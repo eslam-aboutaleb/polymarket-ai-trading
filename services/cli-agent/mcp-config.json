@@ -1,0 +1,36 @@
+{
+  "mcpServers": {
+    "fetch": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-fetch"],
+      "description": "Fetch web pages and extract content"
+    },
+    "ddg-search": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-ddg"],
+      "description": "Search the web using DuckDuckGo"
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "description": "Access GitHub repositories and data"
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-filesystem", "/app/data"],
+      "description": "Read and write files in the data directory"
+    },
+    "polymarket": {
+      "command": "python",
+      "args": ["/app/mcps/polymarket/server.py"],
+      "env": {
+        "POLYMARKET_PRIVATE_KEY": "${POLYMARKET_PRIVATE_KEY}",
+        "POLYMARKET_CHAIN_ID": "${POLYMARKET_CHAIN_ID}"
+      },
+      "description": "Polymarket prediction market data and trading"
+    }
+  }
+}

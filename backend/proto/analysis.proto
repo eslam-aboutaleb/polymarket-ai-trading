@@ -1,0 +1,140 @@
+syntax = "proto3";
+
+package polymarket.analysis;
+
+// Analysis Service - implemented by both LLM Chain and CLI Agent
+service AnalysisService {
+  // Comprehensive market analysis with optional research
+  rpc AnalyzeMarket(MarketAnalysisRequest) returns (AnalysisResponse);
+  
+  // Quick 2-3 sentence analysis
+  rpc QuickAnalysis(QuickAnalysisRequest) returns (AnalysisResponse);
+  
+  // Scan multiple markets for opportunities
+  rpc ScanMarkets(MarketScanRequest) returns (AnalysisResponse);
+  
+  // Assess risk for a potential trade
+  rpc AssessRisk(RiskAssessmentRequest) returns (AnalysisResponse);
+  
+  // Generate trade execution plan
+  rpc GenerateTradePlan(TradePlanRequest) returns (AnalysisResponse);
+  
+  // Streaming analysis for long-running tasks
+  rpc AnalyzeMarketStream(MarketAnalysisRequest) returns (stream AnalysisChunk);
+
+  // ── NEW: Trader / Copy-Trading RPCs ──────────────────────
+  
+  // Full trader profile analysis with internet research
+  rpc AnalyzeTrader(TraderAnalysisRequest) returns (AnalysisResponse);
+  
+  // Evaluate whether to copy a specific trade
+  rpc EvaluateCopyTrade(CopyTradeEvaluationRequest) returns (AnalysisResponse);
+  
+  // Health check
+  rpc HealthCheck(HealthRequest) returns (HealthResponse);
+}
+
+// Common messages
+message HealthRequest {}
+
+message HealthResponse {
+  bool healthy = 1;
+  string service_name = 2;
+  string version = 3;
+  map<string, string> capabilities = 4;
+}
+
+message AnalysisResponse {
+  bool success = 1;
+  string analysis = 2;
+  string research_context = 3;
+  string timestamp = 4;
+  map<string, string> metadata = 5;
+  string error = 6;
+}
+
+message AnalysisChunk {
+  string chunk = 1;
+  bool is_final = 2;
+  string chunk_type = 3;  // "research", "analysis", "recommendation"
+}
+
+// Market Analysis
+message MarketAnalysisRequest {
+  string market_title = 1;
+  string market_description = 2;
+  double yes_price = 3;
+  double no_price = 4;
+  double volume_24h = 5;
+  string end_date = 6;
+  bool include_research = 7;
+  string user_id = 8;
+}
+
+// Quick Analysis
+message QuickAnalysisRequest {
+  string question = 1;
+  double current_price = 2;
+  string user_id = 3;
+}
+
+// Market Scan
+message MarketScanRequest {
+  repeated MarketInfo markets = 1;
+  string user_id = 2;
+}
+
+message MarketInfo {
+  string title = 1;
+  string description = 2;
+  double yes_price = 3;
+  double no_price = 4;
+  double volume_24h = 5;
+  string end_date = 6;
+  string market_id = 7;
+}
+
+// Risk Assessment
+message RiskAssessmentRequest {
+  string market_title = 1;
+  double position_size = 2;
+  double entry_price = 3;
+  int32 days_to_expiry = 4;
+  string correlation_info = 5;
+  string user_id = 6;
+}
+
+// Trade Plan
+message TradePlanRequest {
+  string action = 1;  // buy_yes, buy_no, sell_yes, sell_no
+  string market_title = 2;
+  double target_size = 3;
+  double current_price = 4;
+  string order_book_json = 5;
+  string user_id = 6;
+}
+
+// ── NEW: Trader Analysis ──────────────────────────────────
+
+message TraderAnalysisRequest {
+  string wallet_address = 1;
+  string display_name = 2;
+  double total_pnl = 3;
+  double win_rate = 4;
+  int32  trade_count = 5;
+  int32  markets_traded = 6;
+  string recent_trades_json = 7;   // JSON array of recent trades
+  string user_id = 8;
+}
+
+message CopyTradeEvaluationRequest {
+  string trader_wallet = 1;
+  string trader_stats = 2;         // human-readable stats summary
+  string market_id = 3;
+  string market_title = 4;
+  string trade_side = 5;           // BUY / SELL
+  double trade_size = 6;
+  double current_price = 7;
+  string user_risk_profile = 8;    // e.g. "max_position_daily_loss"
+  string user_id = 9;
+}
