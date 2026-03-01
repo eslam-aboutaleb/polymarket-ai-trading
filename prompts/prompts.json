@@ -1,0 +1,75 @@
+{
+  "version": "1.0.0",
+  "description": "AI prompts for Polymarket trading analysis and automation",
+
+  "authentication": {
+    "challenge_message": "Sign this message to authenticate with Polymarket AI Trading:\n\nTimestamp: {timestamp}\nWallet: {wallet_address}\nNonce: {nonce}"
+  },
+
+  "market_analysis": {
+    "system_prompt": "You are an expert prediction market analyst specializing in Polymarket. Your role is to analyze market data, news, and sentiment to provide actionable trading insights. Always provide probability assessments with confidence levels and reasoning.",
+
+    "market_assessment": "Analyze the following Polymarket market and provide a trading recommendation:\n\nMarket: {market_title}\nDescription: {market_description}\nCurrent Yes Price: ${yes_price}\nCurrent No Price: ${no_price}\nVolume (24h): ${volume_24h}\nEnd Date: {end_date}\n\nRecent News Context:\n{news_context}\n\nProvide:\n1. Your probability assessment (0-100%)\n2. Confidence level (low/medium/high)\n3. Key factors supporting your analysis\n4. Recommended action (buy_yes/buy_no/hold)\n5. Suggested position size (% of max allocation)\n6. Risk factors to monitor",
+
+    "quick_analysis": "Quickly analyze this Polymarket outcome:\n\nQuestion: {question}\nCurrent Price: ${current_price}\n\nProvide a brief (2-3 sentence) assessment of whether this is overpriced, underpriced, or fair.",
+
+    "multi_market_scan": "You are scanning multiple Polymarket markets for opportunities.\n\nMarkets:\n{markets_json}\n\nIdentify the top 3 markets with the highest expected value opportunities. For each, provide:\n- Market name\n- Current mispricing estimate\n- Confidence level\n- Brief rationale"
+  },
+
+  "research": {
+    "news_search_query": "Generate 3-5 search queries to research the following prediction market topic:\n\nMarket Question: {market_question}\nCategory: {category}\nTime Horizon: {time_horizon}\n\nProvide queries that would find recent news, expert opinions, and relevant data.",
+
+    "source_evaluation": "Evaluate the credibility and relevance of this information source for the given market:\n\nMarket: {market_question}\nSource: {source_name}\nContent Summary: {content_summary}\nPublication Date: {pub_date}\n\nRate (1-10) on:\n1. Source credibility\n2. Information freshness\n3. Relevance to market outcome\n4. Potential bias",
+
+    "synthesize_research": "Synthesize the following research findings into a coherent market analysis:\n\nMarket Question: {market_question}\n\nFindings:\n{research_findings}\n\nProvide:\n1. Key consensus points\n2. Major disagreements or uncertainties\n3. Overall probability assessment\n4. Information gaps that need filling"
+  },
+
+  "trading": {
+    "position_sizing": "Calculate optimal position sizing for this trade:\n\nMarket: {market_title}\nYour Probability Assessment: {assessed_prob}%\nCurrent Market Price: ${market_price}\nKelly Fraction: {kelly_fraction}\nMax Position Size: ${max_position}\nCurrent Portfolio Exposure: ${current_exposure}\n\nProvide recommended position size with reasoning.",
+
+    "trade_execution_plan": "Create a trade execution plan:\n\nAction: {action} (buy_yes/buy_no/sell_yes/sell_no)\nMarket: {market_title}\nTarget Size: ${target_size}\nCurrent Price: ${current_price}\nOrder Book Depth: {order_book}\n\nProvide:\n1. Recommended order type (limit/market)\n2. If limit, suggested price levels\n3. Slicing strategy (if applicable)\n4. Risk management stops",
+
+    "portfolio_rebalance": "Analyze portfolio and suggest rebalancing:\n\nCurrent Positions:\n{current_positions}\n\nPortfolio Value: ${portfolio_value}\nRisk Tolerance: {risk_tolerance}\nTarget Diversification: {diversification_targets}\n\nProvide rebalancing recommendations with priority order."
+  },
+
+  "risk_management": {
+    "risk_assessment": "Assess the risk profile of this potential trade:\n\nMarket: {market_title}\nPosition Size: ${position_size}\nEntry Price: ${entry_price}\nTime to Expiry: {days_to_expiry} days\nCorrelation with existing positions: {correlation_info}\n\nProvide:\n1. Maximum loss scenario\n2. Probability of significant loss (>20%)\n3. Liquidity risk assessment\n4. Event risk factors\n5. Overall risk rating (1-10)",
+
+    "portfolio_risk_report": "Generate a risk report for this portfolio:\n\nPositions:\n{positions_json}\n\nProvide:\n1. Total portfolio VaR (95%)\n2. Concentration risks\n3. Correlated position clusters\n4. Upcoming event risks\n5. Recommended hedges or position adjustments"
+  },
+
+  "monitoring": {
+    "price_alert_analysis": "A price alert has triggered:\n\nMarket: {market_title}\nYour Position: {position}\nAlert Trigger: {trigger_condition}\nCurrent Price: ${current_price}\nPrice Change: {price_change}%\n\nAnalyze whether this price movement:\n1. Changes your thesis\n2. Requires action (hold/add/reduce/exit)\n3. Is driven by news or technical factors",
+
+    "daily_portfolio_summary": "Generate a daily summary for this trading portfolio:\n\nDate: {date}\nStarting Value: ${start_value}\nCurrent Value: ${current_value}\nPositions:\n{positions}\n\nKey Events Today:\n{events}\n\nProvide:\n1. P&L summary\n2. Key movers analysis\n3. Upcoming catalysts\n4. Recommended actions for tomorrow"
+  },
+
+  "trader_analysis": {
+    "system_prompt": "You are an expert Polymarket trader analyst. Your job is to evaluate trader profiles, assess their trading strategies, and determine whether they are worth copy-trading. Use internet research, on-chain data patterns, and statistical analysis. You MUST always respond with ONLY a valid JSON object — no markdown, no code fences, no extra text before or after the JSON.",
+
+    "profile_research": "Research this Polymarket trader and build a comprehensive profile:\n\nWallet Address: {wallet_address}\nDisplay Name: {display_name}\nTotal PnL: ${total_pnl}\nWin Rate: {win_rate}% (computed from real trade data)\nTrade Count: {trade_count}\nMarkets Traded: {markets_traded}\n\nTrader's Complete Trade History & Statistics:\n{recent_trades}\n\nIMPORTANT: The statistics above are computed from REAL on-chain trade data fetched from Polymarket's APIs. Use these actual numbers in your analysis — do NOT invent or assume different statistics.\n\nInstructions:\n1. Search the internet for this wallet address or display name to find any public identity, social media, or reputation\n2. Analyze their actual trading patterns from the trade data above\n3. Assess consistency of returns vs. lucky one-off bets\n4. Identify their apparent strategy from their actual trades\n5. Evaluate their risk management\n6. Rate their copy-worthiness on a scale of 1-10\n7. List specific risks of following this trader\n\nYou MUST respond with ONLY a valid JSON object (no markdown, no backticks, no extra text). Use this exact structure:\n{{\n  \"trader_overview\": \"Brief summary of the trader profile and identity\",\n  \"trading_patterns\": \"Description of observed trading patterns from the data\",\n  \"market_preferences\": \"What types of markets they trade (politics, crypto, sports, etc.)\",\n  \"strategy_classification\": \"Identified strategy type (e.g., News-based, Momentum, Contrarian, Quantitative, Arbitrage)\",\n  \"position_sizing\": \"How they size their positions and typical trade amounts\",\n  \"risk_management\": \"How they manage risk, cut losses, and protect capital\",\n  \"win_rate_analysis\": \"Analysis of their win rate and trade outcomes\",\n  \"consistency_assessment\": \"Whether returns are consistent or from lucky one-off bets\",\n  \"copy_worthiness_rating\": \"X/10\",\n  \"copy_worthiness_justification\": \"Detailed justification for the rating\",\n  \"key_strengths\": [\"strength 1\", \"strength 2\", \"strength 3\"],\n  \"specific_risks\": [\"risk 1\", \"risk 2\", \"risk 3\"],\n  \"recommendation\": \"Final recommendation about copy-trading this trader\"\n}}",
+
+    "pattern_evaluation": "Analyze this trader's recent activity and identify patterns:\n\nTrader: {wallet_address}\nRecent Trades:\n{trades_json}\n\nProvide:\n1. Strategy classification (news trader, momentum, contrarian, arbitrage, etc.)\n2. Average hold time and position sizing patterns\n3. Market type preferences (politics, crypto, sports, etc.)\n4. Win/loss streak analysis\n5. Risk-adjusted return assessment\n6. Overall pattern quality score (1-10)"
+  },
+
+  "opportunity_analysis": {
+    "system_prompt": "You are an expert prediction market analyst specializing in identifying high-value trading opportunities on Polymarket. Your job is to analyze each market, validate its credibility through web research, assess smart money positioning, and produce a structured risk/reward score. You MUST always respond with ONLY a valid JSON object — no markdown, no code fences, no extra text before or after the JSON.",
+
+    "market_scoring": "Analyze this Polymarket opportunity and score it for trading potential:\n\nMARKET: {market_title}\nDescription: {market_description}\nCurrent Prices — YES: {yes_price_cents}¢  NO: {no_price_cents}¢\n24h Volume: ${volume_24h}\nLiquidity: ${liquidity}\nEnd Date: {end_date}\nPNL Potential Score: {pnl_potential} (higher = more upside if correct)\n\nWEB RESEARCH FINDINGS:\n{search_findings}\n\nSMART MONEY / TRADER POSITIONING DATA:\n{smart_money_context}\n\nBased on all the above data, produce a comprehensive trading opportunity assessment.\n\nYou MUST respond with ONLY a valid JSON object using this exact schema:\n{{\n  \"ai_score\": <integer 0-100, overall opportunity quality>,\n  \"risk_level\": \"low\" | \"medium\" | \"high\",\n  \"pnl_potential\": <float 0-1, potential profit if correct>,\n  \"credibility_score\": <integer 0-100, how credible/researchable is this market>,\n  \"smart_money_signal\": \"bullish\" | \"bearish\" | \"neutral\",\n  \"smart_money_summary\": \"Brief description of what smart money/whales are doing\",\n  \"recommendation\": \"strong_buy\" | \"buy\" | \"hold\" | \"avoid\",\n  \"recommended_side\": \"YES\" | \"NO\",\n  \"reasoning\": \"2-3 sentence explanation of the scoring and recommendation\",\n  \"search_summary\": \"Brief summary of key findings from web research\",\n  \"key_risks\": [\"risk1\", \"risk2\", \"risk3\"]\n}}",
+
+    "event_scoring": "Analyze this Polymarket EVENT GROUP (multiple related sub-markets under one event) and identify the best trading opportunity:\n\nEVENT: {event_title}\n\nSUB-MARKET OPTIONS:\n{sub_markets_table}\n\nAggregate Event Volume: ${event_volume}\nAggregate Event Liquidity: ${event_liquidity}\n\nWEB RESEARCH FINDINGS:\n{search_findings}\n\nSMART MONEY / TRADER POSITIONING DATA:\n{smart_money_context}\n\nYou are analyzing all sub-markets in this event as a group. Identify which specific option represents the best risk/reward opportunity and explain why.\n\nYou MUST respond with ONLY a valid JSON object using this exact schema:\n{{\n  \"ai_score\": <integer 0-100, overall event opportunity quality>,\n  \"risk_level\": \"low\" | \"medium\" | \"high\",\n  \"pnl_potential\": <float 0-1, potential profit on best option>,\n  \"credibility_score\": <integer 0-100, how credible/researchable is this event>,\n  \"smart_money_signal\": \"bullish\" | \"bearish\" | \"neutral\",\n  \"smart_money_summary\": \"Brief description of what smart money/whales are doing across event\",\n  \"recommendation\": \"strong_buy\" | \"buy\" | \"hold\" | \"avoid\",\n  \"recommended_side\": \"YES\" | \"NO\",\n  \"recommended_option\": \"<exact groupItemTitle of the best sub-market to trade>\",\n  \"reasoning\": \"2-3 sentence explanation covering the full event context and why this option is best\",\n  \"search_summary\": \"Brief summary of key findings from web research\",\n  \"key_risks\": [\"risk1\", \"risk2\", \"risk3\"]\n}}",
+
+    "event_quick_analysis": "Provide a QUICK grouped-trade analysis for this Polymarket event with multiple options.\n\nEVENT: {event_title}\nEVENT SLUG: {event_slug}\n\nSUB-MARKET OPTIONS:\n{sub_markets_table}\n\nAggregate Event Volume: ${event_volume}\nAggregate Event Liquidity: ${event_liquidity}\n\nTreat this event as ONE trade decision with multiple choices. Identify the best option and side based on pricing and structure only (no web research). Keep the summary concise.\n\nYou MUST respond with ONLY valid JSON using this exact schema:\n{{\n  \"analysis\": \"2-3 sentence grouped quick analysis\",\n  \"recommended_option\": \"<best option label exactly as listed in table>\",\n  \"recommended_side\": \"YES\" | \"NO\"\n}}"
+  },
+
+  "copy_trading": {
+    "trade_evaluation": "Evaluate whether to copy this trade from a followed trader:\n\nTrader: {trader_wallet}\nTrader Stats: {trader_stats}\n\nTrade Details:\n- Market: {market_title} (ID: {market_id})\n- Side: {trade_side}\n- Size: ${trade_size}\n- Current Price: ${current_price}\n\nUser Risk Profile: {user_risk_profile}\n\nProvide your assessment:\n1. Market fundamental analysis (is this a good trade on its own merits?)\n2. Trader credibility score (based on their track record)\n3. Risk assessment for this specific trade\n4. Recommendation: COPY / REDUCE_SIZE / SKIP\n5. Confidence level (0-100)\n6. Suggested position size adjustment (if REDUCE_SIZE)\n7. Key risk factors to monitor",
+
+    "risk_check": "Assess the risk of copying this trade:\n\nUser's current exposure: ${current_exposure}\nUser's risk mode: {risk_mode}\nProposed trade size: ${trade_size}\nDaily loss so far: ${daily_loss}\nDaily loss limit: ${daily_loss_limit}\n\nTrader's trade:\n- Market: {market_title}\n- Side: {trade_side}\n- Price: ${price}\n\nShould this trade proceed? Consider:\n1. Portfolio concentration risk\n2. Correlated positions\n3. Daily loss budget remaining\n4. Market liquidity\n5. Overall risk rating"
+  },
+
+  "inverse_position_bot": {
+    "system_prompt": "You are a conservative risk manager for Polymarket auto-reversal trading. You evaluate whether a currently held outcome should be reversed into another outcome. You MUST respond with ONLY valid JSON and no markdown.",
+    "evaluation_prompt": "Evaluate this inverse-position candidate using market distribution and recent research.\n\nMarket: {market_title}\nHeld outcome: {held_outcome}\nHeld outcome implied probability: {held_pct:.4f}\nBest alternative outcome: {best_alt_outcome}\nBest alternative implied probability: {best_alt_pct:.4f}\nDelta (best_alt - held): {delta_pct:.4f}\nAlternative outcomes JSON: {alternatives_json}\n\nWeb evidence (last 24h):\n{web_summary}\n\nX-post evidence (last 24h):\n{x_summary}\n\nReturn ONLY JSON with this exact schema:\n{\n  \"recommendation\": \"reverse\" | \"hold\",\n  \"confidence\": <number 0-100>,\n  \"reasoning\": \"short explanation\",\n  \"key_risks\": [\"risk1\", \"risk2\"],\n  \"alt_outcome\": \"best alternative outcome label\",\n  \"alt_token_id\": \"alternative token id if inferable, else empty\",\n  \"web_summary\": \"concise summary\",\n  \"x_summary\": \"concise summary\"\n}\n\nRules:\n- Be conservative. Use \"hold\" unless reversal evidence is strong.\n- If evidence quality is low or conflicting, lower confidence.\n- Keep reasoning under 120 words."
+  }
+}

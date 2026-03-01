@@ -1,0 +1,74 @@
+import axios, { AxiosInstance, AxiosError, AxiosResponse } from "axios";
+import { useAuthStore } from "../store/authStore";
+import { API_BASE_URL } from "../config/api";
+
+class ApiClient {
+  private client: AxiosInstance;
+
+  constructor() {
+    this.client = axios.create({
+      baseURL: API_BASE_URL,
+      withCredentials: true,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+
+    // Add response interceptor to handle cookie-based token refresh.
+    this.client.interceptors.response.use(
+      (response: AxiosResponse) => response,
+      async (error: AxiosError) => {
+        const originalRequest = error.config as
+          | (AxiosError["config"] & { _retry?: boolean })
+          | undefined;
+
+        if (!originalRequest) {
+          return Promise.reject(error);
+        }
+
+        const requestUrl = originalRequest.url || "";
+        const isRefreshCall = requestUrl.includes("/api/auth/refresh");
+
+        if (
+          error.response?.status === 401 &&
+          !originalRequest._retry &&
+          !isRefreshCall
+        ) {
+          originalRequest._retry = true;
+
+          try {
+            await this.post("/api/auth/refresh", {});
+            return this.client(originalRequest);
+          } catch (refreshError) {
+            useAuthStore.getState().clearSession();
+            return Promise.reject(refreshError);
+          }
+        }
+
+        return Promise.reject(error);
+      },
+    );
+  }
+
+  async get<T>(url: string, config?: any): Promise<T> {
+    const response = await this.client.get<T>(url, config);
+    return response.data;
+  }
+
+  async post<T>(url: string, data?: any, config?: any): Promise<T> {
+    const response = await this.client.post<T>(url, data, config);
+    return response.data;
+  }
+
+  async put<T>(url: string, data?: any, config?: any): Promise<T> {
+    const response = await this.client.put<T>(url, data, config);
+    return response.data;
+  }
+
+  async delete<T>(url: string, config?: any): Promise<T> {
+    const response = await this.client.delete<T>(url, config);
+    return response.data;
+  }
+}
+
+export const apiClient = new ApiClient();
