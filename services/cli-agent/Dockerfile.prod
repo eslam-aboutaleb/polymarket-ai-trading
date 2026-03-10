@@ -1,0 +1,49 @@
+# ── CLI-Agent Production Dockerfile ────────────────────────────
+# Non-root user, GitHub CLI only if needed
+# ───────────────────────────────────────────────────────────────
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System deps — gh CLI is required at runtime for GitHub MCP tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl git \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Deps layer ────────────────────────────────────────────────
+COPY services/cli-agent/pyproject.toml services/cli-agent/README.md ./
+RUN pip install --no-cache-dir -e .
+
+# Compile proto
+COPY services/proto/ proto/
+RUN mkdir -p src && python -m grpc_tools.protoc \
+        -Iproto \
+        --python_out=src \
+        --grpc_python_out=src \
+        proto/analysis.proto
+
+# ── Application code ──────────────────────────────────────────
+COPY services/cli-agent/src/ ./src/
+COPY services/cli-agent/mcp-config.json .
+COPY services/cli-agent/mcps/ ./mcps/
+COPY services/mcps/research/ ./services/mcps/research/
+
+ENV PYTHONPATH=/app/src
+
+# ── Non-root user ─────────────────────────────────────────────
+RUN useradd -m -u 1000 -s /bin/bash appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 50052
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+  CMD python -c "import grpc; ch=grpc.insecure_channel('localhost:50052'); grpc.channel_ready_future(ch).result(timeout=5); print('ok')" || exit 1
+
+CMD ["python", "-m", "server"]

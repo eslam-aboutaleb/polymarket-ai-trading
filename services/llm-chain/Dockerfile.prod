@@ -1,0 +1,46 @@
+# ── LLM-Chain Production Dockerfile ────────────────────────────
+# Non-root user, minimal attack surface
+# ───────────────────────────────────────────────────────────────
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System deps (build-essential needed for some pip packages)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir uv
+
+# ── Deps layer ────────────────────────────────────────────────
+COPY services/llm-chain/pyproject.toml services/llm-chain/README.md ./
+COPY services/mcps/research/ services/mcps/research/
+RUN uv pip install --system -e .
+
+# ── Application code ──────────────────────────────────────────
+COPY services/llm-chain/src/ src/
+
+# Compile proto
+COPY services/proto/ proto/
+RUN python -m grpc_tools.protoc \
+        -I proto/ \
+        --python_out=. \
+        --grpc_python_out=. \
+        proto/analysis.proto
+
+ENV PYTHONPATH=/app
+
+# ChromaDB data dir
+RUN mkdir -p /app/data/chroma
+
+# ── Non-root user ─────────────────────────────────────────────
+RUN useradd -m -u 1000 -s /bin/bash appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 50051
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+  CMD python -c "import grpc; ch=grpc.insecure_channel('localhost:50051'); grpc.channel_ready_future(ch).result(timeout=5); print('ok')" || exit 1
+
+CMD ["python", "src/server.py"]

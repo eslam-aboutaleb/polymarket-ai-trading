@@ -10,15 +10,16 @@ import {
   InverseBotPosition,
   InverseBotSizeOverride,
 } from "../services/inverseBotService";
-import {
-  FollowingFeedEvent,
-  tradesService,
-} from "../services/tradesService";
+import { emergencyService, ArbitrageOpportunity } from "../services/emergencyService";
+import { FollowingFeedEvent, tradesService } from "../services/tradesService";
 import { analysisService } from "../services/analysisService";
 import { useAuthStore } from "../store/authStore";
 import { getApiErrorMessage } from "../utils/apiError";
 import CashOutModal from "./CashOutModal";
 import StopLossModal from "./StopLossModal";
+import PositionAnalysisPopup, {
+  PositionForAnalysis,
+} from "./PositionAnalysisPopup";
 
 const PRICE_POLL_INTERVAL = 15_000; // 15 seconds
 const STOP_LOSS_POLL_INTERVAL = 10_000; // 10 seconds – match backend check
@@ -43,7 +44,12 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [followingFeed, setFollowingFeed] = useState<FollowingFeedEvent[]>([]);
   const [followingFeedLoading, setFollowingFeedLoading] = useState(false);
-  const [followingFeedError, setFollowingFeedError] = useState<string | null>(null);
+  const [followingFeedError, setFollowingFeedError] = useState<string | null>(
+    null,
+  );
+  const [riskOpsBusy, setRiskOpsBusy] = useState<string | null>(null);
+  const [riskOpsMessage, setRiskOpsMessage] = useState<string | null>(null);
+  const [arbitrageRows, setArbitrageRows] = useState<ArbitrageOpportunity[]>([]);
   const [feedEventTypeFilter, setFeedEventTypeFilter] = useState<
     "all" | "opened" | "closed"
   >("all");
@@ -206,6 +212,72 @@ export default function Dashboard() {
     [feedEventTypeFilter, feedWalletFilter, isAuthenticated],
   );
 
+  const refreshArbitrageFeed = useCallback(async () => {
+    try {
+      const rows = await emergencyService.getArbitrageOpportunities();
+      setArbitrageRows(rows || []);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    void refreshArbitrageFeed();
+  }, [isAuthenticated, refreshArbitrageFeed]);
+
+  const handleEmergencyStop = async () => {
+    try {
+      setRiskOpsBusy("emergency");
+      const res = await emergencyService.emergencyStop(true);
+      setRiskOpsMessage(res.message || "Emergency stop completed.");
+      await fetchData();
+      await fetchStopLosses();
+    } catch (err: unknown) {
+      setRiskOpsMessage(getApiErrorMessage(err, "Emergency stop failed"));
+    } finally {
+      setRiskOpsBusy(null);
+    }
+  };
+
+  const handleResumeTrading = async () => {
+    try {
+      setRiskOpsBusy("resume");
+      const res = await emergencyService.resumeTrading();
+      setRiskOpsMessage(res.message || "Trading resumed.");
+      await fetchData();
+    } catch (err: unknown) {
+      setRiskOpsMessage(getApiErrorMessage(err, "Resume trading failed"));
+    } finally {
+      setRiskOpsBusy(null);
+    }
+  };
+
+  const handleScanArbitrage = async () => {
+    try {
+      setRiskOpsBusy("scan_arbitrage");
+      const res = await emergencyService.scanArbitrage();
+      setArbitrageRows(res.opportunities || []);
+      setRiskOpsMessage(`Arbitrage scan complete. Found ${res.found} opportunities.`);
+    } catch (err: unknown) {
+      setRiskOpsMessage(getApiErrorMessage(err, "Arbitrage scan failed"));
+    } finally {
+      setRiskOpsBusy(null);
+    }
+  };
+
+  const handleRescoreTraders = async () => {
+    try {
+      setRiskOpsBusy("rescore");
+      const res = await emergencyService.rescoreAllTraders();
+      setRiskOpsMessage(res.message || `Rescored ${res.scored} traders.`);
+    } catch (err: unknown) {
+      setRiskOpsMessage(getApiErrorMessage(err, "Trader rescore failed"));
+    } finally {
+      setRiskOpsBusy(null);
+    }
+  };
+
   const formatUSD = (value: number) =>
     `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -220,6 +292,14 @@ export default function Dashboard() {
   // ── Modal state ──
   const [cashOutPosition, setCashOutPosition] = useState<any | null>(null);
   const [stopLossPosition, setStopLossPosition] = useState<any | null>(null);
+
+  // ── AI Analysis popup state ──
+  const [analysisPosition, setAnalysisPosition] =
+    useState<PositionForAnalysis | null>(null);
+  const [analysisClickCoords, setAnalysisClickCoords] = useState<{
+    x: number;
+    y: number;
+  }>({ x: 0, y: 0 });
 
   // ── Active stop-losses ──
   const [activeStopLosses, setActiveStopLosses] = useState<StopLossOrder[]>([]);
@@ -283,16 +363,12 @@ export default function Dashboard() {
       if (document.visibilityState !== "visible") return;
       const now = Date.now();
 
-      if (
-        now - lastRunAt.stopLosses >= STOP_LOSS_POLL_INTERVAL
-      ) {
+      if (now - lastRunAt.stopLosses >= STOP_LOSS_POLL_INTERVAL) {
         lastRunAt.stopLosses = now;
         void fetchStopLosses();
       }
 
-      if (
-        now - lastRunAt.followingFeed >= FOLLOWING_FEED_POLL_INTERVAL
-      ) {
+      if (now - lastRunAt.followingFeed >= FOLLOWING_FEED_POLL_INTERVAL) {
         lastRunAt.followingFeed = now;
         void fetchFollowingFeed({ silent: true });
       }
@@ -340,7 +416,9 @@ export default function Dashboard() {
     return activeStopLosses.find((sl) => sl.token_id === tokenId);
   };
 
-  const getInverseBotForPosition = (pos: any): InverseBotPosition | undefined => {
+  const getInverseBotForPosition = (
+    pos: any,
+  ): InverseBotPosition | undefined => {
     const tokenId = String(pos.asset_id || pos.token_id || "");
     return inverseBotPositions.find((row) => row.token_id === tokenId);
   };
@@ -368,9 +446,13 @@ export default function Dashboard() {
       outcome: String(pos.outcome || ""),
       enabled: overrides?.enabled ?? existing?.enabled ?? true,
       size_mode_override:
-        overrides?.size_mode_override ?? existing?.size_mode_override ?? "inherit",
+        overrides?.size_mode_override ??
+        existing?.size_mode_override ??
+        "inherit",
       fixed_amount_override:
-        overrides?.fixed_amount_override ?? existing?.fixed_amount_override ?? null,
+        overrides?.fixed_amount_override ??
+        existing?.fixed_amount_override ??
+        null,
     };
 
     setInverseBusyToken(tokenId);
@@ -379,7 +461,9 @@ export default function Dashboard() {
       await fetchInverseBotPositions();
       return true;
     } catch (err: unknown) {
-      setError(getApiErrorMessage(err, "Failed to update inverse bot settings"));
+      setError(
+        getApiErrorMessage(err, "Failed to update inverse bot settings"),
+      );
       return false;
     } finally {
       setInverseBusyToken(null);
@@ -472,7 +556,10 @@ export default function Dashboard() {
     inverse?: InverseBotPosition,
   ) => {
     if (!inverse) return;
-    if (inverseExplainByToken[tokenId] || inverseExplainLoadingToken === tokenId) {
+    if (
+      inverseExplainByToken[tokenId] ||
+      inverseExplainLoadingToken === tokenId
+    ) {
       return;
     }
     if (
@@ -549,14 +636,22 @@ export default function Dashboard() {
             ? {
                 decision: String(parsed.decision || fallbackExplain.decision),
                 why: String(parsed.why || fallbackExplain.why),
-                confidence: String(parsed.confidence || fallbackExplain.confidence),
+                confidence: String(
+                  parsed.confidence || fallbackExplain.confidence,
+                ),
                 market_signal: String(
                   parsed.market_signal || fallbackExplain.market_signal,
                 ),
-                web_signal: String(parsed.web_signal || fallbackExplain.web_signal),
+                web_signal: String(
+                  parsed.web_signal || fallbackExplain.web_signal,
+                ),
                 x_signal: String(parsed.x_signal || fallbackExplain.x_signal),
-                next_checks: String(parsed.next_checks || fallbackExplain.next_checks),
-                updated_at: String(parsed.updated_at || fallbackExplain.updated_at),
+                next_checks: String(
+                  parsed.next_checks || fallbackExplain.next_checks,
+                ),
+                updated_at: String(
+                  parsed.updated_at || fallbackExplain.updated_at,
+                ),
               }
             : fallbackExplain,
       }));
@@ -669,10 +764,77 @@ export default function Dashboard() {
             {`${(portfolio?.win_rate ?? 0).toFixed(0)}%`}
           </p>
           <p className="text-muted text-sm mt-2">
-            {(portfolio?.wins_positions_history ?? portfolio?.wins_positions ?? 0)}/
-            {(portfolio?.total_positions_history ?? portfolio?.resolved_trades ?? 0)} winning closed / total history
+            {portfolio?.wins_positions_history ??
+              portfolio?.wins_positions ??
+              0}
+            /
+            {portfolio?.total_positions_history ??
+              portfolio?.resolved_trades ??
+              0}{" "}
+            winning closed / total history
           </p>
         </div>
+      </div>
+
+      <div className="surface-panel p-6 space-y-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <h2 className="text-xl font-bold">Risk Ops</h2>
+          <a href="/ops" className="btn-muted text-xs px-3 py-1.5">
+            Open Full Ops Center
+          </a>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={handleEmergencyStop}
+            disabled={riskOpsBusy !== null}
+            className="btn-danger text-xs"
+          >
+            {riskOpsBusy === "emergency"
+              ? "Running..."
+              : "Emergency Stop + Close Positions"}
+          </button>
+          <button
+            onClick={handleResumeTrading}
+            disabled={riskOpsBusy !== null}
+            className="btn-success text-xs"
+          >
+            {riskOpsBusy === "resume" ? "Running..." : "Resume Trading"}
+          </button>
+          <button
+            onClick={handleRescoreTraders}
+            disabled={riskOpsBusy !== null}
+            className="btn-muted text-xs"
+          >
+            {riskOpsBusy === "rescore" ? "Running..." : "Rescore Traders"}
+          </button>
+          <button
+            onClick={handleScanArbitrage}
+            disabled={riskOpsBusy !== null}
+            className="btn-muted text-xs"
+          >
+            {riskOpsBusy === "scan_arbitrage"
+              ? "Scanning..."
+              : "Scan Arbitrage Now"}
+          </button>
+          <button
+            onClick={refreshArbitrageFeed}
+            disabled={riskOpsBusy !== null}
+            className="btn-muted text-xs"
+          >
+            Refresh Arbitrage Feed
+          </button>
+        </div>
+
+        {riskOpsMessage && (
+          <p className="text-xs text-soft rounded border border-[var(--line)] bg-[var(--bg-soft)] px-3 py-2">
+            {riskOpsMessage}
+          </p>
+        )}
+
+        <p className="text-xs text-soft">
+          Arbitrage opportunities tracked: {arbitrageRows.length}
+        </p>
       </div>
 
       <div className="surface-panel p-6">
@@ -734,7 +896,9 @@ export default function Dashboard() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-xs text-white">
-                      <span className="mono">{shortAddressValue(row.trader_wallet)}</span>{" "}
+                      <span className="mono">
+                        {shortAddressValue(row.trader_wallet)}
+                      </span>{" "}
                       <span
                         className={`chip ml-2 text-[10px] ${
                           row.event_type === "opened"
@@ -746,8 +910,10 @@ export default function Dashboard() {
                       </span>
                     </p>
                     <p className="text-[11px] text-muted mt-1">
-                      Market: {row.market_id ? shortAddressValue(row.market_id) : "—"} · Side:{" "}
-                      {row.side || "—"} · Size: {row.size.toFixed(4)} · Price: {row.price.toFixed(4)}
+                      Market:{" "}
+                      {row.market_id ? shortAddressValue(row.market_id) : "—"} ·
+                      Side: {row.side || "—"} · Size: {row.size.toFixed(4)} ·
+                      Price: {row.price.toFixed(4)}
                     </p>
                   </div>
                   <p className="text-[11px] text-muted">
@@ -872,101 +1038,121 @@ export default function Dashboard() {
                     })()}
 
                     {(() => {
-                          const inverse = getInverseBotForPosition(pos);
-                          const tokenId = String(pos.asset_id || pos.token_id || "");
-                          const isBusy = inverseBusyToken === tokenId;
-                          const enabled = !!inverse?.enabled;
-                          const infoOpen =
-                            inverseInfoPinnedToken === tokenId ||
-                            inverseInfoHoverToken === tokenId;
-                          return (
-                            <div className="mb-3 p-3 rounded-lg border border-[var(--line)] bg-[var(--bg-soft)] space-y-2">
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <p className="text-xs font-semibold text-soft">
-                                    Inverse Position Bot
-                                  </p>
-                                  {enabled && (
-                                    <div
-                                      className="relative"
-                                      onMouseEnter={() => {
-                                        setInverseInfoHoverToken(tokenId);
-                                        ensureInverseExplanation(tokenId, pos, inverse);
-                                      }}
-                                      onMouseLeave={() => setInverseInfoHoverToken(null)}
-                                    >
-                                      <button
-                                        type="button"
-                                        title="Explain current evaluation"
-                                        onClick={() => {
-                                          if (inverseInfoPinnedToken === tokenId) {
-                                            setInverseInfoPinnedToken(null);
-                                          } else {
-                                            setInverseInfoPinnedToken(tokenId);
-                                            ensureInverseExplanation(tokenId, pos, inverse);
-                                          }
-                                        }}
-                                        className="w-5 h-5 rounded-full border border-[var(--line-strong)] text-[11px] text-soft hover:text-white hover:border-[var(--accent)] transition"
-                                      >
-                                        i
-                                      </button>
-                                      {infoOpen && (
-                                        <div className="absolute z-20 mt-2 left-0 w-[34rem] max-w-[92vw] surface-panel p-0 shadow-xl overflow-hidden">
-                                          <div className="px-3 py-2 border-b border-[var(--line)] bg-[var(--bg-soft)]">
-                                            <p className="text-[11px] font-semibold text-soft">
-                                              Inverse Bot Evaluation
-                                            </p>
-                                          </div>
-                                          {inverseExplainLoadingToken === tokenId ? (
-                                            <p className="text-[11px] text-muted p-3">
-                                              Generating explanation...
-                                            </p>
-                                          ) : inverseExplainErrorByToken[tokenId] ? (
-                                            <p className="text-[11px] text-red-300 p-3">
-                                              {inverseExplainErrorByToken[tokenId]}
-                                            </p>
-                                          ) : (
-                                            <div className="overflow-x-auto">
-                                              <table className="table-theme text-[11px] w-full">
-                                                <tbody>
-                                                  {Object.entries(
-                                                    inverseExplainByToken[tokenId] || {
-                                                      decision: "No explanation available yet.",
-                                                      why: "-",
-                                                      confidence: "-",
-                                                      market_signal: "-",
-                                                      web_signal: "-",
-                                                      x_signal: "-",
-                                                      next_checks: "-",
-                                                      updated_at: "-",
-                                                    },
-                                                  ).map(([key, value]) => (
-                                                    <tr key={key}>
-                                                    <td className="p-2 text-muted capitalize">
-                                                        {key.replace(/_/g, " ")}
-                                                    </td>
-                                                      <td className="p-2 text-soft">
-                                                        {String(value)}
-                                                      </td>
-                                                    </tr>
-                                                  ))}
-                                                </tbody>
-                                              </table>
-                                            </div>
-                                          )}
+                      const inverse = getInverseBotForPosition(pos);
+                      const tokenId = String(
+                        pos.asset_id || pos.token_id || "",
+                      );
+                      const isBusy = inverseBusyToken === tokenId;
+                      const enabled = !!inverse?.enabled;
+                      const infoOpen =
+                        inverseInfoPinnedToken === tokenId ||
+                        inverseInfoHoverToken === tokenId;
+                      return (
+                        <div className="mb-3 p-3 rounded-lg border border-[var(--line)] bg-[var(--bg-soft)] space-y-2">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <p className="text-xs font-semibold text-soft">
+                                Inverse Position Bot
+                              </p>
+                              {enabled && (
+                                <div
+                                  className="relative"
+                                  onMouseEnter={() => {
+                                    setInverseInfoHoverToken(tokenId);
+                                    ensureInverseExplanation(
+                                      tokenId,
+                                      pos,
+                                      inverse,
+                                    );
+                                  }}
+                                  onMouseLeave={() =>
+                                    setInverseInfoHoverToken(null)
+                                  }
+                                >
+                                  <button
+                                    type="button"
+                                    title="Explain current evaluation"
+                                    onClick={() => {
+                                      if (inverseInfoPinnedToken === tokenId) {
+                                        setInverseInfoPinnedToken(null);
+                                      } else {
+                                        setInverseInfoPinnedToken(tokenId);
+                                        ensureInverseExplanation(
+                                          tokenId,
+                                          pos,
+                                          inverse,
+                                        );
+                                      }
+                                    }}
+                                    className="w-5 h-5 rounded-full border border-[var(--line-strong)] text-[11px] text-soft hover:text-white hover:border-[var(--accent)] transition"
+                                  >
+                                    i
+                                  </button>
+                                  {infoOpen && (
+                                    <div className="absolute z-20 mt-2 left-0 w-[34rem] max-w-[92vw] surface-panel p-0 shadow-xl overflow-hidden">
+                                      <div className="px-3 py-2 border-b border-[var(--line)] bg-[var(--bg-soft)]">
+                                        <p className="text-[11px] font-semibold text-soft">
+                                          Inverse Bot Evaluation
+                                        </p>
+                                      </div>
+                                      {inverseExplainLoadingToken ===
+                                      tokenId ? (
+                                        <p className="text-[11px] text-muted p-3">
+                                          Generating explanation...
+                                        </p>
+                                      ) : inverseExplainErrorByToken[
+                                          tokenId
+                                        ] ? (
+                                        <p className="text-[11px] text-red-300 p-3">
+                                          {inverseExplainErrorByToken[tokenId]}
+                                        </p>
+                                      ) : (
+                                        <div className="overflow-x-auto">
+                                          <table className="table-theme text-[11px] w-full">
+                                            <tbody>
+                                              {Object.entries(
+                                                inverseExplainByToken[
+                                                  tokenId
+                                                ] || {
+                                                  decision:
+                                                    "No explanation available yet.",
+                                                  why: "-",
+                                                  confidence: "-",
+                                                  market_signal: "-",
+                                                  web_signal: "-",
+                                                  x_signal: "-",
+                                                  next_checks: "-",
+                                                  updated_at: "-",
+                                                },
+                                              ).map(([key, value]) => (
+                                                <tr key={key}>
+                                                  <td className="p-2 text-muted capitalize">
+                                                    {key.replace(/_/g, " ")}
+                                                  </td>
+                                                  <td className="p-2 text-soft">
+                                                    {String(value)}
+                                                  </td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
                                         </div>
                                       )}
                                     </div>
                                   )}
                                 </div>
-                                <label className="flex items-center gap-2 cursor-pointer">
-                                  <span className="text-xs text-muted">
-                                    {enabled ? "On" : "Off"}
-                                  </span>
+                              )}
+                            </div>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <span className="text-xs text-muted">
+                                {enabled ? "On" : "Off"}
+                              </span>
                               <input
                                 type="checkbox"
                                 checked={enabled}
-                                onChange={(e) => toggleInverseBot(pos, e.target.checked)}
+                                onChange={(e) =>
+                                  toggleInverseBot(pos, e.target.checked)
+                                }
                                 disabled={isBusy}
                                 className="w-4 h-4 accent-[var(--accent)]"
                               />
@@ -974,7 +1160,9 @@ export default function Dashboard() {
                           </div>
 
                           <div className="flex items-center justify-between gap-2">
-                            <span className={`chip ${inverseStatusClass(inverse?.status)}`}>
+                            <span
+                              className={`chip ${inverseStatusClass(inverse?.status)}`}
+                            >
                               {inverse?.status || "inactive"}
                             </span>
                             <button
@@ -1000,7 +1188,9 @@ export default function Dashboard() {
                               className="px-2 py-1.5 rounded bg-[var(--bg)] border border-[var(--line)] text-xs"
                             >
                               <option value="inherit">Inherit</option>
-                              <option value="full_notional">Full Notional</option>
+                              <option value="full_notional">
+                                Full Notional
+                              </option>
                               <option value="fixed_amount">Fixed Amount</option>
                             </select>
                             {(inverse?.size_mode_override || "inherit") ===
@@ -1010,7 +1200,9 @@ export default function Dashboard() {
                                 min={1}
                                 step={1}
                                 placeholder="USDC"
-                                defaultValue={inverse?.fixed_amount_override ?? 50}
+                                defaultValue={
+                                  inverse?.fixed_amount_override ?? 50
+                                }
                                 onBlur={(e) => {
                                   const v = Number(e.target.value);
                                   if (v >= 1) {
@@ -1035,7 +1227,9 @@ export default function Dashboard() {
                             {" · "}
                             Last eval:{" "}
                             {inverse?.last_evaluated_at
-                              ? new Date(inverse.last_evaluated_at).toLocaleTimeString()
+                              ? new Date(
+                                  inverse.last_evaluated_at,
+                                ).toLocaleTimeString()
                               : "—"}
                           </div>
                           {inverse?.last_error && (
@@ -1049,6 +1243,18 @@ export default function Dashboard() {
 
                     {/* Action Buttons */}
                     <div className="flex gap-2">
+                      <button
+                        onClick={(e) => {
+                          setAnalysisPosition(pos);
+                          setAnalysisClickCoords({
+                            x: e.clientX,
+                            y: e.clientY,
+                          });
+                        }}
+                        className="flex-1 btn-accent flex items-center justify-center gap-1.5 text-xs"
+                      >
+                        <span>🤖</span> AI Analyze
+                      </button>
                       <button
                         onClick={() => setCashOutPosition(pos)}
                         className="flex-1 btn-success flex items-center justify-center gap-1.5"
@@ -1185,6 +1391,15 @@ export default function Dashboard() {
             setStopLossPosition(null);
             fetchStopLosses();
           }}
+        />
+      )}
+
+      {analysisPosition && (
+        <PositionAnalysisPopup
+          position={analysisPosition}
+          clickX={analysisClickCoords.x}
+          clickY={analysisClickCoords.y}
+          onClose={() => setAnalysisPosition(null)}
         />
       )}
     </div>

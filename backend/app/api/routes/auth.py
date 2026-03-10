@@ -564,6 +564,34 @@ def get_current_user_from_token(
     }
 
 
+def get_optional_user_from_token(
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+) -> Optional[dict]:
+    """
+    Like get_current_user_from_token but returns None instead of raising 401
+    when no valid credentials are present.  Used by public-facing endpoints
+    that optionally enrich responses for authenticated visitors.
+    """
+    token = _extract_bearer_token(authorization) or request.cookies.get(
+        ACCESS_TOKEN_COOKIE_NAME
+    )
+    if not token:
+        return None
+
+    try:
+        payload = verify_token(token)
+        if payload.get("type") == "refresh":
+            return None
+        return {
+            "user_id": payload.get("user_id"),
+            "wallet_address": payload.get("sub"),
+            "is_admin": payload.get("is_admin", False),
+        }
+    except Exception:
+        return None
+
+
 @router.get("/me", response_model=UserResponse)
 def get_current_user(
     current_user: dict = Depends(get_current_user_from_token),

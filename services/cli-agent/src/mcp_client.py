@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sys
 import time
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class ResearchMCPClient:
@@ -65,16 +68,89 @@ class ResearchMCPClient:
             },
         )
 
+        # ── Binance Smart Money + Sentiment context ──────────
+        binance_context = await self._gather_binance_context(market_title)
+
         result = {
             "web_results": web_results,
             "x_results": x_results,
             "web_summary": self._summarize(web_results),
             "x_summary": self._summarize(x_results),
+            "binance_context": binance_context,
+            "binance_summary": binance_context.get("formatted", ""),
         }
         self._cache[key] = result
         return result
 
-    async def _call_tool(self, tool: str, args: dict[str, Any]) -> list[dict[str, str]]:
+    async def _gather_binance_context(self, market_title: str) -> dict[str, Any]:
+        """Fetch Binance smart money signals and sentiment data for crypto-related markets."""
+        binance_enabled = os.getenv("BINANCE_SKILLS_ENABLED", "true").strip().lower()
+        if binance_enabled != "true":
+            return {"formatted": ""}
+
+        query_tokens = self._extract_crypto_tokens(market_title)
+        try:
+            raw = await self._call_tool(
+                "binance_market_context",
+                {"query_tokens": query_tokens, "chain": "solana"},
+            )
+            if isinstance(raw, dict):
+                formatted = self._format_binance_for_prompt(raw)
+                return {**raw, "formatted": formatted}
+            return {"formatted": ""}
+        except Exception as exc:
+            logger.debug(f"Binance context gathering failed: {exc}")
+            return {"formatted": ""}
+
+    def _format_binance_for_prompt(self, ctx: dict[str, Any]) -> str:
+        parts = []
+        for key, label in [
+            ("smart_money_signals_summary", "Binance Smart Money Signals"),
+            ("social_hype_summary", "Binance Social Hype"),
+            ("smart_money_inflow_summary", "Binance Smart Money Inflow"),
+        ]:
+            val = ctx.get(key, "")
+            if val:
+                parts.append(f"== {label} ==\n{val}")
+        token_data = ctx.get("token_data", {})
+        if token_data:
+            lines = ["== Binance Token Data =="]
+            for symbol, data in token_data.items():
+                dyn = data.get("dynamic", {})
+                lines.append(
+                    f"• {symbol}: ${data.get('price', '?')} "
+                    f"(24h: {dyn.get('price_change_24h', '?')}%) "
+                    f"Vol: ${dyn.get('volume_24h', '?')}"
+                )
+            parts.append("\n".join(lines))
+        return "\n\n".join(parts) if parts else ""
+
+    @staticmethod
+    def _extract_crypto_tokens(text: str) -> list[str]:
+        KNOWN_TOKENS = {
+            "BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "AVAX",
+            "DOT", "MATIC", "LINK", "UNI", "ATOM", "LTC", "FIL", "APT",
+            "ARB", "OP", "SUI", "SEI", "TIA", "JUP", "WIF", "BONK",
+            "PEPE", "SHIB", "NEAR", "INJ", "TRX", "TON", "RENDER",
+            "FET", "TAO", "BITCOIN", "ETHEREUM", "SOLANA",
+        }
+        NAME_TO_SYMBOL = {
+            "BITCOIN": "BTC", "ETHEREUM": "ETH", "SOLANA": "SOL",
+            "DOGECOIN": "DOGE", "CARDANO": "ADA", "POLKADOT": "DOT",
+            "POLYGON": "MATIC", "CHAINLINK": "LINK", "AVALANCHE": "AVAX",
+            "RIPPLE": "XRP", "TONCOIN": "TON",
+        }
+        words = text.upper().replace(",", " ").replace("?", " ").split()
+        found = []
+        for w in words:
+            clean = w.strip("$().!?")
+            if clean in KNOWN_TOKENS and clean not in found:
+                found.append(NAME_TO_SYMBOL.get(clean, clean))
+            elif clean in NAME_TO_SYMBOL and NAME_TO_SYMBOL[clean] not in found:
+                found.append(NAME_TO_SYMBOL[clean])
+        return found[:5]
+
+    async def _call_tool(self, tool: str, args: dict[str, Any]) -> list[dict[str, str]] | dict[str, Any]:
         if not self.server_path:
             return []
         try:
@@ -95,7 +171,11 @@ class ResearchMCPClient:
             parsed = json.loads(line[-1])
             if not parsed.get("ok"):
                 return []
-            result = parsed.get("result") or []
+            result = parsed.get("result")
+            if result is None:
+                return []
+            if isinstance(result, dict):
+                return result
             if isinstance(result, list):
                 return [r for r in result if isinstance(r, dict)]
             return []

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 import logging
 import json
 
-from app.api.routes.auth import get_current_user_from_token
+from app.api.routes.auth import get_current_user_from_token, get_optional_user_from_token
 from app.services.polymarket_service import (
     PolymarketService,
     get_polymarket_service,
@@ -24,6 +24,8 @@ from app.models.notification_followed_trader import NotificationFollowedTrader
 from app.models.notification_feed_event import NotificationFeedEvent
 from app.models.user_trade import UserTrade
 from app.models.stop_loss import StopLossOrder
+from app.models.take_profit import TakeProfitOrder
+from app.models.user_settings import UserSettings
 from app.security.credential_store import CredentialStoreError, load_wallet_credentials
 from app.utils.database import get_db
 from app.utils.time import utc_now
@@ -88,6 +90,8 @@ class LeaderboardEntry(BaseModel):
     profile_image: Optional[str] = None
     is_followed: bool = False
     is_notification_followed: bool = False
+    quality_score: Optional[float] = None
+    quality_tier: Optional[str] = None
 
 
 class LeaderboardResponse(BaseModel):
@@ -402,7 +406,7 @@ async def cash_out_position(
 async def get_leaderboard(
     limit: int = Query(default=25, le=1000),
     period: str = Query(default="all_time", pattern="^(24h|7d|30d|all_time)$"),
-    current_user: dict = Depends(get_current_user_from_token),
+    current_user: Optional[dict] = Depends(get_optional_user_from_token),
     db: Session = Depends(get_db),
 ):
     """
@@ -410,7 +414,7 @@ async def get_leaderboard(
     Fetches from multiple Polymarket data sources with Redis caching.
     Supports period filtering (24h, 7d, 30d, all_time).
     """
-    user_id = current_user.get("user_id")
+    user_id = current_user.get("user_id") if current_user else None
 
     # Fetch leaderboard data
     raw_entries = await fetch_leaderboard(limit=limit, period=period)
@@ -458,6 +462,8 @@ async def get_leaderboard(
                 is_notification_followed=(
                     addr.lower() in notification_followed_wallets
                 ),
+                quality_score=item.get("quality_score"),
+                quality_tier=item.get("quality_tier"),
             )
         )
 
@@ -474,9 +480,8 @@ async def get_leaderboard(
 @router.get("/trader/{wallet}", response_model=TraderProfileResponse)
 async def get_trader_profile(
     wallet: str,
-    current_user: dict = Depends(get_current_user_from_token),
 ):
-    """Get detailed profile for a specific trader with real trade statistics."""
+    """Get detailed profile for a specific trader with real trade statistics (public)."""
     profile = await fetch_trader_profile(wallet)
     if not profile:
         raise HTTPException(status_code=404, detail="Trader not found")
@@ -1038,3 +1043,365 @@ async def cancel_stop_loss(
     sl.updated_at = utc_now()
     db.commit()
     return {"status": "cancelled", "id": stop_loss_id}
+
+
+# ────────────── Take-Profit Orders ──────────────
+
+class SetTakeProfitRequest(BaseModel):
+    """Create or update a take-profit order."""
+    token_id: str = Field(..., description="CLOB token ID")
+    market_id: str = Field(default="", description="Market condition ID")
+    market_title: str = Field(default="", description="Human-readable title")
+    outcome: str = Field(default="", description="Yes/No outcome label")
+    size: float = Field(..., gt=0, description="Number of shares")
+    take_profit_price: float = Field(..., gt=0, lt=1, description="Trigger price (0-1) – sells when price >= this")
+
+
+class TakeProfitResponse(BaseModel):
+    id: int
+    token_id: str
+    market_id: str
+    market_title: str
+    outcome: str
+    size: float
+    take_profit_price: float
+    status: str
+    order_hash: Optional[str] = None
+    executed_price: Optional[float] = None
+    triggered_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+def _tp_to_response(tp: TakeProfitOrder) -> TakeProfitResponse:
+    return TakeProfitResponse(
+        id=tp.id,
+        token_id=tp.token_id,
+        market_id=tp.market_id or "",
+        market_title=tp.market_title or "",
+        outcome=tp.outcome or "",
+        size=tp.size,
+        take_profit_price=tp.take_profit_price,
+        status=tp.status,
+        order_hash=tp.order_hash,
+        executed_price=tp.executed_price,
+        triggered_at=tp.triggered_at.isoformat() if tp.triggered_at else None,
+        created_at=tp.created_at.isoformat() if tp.created_at else "",
+        updated_at=tp.updated_at.isoformat() if tp.updated_at else "",
+    )
+
+
+@router.post("/take-profit", response_model=TakeProfitResponse)
+async def set_take_profit(
+    body: SetTakeProfitRequest,
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Create or update a take-profit order for a position.
+    If an active take-profit already exists for the same token, it is updated.
+    The background monitor checks prices every ~10s and triggers a sell
+    when price >= take_profit_price.
+    """
+    user_id = current_user.get("user_id")
+
+    existing = db.query(TakeProfitOrder).filter(
+        TakeProfitOrder.user_id == user_id,
+        TakeProfitOrder.token_id == body.token_id,
+        TakeProfitOrder.status == "active",
+    ).first()
+
+    if existing:
+        existing.take_profit_price = body.take_profit_price
+        existing.size = body.size
+        existing.market_title = body.market_title or existing.market_title
+        existing.outcome = body.outcome or existing.outcome
+        existing.updated_at = utc_now()
+        db.commit()
+        db.refresh(existing)
+        return _tp_to_response(existing)
+
+    tp = TakeProfitOrder(
+        user_id=user_id,
+        token_id=body.token_id,
+        market_id=body.market_id,
+        market_title=body.market_title,
+        outcome=body.outcome,
+        size=body.size,
+        take_profit_price=body.take_profit_price,
+        status="active",
+    )
+    db.add(tp)
+    db.commit()
+    db.refresh(tp)
+    return _tp_to_response(tp)
+
+
+@router.get("/take-profit", response_model=List[TakeProfitResponse])
+async def get_take_profits(
+    status: str = Query(default="active", pattern="^(active|triggered|cancelled|failed|all)$"),
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """List take-profit orders for the current user."""
+    user_id = current_user.get("user_id")
+    q = db.query(TakeProfitOrder).filter(TakeProfitOrder.user_id == user_id)
+    if status != "all":
+        q = q.filter(TakeProfitOrder.status == status)
+    orders = q.order_by(TakeProfitOrder.created_at.desc()).all()
+    return [_tp_to_response(o) for o in orders]
+
+
+@router.delete("/take-profit/{take_profit_id}")
+async def cancel_take_profit(
+    take_profit_id: int,
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """Cancel an active take-profit order."""
+    user_id = current_user.get("user_id")
+    tp = db.query(TakeProfitOrder).filter(
+        TakeProfitOrder.id == take_profit_id,
+        TakeProfitOrder.user_id == user_id,
+    ).first()
+
+    if not tp:
+        raise HTTPException(status_code=404, detail="Take-profit order not found")
+    if tp.status != "active":
+        raise HTTPException(status_code=400, detail=f"Cannot cancel – status is '{tp.status}'")
+
+    tp.status = "cancelled"
+    tp.updated_at = utc_now()
+    db.commit()
+    return {"status": "cancelled", "id": take_profit_id}
+
+
+# ────────────── Emergency Stop / Panic Sell ──────────────
+
+class EmergencyStopResponse(BaseModel):
+    halted: bool
+    positions_closed: int = 0
+    stop_losses_cancelled: int = 0
+    take_profits_cancelled: int = 0
+    errors: List[str] = []
+    message: str = ""
+
+
+@router.post("/emergency-stop", response_model=EmergencyStopResponse)
+async def emergency_stop(
+    close_positions: bool = Query(default=True, description="Also attempt to sell all open positions"),
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Emergency stop: immediately halt all copy-trading and optionally
+    close every open position (panic sell at current market prices).
+
+    Steps:
+      1. Disable copy-trading and set trading_halted flag.
+      2. Cancel all active stop-loss and take-profit orders.
+      3. If close_positions=true, sell every open position at market price.
+    """
+    user_id = current_user.get("user_id")
+    errors: List[str] = []
+
+    # 1 – Halt trading
+    settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+    if settings:
+        settings.copy_trading_enabled = False
+        settings.trading_halted = True
+        settings.halt_reason = "Emergency stop triggered by user"
+        settings.updated_at = utc_now()
+    else:
+        errors.append("User settings not found; created halt record")
+        settings = UserSettings(
+            user_id=user_id,
+            copy_trading_enabled=False,
+            trading_halted=True,
+            halt_reason="Emergency stop triggered by user",
+        )
+        db.add(settings)
+
+    # 2 – Cancel all active SL/TP orders
+    sl_cancelled = (
+        db.query(StopLossOrder)
+        .filter(StopLossOrder.user_id == user_id, StopLossOrder.status == "active")
+        .update({"status": "cancelled", "updated_at": utc_now()})
+    )
+    tp_cancelled = (
+        db.query(TakeProfitOrder)
+        .filter(TakeProfitOrder.user_id == user_id, TakeProfitOrder.status == "active")
+        .update({"status": "cancelled", "updated_at": utc_now()})
+    )
+
+    db.commit()
+
+    positions_closed = 0
+
+    # 3 – Panic sell all positions
+    if close_positions:
+        from app.models.user import User
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            errors.append("User not found – cannot close positions")
+        else:
+            try:
+                stored = load_wallet_credentials(user.wallet_address)
+            except CredentialStoreError:
+                stored = None
+
+            if not stored:
+                errors.append("No wallet credentials – cannot close positions")
+            else:
+                pk = stored["private_key"]
+                creds = stored.get("clob_creds")
+                service = get_polymarket_service()
+                try:
+                    positions = await service.get_positions(
+                        user.wallet_address,
+                        private_key=pk,
+                        clob_creds=creds,
+                    )
+                except Exception as e:
+                    positions = []
+                    errors.append(f"Failed to fetch positions: {e}")
+
+                for pos in positions:
+                    size = float(pos.get("size", 0))
+                    if size <= 0:
+                        continue
+                    token_id = pos.get("asset") or pos.get("token_id") or pos.get("tokenId", "")
+                    if not token_id:
+                        continue
+                    cur_price = float(pos.get("curPrice", pos.get("price", 0.5)))
+                    # Sell at slightly below market to ensure fill
+                    sell_price = max(0.01, round(cur_price * 0.98, 4))
+
+                    try:
+                        result = _place_order_on_polymarket(
+                            private_key=pk,
+                            clob_creds=creds,
+                            token_id=token_id,
+                            side="SELL",
+                            price=sell_price,
+                            size=size,
+                        )
+                        if result.get("success"):
+                            positions_closed += 1
+                        else:
+                            errors.append(
+                                f"Failed to sell {token_id[:12]}…: {result.get('error', 'unknown')}"
+                            )
+                    except Exception as e:
+                        errors.append(f"Exception selling {token_id[:12]}…: {e}")
+
+    return EmergencyStopResponse(
+        halted=True,
+        positions_closed=positions_closed,
+        stop_losses_cancelled=sl_cancelled,
+        take_profits_cancelled=tp_cancelled,
+        errors=errors,
+        message=(
+            f"Emergency stop complete. Trading halted, "
+            f"{sl_cancelled} SL + {tp_cancelled} TP orders cancelled, "
+            f"{positions_closed} positions closed."
+        ),
+    )
+
+
+@router.post("/resume-trading")
+async def resume_trading(
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Resume trading after an emergency stop or risk halt.
+    Clears the trading_halted flag and cooldown.
+    """
+    user_id = current_user.get("user_id")
+    settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+    if not settings:
+        raise HTTPException(status_code=404, detail="User settings not found")
+
+    settings.trading_halted = False
+    settings.halt_reason = None
+    settings.cooldown_until = None
+    settings.updated_at = utc_now()
+    db.commit()
+
+    return {"resumed": True, "message": "Trading resumed successfully"}
+
+
+# ────────────── Trader Quality Scoring ──────────────
+
+class TraderQualityResponse(BaseModel):
+    wallet_address: str
+    quality_score: Optional[float] = None
+    consistency_score: Optional[float] = None
+    risk_adjusted_score: Optional[float] = None
+    activity_score: Optional[float] = None
+    win_rate_score: Optional[float] = None
+    quality_tier: Optional[str] = None
+
+
+@router.get("/trader/{wallet}/quality", response_model=TraderQualityResponse)
+async def get_trader_quality_score(
+    wallet: str,
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """Get quality score breakdown for a trader."""
+    from app.services.trader_quality_service import get_trader_quality
+    scores = get_trader_quality(db, wallet)
+    if not scores:
+        raise HTTPException(status_code=404, detail="Trader not found or insufficient data")
+    return TraderQualityResponse(wallet_address=wallet.lower(), **scores)
+
+
+@router.post("/traders/rescore")
+async def rescore_all_traders(
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """Recompute quality scores for all tracked traders."""
+    from app.services.trader_quality_service import score_all_traders
+    count = score_all_traders(db)
+    return {"scored": count, "message": f"Quality scores updated for {count} traders"}
+
+
+# ────────────── Arbitrage Detection ──────────────
+
+class ArbitrageOpportunity(BaseModel):
+    type: str
+    market_id: str
+    market_title: str
+    profit_pct: Optional[float] = None
+    spread_pct: Optional[float] = None
+    total_cost: Optional[float] = None
+    bid: Optional[float] = None
+    ask: Optional[float] = None
+    token_id: Optional[str] = None
+    outcome: Optional[str] = None
+    detected_at: str
+
+
+@router.get("/arbitrage/opportunities", response_model=List[ArbitrageOpportunity])
+async def get_arbitrage_opportunities(
+    current_user: dict = Depends(get_current_user_from_token),
+):
+    """Get recently detected arbitrage opportunities."""
+    from app.services.arbitrage_service import get_recent_opportunities
+    return get_recent_opportunities()
+
+
+@router.post("/arbitrage/scan")
+async def trigger_arbitrage_scan(
+    current_user: dict = Depends(get_current_user_from_token),
+):
+    """Trigger an immediate arbitrage scan."""
+    from app.services.arbitrage_service import scan_for_arbitrage
+    opportunities = await scan_for_arbitrage()
+    return {
+        "found": len(opportunities),
+        "opportunities": opportunities[:20],
+    }

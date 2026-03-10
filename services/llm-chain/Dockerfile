@@ -29,6 +29,9 @@ RUN python -m grpc_tools.protoc \
 # Set PYTHONPATH
 ENV PYTHONPATH=/app
 
+# Create ChromaDB data directory
+RUN mkdir -p /app/data/chroma
+
 # Expose gRPC port
 EXPOSE 50051
 

@@ -34,8 +34,16 @@ class Winner(Base):
     # Ranking (from Polymarket leaderboard)
     leaderboard_rank = Column(Integer, nullable=True)
     
+    # Quality scoring (0–100 composite score)
+    quality_score = Column(Float, nullable=True)         # Overall quality (0-100)
+    consistency_score = Column(Float, nullable=True)     # PnL consistency across periods
+    risk_adjusted_score = Column(Float, nullable=True)   # Sharpe-like risk-adjusted return
+    activity_score = Column(Float, nullable=True)        # Trading activity & freshness
+    quality_tier = Column(String(20), nullable=True)     # "S", "A", "B", "C", "D"
+    quality_updated_at = Column(DateTime(timezone=True), nullable=True)
+    
     last_trade_time = Column(DateTime(timezone=True), nullable=True)
     last_updated = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
     
     def __repr__(self):
-        return f"<Winner(wallet={self.wallet_address}, pnl={self.total_pnl}, rank={self.leaderboard_rank})>"
+        return f"<Winner(wallet={self.wallet_address}, pnl={self.total_pnl}, rank={self.leaderboard_rank}, tier={self.quality_tier})>"

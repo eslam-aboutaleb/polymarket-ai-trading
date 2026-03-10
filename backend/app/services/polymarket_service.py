@@ -1,5 +1,6 @@
 """Services for Polymarket operations - portfolio, balance, and positions."""
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import httpx
 from web3 import Web3
 from typing import Optional, Any
@@ -7,8 +8,12 @@ from decimal import Decimal
 import logging
 from datetime import datetime, timezone
 from py_clob_client.clob_types import BookParams
+from app.utils.cache import get_cache
 
 logger = logging.getLogger(__name__)
+
+# In-memory TTL cache for Gamma API market data (avoids hitting upstream on every page load)
+_market_data_cache = get_cache("market_data")
 
 # Polygon Mainnet RPC (free public endpoints)
 POLYGON_RPC_URL = "https://polygon-bor-rpc.publicnode.com"
@@ -42,6 +47,11 @@ POLYMARKET_DATA_API = "https://data-api.polymarket.com"
 
 class PolymarketService:
     """Service for interacting with Polymarket and Polygon chain."""
+    # Dedicated thread pool for blocking Web3 / CLOB calls so that the
+    # asyncio event loop is never blocked.  A bounded pool prevents
+    # unbounded thread creation under load.
+    _executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="web3")
+
     _historical_winrate_cache: dict[str, dict[str, Any]] = {}
     _historical_winrate_cache_ttl_seconds = 60
 
@@ -54,8 +64,13 @@ class PolymarketService:
 
     @staticmethod
     async def _run_blocking(func, *args, **kwargs):
-        """Run blocking Web3/CLOB calls off the event loop."""
-        return await asyncio.to_thread(func, *args, **kwargs)
+        """Run a blocking Web3 / CLOB call off the event loop using a
+        dedicated thread-pool (avoids starving the default executor)."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            PolymarketService._executor,
+            lambda: func(*args, **kwargs),
+        )
 
     # ------------------------------------------------------------------
     # Balance helpers
@@ -703,7 +718,16 @@ class PolymarketService:
         Get trending/active markets from Polymarket.
         Uses Gamma API /events to get live bestAsk/bestBid prices,
         normalises field names, and filters out resolved markets.
+
+        Results are cached for 60 seconds to avoid hammering the upstream
+        Gamma API on every page load / opportunity scan.
         """
+        cache_key = f"active_markets:{limit}"
+        cached = _market_data_cache.get(cache_key)
+        if cached is not None:
+            logger.debug("get_active_markets cache HIT (limit=%s)", limit)
+            return cached
+
         try:
             # Request more events than needed so filtering still yields `limit`
             fetch_limit = max(limit * 3, 30)
@@ -735,6 +759,7 @@ class PolymarketService:
                         m["_event_volume"] = event.get("volume")
                         m["_event_liquidity"] = event.get("liquidity")
                         m["_event_volume_24hr"] = event.get("volume24hr")
+                        m["_event_tags"] = event.get("tags", [])
                         # Preserve sub-market label (e.g. "Before July 2026")
                         if "groupItemTitle" not in m:
                             m["groupItemTitle"] = m.get("groupItemTitle", "")
@@ -799,9 +824,151 @@ class PolymarketService:
                             continue
                         markets.append(m)
 
-                return markets[:limit]
+                result = markets[:limit]
+                _market_data_cache.set(cache_key, result, ttl_seconds=60)
+                logger.debug("get_active_markets cached %d markets (limit=%s)", len(result), limit)
+                return result
         except Exception as e:
             logger.error(f"Error fetching active markets: {e}")
+            return []
+
+    # ---- noise-filter patterns for get_newest_markets ----
+    _NOISE_TITLE_PATTERNS: list[str] = [
+        "up or down",          # 5-min crypto price up/down markets
+        "updown",              # slug variant
+    ]
+    _MIN_LIQUIDITY_FOR_NEWEST = 40  # skip ultra-thin markets
+
+    def _is_noise_event(self, event: dict) -> bool:
+        """Return True for spam/noise events that should be skipped."""
+        title = (event.get("title") or "").lower()
+        for pattern in self._NOISE_TITLE_PATTERNS:
+            if pattern in title:
+                return True
+        liq = event.get("liquidity") or 0
+        if liq < self._MIN_LIQUIDITY_FOR_NEWEST:
+            return True
+        return False
+
+    async def get_newest_markets(self, limit: int = 60) -> list:
+        """
+        Get the newest/most recently created markets from Polymarket.
+        Sorted by start date descending so the freshest markets come first.
+        These are used by the Easy Trade finder to spot obvious mispricings
+        in newly listed markets before the crowd catches on.
+
+        Pre-filters noise (5-min crypto price prediction, ultra-low liquidity)
+        so the resulting list contains diverse, interesting markets.
+        Results are cached for 60 seconds.
+        """
+        cache_key = f"newest_markets:{limit}"
+        cached = _market_data_cache.get(cache_key)
+        if cached is not None:
+            logger.debug("get_newest_markets cache HIT (limit=%s)", limit)
+            return cached
+
+        try:
+            # Fetch extra events because ~80% are crypto noise that gets filtered
+            fetch_limit = max(limit * 8, 300)
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(
+                    f"{POLYMARKET_GAMMA_API}/events",
+                    params={
+                        "limit": fetch_limit,
+                        "active": True,
+                        "closed": False,
+                        "order": "startDate",
+                        "ascending": False,
+                    },
+                )
+                if response.status_code != 200:
+                    logger.warning("Gamma /events (newest) returned %s", response.status_code)
+                    return []
+
+                events = response.json()
+                markets: list[dict] = []
+                for event in events if isinstance(events, list) else []:
+                    # Skip noise events (5-min crypto, ultra-thin liquidity)
+                    if self._is_noise_event(event):
+                        continue
+                    event_markets = event.get("markets", [])
+                    if not event_markets:
+                        continue
+                    for m in event_markets:
+                        m["_event_title"] = event.get("title")
+                        m["_event_slug"] = event.get("slug")
+                        m["_event_image"] = event.get("image")
+                        m["_event_volume"] = event.get("volume")
+                        m["_event_liquidity"] = event.get("liquidity")
+                        m["_event_volume_24hr"] = event.get("volume24hr")
+                        m["_event_tags"] = event.get("tags", [])
+                        m["_event_start_date"] = event.get("startDate")
+                        if "groupItemTitle" not in m:
+                            m["groupItemTitle"] = m.get("groupItemTitle", "")
+                        if "conditionId" in m and "condition_id" not in m:
+                            m["condition_id"] = m["conditionId"]
+                        if "endDateIso" in m and "end_date_iso" not in m:
+                            m["end_date_iso"] = m["endDateIso"]
+
+                        # Build accurate YES/NO prices
+                        best_ask = m.get("bestAsk")
+                        best_bid = m.get("bestBid")
+                        last_trade = m.get("lastTradePrice")
+
+                        yes_price = None
+                        if best_ask is not None and float(best_ask) > 0:
+                            yes_price = float(best_ask)
+                        elif best_bid is not None and float(best_bid) > 0:
+                            yes_price = float(best_bid)
+                        elif last_trade is not None and 0 < float(last_trade) < 1:
+                            yes_price = float(last_trade)
+
+                        if yes_price is not None:
+                            no_price = round(1.0 - yes_price, 4)
+                            m["outcomePrices"] = [
+                                str(round(yes_price, 4)),
+                                str(round(no_price, 4)),
+                            ]
+                        else:
+                            raw_prices = m.get("outcomePrices")
+                            if isinstance(raw_prices, str):
+                                try:
+                                    import json as _json
+                                    raw_prices = _json.loads(raw_prices)
+                                except Exception:
+                                    raw_prices = None
+                            if isinstance(raw_prices, list) and len(raw_prices) >= 2:
+                                try:
+                                    m["outcomePrices"] = [
+                                        str(float(raw_prices[0])),
+                                        str(float(raw_prices[1])),
+                                    ]
+                                except (ValueError, TypeError):
+                                    m["outcomePrices"] = ["0.5", "0.5"]
+                            else:
+                                m["outcomePrices"] = ["0.5", "0.5"]
+
+                        m["bestAsk"] = best_ask
+                        m["bestBid"] = best_bid
+                        m["lastTradePrice"] = last_trade
+
+                    # Filter out resolved markets (p0 near 0 or 1)
+                    for m in event_markets:
+                        prices = m.get("outcomePrices", [])
+                        try:
+                            p0 = float(prices[0])
+                        except (IndexError, ValueError, TypeError):
+                            p0 = 0.5
+                        if p0 <= 0.005 or p0 >= 0.995:
+                            continue
+                        markets.append(m)
+
+                result = markets[:limit]
+                _market_data_cache.set(cache_key, result, ttl_seconds=60)
+                logger.debug("get_newest_markets cached %d markets (limit=%s)", len(result), limit)
+                return result
+        except Exception as e:
+            logger.error(f"Error fetching newest markets: {e}")
             return []
 
     async def get_high_pnl_markets(self, limit: int = 80) -> list:
@@ -1126,6 +1293,19 @@ class PolymarketService:
             logger.error(f"Error fetching markets for tag={tag}: {e}")
             return []
 
+    # Shared httpx client for connection reuse across requests
+    _shared_http_client: httpx.AsyncClient | None = None
+
+    @classmethod
+    def _get_http_client(cls) -> httpx.AsyncClient:
+        """Return a shared httpx.AsyncClient for connection pooling."""
+        if cls._shared_http_client is None or cls._shared_http_client.is_closed:
+            cls._shared_http_client = httpx.AsyncClient(
+                timeout=15.0,
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            )
+        return cls._shared_http_client
+
     async def search_all_markets(
         self,
         query: str = "",
@@ -1138,129 +1318,213 @@ class PolymarketService:
         Browse / search ALL active Polymarket markets.
 
         Uses the Gamma API ``/events`` endpoint with optional text search.
+        Results are cached for 30 seconds to avoid hammering the upstream
+        Gamma API on every page load.
         Returns ``{markets: [...], total: int, offset: int, has_more: bool}``.
         """
         try:
-            fetch_limit = max(limit * 5, 100)  # over-fetch to survive filtering
-            params: dict = {
-                "limit": fetch_limit,
-                "active": True,
-                "closed": False,
-                "order": sort if sort else "volume24hr",
-                "ascending": False,
-            }
+            # Cache the upstream Gamma fetch by (sort, tag) so that pagination
+            # and text search can be served from the cached full list.
+            gamma_cache_key = f"search_all_markets:{sort}:{tag}"
+            all_markets: list[dict] | None = _market_data_cache.get(gamma_cache_key)
 
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.get(
-                    f"{POLYMARKET_GAMMA_API}/events",
-                    params=params,
-                )
-                if response.status_code != 200:
-                    logger.warning(
-                        "Gamma /events search returned %s", response.status_code
-                    )
-                    return {"markets": [], "total": 0, "offset": offset, "has_more": False}
-
-                events = response.json()
+            if all_markets is None:
+                client = self._get_http_client()
                 all_markets: list[dict] = []
-                for event in events if isinstance(events, list) else []:
-                    # ── Server-side tag filter ──
-                    if tag and not self._event_matches_tag(event, tag):
-                        continue
-                    event_markets = event.get("markets", [])
-                    if not event_markets:
-                        continue
-                    for m in event_markets:
-                        m["_event_title"] = event.get("title")
-                        m["_event_slug"] = event.get("slug")
-                        m["_event_image"] = event.get("image")
-                        m["_event_volume"] = event.get("volume")
-                        m["_event_liquidity"] = event.get("liquidity")
-                        m["_event_volume_24hr"] = event.get("volume24hr")
-                        if "groupItemTitle" not in m:
-                            m["groupItemTitle"] = m.get("groupItemTitle", "")
+                seen_market_keys: set[str] = set()
 
-                        if "conditionId" in m and "condition_id" not in m:
-                            m["condition_id"] = m["conditionId"]
-                        if "endDateIso" in m and "end_date_iso" not in m:
-                            m["end_date_iso"] = m["endDateIso"]
+                # Walk Gamma events in pages so we can mirror the broader Polymarket list.
+                page_size = 200
+                max_pages = 40
+                max_markets = 6000
+                page_offset = 0
+                previous_page_fingerprint = ""
+                reached_cap = False
 
-                        # Build tokens array for trade execution
-                        self._build_tokens_from_gamma(m)
+                def _as_prob(value: Any) -> float | None:
+                    try:
+                        n = float(value)
+                        return n if 0 < n < 1 else None
+                    except (TypeError, ValueError):
+                        return None
 
-                        # Build YES / NO prices
-                        best_ask = m.get("bestAsk")
-                        best_bid = m.get("bestBid")
-                        last_trade = m.get("lastTradePrice")
-                        yes_price = None
-                        if best_ask is not None and float(best_ask) > 0:
-                            yes_price = float(best_ask)
-                        elif best_bid is not None and float(best_bid) > 0:
-                            yes_price = float(best_bid)
-                        elif last_trade is not None and 0 < float(last_trade) < 1:
-                            yes_price = float(last_trade)
-
-                        if yes_price is not None:
-                            no_price = round(1.0 - yes_price, 4)
-                            m["outcomePrices"] = [
-                                str(round(yes_price, 4)),
-                                str(round(no_price, 4)),
-                            ]
-                        else:
-                            raw_prices = m.get("outcomePrices")
-                            if isinstance(raw_prices, str):
-                                try:
-                                    import json as _json
-                                    raw_prices = _json.loads(raw_prices)
-                                except Exception:
-                                    raw_prices = None
-                            if isinstance(raw_prices, list) and len(raw_prices) >= 2:
-                                try:
-                                    m["outcomePrices"] = [
-                                        str(float(raw_prices[0])),
-                                        str(float(raw_prices[1])),
-                                    ]
-                                except (ValueError, TypeError):
-                                    m["outcomePrices"] = ["0.5", "0.5"]
-                            else:
-                                m["outcomePrices"] = ["0.5", "0.5"]
-
-                        m["bestAsk"] = best_ask
-                        m["bestBid"] = best_bid
-                        m["lastTradePrice"] = last_trade
-
-                    # Filter resolved
-                    for m in event_markets:
-                        prices = m.get("outcomePrices", [])
-                        try:
-                            p0 = float(prices[0])
-                        except (IndexError, ValueError, TypeError):
-                            p0 = 0.5
-                        if p0 <= 0.005 or p0 >= 0.995:
-                            continue
-                        all_markets.append(m)
-
-                # Client-side text search
-                if query:
-                    q_lower = query.lower()
-                    all_markets = [
-                        m
-                        for m in all_markets
-                        if q_lower
-                        in (
-                            (m.get("question") or m.get("_event_title") or "")
-                            .lower()
+                for _ in range(max_pages):
+                    params: dict[str, Any] = {
+                        "limit": page_size,
+                        "offset": page_offset,
+                        "active": True,
+                        "closed": False,
+                        "order": sort if sort else "volume24hr",
+                        "ascending": False,
+                    }
+                    response = await client.get(
+                        f"{POLYMARKET_GAMMA_API}/events",
+                        params=params,
+                    )
+                    if response.status_code != 200:
+                        if page_offset == 0:
+                            logger.warning(
+                                "Gamma /events search returned %s", response.status_code
+                            )
+                            return {
+                                "markets": [],
+                                "total": 0,
+                                "offset": offset,
+                                "has_more": False,
+                            }
+                        logger.warning(
+                            "Gamma /events pagination stopped at offset=%s status=%s",
+                            page_offset,
+                            response.status_code,
                         )
-                    ]
+                        break
 
-                total = len(all_markets)
-                page = all_markets[offset : offset + limit]
-                return {
-                    "markets": page,
-                    "total": total,
-                    "offset": offset,
-                    "has_more": (offset + limit) < total,
-                }
+                    events = response.json()
+                    if not isinstance(events, list) or not events:
+                        break
+
+                    first_event = events[0]
+                    page_fingerprint = (
+                        f"{first_event.get('id') or first_event.get('slug') or ''}:{len(events)}"
+                    )
+                    # Safety: if upstream ignores offset, avoid looping same page forever.
+                    if page_fingerprint and page_fingerprint == previous_page_fingerprint:
+                        logger.warning(
+                            "Gamma /events returned duplicate page fingerprint; stopping pagination"
+                        )
+                        break
+                    previous_page_fingerprint = page_fingerprint
+                    page_offset += len(events)
+
+                    for event in events:
+                        # ── Server-side tag filter ──
+                        if tag and not self._event_matches_tag(event, tag):
+                            continue
+                        event_markets = event.get("markets", [])
+                        if not event_markets:
+                            continue
+
+                        for m in event_markets:
+                            m["_event_title"] = event.get("title")
+                            m["_event_slug"] = event.get("slug")
+                            m["_event_image"] = event.get("image")
+                            m["_event_volume"] = event.get("volume")
+                            m["_event_liquidity"] = event.get("liquidity")
+                            m["_event_volume_24hr"] = event.get("volume24hr")
+                            m["_event_tags"] = event.get("tags", [])
+                            if "groupItemTitle" not in m:
+                                m["groupItemTitle"] = m.get("groupItemTitle", "")
+
+                            if "conditionId" in m and "condition_id" not in m:
+                                m["condition_id"] = m["conditionId"]
+                            if "endDateIso" in m and "end_date_iso" not in m:
+                                m["end_date_iso"] = m["endDateIso"]
+
+                            # Build tokens array for trade execution
+                            self._build_tokens_from_gamma(m)
+
+                            # Build YES / NO prices
+                            best_ask = m.get("bestAsk")
+                            best_bid = m.get("bestBid")
+                            last_trade = m.get("lastTradePrice")
+                            yes_price = (
+                                _as_prob(best_ask)
+                                or _as_prob(best_bid)
+                                or _as_prob(last_trade)
+                            )
+
+                            if yes_price is not None:
+                                no_price = round(1.0 - yes_price, 4)
+                                m["outcomePrices"] = [
+                                    str(round(yes_price, 4)),
+                                    str(round(no_price, 4)),
+                                ]
+                            else:
+                                raw_prices = m.get("outcomePrices")
+                                if isinstance(raw_prices, str):
+                                    try:
+                                        import json as _json
+                                        raw_prices = _json.loads(raw_prices)
+                                    except Exception:
+                                        raw_prices = None
+                                if isinstance(raw_prices, list) and len(raw_prices) >= 2:
+                                    try:
+                                        m["outcomePrices"] = [
+                                            str(float(raw_prices[0])),
+                                            str(float(raw_prices[1])),
+                                        ]
+                                    except (ValueError, TypeError):
+                                        m["outcomePrices"] = ["0.5", "0.5"]
+                                else:
+                                    m["outcomePrices"] = ["0.5", "0.5"]
+
+                            m["bestAsk"] = best_ask
+                            m["bestBid"] = best_bid
+                            m["lastTradePrice"] = last_trade
+
+                        # Filter resolved + dedupe
+                        for m in event_markets:
+                            prices = m.get("outcomePrices", [])
+                            try:
+                                p0 = float(prices[0])
+                            except (IndexError, ValueError, TypeError):
+                                p0 = 0.5
+                            if p0 <= 0.005 or p0 >= 0.995:
+                                continue
+
+                            cid = str(
+                                m.get("condition_id")
+                                or m.get("conditionId")
+                                or m.get("id")
+                                or ""
+                            )
+                            dedupe_key = cid or str(
+                                (m.get("_event_slug") or m.get("slug") or "")
+                                + "|"
+                                + (m.get("question") or "")
+                            )
+                            if dedupe_key in seen_market_keys:
+                                continue
+                            seen_market_keys.add(dedupe_key)
+                            all_markets.append(m)
+
+                            if len(all_markets) >= max_markets:
+                                reached_cap = True
+                                break
+                        if reached_cap:
+                            break
+                    if reached_cap or len(events) < page_size:
+                        break
+
+                # Cache the full market list for 30s (shared across paginated requests)
+                _market_data_cache.set(gamma_cache_key, all_markets, ttl_seconds=30)
+                logger.debug(
+                    "search_all_markets cached %d markets (sort=%s, tag=%s)",
+                    len(all_markets), sort, tag,
+                )
+
+            # Client-side text search (operates on cached list)
+            filtered = all_markets
+            if query:
+                q_lower = query.lower()
+                filtered = [
+                    m
+                    for m in all_markets
+                    if q_lower
+                    in (
+                        (m.get("question") or m.get("_event_title") or "")
+                        .lower()
+                    )
+                ]
+
+            total = len(filtered)
+            page = filtered[offset : offset + limit]
+            return {
+                "markets": page,
+                "total": total,
+                "offset": offset,
+                "has_more": (offset + limit) < total,
+            }
         except Exception as e:
             logger.error("Error in search_all_markets: %s", e)
             return {"markets": [], "total": 0, "offset": offset, "has_more": False}

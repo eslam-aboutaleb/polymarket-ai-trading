@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 import json
 import logging
 
-from app.api.routes.auth import get_current_user_from_token
+from app.api.routes.auth import get_current_user_from_token, get_optional_user_from_token
 from app.config import get_settings, AIBackend
 from app.grpc_clients.analysis_client import AnalysisClient
 from app.models.user_settings import UserSettings, AIBackendType
@@ -35,22 +35,23 @@ class TraderAnalysisRequest(BaseModel):
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
-async def _get_analysis_client(user_id: int, db: Session) -> AnalysisClient:
+async def _get_analysis_client(user_id: Optional[int], db: Session) -> AnalysisClient:
     """Return an AnalysisClient configured for the user's preferred backend."""
-    record = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
-    backend = AIBackend.CLI_AGENT if (
-        record and record.ai_backend == AIBackendType.CLI_AGENT.value
-    ) else AIBackend.LLM_CHAIN
+    if user_id is not None:
+        record = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+        backend = AIBackend.CLI_AGENT if (
+            record and record.ai_backend == AIBackendType.CLI_AGENT.value
+        ) else AIBackend.LLM_CHAIN
+    else:
+        backend = AIBackend.LLM_CHAIN
     return AnalysisClient(backend=backend)
 
 
 # ── Endpoints ────────────────────────────────────────────────────────
 
 @router.get("/categories")
-async def get_categories(
-    current_user: dict = Depends(get_current_user_from_token),
-):
-    """Return the list of Polymarket market categories."""
+async def get_categories():
+    """Return the list of Polymarket market categories (public)."""
     service = get_polymarket_service()
     return {"categories": service.get_market_categories()}
 
@@ -62,9 +63,8 @@ async def search_markets(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     sort: str = Query("volume24hr", description="Sort field: volume24hr | liquidity | startDate"),
-    current_user: dict = Depends(get_current_user_from_token),
 ):
-    """Search / browse all active Polymarket markets with optional text search + category filter."""
+    """Search / browse all active Polymarket markets (public)."""
     service = get_polymarket_service()
     return await service.search_all_markets(
         query=q, tag=tag, limit=limit, offset=offset, sort=sort,
@@ -75,9 +75,8 @@ async def search_markets(
 async def browse_markets(
     tag: str = Query(..., description="Category tag, e.g. 'crypto'"),
     limit: int = Query(60, ge=1, le=100),
-    current_user: dict = Depends(get_current_user_from_token),
 ):
-    """Browse active markets filtered by category tag."""
+    """Browse active markets filtered by category tag (public)."""
     service = get_polymarket_service()
     markets = await service.get_markets_by_category(tag=tag, limit=limit)
     return {"tag": tag, "markets": markets, "count": len(markets)}
@@ -86,7 +85,7 @@ async def browse_markets(
 @router.post("/trader-analysis/stream")
 async def stream_trader_analysis(
     request: TraderAnalysisRequest,
-    current_user: dict = Depends(get_current_user_from_token),
+    current_user: Optional[dict] = Depends(get_optional_user_from_token),
     db: Session = Depends(get_db),
 ):
     """
@@ -98,7 +97,7 @@ async def stream_trader_analysis(
        how many winning/experienced traders are betting on each position.
     """
     service = get_polymarket_service()
-    user_id = current_user.get("user_id")
+    user_id = current_user.get("user_id") if current_user else None
     client = await _get_analysis_client(user_id, db)
 
     # ── 1. Gather trader statistics ──────────────────────────────

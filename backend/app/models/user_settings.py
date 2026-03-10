@@ -8,9 +8,25 @@ from app.models.base import Base
 
 
 class AIBackendType(str, PyEnum):
-    """Available AI backend options"""
+    """Available AI backend options (legacy - maps to service)"""
     LLM_CHAIN = "llm_chain"
     CLI_AGENT = "cli_agent"
+
+
+class LLMProviderType(str, PyEnum):
+    """
+    Available LLM providers (new - specific provider selection).
+    
+    These map to:
+    - LLM-chain service (port 50051): OPENAI, ANTHROPIC, GOOGLE, GROQ, OLLAMA
+    - CLI-agent service (port 50052): GITHUB_MODELS
+    """
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"
+    GOOGLE = "google"
+    GROQ = "groq"
+    OLLAMA = "ollama"
+    GITHUB_MODELS = "github_models"
 
 
 class RiskMode(str, PyEnum):
@@ -67,11 +83,26 @@ class UserSettings(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False, index=True)
     
-    # AI Backend preference
+    # AI Backend preference (legacy - service-level selection)
     ai_backend = Column(
         String(20),
         default=AIBackendType.LLM_CHAIN.value,
         nullable=False
+    )
+    
+    # LLM Provider preference (new - specific provider selection)
+    # When set, this takes precedence over ai_backend for provider selection
+    preferred_llm_provider = Column(
+        String(30),
+        nullable=True,  # NULL = use ai_backend for backwards compatibility
+        default=None,
+    )
+    
+    # Preferred model for the selected provider (optional)
+    preferred_llm_model = Column(
+        String(100),
+        nullable=True,  # NULL = use provider default
+        default=None,
     )
     
     # ── Copy-Trading Settings ──────────────────────────────────
@@ -95,6 +126,24 @@ class UserSettings(Base):
         default=False,
         nullable=False,
     )
+
+    # ── Multi-Layer Risk Protection ─────────────────────
+    monthly_loss_limit = Column(Float, nullable=True)            # USDC rolling-30-day loss cap
+    max_drawdown_pct = Column(Float, default=25.0, nullable=False)  # % drawdown from peak
+    total_loss_halt_pct = Column(Float, default=40.0, nullable=False)  # % total loss → permanent halt
+    peak_capital = Column(Float, nullable=True)                  # High-water mark in USDC
+    initial_capital = Column(Float, nullable=True)               # Baseline capital for total-loss calc
+    trading_halted = Column(Boolean, default=False, nullable=False)  # Permanent halt flag
+    halt_reason = Column(String(200), nullable=True)             # Why trading was halted
+    cooldown_until = Column(DateTime(timezone=True), nullable=True)  # Timed pause expiry
+
+    # ── Dynamic Streak-Based Sizing ───────────────────
+    dynamic_sizing_enabled = Column(Boolean, default=False, nullable=False)
+    consecutive_wins = Column(Integer, default=0, nullable=False)
+    consecutive_losses = Column(Integer, default=0, nullable=False)
+
+    # ── Simulation / Dry-Run Mode ─────────────────────
+    simulation_mode = Column(Boolean, default=False, nullable=False)
 
     # ── Inverse Position Bot Settings ───────────────────────
     inverse_bot_enabled = Column(Boolean, default=False, nullable=False)

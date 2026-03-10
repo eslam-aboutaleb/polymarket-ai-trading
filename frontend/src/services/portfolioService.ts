@@ -46,6 +46,14 @@ export interface MarketsResponse {
   count: number;
 }
 
+export interface CombinedMarketsResponse {
+  markets: PolymarketMarket[];
+  count: number;
+  total: number;
+  offset: number;
+  has_more: boolean;
+}
+
 export interface MarketPriceTick {
   id: string;
   question: string;
@@ -89,6 +97,7 @@ export interface PolymarketMarket {
   _event_volume?: string;
   _event_liquidity?: string;
   _event_volume_24hr?: number;
+  _event_tags?: Array<{ label?: string; slug?: string; id?: string }>;
   groupItemTitle?: string;
 }
 
@@ -112,6 +121,21 @@ export const portfolioService = {
   async getActiveMarkets(limit: number = 10): Promise<MarketsResponse> {
     return apiClient.get<MarketsResponse>(
       `/api/portfolio/markets?limit=${limit}`,
+    );
+  },
+
+  async getNewestMarkets(limit: number = 60): Promise<MarketsResponse> {
+    return apiClient.get<MarketsResponse>(
+      `/api/portfolio/markets/newest?limit=${limit}`,
+    );
+  },
+
+  async getCombinedMarkets(
+    limit: number = 60,
+    offset: number = 0,
+  ): Promise<CombinedMarketsResponse> {
+    return apiClient.get<CombinedMarketsResponse>(
+      `/api/portfolio/markets/combined?limit=${limit}&offset=${offset}`,
     );
   },
 

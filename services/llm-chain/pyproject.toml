@@ -20,6 +20,13 @@ dependencies = [
     # Default provider - OpenAI
     "langchain-openai>=0.1.0",
     "openai>=1.0.0",
+    # RAG / Vector DB
+    "chromadb>=0.4.0",
+    "langchain-chroma>=0.1.0",
+    # Premium search providers
+    "tavily-python>=0.3.0",
+    # News API
+    "newsapi-python>=0.2.7",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,208 @@
+# ── Production Docker Compose ──────────────────────────────────
+# Usage:
+#   cp .env.prod.example .env.prod     # fill in secrets
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+# ───────────────────────────────────────────────────────────────
+
+services:
+  # ── PostgreSQL ────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+      POSTGRES_DB: ${POSTGRES_DB:-polymarket}
+    # No host port binding — only reachable inside the compose network
+    expose:
+      - "5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-polymarket_user} -d ${POSTGRES_DB:-polymarket}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  # ── Redis ─────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    command: >
+      redis-server
+        --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD required}
+        --maxmemory 256mb
+        --maxmemory-policy allkeys-lru
+    expose:
+      - "6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD} ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+
+  # ── LLM Chain (gRPC AI service) ──────────────────────────────
+  llm-chain:
+    build:
+      context: .
+      dockerfile: services/llm-chain/Dockerfile.prod
+    expose:
+      - "50051"
+    environment:
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4-turbo-preview}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.3}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-4096}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      GRPC_PORT: 50051
+      PROMPTS_PATH: /app/prompts/prompts.json
+      LOG_LEVEL: ${LOG_LEVEL:-WARNING}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      TAVILY_ENABLED: ${TAVILY_ENABLED:-false}
+      NEWSAPI_API_KEY: ${NEWSAPI_API_KEY:-}
+      NEWSAPI_ENABLED: ${NEWSAPI_ENABLED:-false}
+      RAG_ENABLED: ${RAG_ENABLED:-true}
+      CHROMA_PERSIST_DIR: /app/data/chroma
+    volumes:
+      - ./prompts:/app/prompts:ro
+      - llm_chain_chroma:/app/data/chroma
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  # ── CLI Agent (gRPC AI service) ──────────────────────────────
+  cli-agent:
+    build:
+      context: .
+      dockerfile: services/cli-agent/Dockerfile.prod
+    expose:
+      - "50052"
+    environment:
+      GRPC_PORT: 50052
+      PROMPTS_PATH: /app/prompts/prompts.json
+      MCP_CONFIG_PATH: /app/mcp-config.json
+      LOG_LEVEL: ${LOG_LEVEL:-WARNING}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_MODEL: ${GITHUB_MODEL:-gpt-4o-mini}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # NOTE: POLYMARKET_PRIVATE_KEY is sensitive.
+      # Prefer Docker secrets in orchestrated environments.
+      POLYMARKET_PRIVATE_KEY: ${POLYMARKET_PRIVATE_KEY:-}
+      POLYMARKET_CHAIN_ID: ${POLYMARKET_CHAIN_ID:-137}
+    volumes:
+      - ./prompts:/app/prompts:ro
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  # ── Backend (FastAPI) ────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    expose:
+      - "8000"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-polymarket}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set}
+      REFRESH_TOKEN_HASH_SECRET: ${REFRESH_TOKEN_HASH_SECRET:-}
+      ENCRYPTION_MASTER_KEYS: ${ENCRYPTION_MASTER_KEYS:-}
+      ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:-}
+      CREDENTIAL_CACHE_TTL_SECONDS: ${CREDENTIAL_CACHE_TTL_SECONDS:-3600}
+      REQUIRE_REDIS_FOR_CREDENTIALS: "true"
+      ENVIRONMENT: production
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://yourdomain.com}
+      DEBUG_ENDPOINTS_ENABLED: "false"
+      DEBUG_LOG_HASH_SALT: ${DEBUG_LOG_HASH_SALT:-}
+      POLYMARKET_PRIVATE_KEY: ${POLYMARKET_PRIVATE_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      PROMPTS_PATH: /app/prompts/prompts.json
+      LLM_CHAIN_GRPC_HOST: llm-chain
+      LLM_CHAIN_GRPC_PORT: 50051
+      CLI_AGENT_GRPC_HOST: cli-agent
+      CLI_AGENT_GRPC_PORT: 50052
+      DEFAULT_AI_BACKEND: ${DEFAULT_AI_BACKEND:-llm_chain}
+      GRPC_TIMEOUT: ${GRPC_TIMEOUT:-60}
+      ADMIN_WALLETS: ${ADMIN_WALLETS:-}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      llm-chain:
+        condition: service_started
+      cli-agent:
+        condition: service_started
+    volumes:
+      - ./prompts:/app/prompts:ro
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+  # ── Frontend (nginx serving Vite build) ──────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        VITE_API_URL: ""   # empty → relative /api, proxied by nginx
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+
+volumes:
+  postgres_data:
+  redis_data:
+  llm_chain_chroma:

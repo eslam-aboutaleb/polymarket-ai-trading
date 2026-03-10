@@ -10,6 +10,10 @@ import {
 } from "../services/portfolioService";
 import { stopLossService, StopLossOrder } from "../services/stopLossService";
 import {
+  takeProfitService,
+  TakeProfitOrder,
+} from "../services/takeProfitService";
+import {
   inverseBotService,
   InverseBotPosition,
   InverseBotSizeOverride,
@@ -24,6 +28,7 @@ import {
 } from "../utils/urlSafety";
 import CashOutModal from "./CashOutModal";
 import StopLossModal from "./StopLossModal";
+import TakeProfitModal from "./TakeProfitModal";
 
 type FilterType = "all" | "buy" | "sell" | "confirmed" | "matched";
 type TabType = "history" | "positions";
@@ -66,9 +71,15 @@ export default function TradeHistory() {
   // --- Modal state ---
   const [cashOutPosition, setCashOutPosition] = useState<any | null>(null);
   const [stopLossPosition, setStopLossPosition] = useState<any | null>(null);
+  const [takeProfitPosition, setTakeProfitPosition] = useState<any | null>(
+    null,
+  );
 
-  // --- Active stop-losses ---
+  // --- Active stop-losses & take-profits ---
   const [activeStopLosses, setActiveStopLosses] = useState<StopLossOrder[]>([]);
+  const [activeTakeProfits, setActiveTakeProfits] = useState<TakeProfitOrder[]>(
+    [],
+  );
   const [inverseBotPositions, setInverseBotPositions] = useState<
     InverseBotPosition[]
   >([]);
@@ -119,6 +130,15 @@ export default function TradeHistory() {
     }
   }, []);
 
+  const fetchTakeProfits = useCallback(async () => {
+    try {
+      const orders = await takeProfitService.getTakeProfits("active");
+      setActiveTakeProfits(orders);
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const fetchInverseBotPositions = useCallback(async () => {
     try {
       const rows = await inverseBotService.listInverseBotPositions();
@@ -128,13 +148,17 @@ export default function TradeHistory() {
     }
   }, []);
 
-  // Poll active stop-losses
+  // Poll active stop-losses & take-profits
   useEffect(() => {
     if (!isAuthenticated || activeTab !== "positions") return;
     fetchStopLosses();
-    const id = setInterval(fetchStopLosses, STOP_LOSS_POLL_INTERVAL);
+    fetchTakeProfits();
+    const id = setInterval(() => {
+      fetchStopLosses();
+      fetchTakeProfits();
+    }, STOP_LOSS_POLL_INTERVAL);
     return () => clearInterval(id);
-  }, [isAuthenticated, activeTab, fetchStopLosses]);
+  }, [isAuthenticated, activeTab, fetchStopLosses, fetchTakeProfits]);
 
   useEffect(() => {
     if (!isAuthenticated || activeTab !== "positions") return;
@@ -147,7 +171,14 @@ export default function TradeHistory() {
     return activeStopLosses.find((sl) => sl.token_id === tokenId);
   };
 
-  const getInverseBotForPosition = (pos: any): InverseBotPosition | undefined => {
+  const getTakeProfitForPosition = (pos: any): TakeProfitOrder | undefined => {
+    const tokenId = pos.asset_id || pos.token_id || pos.condition_id || "";
+    return activeTakeProfits.find((tp) => tp.token_id === tokenId);
+  };
+
+  const getInverseBotForPosition = (
+    pos: any,
+  ): InverseBotPosition | undefined => {
     const tokenId = String(pos.asset_id || pos.token_id || "");
     return inverseBotPositions.find((row) => row.token_id === tokenId);
   };
@@ -174,9 +205,13 @@ export default function TradeHistory() {
       outcome: String(pos.outcome || ""),
       enabled: overrides?.enabled ?? existing?.enabled ?? true,
       size_mode_override:
-        overrides?.size_mode_override ?? existing?.size_mode_override ?? "inherit",
+        overrides?.size_mode_override ??
+        existing?.size_mode_override ??
+        "inherit",
       fixed_amount_override:
-        overrides?.fixed_amount_override ?? existing?.fixed_amount_override ?? null,
+        overrides?.fixed_amount_override ??
+        existing?.fixed_amount_override ??
+        null,
     };
     setInverseBusyToken(tokenId);
     try {
@@ -184,7 +219,9 @@ export default function TradeHistory() {
       await fetchInverseBotPositions();
       return true;
     } catch (err: unknown) {
-      setPosError(getApiErrorMessage(err, "Failed to update inverse bot settings"));
+      setPosError(
+        getApiErrorMessage(err, "Failed to update inverse bot settings"),
+      );
       return false;
     } finally {
       setInverseBusyToken(null);
@@ -277,7 +314,10 @@ export default function TradeHistory() {
     inverse?: InverseBotPosition,
   ) => {
     if (!inverse) return;
-    if (inverseExplainByToken[tokenId] || inverseExplainLoadingToken === tokenId) {
+    if (
+      inverseExplainByToken[tokenId] ||
+      inverseExplainLoadingToken === tokenId
+    ) {
       return;
     }
     if (
@@ -354,14 +394,22 @@ export default function TradeHistory() {
             ? {
                 decision: String(parsed.decision || fallbackExplain.decision),
                 why: String(parsed.why || fallbackExplain.why),
-                confidence: String(parsed.confidence || fallbackExplain.confidence),
+                confidence: String(
+                  parsed.confidence || fallbackExplain.confidence,
+                ),
                 market_signal: String(
                   parsed.market_signal || fallbackExplain.market_signal,
                 ),
-                web_signal: String(parsed.web_signal || fallbackExplain.web_signal),
+                web_signal: String(
+                  parsed.web_signal || fallbackExplain.web_signal,
+                ),
                 x_signal: String(parsed.x_signal || fallbackExplain.x_signal),
-                next_checks: String(parsed.next_checks || fallbackExplain.next_checks),
-                updated_at: String(parsed.updated_at || fallbackExplain.updated_at),
+                next_checks: String(
+                  parsed.next_checks || fallbackExplain.next_checks,
+                ),
+                updated_at: String(
+                  parsed.updated_at || fallbackExplain.updated_at,
+                ),
               }
             : fallbackExplain,
       }));
@@ -780,9 +828,26 @@ export default function TradeHistory() {
                         ) : null;
                       })()}
 
+                      {/* Take-profit indicator */}
+                      {(() => {
+                        const tp = getTakeProfitForPosition(pos);
+                        return tp ? (
+                          <div className="mb-3 px-2.5 py-1.5 rounded bg-emerald-500/10 border border-emerald-500/20 flex justify-between items-center">
+                            <span className="text-xs text-emerald-400">
+                              Take Profit Active
+                            </span>
+                            <span className="text-xs mono text-emerald-300">
+                              {(tp.take_profit_price * 100).toFixed(1)}¢
+                            </span>
+                          </div>
+                        ) : null;
+                      })()}
+
                       {(() => {
                         const inverse = getInverseBotForPosition(pos);
-                        const tokenId = String(pos.asset_id || pos.token_id || "");
+                        const tokenId = String(
+                          pos.asset_id || pos.token_id || "",
+                        );
                         const isBusy = inverseBusyToken === tokenId;
                         const enabled = !!inverse?.enabled;
                         const infoOpen =
@@ -800,19 +865,31 @@ export default function TradeHistory() {
                                     className="relative"
                                     onMouseEnter={() => {
                                       setInverseInfoHoverToken(tokenId);
-                                      ensureInverseExplanation(tokenId, pos, inverse);
+                                      ensureInverseExplanation(
+                                        tokenId,
+                                        pos,
+                                        inverse,
+                                      );
                                     }}
-                                    onMouseLeave={() => setInverseInfoHoverToken(null)}
+                                    onMouseLeave={() =>
+                                      setInverseInfoHoverToken(null)
+                                    }
                                   >
                                     <button
                                       type="button"
                                       title="Explain current evaluation"
                                       onClick={() => {
-                                        if (inverseInfoPinnedToken === tokenId) {
+                                        if (
+                                          inverseInfoPinnedToken === tokenId
+                                        ) {
                                           setInverseInfoPinnedToken(null);
                                         } else {
                                           setInverseInfoPinnedToken(tokenId);
-                                          ensureInverseExplanation(tokenId, pos, inverse);
+                                          ensureInverseExplanation(
+                                            tokenId,
+                                            pos,
+                                            inverse,
+                                          );
                                         }
                                       }}
                                       className="w-5 h-5 rounded-full border border-[var(--line-strong)] text-[11px] text-soft hover:text-white hover:border-[var(--accent)] transition"
@@ -826,21 +903,31 @@ export default function TradeHistory() {
                                             Inverse Bot Evaluation
                                           </p>
                                         </div>
-                                        {inverseExplainLoadingToken === tokenId ? (
+                                        {inverseExplainLoadingToken ===
+                                        tokenId ? (
                                           <p className="text-[11px] text-muted p-3">
                                             Generating explanation...
                                           </p>
-                                        ) : inverseExplainErrorByToken[tokenId] ? (
+                                        ) : inverseExplainErrorByToken[
+                                            tokenId
+                                          ] ? (
                                           <p className="text-[11px] text-red-300 p-3">
-                                            {inverseExplainErrorByToken[tokenId]}
+                                            {
+                                              inverseExplainErrorByToken[
+                                                tokenId
+                                              ]
+                                            }
                                           </p>
                                         ) : (
                                           <div className="overflow-x-auto">
                                             <table className="table-theme text-[11px] w-full">
                                               <tbody>
                                                 {Object.entries(
-                                                  inverseExplainByToken[tokenId] || {
-                                                    decision: "No explanation available yet.",
+                                                  inverseExplainByToken[
+                                                    tokenId
+                                                  ] || {
+                                                    decision:
+                                                      "No explanation available yet.",
                                                     why: "-",
                                                     confidence: "-",
                                                     market_signal: "-",
@@ -875,7 +962,9 @@ export default function TradeHistory() {
                                 <input
                                   type="checkbox"
                                   checked={enabled}
-                                  onChange={(e) => toggleInverseBot(pos, e.target.checked)}
+                                  onChange={(e) =>
+                                    toggleInverseBot(pos, e.target.checked)
+                                  }
                                   disabled={isBusy}
                                   className="w-4 h-4 accent-[var(--accent)]"
                                 />
@@ -883,7 +972,9 @@ export default function TradeHistory() {
                             </div>
 
                             <div className="flex items-center justify-between gap-2">
-                              <span className={`chip ${inverseStatusClass(inverse?.status)}`}>
+                              <span
+                                className={`chip ${inverseStatusClass(inverse?.status)}`}
+                              >
                                 {inverse?.status || "inactive"}
                               </span>
                               <button
@@ -909,8 +1000,12 @@ export default function TradeHistory() {
                                 className="px-2 py-1.5 rounded bg-[var(--bg)] border border-[var(--line)] text-xs"
                               >
                                 <option value="inherit">Inherit</option>
-                                <option value="full_notional">Full Notional</option>
-                                <option value="fixed_amount">Fixed Amount</option>
+                                <option value="full_notional">
+                                  Full Notional
+                                </option>
+                                <option value="fixed_amount">
+                                  Fixed Amount
+                                </option>
                               </select>
                               {(inverse?.size_mode_override || "inherit") ===
                                 "fixed_amount" && (
@@ -919,7 +1014,9 @@ export default function TradeHistory() {
                                   min={1}
                                   step={1}
                                   placeholder="USDC"
-                                  defaultValue={inverse?.fixed_amount_override ?? 50}
+                                  defaultValue={
+                                    inverse?.fixed_amount_override ?? 50
+                                  }
                                   onBlur={(e) => {
                                     const v = Number(e.target.value);
                                     if (v >= 1) {
@@ -944,7 +1041,9 @@ export default function TradeHistory() {
                               {" · "}
                               Last eval:{" "}
                               {inverse?.last_evaluated_at
-                                ? new Date(inverse.last_evaluated_at).toLocaleTimeString()
+                                ? new Date(
+                                    inverse.last_evaluated_at,
+                                  ).toLocaleTimeString()
                                 : "—"}
                             </div>
                             {inverse?.last_error && (
@@ -971,6 +1070,14 @@ export default function TradeHistory() {
                           {getStopLossForPosition(pos)
                             ? "Edit Stop Loss"
                             : "Stop Loss"}
+                        </button>
+                        <button
+                          onClick={() => setTakeProfitPosition(pos)}
+                          className="flex-1 btn-accent flex items-center justify-center gap-1.5"
+                        >
+                          {getTakeProfitForPosition(pos)
+                            ? "Edit Take Profit"
+                            : "Take Profit"}
                         </button>
                       </div>
                     </div>
@@ -1197,7 +1304,9 @@ export default function TradeHistory() {
                                       <span className="text-muted block mb-0.5">
                                         Tx Hash
                                       </span>
-                                      {buildPolygonscanTxUrl(trade.transaction_hash) ? (
+                                      {buildPolygonscanTxUrl(
+                                        trade.transaction_hash,
+                                      ) ? (
                                         <a
                                           href={
                                             buildPolygonscanTxUrl(
@@ -1222,7 +1331,9 @@ export default function TradeHistory() {
                                       <span className="text-muted block mb-0.5">
                                         Counterparty
                                       </span>
-                                      {buildPolygonscanAddressUrl(trade.maker_address) ? (
+                                      {buildPolygonscanAddressUrl(
+                                        trade.maker_address,
+                                      ) ? (
                                         <a
                                           href={
                                             buildPolygonscanAddressUrl(
@@ -1283,7 +1394,9 @@ export default function TradeHistory() {
                                           View Market
                                         </a>
                                       ) : (
-                                        <span className="text-soft">Unavailable</span>
+                                        <span className="text-soft">
+                                          Unavailable
+                                        </span>
                                       )}
                                     </div>
                                   )}
@@ -1345,6 +1458,18 @@ export default function TradeHistory() {
           onSuccess={() => {
             setStopLossPosition(null);
             fetchStopLosses();
+          }}
+        />
+      )}
+
+      {takeProfitPosition && (
+        <TakeProfitModal
+          position={takeProfitPosition}
+          existingTakeProfit={getTakeProfitForPosition(takeProfitPosition)}
+          onClose={() => setTakeProfitPosition(null)}
+          onSuccess={() => {
+            setTakeProfitPosition(null);
+            fetchTakeProfits();
           }}
         />
       )}

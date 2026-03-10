@@ -362,6 +362,84 @@ def _place_order_on_polymarket(
     }
 
 
+# ────────────── Multi-Phase Order Execution ──────────────
+
+def _place_order_multi_phase(
+    private_key: str,
+    clob_creds: Optional[dict],
+    token_id: str,
+    side: str,
+    price: float,
+    size: float,
+    enable_phases: bool = True,
+) -> Dict[str, Any]:
+    """Multi-phase order execution with automatic price adjustment.
+
+    Inspired by zydomus219/Polymarket-betting-bot's 3-tiered approach:
+      Phase 1: Place at original price (GTC limit)
+      Phase 2: Adjust price by +1-3 cents toward market for better fills
+      Phase 3: Aggressive — reduced size at more aggressive price
+
+    Falls back to single-phase when enable_phases=False.
+    """
+    if not enable_phases:
+        return _place_order_on_polymarket(
+            private_key, clob_creds, token_id, side, price, size,
+        )
+
+    # Phase 1: Original price
+    logger.info("Multi-phase order: Phase 1 — original price=%.4f size=%.2f", price, size)
+    result = _place_order_on_polymarket(
+        private_key, clob_creds, token_id, side, price, size,
+    )
+    if result.get("success"):
+        result["phase"] = 1
+        return result
+
+    # Phase 2: Adjust price by 1-3 cents toward market
+    for price_adjust in [0.01, 0.02, 0.03]:
+        adjusted_price = price + price_adjust if side.upper() == "BUY" else price - price_adjust
+        adjusted_price = round(max(0.01, min(0.99, adjusted_price)), 4)
+        logger.info(
+            "Multi-phase order: Phase 2 — adjusted price=%.4f (offset=%.2f)",
+            adjusted_price, price_adjust,
+        )
+        result = _place_order_on_polymarket(
+            private_key, clob_creds, token_id, side, adjusted_price, size,
+        )
+        if result.get("success"):
+            result["phase"] = 2
+            result["price_adjustment"] = price_adjust
+            return result
+
+    # Phase 3: Aggressive — smaller size, wider spread
+    aggressive_size = round(size * 0.5, 2)
+    aggressive_price = round(
+        price + 0.05 if side.upper() == "BUY" else price - 0.05, 4,
+    )
+    aggressive_price = max(0.01, min(0.99, aggressive_price))
+    if aggressive_size >= 1.0:
+        logger.info(
+            "Multi-phase order: Phase 3 — aggressive price=%.4f size=%.2f",
+            aggressive_price, aggressive_size,
+        )
+        result = _place_order_on_polymarket(
+            private_key, clob_creds, token_id, side, aggressive_price, aggressive_size,
+        )
+        if result.get("success"):
+            result["phase"] = 3
+            result["original_size"] = size
+            return result
+
+    logger.error("Multi-phase order exhausted all phases for %s %s", side, token_id[:20])
+    return {
+        "success": False,
+        "order_hash": None,
+        "status": "all_phases_failed",
+        "error": "All execution phases failed",
+    }
+
+
 # ────────────── Risk calculations ──────────────
 
 def _daily_loss_so_far(db: Session, user_id: int) -> float:
@@ -378,6 +456,36 @@ def _daily_loss_so_far(db: Session, user_id: int) -> float:
         .scalar()
     )
     return abs(float(result or 0.0))
+
+
+def _monthly_loss_so_far(db: Session, user_id: int) -> float:
+    """Sum of negative PnL from copy trades executed this calendar month (UTC)."""
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    result = (
+        db.query(func.coalesce(func.sum(UserTrade.pnl), 0.0))
+        .filter(
+            UserTrade.user_id == user_id,
+            UserTrade.copied_from_wallet.isnot(None),
+            UserTrade.executed_at >= month_start,
+            UserTrade.pnl < 0,
+        )
+        .scalar()
+    )
+    return abs(float(result or 0.0))
+
+
+def _total_pnl_since_start(db: Session, user_id: int) -> float:
+    """Net PnL across all copy trades for a user (positive = profit, negative = loss)."""
+    result = (
+        db.query(func.coalesce(func.sum(UserTrade.pnl), 0.0))
+        .filter(
+            UserTrade.user_id == user_id,
+            UserTrade.copied_from_wallet.isnot(None),
+        )
+        .scalar()
+    )
+    return float(result or 0.0)
 
 
 def _to_float(val: Any, default: float = 0.0) -> float:
@@ -404,17 +512,77 @@ def _apply_global_safety_caps(
     db: Session,
 ) -> Tuple[float, Optional[str]]:
     """
-    Apply global max-position and daily-loss safety caps as the final guardrail,
+    Apply multi-layer risk protection as the final guardrail,
     regardless of per-trader sizing mode.
+
+    Layers:
+      0. Trading halt / cooldown check
+      1. Monthly loss limit
+      2. Max drawdown from peak capital
+      3. Total loss halt (percentage of initial capital)
+      4. Daily loss limit (original)
+      5. Max position size cap
     """
     size = _to_float(trade_size)
     if size <= 0:
         return 0.0, "Calculated trade size is zero"
 
+    # Layer 0 – Trading halt / cooldown
+    if settings.trading_halted:
+        reason = settings.halt_reason or "Trading halted by risk system"
+        return 0.0, reason
+    if settings.cooldown_until:
+        now = datetime.now(timezone.utc)
+        if now < settings.cooldown_until:
+            remaining = int((settings.cooldown_until - now).total_seconds() / 60)
+            return 0.0, f"Cooldown active ({remaining}m remaining)"
+        else:
+            # Cooldown expired — clear it
+            settings.cooldown_until = None
+
+    # Layer 1 – Monthly loss limit
+    monthly_limit = _to_float(settings.monthly_loss_limit)
+    if monthly_limit > 0:
+        monthly_loss = _monthly_loss_so_far(db, settings.user_id)
+        monthly_remaining = monthly_limit - monthly_loss
+        if monthly_remaining <= 0:
+            return 0.0, "Monthly loss limit reached"
+        size = min(size, monthly_remaining)
+
+    # Layer 2 – Max drawdown from peak capital
+    max_dd_pct = _to_float(settings.max_drawdown_pct)
+    peak = _to_float(settings.peak_capital)
+    if max_dd_pct > 0 and peak > 0:
+        total_pnl = _total_pnl_since_start(db, settings.user_id)
+        initial = _to_float(settings.initial_capital, peak)
+        current_capital = initial + total_pnl
+        # Update peak if current is higher
+        if current_capital > peak:
+            settings.peak_capital = current_capital
+            peak = current_capital
+        drawdown_pct = ((peak - current_capital) / peak) * 100.0 if peak > 0 else 0.0
+        if drawdown_pct >= max_dd_pct:
+            settings.trading_halted = True
+            settings.halt_reason = f"Max drawdown {max_dd_pct}% breached (current: {drawdown_pct:.1f}%)"
+            return 0.0, settings.halt_reason
+
+    # Layer 3 – Total loss halt
+    total_halt_pct = _to_float(settings.total_loss_halt_pct)
+    initial_cap = _to_float(settings.initial_capital)
+    if total_halt_pct > 0 and initial_cap > 0:
+        total_pnl = _total_pnl_since_start(db, settings.user_id)
+        total_loss_pct = (abs(min(0, total_pnl)) / initial_cap) * 100.0
+        if total_loss_pct >= total_halt_pct:
+            settings.trading_halted = True
+            settings.halt_reason = f"Total loss {total_halt_pct}% of initial capital breached"
+            return 0.0, settings.halt_reason
+
+    # Layer 4 – Max position size
     max_pos = _to_float(settings.max_position_size)
     if max_pos > 0:
         size = min(size, max_pos)
 
+    # Layer 5 – Daily loss limit
     daily_loss = _daily_loss_so_far(db, settings.user_id)
     remaining = _to_float(settings.daily_loss_limit, 500.0) - daily_loss
     if remaining <= 0:
@@ -427,6 +595,33 @@ def _apply_global_safety_caps(
     return round(size, 2), None
 
 
+def _streak_sizing_multiplier(settings: UserSettings) -> float:
+    """
+    Calculate a dynamic sizing multiplier based on consecutive win/loss streaks.
+    - Wins streak: gradually increase up to 1.5x
+    - Loss streak: taper down to 0.25x
+    """
+    if not settings.dynamic_sizing_enabled:
+        return 1.0
+
+    wins = settings.consecutive_wins or 0
+    losses = settings.consecutive_losses or 0
+
+    if losses >= 5:
+        return 0.25
+    elif losses >= 3:
+        return 0.5
+    elif losses >= 2:
+        return 0.75
+    elif wins >= 5:
+        return 1.5
+    elif wins >= 3:
+        return 1.25
+    elif wins >= 2:
+        return 1.1
+    return 1.0
+
+
 def calculate_trade_size(
     settings: UserSettings,
     trader_trade_amount: float,
@@ -434,6 +629,7 @@ def calculate_trade_size(
 ) -> Tuple[float, Optional[str]]:
     """
     Determine base USDC trade size based on the user's global risk mode.
+    Applies dynamic streak-based sizing multiplier when enabled.
     Safety caps are applied separately by _apply_global_safety_caps().
 
     Returns (trade_size, rejection_reason).
@@ -455,6 +651,16 @@ def calculate_trade_size(
 
     if trade_size <= 0:
         return 0.0, "Calculated trade size is zero"
+
+    # Apply dynamic streak-based multiplier
+    multiplier = _streak_sizing_multiplier(settings)
+    if multiplier != 1.0:
+        trade_size = trade_size * multiplier
+        logger.info(
+            "Streak sizing: user %s multiplier=%.2f (wins=%d, losses=%d)",
+            settings.user_id, multiplier,
+            settings.consecutive_wins or 0, settings.consecutive_losses or 0,
+        )
 
     return round(trade_size, 2), None
 
@@ -666,6 +872,16 @@ def _record_copy_trade_attempt(
     return user_trade
 
 
+def _update_streak(settings: UserSettings, won: bool) -> None:
+    """Update consecutive win/loss counters for dynamic sizing."""
+    if won:
+        settings.consecutive_wins = (settings.consecutive_wins or 0) + 1
+        settings.consecutive_losses = 0
+    else:
+        settings.consecutive_losses = (settings.consecutive_losses or 0) + 1
+        settings.consecutive_wins = 0
+
+
 # ────────────── Main execution flow ──────────────
 
 async def execute_copy_trade(
@@ -798,7 +1014,7 @@ async def execute_copy_trade(
         _save_assessment(db, trade_history_id, assessment)
 
     # 5 – Ensure credentials exist before placing order
-    if not stored:
+    if not stored and not user_settings.simulation_mode:
         rejected = _record_copy_trade_attempt(
             db=db,
             user_id=user_id,
@@ -821,7 +1037,39 @@ async def execute_copy_trade(
             "status": "rejected",
         }
 
-    # 6 – Place order
+    # 6 – Simulation mode: record trade without placing a real order
+    if user_settings.simulation_mode:
+        logger.info(
+            "SIMULATION: user %d would trade %s %s @ %.4f size=%.2f on %s",
+            user_id, side, token_id, price, trade_size, market_id,
+        )
+        sim_trade = _record_copy_trade_attempt(
+            db=db,
+            user_id=user_id,
+            market_id=market_id,
+            side=side,
+            trade_size=trade_size,
+            price=price,
+            status="simulated",
+            trader_wallet=trader_wallet,
+            order_hash=None,
+            trade_history_id=trade_history_id,
+            plan=plan,
+            reason=None,
+        )
+        # Update streak counters (simulate success)
+        _update_streak(user_settings, won=True)
+        db.commit()
+        return {
+            "executed": True,
+            "simulated": True,
+            "trade_id": sim_trade.id,
+            "order_hash": None,
+            "trade_size": trade_size,
+            "status": "simulated",
+        }
+
+    # 7 – Place order
     result = _place_order_on_polymarket(
         private_key=pk,
         clob_creds=creds,
@@ -831,7 +1079,7 @@ async def execute_copy_trade(
         size=trade_size,
     )
 
-    # 7 – Record trade
+    # 8 – Record trade and update streak
     status = "executed" if result["success"] else "failed"
     user_trade = _record_copy_trade_attempt(
         db=db,
@@ -847,6 +1095,13 @@ async def execute_copy_trade(
         plan=plan,
         reason=result.get("error"),
     )
+
+    # Update consecutive win/loss streak
+    if result["success"]:
+        _update_streak(user_settings, won=True)
+    else:
+        _update_streak(user_settings, won=False)
+    db.commit()
 
     return {
         "executed": result["success"],
@@ -1021,3 +1276,54 @@ async def get_daily_copy_pnl(db: Session, user_id: int) -> float:
         .scalar()
     )
     return float(result or 0.0)
+
+
+async def execute_aggregated_trade(aggregated: dict) -> dict:
+    """Execute a VWAP-aggregated trade as a single order.
+
+    Called by the trade_aggregation_service when a buffer window closes.
+    Uses multi-phase execution for better fill rates.
+    """
+    user_id = aggregated.get("user_id")
+    token_id = aggregated.get("token_id", "")
+    side = aggregated.get("side", "BUY")
+    size = aggregated.get("aggregated_size", 0)
+    price = aggregated.get("vwap_price", 0)
+
+    if not user_id or size <= 0 or price <= 0:
+        logger.warning("Invalid aggregated trade params: %s", aggregated)
+        return {"success": False, "error": "Invalid aggregated trade parameters"}
+
+    db = SessionLocal()
+    try:
+        from app.models.user import User
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            return {"success": False, "error": f"User {user_id} not found"}
+
+        from app.security.credential_store import get_decrypted_private_key
+        private_key = get_decrypted_private_key(db, user.id)
+        if not private_key:
+            return {"success": False, "error": "No private key available"}
+
+        result = _place_order_multi_phase(
+            private_key=private_key,
+            clob_creds=None,
+            token_id=token_id,
+            side=side,
+            price=price,
+            size=size,
+            enable_phases=True,
+        )
+
+        logger.info(
+            "Aggregated trade executed: user=%d token=%s side=%s size=%.2f "
+            "vwap=%.4f success=%s",
+            user_id, token_id[:20], side, size, price, result.get("success"),
+        )
+        return result
+    except Exception as e:
+        logger.error("Failed to execute aggregated trade: %s", e)
+        return {"success": False, "error": str(e)}
+    finally:
+        db.close()

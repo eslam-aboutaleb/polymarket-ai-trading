@@ -85,6 +85,10 @@ interface EventGroupPanelProps<T extends GroupableMarket> {
   headerBadge?: ReactNode;
   /** Whether this group is currently selected / active */
   isSelected?: boolean;
+  /** Whether this event is favorited */
+  isFavorite?: boolean;
+  /** Toggle event favorite status */
+  onToggleFavorite?: () => void;
   /** Extra CSS classes on the container */
   className?: string;
 }
@@ -109,6 +113,8 @@ export default function EventGroupPanel<T extends GroupableMarket>({
   analyzeCtaLabel = "AI Analysis",
   headerBadge,
   isSelected = false,
+  isFavorite = false,
+  onToggleFavorite,
   className = "",
 }: EventGroupPanelProps<T>) {
   const imgUrl = group.eventImage;
@@ -173,6 +179,24 @@ export default function EventGroupPanel<T extends GroupableMarket>({
 
         {/* Optional header badge (e.g. best AI score) */}
         {headerBadge && <div className="flex-shrink-0">{headerBadge}</div>}
+
+        {onToggleFavorite && (
+          <button
+            type="button"
+            title={isFavorite ? "Remove from favorites" : "Add to favorites"}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleFavorite();
+            }}
+            className={`w-6 h-6 rounded-full border text-xs transition ${
+              isFavorite
+                ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                : "border-[var(--line)] text-muted hover:text-white"
+            }`}
+          >
+            {isFavorite ? "★" : "☆"}
+          </button>
+        )}
 
         {/* Right arrow — indicates opens detail */}
         <svg

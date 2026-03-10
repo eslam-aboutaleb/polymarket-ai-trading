@@ -64,3 +64,9 @@ Thumbs.db
 *.log
 .coverage
 htmlcov/
+
+# Study webapp
+study-app/
+
+# Docs (owner handbook)
+docs/

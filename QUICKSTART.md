@@ -18,6 +18,7 @@ cp frontend/.env.example frontend/.env
 # - JWT_SECRET_KEY (generate a random string)
 # - POLYMARKET_PRIVATE_KEY (your wallet private key)
 # - OPENAI_API_KEY (your OpenAI key)
+# - BINANCE_SKILLS_ENABLED=true (default, set false to disable)
 
 # Start everything
 ./start.sh
@@ -105,6 +106,9 @@ OPENAI_API_KEY=sk-your-openai-key
 # Trading Settings
 EXECUTION_MODE=approval  # or 'auto'
 MAX_POSITION_SIZE=1000.0  # Max USDC per trade
+
+# Binance Skills Hub (public APIs — no API key required)
+BINANCE_SKILLS_ENABLED=true  # Set to false to disable smart money signals
 ```
 
 ### Frontend Environment Variables

@@ -129,7 +129,7 @@ export default function EventGroupDetailDrawer<T extends GroupableMarket>({
   return (
     <>
       {/* ═══════ MOBILE (<md): Centered modal ═══════ */}
-      <div className="md:hidden fixed inset-0 z-50">
+      <div className="md:hidden fixed inset-0 z-[120]">
         {/* Backdrop */}
         <div className="absolute inset-0 modal-overlay" onClick={onClose} />
         {/* Modal panel */}
@@ -171,15 +171,15 @@ export default function EventGroupDetailDrawer<T extends GroupableMarket>({
       </div>
 
       {/* ═══════ DESKTOP (md+): Right-side slide-in drawer ═══════ */}
-      <div className="hidden md:block fixed inset-0 z-40">
+      <div className="hidden md:block fixed inset-x-0 bottom-0 top-16 z-[120]">
         {/* Backdrop (semi-transparent, left side) */}
         <div
-          className="absolute inset-0 bg-black/40 backdrop-blur-[2px] animate-[fade-in_150ms_ease-out]"
+          className="absolute inset-0 z-[120] bg-black/40 backdrop-blur-[2px] animate-[fade-in_150ms_ease-out]"
           onClick={onClose}
         />
         {/* Drawer panel */}
         <div
-          className="absolute top-0 right-0 h-full w-[460px] max-w-[90vw] surface-panel border-l border-[var(--line)] flex flex-col shadow-2xl animate-[slide-in-right_250ms_ease-out]"
+          className="absolute top-0 right-0 z-[121] h-full w-[460px] max-w-[90vw] surface-panel border-l border-[var(--line)] flex flex-col shadow-2xl animate-[slide-in-right_250ms_ease-out]"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Close button */}

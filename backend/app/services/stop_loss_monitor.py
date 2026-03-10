@@ -1,6 +1,9 @@
 """
-Stop-loss monitor – background task that periodically checks prices
-against active stop-loss orders and triggers sells when price <= stop_price.
+Stop-loss & take-profit monitor – background task that periodically checks
+prices against active stop-loss and take-profit orders.
+
+- Stop-loss: triggers SELL when price <= stop_price
+- Take-profit: triggers SELL when price >= take_profit_price
 
 Runs inside the FastAPI backend process using asyncio tasks.
 """
@@ -10,11 +13,12 @@ from datetime import datetime, timezone
 from time import perf_counter
 from typing import Dict, List, Any
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from py_clob_client.clob_types import BookParams
 
 from app.models.stop_loss import StopLossOrder
+from app.models.take_profit import TakeProfitOrder
 from app.models.user import User
 from app.config import get_settings
 from app.security.credential_store import CredentialStoreError, load_wallet_credentials
@@ -71,55 +75,74 @@ async def _monitor_loop():
 
 async def _check_stop_losses():
     """
-    1. Load all active stop-loss orders grouped by user.
-    2. For each user, fetch live prices for their stop-loss token_ids.
-    3. If price <= stop_price, trigger a SELL order.
+    1. Load all active stop-loss AND take-profit orders grouped by user.
+    2. For each user, fetch live prices for their token_ids.
+    3. Stop-loss: if price <= stop_price, trigger a SELL order.
+    4. Take-profit: if price >= take_profit_price, trigger a SELL order.
     """
     started = perf_counter()
     db: Session = SessionLocal()
     try:
-        active_orders: List[StopLossOrder] = (
+        # Eager-load user relationship to avoid N+1 wallet lookups.
+        # 2 queries total (SL + TP) instead of 2 + 1 per user.
+        active_sl_orders: List[StopLossOrder] = (
             db.query(StopLossOrder)
+            .options(joinedload(StopLossOrder.user))
             .filter(StopLossOrder.status == "active")
             .all()
         )
-
-        if not active_orders:
-            return
-
-        # Group by user_id
-        user_orders: Dict[int, List[StopLossOrder]] = {}
-        for order in active_orders:
-            user_orders.setdefault(order.user_id, []).append(order)
-
-        wallet_rows = (
-            db.query(User.id, User.wallet_address)
-            .filter(User.id.in_(list(user_orders.keys())))
+        active_tp_orders: List[TakeProfitOrder] = (
+            db.query(TakeProfitOrder)
+            .options(joinedload(TakeProfitOrder.user))
+            .filter(TakeProfitOrder.status == "active")
             .all()
         )
-        wallet_by_user = {
-            int(user_id): str(wallet_address)
-            for user_id, wallet_address in wallet_rows
-            if wallet_address
-        }
+
+        if not active_sl_orders and not active_tp_orders:
+            return
+
+        # Group orders by user and collect wallet addresses from the
+        # eagerly-loaded relationship — no extra queries needed.
+        all_user_ids: set[int] = set()
+        wallet_by_user: Dict[int, str] = {}
+        user_sl_orders: Dict[int, List[StopLossOrder]] = {}
+        for order in active_sl_orders:
+            user_sl_orders.setdefault(order.user_id, []).append(order)
+            all_user_ids.add(order.user_id)
+            if order.user and order.user.wallet_address:
+                wallet_by_user[order.user_id] = order.user.wallet_address
+
+        user_tp_orders: Dict[int, List[TakeProfitOrder]] = {}
+        for order in active_tp_orders:
+            user_tp_orders.setdefault(order.user_id, []).append(order)
+            all_user_ids.add(order.user_id)
+            if order.user and order.user.wallet_address:
+                wallet_by_user[order.user_id] = order.user.wallet_address
+
+        if not all_user_ids:
+            return
 
         triggered_total = 0
-        for user_id, orders in user_orders.items():
+        for user_id in all_user_ids:
             wallet_address = wallet_by_user.get(user_id)
             if not wallet_address:
                 continue
-            triggered_total += await _check_user_stop_losses(
+            sl_orders = user_sl_orders.get(user_id, [])
+            tp_orders = user_tp_orders.get(user_id, [])
+            triggered_total += await _check_user_price_orders(
                 db=db,
                 user_id=user_id,
                 wallet_address=wallet_address,
-                orders=orders,
+                sl_orders=sl_orders,
+                tp_orders=tp_orders,
             )
 
         elapsed_ms = (perf_counter() - started) * 1000
         logger.info(
-            "Stop-loss cycle complete: orders=%d users=%d triggered=%d elapsed_ms=%.1f",
-            len(active_orders),
-            len(user_orders),
+            "Price-order cycle complete: sl_orders=%d tp_orders=%d users=%d triggered=%d elapsed_ms=%.1f",
+            len(active_sl_orders),
+            len(active_tp_orders),
+            len(all_user_ids),
             triggered_total,
             elapsed_ms,
         )
@@ -128,35 +151,38 @@ async def _check_stop_losses():
         db.close()
 
 
-async def _check_user_stop_losses(
+async def _check_user_price_orders(
     db: Session,
     user_id: int,
     wallet_address: str,
-    orders: List[StopLossOrder],
+    sl_orders: List[StopLossOrder],
+    tp_orders: List[TakeProfitOrder],
 ) -> int:
-    """Check and potentially trigger stop-losses for a single user."""
+    """Check and potentially trigger stop-losses and take-profits for a single user."""
     try:
         stored = load_wallet_credentials(wallet_address)
     except CredentialStoreError as exc:
-        logger.warning("Stop-loss credentials unavailable for %s: %s", wallet_address, exc)
+        logger.warning("Price-order credentials unavailable for %s: %s", wallet_address, exc)
         return 0
     if not stored:
-        # No trading creds – can't execute orders
         return 0
 
     pk = stored["private_key"]
     creds = stored.get("clob_creds")
 
-    # Fetch live prices for all tokens
-    token_ids = list({o.token_id for o in orders})
+    # Fetch live prices for all tokens across both order types
+    token_ids = list(
+        {o.token_id for o in sl_orders} | {o.token_id for o in tp_orders}
+    )
     prices = await _fetch_live_prices(pk, creds, token_ids)
 
     triggered = 0
-    for order in orders:
+
+    # Check stop-losses: trigger SELL when price <= stop_price
+    for order in sl_orders:
         live_price = prices.get(order.token_id)
         if live_price is None:
             continue
-
         if live_price <= order.stop_price:
             logger.info(
                 "Stop-loss TRIGGERED: order=%d token=%s price=%.4f <= stop=%.4f",
@@ -164,6 +190,20 @@ async def _check_user_stop_losses(
             )
             await _execute_stop_loss(db, order, pk, creds, live_price)
             triggered += 1
+
+    # Check take-profits: trigger SELL when price >= take_profit_price
+    for order in tp_orders:
+        live_price = prices.get(order.token_id)
+        if live_price is None:
+            continue
+        if live_price >= order.take_profit_price:
+            logger.info(
+                "Take-profit TRIGGERED: order=%d token=%s price=%.4f >= tp=%.4f",
+                order.id, order.token_id[:20], live_price, order.take_profit_price,
+            )
+            await _execute_take_profit(db, order, pk, creds, live_price)
+            triggered += 1
+
     return triggered
 
 
@@ -289,6 +329,51 @@ async def _execute_stop_loss(
 
     except Exception as e:
         logger.error("Stop-loss execution exception: order=%d error=%s", order.id, e)
+        try:
+            order.status = "failed"
+            order.triggered_at = datetime.now(timezone.utc)
+            order.updated_at = datetime.now(timezone.utc)
+            db.commit()
+        except Exception:
+            db.rollback()
+
+
+async def _execute_take_profit(
+    db: Session,
+    order: TakeProfitOrder,
+    private_key: str,
+    clob_creds: dict | None,
+    live_price: float,
+):
+    """Execute the sell order for a take-profit and update the record."""
+    try:
+        result = await asyncio.to_thread(
+            _place_order_on_polymarket,
+            private_key=private_key,
+            clob_creds=clob_creds,
+            token_id=order.token_id,
+            side="SELL",
+            price=live_price,
+            size=order.size,
+        )
+
+        now = datetime.now(timezone.utc)
+        if result.get("success"):
+            order.status = "triggered"
+            order.order_hash = result.get("order_hash")
+            order.executed_price = live_price
+            order.triggered_at = now
+            logger.info("Take-profit executed: order=%d hash=%s", order.id, order.order_hash)
+        else:
+            order.status = "failed"
+            order.triggered_at = now
+            logger.error("Take-profit execution failed: order=%d error=%s", order.id, result.get("error"))
+
+        order.updated_at = now
+        db.commit()
+
+    except Exception as e:
+        logger.error("Take-profit execution exception: order=%d error=%s", order.id, e)
         try:
             order.status = "failed"
             order.triggered_at = datetime.now(timezone.utc)

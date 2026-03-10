@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 
-from app.api.routes.auth import get_current_user_from_token
+from app.api.routes.auth import get_current_user_from_token, get_optional_user_from_token
 from app.services.polymarket_service import get_polymarket_service
 from app.security.credential_store import CredentialStoreError, load_wallet_credentials
 from py_clob_client.clob_types import BookParams
@@ -144,10 +144,49 @@ async def get_active_markets(
     return {"markets": markets, "count": len(markets)}
 
 
+@router.get("/markets/newest")
+async def get_newest_markets(
+    limit: int = 60,
+):
+    """Get the newest/most recently created markets from Polymarket (public)."""
+    service = get_polymarket_service()
+    markets = await service.get_newest_markets(limit=limit)
+    return {"markets": markets, "count": len(markets)}
+
+
+@router.get("/markets/combined")
+async def get_combined_markets(
+    limit: int = 60,
+    offset: int = 0,
+):
+    """
+    Return the same active-market universe used by the Markets tab,
+    with offset pagination for the Opportunities view.
+    """
+    service = get_polymarket_service()
+    result = await service.search_all_markets(
+        query="",
+        tag="",
+        limit=limit,
+        offset=offset,
+        sort="volume24hr",
+    )
+    page = [{**m, "_source": "all_markets"} for m in result.get("markets", [])]
+    total = int(result.get("total", 0) or 0)
+    result_offset = int(result.get("offset", offset) or 0)
+    has_more = bool(result.get("has_more", False))
+    return {
+        "markets": page,
+        "count": len(page),
+        "total": total,
+        "offset": result_offset,
+        "has_more": has_more,
+    }
+
+
 @router.get("/markets/prices")
 async def get_market_prices(
     limit: int = 20,
-    current_user: dict = Depends(get_current_user_from_token),
 ):
     """
     Lightweight endpoint that returns only the fields needed for a price
