@@ -73,6 +73,17 @@ export interface TraderAnalysisRequest {
   recent_trades_json?: string;
 }
 
+export interface CopyTradeEvalRequest {
+  trader_wallet: string;
+  trader_stats?: string;
+  market_id?: string;
+  market_title?: string;
+  trade_side?: "BUY" | "SELL";
+  trade_size?: number;
+  current_price?: number;
+  user_risk_profile?: string;
+}
+
 // --- Opportunity Scoring Types ---
 
 export interface OpportunityScanRequest {
@@ -100,6 +111,12 @@ export interface OpportunityScore {
   yes_whale_pct?: number;
   no_whale_pct?: number;
   search_findings?: string;
+  // Easy Trade fields
+  ease_score?: number; // 0-100, how obvious the trade is
+  expected_probability?: number; // 0-1, AI's estimated real probability
+  edge_estimate?: number; // difference between AI probability and market price
+  confidence?: number; // 0-1, AI confidence level
+  category?: string; // market category
 }
 
 // --- Response Types ---
@@ -140,7 +157,10 @@ export const analysisService = {
   async quickGroupAnalysis(
     request: QuickGroupAnalysisRequest,
   ): Promise<AnalysisResponse> {
-    return apiClient.post<AnalysisResponse>("/api/analysis/quick-group", request);
+    return apiClient.post<AnalysisResponse>(
+      "/api/analysis/quick-group",
+      request,
+    );
   },
 
   /** Scan multiple markets for top opportunities */
@@ -173,6 +193,19 @@ export const analysisService = {
     request: TraderAnalysisRequest,
   ): Promise<AnalysisResponse> {
     return apiClient.post<AnalysisResponse>("/api/analysis/trader", request);
+  },
+
+  /** Evaluate whether a copy-trade should be executed */
+  async evaluateCopyTrade(
+    request: CopyTradeEvalRequest,
+  ): Promise<AnalysisResponse> {
+    return apiClient.post<AnalysisResponse>("/api/analysis/copy-trade-eval", {
+      trade_side: "BUY",
+      trade_size: 0,
+      current_price: 0.5,
+      user_risk_profile: "max_position_daily_loss",
+      ...request,
+    });
   },
 
   /**
@@ -371,6 +404,103 @@ export const analysisService = {
             },
             credentials: "include",
             body: JSON.stringify(request),
+            signal: controller.signal,
+          },
+        );
+
+        if (!res.ok) {
+          const errBody = await res.text();
+          callbacks.onError(errBody || `HTTP ${res.status}`);
+          return;
+        }
+
+        const reader = res.body?.getReader();
+        if (!reader) {
+          callbacks.onError("No response body");
+          return;
+        }
+
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data: ")) continue;
+            const jsonStr = trimmed.slice(6);
+            try {
+              const parsed = JSON.parse(jsonStr);
+              if (parsed.error) {
+                callbacks.onError(parsed.error);
+                return;
+              }
+              if (parsed.all_done) {
+                callbacks.onDone(parsed.total || 0);
+                return;
+              }
+              if (parsed.status) {
+                callbacks.onStatus(parsed.status, parsed.total);
+                continue;
+              }
+              if (parsed.scores && parsed.market_id) {
+                callbacks.onMarketScored(
+                  parsed.market_id,
+                  parsed.scores as OpportunityScore,
+                  parsed.done_count || 0,
+                  parsed.total || 0,
+                );
+              }
+            } catch {
+              // skip malformed JSON
+            }
+          }
+        }
+        callbacks.onDone(0);
+      } catch (err: unknown) {
+        if ((err as Error).name === "AbortError") return;
+        callbacks.onError((err as Error).message || "Stream failed");
+      }
+    })();
+
+    return controller;
+  },
+
+  /**
+   * Analyze a specific batch of markets via SSE (for infinite-scroll new markets).
+   * Same SSE protocol as streamOpportunityScan but accepts market data directly.
+   */
+  streamAnalyzeMarkets(
+    markets: Record<string, unknown>[],
+    callbacks: {
+      onMarketScored: (
+        marketId: string,
+        scores: OpportunityScore,
+        doneCount: number,
+        total: number,
+      ) => void;
+      onStatus: (status: string, total?: number) => void;
+      onDone: (total: number) => void;
+      onError: (err: string) => void;
+    },
+  ): AbortController {
+    const controller = new AbortController();
+
+    (async () => {
+      try {
+        const res = await fetch(
+          `${API_BASE_URL}/api/analysis/opportunities/analyze-markets`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ markets }),
             signal: controller.signal,
           },
         );

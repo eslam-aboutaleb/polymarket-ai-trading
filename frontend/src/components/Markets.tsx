@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import {
   marketsService,
   MarketCategory,
@@ -8,18 +15,33 @@ import {
 } from "../services/marketsService";
 import { getApiErrorMessage } from "../utils/apiError";
 import TradeModal, { TradeModalMarket } from "./TradeModal";
-import { groupMarketsByEvent, EventGroup } from "../utils/groupMarkets";
-import EventGroupPanel from "./EventGroupPanel";
+import {
+  groupMarketsByEvent,
+  EventGroup,
+  getSubMarketLabel,
+} from "../utils/groupMarkets";
 import EventGroupDetailDrawer from "./EventGroupDetailDrawer";
+import MarketBoardCard from "./MarketBoardCard";
 import {
   buildPolymarketEventUrl,
   buildPolygonscanAddressUrl,
 } from "../utils/urlSafety";
 import { useRafBufferedText } from "../hooks/useRafBufferedText";
-
+import {
+  FOCUS_MARKET_SEARCH_EVENT,
+  loadMarketWatchlist,
+  loadRecentTradeMarkets,
+  subscribeMarketWatchlist,
+  subscribeRecentTradeMarkets,
+  toggleMarketWatchlist,
+} from "../utils/tradingWorkspace";
+import { RecentTradeMarket } from "../types/trading";
+import { MarketBoardCardVM } from "../types/marketBoard";
+import { TradeTicketOutcome } from "../types/trading";
+import { useRequireAuth } from "../hooks/useRequireAuth";
 const PAGE_SIZE = 60;
-const MIN_VISIBLE_TRADE_PANELS = 10;
-const MAX_INITIAL_FETCH_PAGES = 4;
+const MIN_VISIBLE_TRADE_PANELS = 6;
+const MAX_INITIAL_FETCH_PAGES = 1;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -53,11 +75,16 @@ function getPolymarketUrl(market: BrowseMarket): string | null {
   return buildPolymarketEventUrl(market._event_slug || slug, slug);
 }
 
-const fmtUSD = (v: number) =>
-  `$${Math.abs(v).toLocaleString("en-US", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  })}`;
+function getMarketWatchKey(market: BrowseMarket): string {
+  return (
+    market._event_slug ||
+    market.condition_id ||
+    market.market_slug ||
+    market.slug ||
+    market.question ||
+    "unknown-market"
+  ).toLowerCase();
+}
 
 const fmtUSD2 = (v: number) =>
   `$${Math.abs(v).toLocaleString("en-US", {
@@ -65,11 +92,37 @@ const fmtUSD2 = (v: number) =>
     maximumFractionDigits: 2,
   })}`;
 
+const fmtCompactUSD = (value: number) => {
+  const n = Math.abs(Number(value || 0));
+  if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(0)}M`;
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
+  return `$${n.toFixed(0)}`;
+};
+
+const getCadenceLabel = (endDate?: string) => {
+  if (!endDate) return "Active";
+  const diffMs = new Date(endDate).getTime() - Date.now();
+  const days = Math.ceil(diffMs / 86_400_000);
+  if (days <= 1) return "Daily";
+  if (days <= 7) return "Weekly";
+  if (days <= 35) return "Monthly";
+  return "Long-dated";
+};
+
+function isPriceDirectionMarket(market: BrowseMarket): boolean {
+  const question = String(
+    market.question || market._event_title || "",
+  ).toLowerCase();
+  return question.includes("up or down") || question.includes("minute");
+}
+
 // ════════════════════════════════════════════════════════════════════
 // Component
 // ════════════════════════════════════════════════════════════════════
 
 export default function Markets() {
+  const { requireAuth } = useRequireAuth();
   // ── Search / browse state ──────────────────────────────────────
   const [categories, setCategories] = useState<MarketCategory[]>([]);
   const [markets, setMarkets] = useState<BrowseMarket[]>([]);
@@ -83,6 +136,19 @@ export default function Markets() {
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [selectedTag, setSelectedTag] = useState("");
   const [sort, setSort] = useState("volume24hr");
+  const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
+  const [watchlistKeys, setWatchlistKeys] = useState<string[]>(
+    loadMarketWatchlist(),
+  );
+  const [recentTrades, setRecentTrades] = useState<RecentTradeMarket[]>(
+    loadRecentTradeMarkets(8),
+  );
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const categoryRailRef = useRef<HTMLDivElement | null>(null);
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
+  const [tradeDefaultOutcome, setTradeDefaultOutcome] = useState<
+    TradeTicketOutcome | undefined
+  >(undefined);
 
   // AI Trader Analysis popup
   const [analysisMarket, setAnalysisMarket] = useState<BrowseMarket | null>(
@@ -102,13 +168,15 @@ export default function Markets() {
 
   // Trade modal
   const [tradeMarket, setTradeMarket] = useState<TradeModalMarket | null>(null);
-
-  // Event group detail drawer
   const [selectedGroup, setSelectedGroup] =
     useState<EventGroup<BrowseMarket> | null>(null);
 
-  const openTradeModal = (market: BrowseMarket) => {
+  const openTradeModal = (
+    market: BrowseMarket,
+    preferredOutcome?: TradeTicketOutcome,
+  ) => {
     const prices = parseOutcomePrices(market);
+    const watchKey = getMarketWatchKey(market);
 
     // Build outcome tokens – Polymarket markets always have Yes/No tokens
     const yesTokenId =
@@ -119,11 +187,17 @@ export default function Markets() {
       market_id: market.condition_id || market.market_slug || "",
       title: market.question || market._event_title || "Market",
       image: market.image || market._event_image,
+      watch_key: watchKey,
+      bestAsk: market.bestAsk,
+      bestBid: market.bestBid,
+      liquidity: market.liquidity,
+      quote_timestamp: new Date().toISOString(),
       tokens: [
         { token_id: yesTokenId, outcome: "Yes", price: prices.yes },
         { token_id: noTokenId, outcome: "No", price: prices.no },
       ],
     });
+    setTradeDefaultOutcome(preferredOutcome);
   };
 
   // ── Load categories on mount ─────────────────────────────────
@@ -143,6 +217,23 @@ export default function Markets() {
     const id = setTimeout(() => setDebouncedQuery(searchInput.trim()), 400);
     return () => clearTimeout(id);
   }, [searchInput]);
+
+  useEffect(() => subscribeMarketWatchlist(setWatchlistKeys), []);
+  useEffect(
+    () =>
+      subscribeRecentTradeMarkets((rows) => setRecentTrades(rows.slice(0, 8))),
+    [],
+  );
+
+  useEffect(() => {
+    const onFocusSearch = () => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    };
+    window.addEventListener(FOCUS_MARKET_SEARCH_EVENT, onFocusSearch);
+    return () =>
+      window.removeEventListener(FOCUS_MARKET_SEARCH_EVENT, onFocusSearch);
+  }, []);
 
   // ── Fetch markets when filters change ────────────────────────
   const fetchMarkets = useCallback(
@@ -213,6 +304,35 @@ export default function Markets() {
     fetchMarkets(0);
   }, [fetchMarkets]);
 
+  const loadMoreMarkets = useCallback(() => {
+    if (!hasMore || loading || loadingMore) return;
+    fetchMarkets(markets.length);
+  }, [fetchMarkets, hasMore, loading, loadingMore, markets.length]);
+
+  useEffect(() => {
+    if (!hasMore) return;
+    const sentinel = loadMoreSentinelRef.current;
+    if (!sentinel) return;
+    if (typeof IntersectionObserver === "undefined") return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const [entry] = entries;
+        if (entry?.isIntersecting) {
+          loadMoreMarkets();
+        }
+      },
+      {
+        root: null,
+        rootMargin: "200px 0px",
+        threshold: 0.01,
+      },
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, loadMoreMarkets, markets.length]);
+
   // Auto-scroll streaming text inside its own container (not the page)
   useEffect(() => {
     const el = streamContainerRef.current;
@@ -220,40 +340,43 @@ export default function Markets() {
   }, [streamText]);
 
   // ── AI Trader Analysis (streaming) ────────────────────────────
-  const openTraderAnalysis = useCallback((market: BrowseMarket) => {
-    abortRef.current?.abort();
-    const prices = parseOutcomePrices(market);
-    setAnalysisMarket(market);
-    setTraderStats(null);
-    resetStreamText();
-    setStreamDone(false);
-    setStreamError(null);
+  const openTraderAnalysis = useCallback(
+    (market: BrowseMarket) => {
+      abortRef.current?.abort();
+      const prices = parseOutcomePrices(market);
+      setAnalysisMarket(market);
+      setTraderStats(null);
+      resetStreamText();
+      setStreamDone(false);
+      setStreamError(null);
 
-    const request: TraderAnalysisRequest = {
-      condition_id: market.condition_id || "",
-      question: market.question || market._event_title || "Unknown market",
-      yes_price: prices.yes,
-      no_price: prices.no,
-      volume_24h: market.volume24hr || market.volume || 0,
-      end_date:
-        market.endDate || market.end_date_iso || new Date().toISOString(),
-    };
+      const request: TraderAnalysisRequest = {
+        condition_id: market.condition_id || "",
+        question: market.question || market._event_title || "Unknown market",
+        yes_price: prices.yes,
+        no_price: prices.no,
+        volume_24h: market.volume24hr || market.volume || 0,
+        end_date:
+          market.endDate || market.end_date_iso || new Date().toISOString(),
+      };
 
-    const controller = marketsService.streamTraderAnalysis(request, {
-      onStats: (stats) => setTraderStats(stats),
-      onChunk: (text) => appendStreamText(text),
-      onDone: () => {
-        flushStreamTextNow();
-        setStreamDone(true);
-      },
-      onError: (err) => {
-        flushStreamTextNow();
-        setStreamError(err);
-        setStreamDone(true);
-      },
-    });
-    abortRef.current = controller;
-  }, [appendStreamText, flushStreamTextNow, resetStreamText]);
+      const controller = marketsService.streamTraderAnalysis(request, {
+        onStats: (stats) => setTraderStats(stats),
+        onChunk: (text) => appendStreamText(text),
+        onDone: () => {
+          flushStreamTextNow();
+          setStreamDone(true);
+        },
+        onError: (err) => {
+          flushStreamTextNow();
+          setStreamError(err);
+          setStreamDone(true);
+        },
+      });
+      abortRef.current = controller;
+    },
+    [appendStreamText, flushStreamTextNow, resetStreamText],
+  );
 
   const closeAnalysis = () => {
     abortRef.current?.abort();
@@ -264,326 +387,469 @@ export default function Markets() {
     setStreamError(null);
   };
 
+  const [showCategoryScrollHint, setShowCategoryScrollHint] = useState(false);
   const eventGroups = useMemo(() => groupMarketsByEvent(markets), [markets]);
+  const watchlistSet = useMemo(() => new Set(watchlistKeys), [watchlistKeys]);
+  const filteredGroups = useMemo(() => {
+    if (!showFavoritesOnly) return eventGroups;
+    return eventGroups.filter((group) =>
+      watchlistSet.has(group.eventSlug.toLowerCase()),
+    );
+  }, [eventGroups, showFavoritesOnly, watchlistSet]);
   const totalOptions = useMemo(
-    () => eventGroups.reduce((sum, g) => sum + g.markets.length, 0),
-    [eventGroups],
+    () => filteredGroups.reduce((sum, g) => sum + g.markets.length, 0),
+    [filteredGroups],
   );
+  const favoriteCount = watchlistKeys.length;
+
+  const categoriesWithAll = useMemo(
+    () => [
+      { id: "", label: "All" },
+      ...categories.map((cat) => ({ id: cat.id, label: cat.label })),
+    ],
+    [categories],
+  );
+
+  const refreshCategoryScrollHint = useCallback(() => {
+    const rail = categoryRailRef.current;
+    if (!rail) return;
+    setShowCategoryScrollHint(
+      rail.scrollWidth - rail.clientWidth - rail.scrollLeft > 8,
+    );
+  }, []);
+
+  useEffect(() => {
+    refreshCategoryScrollHint();
+    window.addEventListener("resize", refreshCategoryScrollHint);
+    return () =>
+      window.removeEventListener("resize", refreshCategoryScrollHint);
+  }, [refreshCategoryScrollHint, categoriesWithAll.length, selectedTag]);
+
+  const handleCategoryRailKeyDown = (
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ) => {
+    if (!categoryRailRef.current) return;
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      categoryRailRef.current.scrollBy({ left: 180, behavior: "smooth" });
+      return;
+    }
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      categoryRailRef.current.scrollBy({ left: -180, behavior: "smooth" });
+    }
+  };
+
+  const scrollCategoryRailRight = () => {
+    categoryRailRef.current?.scrollBy({ left: 260, behavior: "smooth" });
+  };
+
+  const boardItems = useMemo(() => {
+    return filteredGroups.map((group) => {
+      const isFavorite = watchlistSet.has(group.eventSlug.toLowerCase());
+      const primaryMarket = group.markets[0];
+
+      if (group.isSingle) {
+        const market = primaryMarket;
+        const prices = parseOutcomePrices(market);
+        const endDate = market.endDate || market.end_date_iso;
+        const volume = Number(
+          market.volume24hr ||
+            market.volumeNum ||
+            market.volume ||
+            group.eventVolume24hr ||
+            0,
+        );
+        const isDirection = isPriceDirectionMarket(market);
+        const card: MarketBoardCardVM = {
+          id: group.eventSlug,
+          source: "markets",
+          variant: isDirection ? "price_direction" : "binary_single",
+          title: market.question || group.eventTitle || "Unknown market",
+          image: market.image || market._event_image,
+          href: getPolymarketUrl(market),
+          probability: prices.yes,
+          probabilityLabel: isDirection ? "up" : "chance",
+          positiveLabel: isDirection ? "Up" : "Yes",
+          negativeLabel: isDirection ? "Down" : "No",
+          positiveOutcome: "Yes",
+          negativeOutcome: "No",
+          positiveMeta: `${Math.round(prices.yes * 100)}%`,
+          negativeMeta: `${Math.round(prices.no * 100)}%`,
+          footerMeta: `${fmtCompactUSD(volume)} Vol.`,
+          footerSubMeta: getCadenceLabel(endDate),
+          isLive: isDirection,
+          isFavorite,
+        };
+        return {
+          group,
+          primaryMarket: market,
+          rowMarketMap: new Map<string, BrowseMarket>(),
+          card,
+        };
+      }
+
+      const rowMarketMap = new Map<string, BrowseMarket>();
+      const rows = group.markets.map((market, index) => {
+        const rowId = `${group.eventSlug}:${market.condition_id || market.market_slug || index}`;
+        rowMarketMap.set(rowId, market);
+        const prices = parseOutcomePrices(market);
+        return {
+          id: rowId,
+          label: getSubMarketLabel(market, group.eventTitle),
+          probabilityText: `${Math.round(prices.yes * 100)}%`,
+          yesLabel: "Yes",
+          noLabel: "No",
+        };
+      });
+
+      const primaryPrices = parseOutcomePrices(primaryMarket);
+      const eventVolume = Number(
+        group.eventVolume || group.eventVolume24hr || 0,
+      );
+      const primaryEndDate =
+        primaryMarket.endDate || primaryMarket.end_date_iso;
+      const card: MarketBoardCardVM = {
+        id: group.eventSlug,
+        source: "markets",
+        variant: "multi_option",
+        title: group.eventTitle,
+        image: group.eventImage,
+        href: getPolymarketUrl(primaryMarket),
+        probability: primaryPrices.yes,
+        probabilityLabel: "chance",
+        rows,
+        footerMeta: `${fmtCompactUSD(eventVolume)} Vol.`,
+        footerSubMeta: getCadenceLabel(primaryEndDate),
+        isFavorite,
+      };
+      return { group, primaryMarket, rowMarketMap, card };
+    });
+  }, [filteredGroups, watchlistSet]);
+
+  const openTradeFromRecent = useCallback((row: RecentTradeMarket) => {
+    setTradeMarket({
+      market_id: row.market_id,
+      title: row.title,
+      image: row.image,
+      watch_key: row.watch_key,
+      tokens: row.tokens,
+      bestAsk: row.bestAsk,
+      bestBid: row.bestBid,
+      liquidity: row.liquidity,
+      quote_timestamp: row.quote_timestamp || row.last_traded_at,
+    });
+    setTradeDefaultOutcome(undefined);
+  }, []);
 
   // ════════════════════════════════════════════════════════════════
   // RENDER
   // ════════════════════════════════════════════════════════════════
   return (
-    <div className="space-y-6">
-      {/* ── Header ─────────────────────────────────────────────── */}
-      <div>
-        <h1 className="text-3xl font-bold mb-1">Markets</h1>
-        <p className="text-soft">
-          Browse &amp; search all active Polymarket markets
-        </p>
-      </div>
+    <div className="pm-board space-y-4">
+      <section className="pm-board-surface space-y-4">
+        <div className="pm-board-header">
+          <h1 className="pm-board-title">All markets</h1>
+          <div className="pm-board-tools">
+            <button
+              type="button"
+              className="pm-board-icon-btn"
+              aria-label="Focus market search"
+              onClick={() => searchInputRef.current?.focus()}
+            >
+              <svg
+                className="pm-board-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.9"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="m21 21-4.35-4.35m1.6-5.4a6.75 6.75 0 1 1-13.5 0 6.75 6.75 0 0 1 13.5 0Z"
+                />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className="pm-board-icon-btn"
+              aria-label="Change sorting mode"
+              onClick={() =>
+                setSort((prev) =>
+                  prev === "volume24hr"
+                    ? "liquidity"
+                    : prev === "liquidity"
+                      ? "startDate"
+                      : "volume24hr",
+                )
+              }
+            >
+              <svg
+                className="pm-board-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M4 6h16M7 12h10M10 18h4"
+                />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className="pm-board-icon-btn"
+              aria-label={
+                showFavoritesOnly ? "Show all markets" : "Show watchlist only"
+              }
+              onClick={() => setShowFavoritesOnly((prev) => !prev)}
+            >
+              <svg
+                className="pm-board-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M7 4.75A1.75 1.75 0 0 1 8.75 3h6.5A1.75 1.75 0 0 1 17 4.75v15.5a.75.75 0 0 1-1.206.595L12 17.9l-3.794 2.946A.75.75 0 0 1 7 20.25V4.75Z"
+                />
+              </svg>
+            </button>
+          </div>
+        </div>
 
-      {/* ── Search bar ─────────────────────────────────────────── */}
-      <div className="relative">
-        <svg
-          className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-soft pointer-events-none"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2}
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
-          />
-        </svg>
-        <input
-          type="text"
-          placeholder="Search markets... e.g. Bitcoin, Trump, Olympics"
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-          className="w-full pl-11 pr-10 py-3 bg-[var(--bg-soft)] border border-[var(--line)] rounded-lg text-white placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition"
-        />
-        {searchInput && (
-          <button
-            onClick={() => setSearchInput("")}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-soft hover:text-white transition"
+        <div className="pm-board-cats-wrap">
+          <div
+            ref={categoryRailRef}
+            className="pm-board-cats"
+            tabIndex={0}
+            role="listbox"
+            aria-label="Market categories"
+            onKeyDown={handleCategoryRailKeyDown}
+            onScroll={refreshCategoryScrollHint}
           >
+            {categoriesWithAll.map((cat) => {
+              const active = selectedTag === cat.id;
+              return (
+                <button
+                  key={cat.id || "all"}
+                  type="button"
+                  className={`pm-chip-cat ${active ? "is-active" : ""}`}
+                  aria-pressed={active}
+                  onClick={() => setSelectedTag(active ? "" : cat.id)}
+                >
+                  {cat.label}
+                </button>
+              );
+            })}
+          </div>
+          {showCategoryScrollHint && (
+            <button
+              type="button"
+              className="pm-cat-scroll-btn"
+              onClick={scrollCategoryRailRight}
+              aria-label="Scroll categories right"
+            >
+              <svg
+                className="w-4 h-4 mx-auto"
+                viewBox="0 0 20 20"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="m7 4 6 6-6 6"
+                />
+              </svg>
+            </button>
+          )}
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-center">
+          <div className="pm-board-search">
             <svg
-              className="w-5 h-5"
-              fill="none"
               viewBox="0 0 24 24"
+              fill="none"
               stroke="currentColor"
-              strokeWidth={2}
+              strokeWidth="1.9"
+              aria-hidden="true"
             >
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                d="M6 18L18 6M6 6l12 12"
+                d="m21 21-4.35-4.35m1.6-5.4a6.75 6.75 0 1 1-13.5 0 6.75 6.75 0 0 1 13.5 0Z"
               />
             </svg>
-          </button>
-        )}
-      </div>
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
+              placeholder="Search markets... (/)"
+            />
+            {searchInput && (
+              <button
+                type="button"
+                className="pm-board-search-clear"
+                aria-label="Clear search"
+                onClick={() => setSearchInput("")}
+              >
+                ✕
+              </button>
+            )}
+          </div>
 
-      {/* ── Category chips + sort ──────────────────────────────── */}
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          onClick={() => setSelectedTag("")}
-          className={`px-3 py-1.5 rounded-full text-xs font-medium border transition ${
-            selectedTag === ""
-              ? "bg-[var(--accent)] text-black border-[var(--accent)]"
-              : "border-[var(--line)] text-soft hover:text-white hover:border-[var(--line-strong)]"
-          }`}
-        >
-          All
-        </button>
-        {categories.map((cat) => (
           <button
-            key={cat.id}
-            onClick={() => setSelectedTag(selectedTag === cat.id ? "" : cat.id)}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium border transition ${
-              selectedTag === cat.id
-                ? "bg-[var(--accent)] text-black border-[var(--accent)]"
-                : "border-[var(--line)] text-soft hover:text-white hover:border-[var(--line-strong)]"
-            }`}
+            type="button"
+            className={`pm-chip-cat ${showFavoritesOnly ? "is-active" : ""}`}
+            onClick={() => setShowFavoritesOnly((prev) => !prev)}
+            aria-pressed={showFavoritesOnly}
           >
-            {cat.label}
+            Watchlist ({favoriteCount})
           </button>
-        ))}
 
-        {/* Sort dropdown */}
-        <div className="ml-auto">
           <select
             value={sort}
-            onChange={(e) => setSort(e.target.value)}
-            className="bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-1.5 text-xs text-soft focus:outline-none focus:border-[var(--accent)]"
+            onChange={(event) => setSort(event.target.value)}
+            className="h-[2.7rem] rounded-xl border border-[var(--pm-border)] bg-[var(--pm-card)] px-3 text-sm text-[var(--pm-text)] focus:outline-none focus:border-[var(--pm-accent)]"
+            aria-label="Sort markets"
           >
             <option value="volume24hr">Volume 24h</option>
             <option value="liquidity">Liquidity</option>
             <option value="startDate">Newest</option>
           </select>
         </div>
-      </div>
 
-      {error && <div className="p-4 alert-error rounded text-sm">{error}</div>}
-
-      {/* ── Loading skeleton ───────────────────────────────────── */}
-      {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 items-stretch">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="surface-panel p-5 animate-pulse space-y-3">
-              <div className="flex gap-3">
-                <div className="w-10 h-10 rounded bg-[var(--bg-soft)]" />
-                <div className="flex-1 space-y-2">
-                  <div className="h-3 bg-[var(--bg-soft)] rounded w-3/4" />
-                  <div className="h-3 bg-[var(--bg-soft)] rounded w-1/2" />
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <div className="h-6 bg-[var(--bg-soft)] rounded w-16" />
-                <div className="h-6 bg-[var(--bg-soft)] rounded w-16" />
-              </div>
-              <div className="h-3 bg-[var(--bg-soft)] rounded w-2/3" />
+        {recentTrades.length > 0 && (
+          <div className="rounded-xl border border-[var(--pm-border)] bg-[var(--pm-card)] p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-[var(--pm-text)]">
+                Recent traded markets
+              </h2>
+              <span className="text-xs text-[var(--pm-text-soft)]">
+                Quick re-entry
+              </span>
             </div>
-          ))}
-        </div>
-      ) : markets.length === 0 ? (
-        /* ── Empty state ──────────────────────────────────────── */
-        <div className="text-center py-16 surface-panel">
-          <svg
-            className="w-12 h-12 mx-auto text-soft mb-4"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={1.5}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
-            />
-          </svg>
-          <p className="text-soft text-lg mb-1">No markets found</p>
-          <p className="text-muted text-sm">
-            {debouncedQuery
-              ? `No results for "${debouncedQuery}". Try a different search term.`
-              : "Try a different category or check back later."}
-          </p>
-        </div>
-      ) : (
-        <>
-          {/* ── Results count ─────────────────────────────────── */}
-          <p className="text-xs text-muted">
-            Showing {eventGroups.length} events / {totalOptions} options
-            {total > 0 ? ` · ${total} total options` : ""}
-          </p>
-
-          {/* ── Market grid ───────────────────────────────────── */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 items-stretch">
-            {eventGroups.map((group) => {
-              // ── Single-market event → regular card (no grouping chrome) ──
-              if (group.isSingle) {
-                const market = group.markets[0];
-                const prices = parseOutcomePrices(market);
-                const vol =
-                  market.volume24hr || market.volumeNum || market.volume || 0;
-                const liq = market.liquidity || 0;
-                const endDate = market.endDate || market.end_date_iso;
-                const imgUrl = market.image || market._event_image;
-                const polyUrl = getPolymarketUrl(market);
-                return (
-                  <div
-                    key={group.eventSlug}
-                    className="surface-panel p-5 hover:border-[var(--line-strong)] transition group flex flex-col w-full h-[320px]"
-                  >
-                    <div
-                      className={`flex gap-3 mb-3 ${polyUrl ? "cursor-pointer hover:opacity-80" : ""}`}
-                    >
-                      {imgUrl && (
-                        <img
-                          src={imgUrl}
-                          alt=""
-                          className="w-10 h-10 rounded object-cover flex-shrink-0 mt-0.5"
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).style.display =
-                              "none";
-                          }}
-                        />
-                      )}
-                      <h3 className="text-sm font-medium text-white leading-snug line-clamp-3 group-hover:text-blue-400 transition-colors">
-                        {polyUrl ? (
-                          <a
-                            href={polyUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="hover:opacity-80"
-                          >
-                            {market.question ||
-                              market._event_title ||
-                              "Unknown Market"}
-                            <svg
-                              className="inline-block w-3 h-3 ml-1 opacity-0 group-hover:opacity-60 transition-opacity"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                              strokeWidth={2}
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
-                              />
-                            </svg>
-                          </a>
-                        ) : (
-                          market.question || market._event_title || "Unknown Market"
-                        )}
-                      </h3>
-                    </div>
-                    <div className="flex gap-3 mb-3">
-                      <span className="chip chip-success px-2.5 py-1">
-                        Yes {(prices.yes * 100).toFixed(0)}c
-                      </span>
-                      <span className="chip chip-danger px-2.5 py-1">
-                        No {(prices.no * 100).toFixed(0)}c
-                      </span>
-                    </div>
-                    <div className="flex gap-4 text-xs text-soft mb-4">
-                      {vol > 0 && <span>Vol: {fmtUSD(vol)}</span>}
-                      {liq > 0 && <span>Liq: {fmtUSD(liq)}</span>}
-                      {endDate && (
-                        <span>
-                          Ends: {new Date(endDate).toLocaleDateString()}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex gap-2 mt-auto">
-                      <button
-                        onClick={() => openTradeModal(market)}
-                        className="btn-success text-xs flex items-center gap-1.5"
-                      >
-                        <svg
-                          className="w-3.5 h-3.5"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth={2}
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                          />
-                        </svg>
-                        Trade
-                      </button>
-                      <button
-                        onClick={() => openTraderAnalysis(market)}
-                        className="btn-accent text-xs flex items-center gap-1.5"
-                      >
-                        <svg
-                          className="w-3.5 h-3.5"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth={2}
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z"
-                          />
-                        </svg>
-                        AI Analysis
-                      </button>
-                    </div>
-                  </div>
-                );
-              }
-
-              // ── Multi-market event → compact group card (opens drawer) ──
-              return (
-                <EventGroupPanel
-                  key={group.eventSlug}
-                  group={group}
-                  parsePrices={parseOutcomePrices}
-                  onSelect={() => setSelectedGroup(group)}
-                  onTradePrimary={openTradeModal}
-                  onAnalyzePrimary={openTraderAnalysis}
-                  isSelected={selectedGroup?.eventSlug === group.eventSlug}
-                />
-              );
-            })}
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {recentTrades.slice(0, 8).map((row) => (
+                <button
+                  key={`${row.market_id}-${row.last_traded_at}`}
+                  type="button"
+                  onClick={() => requireAuth(() => openTradeFromRecent(row))}
+                  className="min-w-[220px] rounded-lg border border-[var(--pm-border)] bg-[var(--pm-bg)] px-3 py-2 text-left transition hover:border-[var(--pm-border-strong)]"
+                >
+                  <p className="truncate text-xs font-semibold text-[var(--pm-text)]">
+                    {row.title}
+                  </p>
+                  <p className="mt-1 text-[11px] text-[var(--pm-text-soft)]">
+                    {new Date(row.last_traded_at).toLocaleString()}
+                  </p>
+                </button>
+              ))}
+            </div>
           </div>
+        )}
 
-          {/* ── Load More ─────────────────────────────────────── */}
-          {hasMore && (
-            <div className="text-center pt-2">
-              <button
-                onClick={() => fetchMarkets(markets.length)}
-                disabled={loadingMore}
-                className="btn-muted px-6 py-2 text-sm"
-              >
-                {loadingMore ? (
-                  <span className="flex items-center gap-2">
-                    <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full" />
-                    Loading...
-                  </span>
-                ) : (
-                  "Load More"
-                )}
-              </button>
+        <p className="text-xs text-[var(--pm-text-soft)]">
+          Showing {filteredGroups.length} events / {totalOptions} options
+          {total > 0 ? ` · ${total} total options` : ""}
+        </p>
+
+        {error && (
+          <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
+        {loading ? (
+          <div className="pm-board-grid">
+            {Array.from({ length: 8 }).map((_, index) => (
+              <div key={index} className="pm-card-skeleton" />
+            ))}
+          </div>
+        ) : markets.length === 0 ? (
+          <div className="rounded-xl border border-[var(--pm-border)] bg-[var(--pm-card)] px-6 py-14 text-center">
+            <p className="text-lg font-semibold text-[var(--pm-text)]">
+              No markets found
+            </p>
+            <p className="mt-1 text-sm text-[var(--pm-text-soft)]">
+              {debouncedQuery
+                ? `No results for "${debouncedQuery}". Try a different search term.`
+                : "Try a different category or check back later."}
+            </p>
+          </div>
+        ) : filteredGroups.length === 0 ? (
+          <div className="rounded-xl border border-[var(--pm-border)] bg-[var(--pm-card)] px-6 py-14 text-center">
+            <p className="text-lg font-semibold text-[var(--pm-text)]">
+              No watchlist markets in this view
+            </p>
+            <p className="mt-1 text-sm text-[var(--pm-text-soft)]">
+              Disable watchlist mode or add markets to your watchlist.
+            </p>
+          </div>
+        ) : (
+          <>
+            <div className="pm-board-grid">
+              {boardItems.map((item) => (
+                <MarketBoardCard
+                  key={item.card.id}
+                  card={item.card}
+                  onTrade={(outcome) =>
+                    requireAuth(() =>
+                      openTradeModal(item.primaryMarket, outcome),
+                    )
+                  }
+                  onRowTrade={(rowId, outcome) => {
+                    const market = item.rowMarketMap.get(rowId);
+                    if (market)
+                      requireAuth(() => openTradeModal(market, outcome));
+                  }}
+                  onOpenDetail={() => setSelectedGroup(item.group)}
+                  onToggleFavorite={() =>
+                    requireAuth(() =>
+                      toggleMarketWatchlist(item.group.eventSlug),
+                    )
+                  }
+                />
+              ))}
             </div>
-          )}
-        </>
-      )}
 
-      {/* Trade Modal */}
-      <TradeModal market={tradeMarket} onClose={() => setTradeMarket(null)} />
+            {hasMore && (
+              <div className="pt-1 text-center">
+                <div
+                  ref={loadMoreSentinelRef}
+                  aria-hidden="true"
+                  className="h-1 w-full"
+                />
+                {loadingMore && (
+                  <p className="text-xs text-[var(--pm-text-soft)]">
+                    Loading more markets...
+                  </p>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </section>
 
-      {/* ═══ Event Group Detail Drawer ═══ */}
+      <TradeModal
+        market={tradeMarket}
+        source="markets"
+        defaultOutcome={tradeDefaultOutcome}
+        onClose={() => {
+          setTradeMarket(null);
+          setTradeDefaultOutcome(undefined);
+        }}
+      />
+
       {selectedGroup && (
         <EventGroupDetailDrawer
           group={selectedGroup}
@@ -611,7 +877,7 @@ export default function Markets() {
                 </div>
                 <div className="flex items-center justify-between">
                   <div className="flex gap-3 text-xs text-muted">
-                    {vol > 0 && <span>Vol: {fmtUSD(vol)}</span>}
+                    {vol > 0 && <span>Vol: {fmtCompactUSD(vol)}</span>}
                     {endDate && (
                       <span>
                         Ends: {new Date(endDate).toLocaleDateString()}
@@ -620,7 +886,7 @@ export default function Markets() {
                   </div>
                   <div className="flex gap-2">
                     <button
-                      onClick={() => openTradeModal(market)}
+                      onClick={() => requireAuth(() => openTradeModal(market))}
                       className="btn-success text-xs px-2 py-1"
                     >
                       Trade
@@ -735,7 +1001,9 @@ export default function Markets() {
                         <td className="p-2 mono">
                           {buildPolygonscanAddressUrl(t.address) ? (
                             <a
-                              href={buildPolygonscanAddressUrl(t.address) || "#"}
+                              href={
+                                buildPolygonscanAddressUrl(t.address) || "#"
+                              }
                               target="_blank"
                               rel="noopener noreferrer"
                               className="text-soft hover:text-white"

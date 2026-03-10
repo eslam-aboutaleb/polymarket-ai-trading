@@ -1,5 +1,6 @@
 """StopLossOrder model – persistent stop-loss orders monitored in real-time."""
 from sqlalchemy import Column, String, Float, DateTime, Integer, ForeignKey, Boolean
+from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.utils.time import utc_now
 from app.models.base import Base
@@ -12,6 +13,9 @@ class StopLossOrder(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
+    # Eager-loadable relationship (avoids N+1 wallet lookups)
+    user = relationship("User", lazy="noload")
     token_id = Column(String(200), nullable=False, index=True)
     market_id = Column(String(200), nullable=False)
     market_title = Column(String(500), default="")

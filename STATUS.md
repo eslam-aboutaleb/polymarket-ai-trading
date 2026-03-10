@@ -18,6 +18,7 @@
 - ✅ 5 fully-implemented REST API endpoints for authentication
 - ✅ Database initialization on startup
 - ✅ Pydantic schemas for all requests/responses
+- ✅ Binance Skills Hub integration (10 REST endpoints under `/api/binance/*`)
 
 ### Frontend (React + TypeScript)
 
@@ -28,6 +29,7 @@
 - ✅ Axios HTTP client with automatic token refresh
 - ✅ Complete authentication service layer
 - ✅ Responsive design with Tailwind CSS
+- ✅ Binance Smart Money Signals dashboard component
 
 ### Database
 
@@ -66,6 +68,22 @@
 ✅ Automatic session persistence
 ✅ Token revocation on logout
 ✅ Auto-refresh before expiry
+```
+
+### Binance Skills Hub Integration
+
+```
+✅ Smart money buy/sell signals (Ethereum, Polygon, BSC, Solana, etc.)
+✅ Social hype rankings (token mention tracking)
+✅ Unified trending token rankings
+✅ Smart money net inflow tracking
+✅ PnL leaderboard (7d/30d top traders)
+✅ Token search & dynamic market data
+✅ Aggregated dashboard endpoint (/api/binance/dashboard)
+✅ MCP research server integration (9 Binance tools)
+✅ AI analysis chain enrichment (all 6 bots)
+✅ Frontend signals dashboard component
+✅ Opt-out via BINANCE_SKILLS_ENABLED=false
 ```
 
 ### User Experience
@@ -122,7 +140,8 @@ polymarket/                              # Root directory
 │   │   ├── schemas/
 │   │   │   └── auth.py              # Request/response schemas
 │   │   ├── api/routes/
-│   │   │   └── auth.py              # 5 auth endpoints
+│   │   │   ├── auth.py              # 5 auth endpoints
+│   │   │   └── binance_signals.py   # Binance smart money API (10 endpoints)
 │   │   ├── security/
 │   │   │   └── auth.py              # JWT & signatures
 │   │   ├── services/                # Business logic (stubs)
@@ -148,7 +167,8 @@ polymarket/                              # Root directory
 │   │   │   └── Dashboard.tsx      # Dashboard content
 │   │   ├── services/               # API communication
 │   │   │   ├── apiClient.ts       # HTTP client
-│   │   │   └── authService.ts     # Auth API methods
+│   │   │   ├── authService.ts     # Auth API methods
+│   │   │   └── binanceSignalsService.ts # Binance signals API
 │   │   ├── store/                  # State management
 │   │   │   └── authStore.ts       # Zustand store
 │   │   ├── hooks/                  # Custom hooks (ready)

@@ -29,6 +29,7 @@ An AI-powered trading automation system for Polymarket that identifies winning t
 │  │ - PolymarketSDK (py-clob-client)                           │    │
 │  │ - LangChain Chain (Assessment)                             │    │
 │  │ - Web Search MCP (Context)                                 │    │
+│  │ - Binance Skills Hub (Smart Money + Rankings)              │    │
 │  │ - Trade Execution                                          │    │
 │  └─────────────────────────────────────────────────────────────┘    │
 │  ┌─────────────────────────────────────────────────────────────┐    │
@@ -77,6 +78,7 @@ An AI-powered trading automation system for Polymarket that identifies winning t
 
 - LangChain chains for structured trade analysis
 - Web search MCP integration for market context
+- **Binance Skills Hub integration** for smart money signals, social hype, and token data
 - Risk assessment (low/medium/high)
 - Confidence scoring (0-100)
 - Market sentiment analysis
@@ -111,6 +113,7 @@ polymarket/
 │   │   ├── api/
 │   │   │   └── routes/
 │   │   │       ├── auth.py     # Authentication routes
+│   │   │       ├── binance_signals.py # Binance smart money API routes
 │   │   │       └── ...         # Other route modules (coming soon)
 │   │   ├── services/           # Business logic services
 │   │   ├── llm/                # LangChain chains
@@ -138,7 +141,8 @@ polymarket/
 │   │   │   └── Dashboard.tsx   # Dashboard content
 │   │   ├── services/
 │   │   │   ├── apiClient.ts    # Axios HTTP client with auth
-│   │   │   └── authService.ts  # Authentication API service
+│   │   │   ├── authService.ts  # Authentication API service
+│   │   │   └── binanceSignalsService.ts # Binance smart money API service
 │   │   ├── store/
 │   │   │   └── authStore.ts    # Zustand auth store
 │   │   ├── hooks/              # Custom React hooks
@@ -186,6 +190,7 @@ polymarket/
    # - JWT_SECRET_KEY: Change to random secret
    # - POLYMARKET_PRIVATE_KEY: Your Polygon wallet private key
    # - OPENAI_API_KEY: Your OpenAI API key
+   # - BINANCE_SKILLS_ENABLED: true (default) — enable Binance smart money signals
    ```
 
 3. **Initialize database**:
@@ -265,6 +270,18 @@ docker-compose up
 - `GET /api/markets/search` - Search markets
 - `GET /api/portfolio` - User's positions and balance
 - `GET/POST /api/settings` - User settings
+
+### Binance Smart Money Signals
+
+- `GET /api/binance/dashboard` - Aggregated signals dashboard (smart money, social hype, trending, inflow, PnL leaderboard)
+- `GET /api/binance/signals/smart-money` - Smart money buy/sell signals by chain
+- `GET /api/binance/signals/active-buys` - Tokens being accumulated by smart money
+- `GET /api/binance/rankings/social-hype` - Social media hype rankings
+- `GET /api/binance/rankings/trending` - Unified trending token rankings
+- `GET /api/binance/rankings/smart-money-inflow` - Smart money net inflow rankings
+- `GET /api/binance/rankings/pnl-leaderboard` - Top PnL traders (7d/30d)
+- `GET /api/binance/token/search` - Search tokens by name/symbol
+- `GET /api/binance/token/data` - Detailed dynamic data for a token
 
 ## Development Workflow
 

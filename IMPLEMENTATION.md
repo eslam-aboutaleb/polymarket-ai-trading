@@ -289,6 +289,43 @@ GET /
 
 ## 🚀 Ready for Next Phases
 
+### Binance Skills Hub Integration (Implemented)
+
+- **`services/mcps/research/binance_skills.py`** — Async HTTP client for all 3 Binance Skills (trading signals, crypto rankings, token info) with 5-min TTL in-memory cache
+- **`backend/app/api/routes/binance_signals.py`** — 10 REST endpoints under `/api/binance/*` including aggregated `/dashboard`
+- **`frontend/src/services/binanceSignalsService.ts`** — TypeScript service for all Binance API calls
+- **`frontend/src/components/BinanceSignals.tsx`** — Tabbed dashboard widget (Smart Money, Social Hype, Trending, Inflow, Top Traders)
+
+#### Data Flow
+
+```
+Binance Skills Hub (public REST APIs, no auth)
+    ↓
+binance_skills.py (httpx + TTL cache)
+    ↓
+server.py MCP tools (9 new Binance tools via stdio JSON)
+    ↓
+ResearchMCPClient._gather_binance_context()
+    ↓
+TradingAnalysisChain → LLM prompts include smart money data
+    ↓
+All 6 bots receive Binance intelligence automatically
+```
+
+#### Binance Skills APIs Used
+
+| Skill                            | Endpoints                                                  | Bot Integration                              |
+| -------------------------------- | ---------------------------------------------------------- | -------------------------------------------- |
+| **Trading Signal** (Smart Money) | `POST /signal/smart-money`                                 | Inverse bot, copy-trade, opportunity scanner |
+| **Crypto Market Rank**           | Social Hype, Trending, Smart Money Inflow, PnL Leaderboard | Sentiment analysis, opportunity scoring      |
+| **Query Token Info**             | Token Search, Dynamic Data, K-Line                         | Arbitrage scanner, market maker price oracle |
+
+#### Configuration
+
+- `BINANCE_SKILLS_ENABLED=true` (default) in both `backend/app/config.py` and `services/llm-chain/src/config.py`
+- Set to `false` to disable all Binance data collection
+- No API key required — all Binance Skills Hub APIs are public
+
 ### Stub Files Created (Ready for Implementation)
 
 - **`app/services/polymarket_service.py`** - For Polymarket SDK integration
@@ -311,6 +348,7 @@ GET /
 3. **LLM Integration** (Phase 3)
    - LangChain chains with OpenAI
    - Web search MCP integration
+   - Binance Skills Hub integration (smart money signals, social hype, token data)
    - Trade assessment logic
 
 4. **Frontend Pages** (Phase 4)

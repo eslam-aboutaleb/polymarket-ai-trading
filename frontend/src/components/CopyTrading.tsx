@@ -20,6 +20,8 @@ import {
   upsertMockCopyTrader,
 } from "../utils/mockCopyTraders";
 import { buildPolymarketProfileUrl } from "../utils/urlSafety";
+import { useAuthStore } from "../store/authStore";
+import { useLoginModal } from "../context/LoginModalContext";
 
 type MockPeriod = "24h" | "7d" | "30d" | "all_time";
 
@@ -40,7 +42,10 @@ const SIZING_MODE_OPTIONS = [
 ] as const;
 
 const COPY_WALLET_MODE_OPTIONS = [
-  { value: "dynamic_main_wallet_percentage", label: "Dynamic % of Main Wallet" },
+  {
+    value: "dynamic_main_wallet_percentage",
+    label: "Dynamic % of Main Wallet",
+  },
   { value: "fixed_snapshot_amount", label: "Fixed Snapshot Amount" },
 ] as const;
 
@@ -62,7 +67,8 @@ const defaultTraderConfig = (f: FollowedTrader): TraderConfigDraft => ({
 const normalizeTraderConfig = (cfg: TraderConfigDraft) => ({
   max_position_size:
     cfg.max_position_size == null ? null : Number(cfg.max_position_size),
-  trader_alias: cfg.trader_alias == null ? null : cfg.trader_alias.trim() || null,
+  trader_alias:
+    cfg.trader_alias == null ? null : cfg.trader_alias.trim() || null,
   sizing_mode: cfg.sizing_mode ?? "inherit_global",
   fixed_trade_amount_override:
     cfg.fixed_trade_amount_override == null
@@ -70,7 +76,9 @@ const normalizeTraderConfig = (cfg: TraderConfigDraft) => ({
       : Number(cfg.fixed_trade_amount_override),
   copy_wallet_mode: cfg.copy_wallet_mode ?? "dynamic_main_wallet_percentage",
   copy_wallet_percentage:
-    cfg.copy_wallet_percentage == null ? null : Number(cfg.copy_wallet_percentage),
+    cfg.copy_wallet_percentage == null
+      ? null
+      : Number(cfg.copy_wallet_percentage),
   copy_wallet_fixed_amount:
     cfg.copy_wallet_fixed_amount == null
       ? null
@@ -78,6 +86,29 @@ const normalizeTraderConfig = (cfg: TraderConfigDraft) => ({
 });
 
 export default function CopyTrading() {
+  const { isAuthenticated } = useAuthStore();
+  const { openLoginModal } = useLoginModal();
+
+  // ── Unauthenticated visitors see a connect-wallet prompt ──
+  if (!isAuthenticated) {
+    return (
+      <div className="max-w-3xl mx-auto mt-16 px-4 text-center space-y-6">
+        <h1 className="text-2xl font-bold text-white">Copy Trading</h1>
+        <p className="text-soft text-base leading-relaxed max-w-lg mx-auto">
+          Automatically mirror the trades of top Polymarket traders. Follow
+          wallets, configure position sizing, and track performance — all from
+          one dashboard.
+        </p>
+        <button
+          onClick={openLoginModal}
+          className="btn-accent font-semibold text-sm px-6 py-3"
+        >
+          Connect Wallet to Get Started
+        </button>
+      </div>
+    );
+  }
+
   const [activeTab, setActiveTab] = useState<"copy" | "mock">(() => {
     try {
       const stored = localStorage.getItem(COPY_TRADING_TAB_STORAGE_KEY);
@@ -132,8 +163,8 @@ export default function CopyTrading() {
 
   const [mockWalletInput, setMockWalletInput] = useState("");
   const [mockPeriod, setMockPeriod] = useState<MockPeriod>("30d");
-  const [mockTraders, setMockTraders] = useState<MockCopyTrader[]>(
-    () => loadMockCopyTraders(),
+  const [mockTraders, setMockTraders] = useState<MockCopyTrader[]>(() =>
+    loadMockCopyTraders(),
   );
   const [mockLeaderboard, setMockLeaderboard] = useState<LeaderboardEntry[]>(
     [],
@@ -200,7 +231,9 @@ export default function CopyTrading() {
       setEvaluationRows(data.rows);
       setEvaluationUpdatedAt(data.updated_at);
     } catch (err: unknown) {
-      setEvaluationError(getApiErrorMessage(err, "Failed to load copy evaluation"));
+      setEvaluationError(
+        getApiErrorMessage(err, "Failed to load copy evaluation"),
+      );
     } finally {
       setEvaluationLoading(false);
     }
@@ -286,7 +319,9 @@ export default function CopyTrading() {
       if (!persisted) return false;
       const persistedNormalized = normalizeTraderConfig(persisted);
       const draftNormalized = normalizeTraderConfig(draft);
-      return JSON.stringify(draftNormalized) !== JSON.stringify(persistedNormalized);
+      return (
+        JSON.stringify(draftNormalized) !== JSON.stringify(persistedNormalized)
+      );
     },
     [getPersistedConfigForWallet],
   );
@@ -301,7 +336,8 @@ export default function CopyTrading() {
     })}`;
   };
 
-  const formatPct = (v: number) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(2)}%`;
+  const formatPct = (v: number) =>
+    `${v >= 0 ? "+" : ""}${(v * 100).toFixed(2)}%`;
 
   const handleUnfollow = async (wallet: string): Promise<boolean> => {
     const key = wallet.toLowerCase();
@@ -422,7 +458,8 @@ export default function CopyTrading() {
 
     if (
       draft.max_position_size != null &&
-      (!Number.isFinite(draft.max_position_size) || draft.max_position_size <= 0)
+      (!Number.isFinite(draft.max_position_size) ||
+        draft.max_position_size <= 0)
     ) {
       setError("Max position size must be a positive number.");
       setSaveStatusByWallet((prev) => ({ ...prev, [key]: "error" }));
@@ -439,7 +476,9 @@ export default function CopyTrading() {
         !Number.isFinite(draft.fixed_trade_amount_override) ||
         draft.fixed_trade_amount_override <= 0
       ) {
-        setError("Fixed amount mode requires a positive fixed amount override.");
+        setError(
+          "Fixed amount mode requires a positive fixed amount override.",
+        );
         setSaveStatusByWallet((prev) => ({ ...prev, [key]: "error" }));
         setSaveStatusMessageByWallet((prev) => ({
           ...prev,
@@ -504,7 +543,9 @@ export default function CopyTrading() {
             : draft.fixed_trade_amount_override,
         copy_wallet_mode: draft.copy_wallet_mode,
         copy_wallet_percentage:
-          draft.copy_wallet_percentage == null ? null : draft.copy_wallet_percentage,
+          draft.copy_wallet_percentage == null
+            ? null
+            : draft.copy_wallet_percentage,
         copy_wallet_fixed_amount:
           draft.copy_wallet_fixed_amount == null
             ? null
@@ -513,11 +554,7 @@ export default function CopyTrading() {
 
       const updated = await tradesService.followTrader(key, payload);
       setFollowing((prev) =>
-        prev.map((f) =>
-          f.trader_wallet.toLowerCase() === key
-            ? updated
-            : f,
-        ),
+        prev.map((f) => (f.trader_wallet.toLowerCase() === key ? updated : f)),
       );
       setTraderConfigDrafts((prev) => ({
         ...prev,
@@ -528,7 +565,10 @@ export default function CopyTrading() {
       setSaveStatusMessageByWallet((prev) => ({ ...prev, [key]: "Saved" }));
       return true;
     } catch (err: unknown) {
-      const message = getApiErrorMessage(err, "Failed to save trader copy settings");
+      const message = getApiErrorMessage(
+        err,
+        "Failed to save trader copy settings",
+      );
       setError(message);
       setSaveStatusByWallet((prev) => ({ ...prev, [key]: "error" }));
       setSaveStatusMessageByWallet((prev) => ({ ...prev, [key]: message }));
@@ -549,7 +589,9 @@ export default function CopyTrading() {
   const handleAddMockTrader = () => {
     const wallet = mockWalletInput.trim().toLowerCase();
     if (!isValidWallet(wallet)) {
-      setMockError("Enter a valid Polymarket wallet address (0x + 40 hex chars).");
+      setMockError(
+        "Enter a valid Polymarket wallet address (0x + 40 hex chars).",
+      );
       setMockSuccess(null);
       return;
     }
@@ -565,7 +607,9 @@ export default function CopyTrading() {
     upsertMockTrader(wallet);
     setMockWalletInput("");
     setMockError(null);
-    setMockSuccess(`Mock copy started for ${shortAddress(wallet)} with $10,000.`);
+    setMockSuccess(
+      `Mock copy started for ${shortAddress(wallet)} with $10,000.`,
+    );
     setMockIndicatorByWallet((prev) => ({
       ...prev,
       [wallet]: "added",
@@ -635,7 +679,8 @@ export default function CopyTrading() {
   };
 
   const handleConfirmAction = async () => {
-    if (!confirmState.open || !confirmState.type || !confirmState.wallet) return;
+    if (!confirmState.open || !confirmState.type || !confirmState.wallet)
+      return;
     setConfirmLoading(true);
     let ok = false;
     try {
@@ -681,7 +726,9 @@ export default function CopyTrading() {
 
   const mockRows = useMemo(() => {
     const byWallet = new Map(
-      mockLeaderboard.map((entry) => [entry.address.toLowerCase(), entry] as const),
+      mockLeaderboard.map(
+        (entry) => [entry.address.toLowerCase(), entry] as const,
+      ),
     );
 
     return mockTraders.map((trader) => {
@@ -741,7 +788,10 @@ export default function CopyTrading() {
       (sum, row) => sum + row.initial_capital,
       0,
     );
-    const estimatedPnl = mockRows.reduce((sum, row) => sum + row.estimatedPnl, 0);
+    const estimatedPnl = mockRows.reduce(
+      (sum, row) => sum + row.estimatedPnl,
+      0,
+    );
     return {
       allocated,
       estimatedPnl,
@@ -820,714 +870,802 @@ export default function CopyTrading() {
 
       {activeTab === "mock" && (
         <div className="surface-panel p-6 rounded-lg space-y-4">
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div>
-            <h2 className="text-lg font-semibold">Mock Copy Trading</h2>
-            <p className="text-soft text-sm">
-              Paper-copy Polymarket wallets with virtual funds. Each mock trader
-              starts with {formatUSD(MOCK_CAPITAL_PER_TRADER)}.
-            </p>
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <h2 className="text-lg font-semibold">Mock Copy Trading</h2>
+              <p className="text-soft text-sm">
+                Paper-copy Polymarket wallets with virtual funds. Each mock
+                trader starts with {formatUSD(MOCK_CAPITAL_PER_TRADER)}.
+              </p>
+            </div>
+            <button onClick={refreshMockLeaderboard} className="btn-muted">
+              {mockLoading ? "Refreshing..." : "Refresh Mock Data"}
+            </button>
           </div>
-          <button onClick={refreshMockLeaderboard} className="btn-muted">
-            {mockLoading ? "Refreshing..." : "Refresh Mock Data"}
-          </button>
-        </div>
 
-        {mockError && <div className="p-3 alert-error rounded text-sm">{mockError}</div>}
-        {mockSuccess && (
-          <div className="p-3 rounded text-sm border border-green-500/30 bg-green-500/10 text-green-300">
-            {mockSuccess}
+          {mockError && (
+            <div className="p-3 alert-error rounded text-sm">{mockError}</div>
+          )}
+          {mockSuccess && (
+            <div className="p-3 rounded text-sm border border-green-500/30 bg-green-500/10 text-green-300">
+              {mockSuccess}
+            </div>
+          )}
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex bg-[var(--bg-soft)] rounded-lg p-1">
+              {MOCK_PERIODS.map((p) => (
+                <button
+                  key={p.value}
+                  onClick={() => setMockPeriod(p.value)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-semibold transition ${
+                    mockPeriod === p.value
+                      ? "bg-[var(--accent-soft)] text-[var(--accent)]"
+                      : "text-soft hover:text-white"
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <span className="text-xs text-muted">
+              Performance shown as an estimate from leaderboard PnL/volume
+              ratio.
+            </span>
           </div>
-        )}
 
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex bg-[var(--bg-soft)] rounded-lg p-1">
-            {MOCK_PERIODS.map((p) => (
-              <button
-                key={p.value}
-                onClick={() => setMockPeriod(p.value)}
-                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition ${
-                  mockPeriod === p.value
-                    ? "bg-[var(--accent-soft)] text-[var(--accent)]"
-                    : "text-soft hover:text-white"
+          <div className="flex flex-col md:flex-row gap-3">
+            <input
+              type="text"
+              value={mockWalletInput}
+              onChange={(e) => setMockWalletInput(e.target.value)}
+              placeholder="Add wallet to mock copy (0x...)"
+              className="flex-1 bg-[var(--bg-soft)] border border-[var(--line)] rounded px-3 py-2 text-sm mono"
+            />
+            <button onClick={handleAddMockTrader} className="btn-primary">
+              Add Mock Trader
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="surface-soft p-4 rounded-lg">
+              <p className="text-muted text-xs uppercase tracking-wide">
+                Mock Traders
+              </p>
+              <p className="text-2xl font-bold mt-1">{mockRows.length}</p>
+            </div>
+            <div className="surface-soft p-4 rounded-lg">
+              <p className="text-muted text-xs uppercase tracking-wide">
+                Virtual Equity
+              </p>
+              <p className="text-2xl font-bold mt-1">
+                {formatUSD(mockTotals.equity)}
+              </p>
+            </div>
+            <div className="surface-soft p-4 rounded-lg">
+              <p className="text-muted text-xs uppercase tracking-wide">
+                Est. P&L ({mockPeriod})
+              </p>
+              <p
+                className={`text-2xl font-bold mt-1 ${
+                  mockTotals.estimatedPnl >= 0 ? "status-good" : "status-bad"
                 }`}
               >
-                {p.label}
-              </button>
-            ))}
+                {mockTotals.estimatedPnl >= 0 ? "+" : ""}
+                {formatUSD(mockTotals.estimatedPnl)}
+              </p>
+            </div>
           </div>
-          <span className="text-xs text-muted">
-            Performance shown as an estimate from leaderboard PnL/volume ratio.
-          </span>
-        </div>
 
-        <div className="flex flex-col md:flex-row gap-3">
-          <input
-            type="text"
-            value={mockWalletInput}
-            onChange={(e) => setMockWalletInput(e.target.value)}
-            placeholder="Add wallet to mock copy (0x...)"
-            className="flex-1 bg-[var(--bg-soft)] border border-[var(--line)] rounded px-3 py-2 text-sm mono"
-          />
-          <button onClick={handleAddMockTrader} className="btn-primary">
-            Add Mock Trader
-          </button>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="surface-soft p-4 rounded-lg">
-            <p className="text-muted text-xs uppercase tracking-wide">Mock Traders</p>
-            <p className="text-2xl font-bold mt-1">{mockRows.length}</p>
-          </div>
-          <div className="surface-soft p-4 rounded-lg">
-            <p className="text-muted text-xs uppercase tracking-wide">Virtual Equity</p>
-            <p className="text-2xl font-bold mt-1">{formatUSD(mockTotals.equity)}</p>
-          </div>
-          <div className="surface-soft p-4 rounded-lg">
-            <p className="text-muted text-xs uppercase tracking-wide">Est. P&L ({mockPeriod})</p>
-            <p
-              className={`text-2xl font-bold mt-1 ${
-                mockTotals.estimatedPnl >= 0 ? "status-good" : "status-bad"
-              }`}
-            >
-              {mockTotals.estimatedPnl >= 0 ? "+" : ""}
-              {formatUSD(mockTotals.estimatedPnl)}
-            </p>
-          </div>
-        </div>
-
-        {mockRows.length === 0 ? (
-          <div className="surface-soft p-6 rounded text-sm text-soft">
-            No mock traders added yet. Add any Polymarket wallet to simulate copy
-            trading with {formatUSD(MOCK_CAPITAL_PER_TRADER)} per trader.
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="table-theme text-sm">
-              <thead>
-                <tr>
-                  <th className="text-left p-3">Trader</th>
-                  <th className="text-right p-3">Start Capital</th>
-                  <th className="text-right p-3">Est. ROI</th>
-                  <th className="text-right p-3">Est. P&L</th>
-                  <th className="text-right p-3">Virtual Balance</th>
-                  <th className="text-right p-3">Started</th>
-                  <th className="text-center p-3">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {mockRows.map((row) => (
-                  <tr key={row.wallet}>
-                    <td className="p-3">
-                      <p className="text-white font-medium text-xs">
-                        {row.primary_name}
-                      </p>
-                      <p className="text-muted text-xs mono">{shortAddress(row.wallet)}</p>
-                      {getPolymarketProfileUrl(row.wallet) && (
-                        <a
-                          href={getPolymarketProfileUrl(row.wallet) || "#"}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-[11px] text-[var(--accent)] hover:underline"
-                        >
-                          Polymarket Profile
-                        </a>
-                      )}
-                      <input
-                        type="text"
-                        value={row.alias ?? row.display_name ?? ""}
-                        onChange={(e) =>
-                          updateMockTraderAlias(
-                            row.wallet,
-                            row.display_name &&
-                              e.target.value.trim().toLowerCase() ===
-                                row.display_name.trim().toLowerCase()
-                              ? ""
-                              : e.target.value,
-                          )
-                        }
-                        placeholder="Defaults to Polymarket username"
-                        className="mt-2 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-1.5 text-xs"
-                      />
-                    </td>
-                    <td className="p-3 text-right mono">{formatUSD(row.initial_capital)}</td>
-                    <td className="p-3 text-right mono">
-                      {row.hasLeaderboardData ? (
-                        <span className={row.roi >= 0 ? "status-good" : "status-bad"}>
-                          {formatPct(row.roi)}
-                        </span>
-                      ) : (
-                        <span className="text-muted">N/A</span>
-                      )}
-                    </td>
-                    <td className="p-3 text-right mono">
-                      {row.hasLeaderboardData ? (
-                        <span className={row.estimatedPnl >= 0 ? "status-good" : "status-bad"}>
-                          {row.estimatedPnl >= 0 ? "+" : ""}
-                          {formatUSD(row.estimatedPnl)}
-                        </span>
-                      ) : (
-                        <span className="text-muted">N/A</span>
-                      )}
-                    </td>
-                    <td className="p-3 text-right mono">
-                      {row.hasLeaderboardData ? (
-                        formatUSD(row.virtualBalance)
-                      ) : (
-                        <span className="text-muted">{formatUSD(row.initial_capital)}</span>
-                      )}
-                    </td>
-                    <td className="p-3 text-right text-muted text-xs">
-                      {new Date(row.created_at).toLocaleDateString()}
-                    </td>
-                    <td className="p-3 text-center">
-                      <button
-                        onClick={() => handleRemoveMockTrader(row.wallet)}
-                        className="px-3 py-1 rounded text-xs font-semibold bg-red-500/20 text-red-400 hover:bg-red-500/30 transition"
-                      >
-                        Remove
-                      </button>
-                    </td>
+          {mockRows.length === 0 ? (
+            <div className="surface-soft p-6 rounded text-sm text-soft">
+              No mock traders added yet. Add any Polymarket wallet to simulate
+              copy trading with {formatUSD(MOCK_CAPITAL_PER_TRADER)} per trader.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="table-theme text-sm">
+                <thead>
+                  <tr>
+                    <th className="text-left p-3">Trader</th>
+                    <th className="text-right p-3">Start Capital</th>
+                    <th className="text-right p-3">Est. ROI</th>
+                    <th className="text-right p-3">Est. P&L</th>
+                    <th className="text-right p-3">Virtual Balance</th>
+                    <th className="text-right p-3">Started</th>
+                    <th className="text-center p-3">Action</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                </thead>
+                <tbody>
+                  {mockRows.map((row) => (
+                    <tr key={row.wallet}>
+                      <td className="p-3">
+                        <p className="text-white font-medium text-xs">
+                          {row.primary_name}
+                        </p>
+                        <p className="text-muted text-xs mono">
+                          {shortAddress(row.wallet)}
+                        </p>
+                        {getPolymarketProfileUrl(row.wallet) && (
+                          <a
+                            href={getPolymarketProfileUrl(row.wallet) || "#"}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[11px] text-[var(--accent)] hover:underline"
+                          >
+                            Polymarket Profile
+                          </a>
+                        )}
+                        <input
+                          type="text"
+                          value={row.alias ?? row.display_name ?? ""}
+                          onChange={(e) =>
+                            updateMockTraderAlias(
+                              row.wallet,
+                              row.display_name &&
+                                e.target.value.trim().toLowerCase() ===
+                                  row.display_name.trim().toLowerCase()
+                                ? ""
+                                : e.target.value,
+                            )
+                          }
+                          placeholder="Defaults to Polymarket username"
+                          className="mt-2 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-1.5 text-xs"
+                        />
+                      </td>
+                      <td className="p-3 text-right mono">
+                        {formatUSD(row.initial_capital)}
+                      </td>
+                      <td className="p-3 text-right mono">
+                        {row.hasLeaderboardData ? (
+                          <span
+                            className={
+                              row.roi >= 0 ? "status-good" : "status-bad"
+                            }
+                          >
+                            {formatPct(row.roi)}
+                          </span>
+                        ) : (
+                          <span className="text-muted">N/A</span>
+                        )}
+                      </td>
+                      <td className="p-3 text-right mono">
+                        {row.hasLeaderboardData ? (
+                          <span
+                            className={
+                              row.estimatedPnl >= 0
+                                ? "status-good"
+                                : "status-bad"
+                            }
+                          >
+                            {row.estimatedPnl >= 0 ? "+" : ""}
+                            {formatUSD(row.estimatedPnl)}
+                          </span>
+                        ) : (
+                          <span className="text-muted">N/A</span>
+                        )}
+                      </td>
+                      <td className="p-3 text-right mono">
+                        {row.hasLeaderboardData ? (
+                          formatUSD(row.virtualBalance)
+                        ) : (
+                          <span className="text-muted">
+                            {formatUSD(row.initial_capital)}
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-3 text-right text-muted text-xs">
+                        {new Date(row.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="p-3 text-center">
+                        <button
+                          onClick={() => handleRemoveMockTrader(row.wallet)}
+                          className="px-3 py-1 rounded text-xs font-semibold bg-red-500/20 text-red-400 hover:bg-red-500/30 transition"
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
       {activeTab === "copy" && (
         <div className="surface-panel p-6 rounded-lg space-y-4">
-        <h2 className="text-lg font-semibold">Follow by Wallet Address</h2>
-        <p className="text-soft text-sm">
-          Paste a Polymarket trader wallet address to start copy trading.
-        </p>
-        <div className="flex flex-col md:flex-row gap-3">
-          <input
-            type="text"
-            value={walletInput}
-            onChange={(e) => setWalletInput(e.target.value)}
-            placeholder="0x..."
-            className="flex-1 bg-[var(--bg-soft)] border border-[var(--line)] rounded px-3 py-2 text-sm mono"
-          />
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            value={maxPositionInput}
-            onChange={(e) => setMaxPositionInput(e.target.value)}
-            placeholder="Max position (optional)"
-            className="w-full md:w-56 bg-[var(--bg-soft)] border border-[var(--line)] rounded px-3 py-2 text-sm"
-          />
-          <button
-            onClick={handleFollowByWallet}
-            disabled={addingWallet}
-            className="btn-primary disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            {addingWallet ? "Adding..." : "Follow Wallet"}
-          </button>
-        </div>
-        </div>
-      )}
-
-      {activeTab === "copy" && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="surface-panel p-4 rounded-lg">
-          <p className="text-muted text-xs uppercase tracking-wide">Following</p>
-          <p className="text-2xl font-bold mt-1">{following.length}</p>
-        </div>
-        <div className="surface-panel p-4 rounded-lg">
-          <p className="text-muted text-xs uppercase tracking-wide">Copy Trades (Today)</p>
-          <p className="text-2xl font-bold mt-1">{copyTrades.length}</p>
-        </div>
-        <div className="surface-panel p-4 rounded-lg">
-          <p className="text-muted text-xs uppercase tracking-wide">Daily P&L</p>
-          <p
-            className={`text-2xl font-bold mt-1 ${
-              dailyPnl >= 0 ? "status-good" : "status-bad"
-            }`}
-          >
-            {dailyPnl >= 0 ? "+" : ""}
-            {formatUSD(dailyPnl)}
+          <h2 className="text-lg font-semibold">Follow by Wallet Address</h2>
+          <p className="text-soft text-sm">
+            Paste a Polymarket trader wallet address to start copy trading.
           </p>
-        </div>
-      </div>
-      )}
-
-      {activeTab === "copy" && (
-        <div className="surface-panel p-6 rounded-lg space-y-4">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <h2 className="text-lg font-semibold">Copy Evaluation</h2>
-          <div className="flex items-center gap-2">
-            <select
-              value={evaluationWallet}
-              onChange={(e) => setEvaluationWallet(e.target.value)}
-              className="bg-[var(--bg-soft)] border border-[var(--line)] rounded px-3 py-2 text-xs mono"
-              disabled={following.length === 0}
-            >
-              {following.map((f) => (
-                <option key={f.id} value={f.trader_wallet}>
-                  {getTraderPrimaryLabel(f)}
-                </option>
-              ))}
-            </select>
+          <div className="flex flex-col md:flex-row gap-3">
+            <input
+              type="text"
+              value={walletInput}
+              onChange={(e) => setWalletInput(e.target.value)}
+              placeholder="0x..."
+              className="flex-1 bg-[var(--bg-soft)] border border-[var(--line)] rounded px-3 py-2 text-sm mono"
+            />
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={maxPositionInput}
+              onChange={(e) => setMaxPositionInput(e.target.value)}
+              placeholder="Max position (optional)"
+              className="w-full md:w-56 bg-[var(--bg-soft)] border border-[var(--line)] rounded px-3 py-2 text-sm"
+            />
             <button
-              onClick={() => evaluationWallet && fetchEvaluation(evaluationWallet)}
-              className="btn-muted"
-              disabled={!evaluationWallet || evaluationLoading}
+              onClick={handleFollowByWallet}
+              disabled={addingWallet}
+              className="btn-primary disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              {evaluationLoading ? "Refreshing..." : "Refresh"}
+              {addingWallet ? "Adding..." : "Follow Wallet"}
             </button>
           </div>
         </div>
+      )}
 
-        <p className="text-soft text-sm">
-          Side-by-side source trader trades and your copied outcomes. Auto-refreshes every 15 seconds.
-          {evaluationUpdatedAt && (
-            <span className="text-muted ml-2">
-              · Updated {new Date(evaluationUpdatedAt).toLocaleTimeString()}
-            </span>
-          )}
-        </p>
-
-        {evaluationError && (
-          <div className="p-3 alert-error rounded text-sm">{evaluationError}</div>
-        )}
-
-        {!evaluationWallet ? (
-          <div className="surface-soft p-6 rounded text-sm text-soft">
-            Follow a trader first to view evaluation.
+      {activeTab === "copy" && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="surface-panel p-4 rounded-lg">
+            <p className="text-muted text-xs uppercase tracking-wide">
+              Following
+            </p>
+            <p className="text-2xl font-bold mt-1">{following.length}</p>
           </div>
-        ) : evaluationRows.length === 0 ? (
-          <div className="surface-soft p-6 rounded text-sm text-soft">
-            No source trades found yet for this trader.
+          <div className="surface-panel p-4 rounded-lg">
+            <p className="text-muted text-xs uppercase tracking-wide">
+              Copy Trades (Today)
+            </p>
+            <p className="text-2xl font-bold mt-1">{copyTrades.length}</p>
           </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="table-theme text-xs">
-              <thead>
-                <tr>
-                  <th className="text-right p-3">Time</th>
-                  <th className="text-left p-3">Market</th>
-                  <th className="text-center p-3">Side</th>
-                  <th className="text-right p-3">Source Notional</th>
-                  <th className="text-right p-3">Trader Wallet</th>
-                  <th className="text-right p-3">Ratio</th>
-                  <th className="text-right p-3">Copy Wallet Base</th>
-                  <th className="text-right p-3">Copied Size</th>
-                  <th className="text-center p-3">Status</th>
-                  <th className="text-left p-3">Warning</th>
-                </tr>
-              </thead>
-              <tbody>
-                {evaluationRows.map((row) => (
-                  <tr key={row.source_trade_id}>
-                    <td className="p-3 text-right text-muted">
-                      {row.source_timestamp
-                        ? new Date(row.source_timestamp).toLocaleTimeString()
-                        : "—"}
-                    </td>
-                    <td className="p-3 text-white truncate max-w-[210px]">
-                      {row.market_id ? shortAddress(row.market_id) : "—"}
-                    </td>
-                    <td className="p-3 text-center">
-                      <span
-                        className={`text-xs font-semibold ${
-                          row.side === "BUY" ? "status-good" : "status-bad"
-                        }`}
-                      >
-                        {row.side}
-                      </span>
-                    </td>
-                    <td className="p-3 text-right mono">{formatUSD(row.source_trade_notional)}</td>
-                    <td className="p-3 text-right mono">
-                      {row.trader_wallet_balance != null
-                        ? formatUSD(row.trader_wallet_balance)
-                        : "—"}
-                    </td>
-                    <td className="p-3 text-right mono">
-                      {row.ratio != null ? formatPct(row.ratio) : "—"}
-                    </td>
-                    <td className="p-3 text-right mono">
-                      {row.copy_wallet_base != null ? formatUSD(row.copy_wallet_base) : "—"}
-                    </td>
-                    <td className="p-3 text-right mono">
-                      {row.copied_size != null ? formatUSD(row.copied_size) : "—"}
-                    </td>
-                    <td className="p-3 text-center">
-                      <span
-                        className={`chip text-[10px] ${
-                          row.copy_status === "executed"
-                            ? "chip-success"
-                            : row.copy_status === "failed" || row.copy_status === "rejected"
-                              ? "chip-danger"
-                              : "bg-[var(--bg-soft)] text-muted"
-                        }`}
-                      >
-                        {row.copy_status}
-                      </span>
-                    </td>
-                    <td className="p-3 text-left">
-                      {row.warning ? (
-                        <span className="inline-block px-2 py-1 rounded bg-yellow-500/20 text-yellow-300 text-[10px]">
-                          {row.warning}
-                        </span>
-                      ) : (
-                        <span className="text-muted">—</span>
-                      )}
-                    </td>
-                  </tr>
+          <div className="surface-panel p-4 rounded-lg">
+            <p className="text-muted text-xs uppercase tracking-wide">
+              Daily P&L
+            </p>
+            <p
+              className={`text-2xl font-bold mt-1 ${
+                dailyPnl >= 0 ? "status-good" : "status-bad"
+              }`}
+            >
+              {dailyPnl >= 0 ? "+" : ""}
+              {formatUSD(dailyPnl)}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "copy" && (
+        <div className="surface-panel p-6 rounded-lg space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <h2 className="text-lg font-semibold">Copy Evaluation</h2>
+            <div className="flex items-center gap-2">
+              <select
+                value={evaluationWallet}
+                onChange={(e) => setEvaluationWallet(e.target.value)}
+                className="bg-[var(--bg-soft)] border border-[var(--line)] rounded px-3 py-2 text-xs mono"
+                disabled={following.length === 0}
+              >
+                {following.map((f) => (
+                  <option key={f.id} value={f.trader_wallet}>
+                    {getTraderPrimaryLabel(f)}
+                  </option>
                 ))}
-              </tbody>
-            </table>
+              </select>
+              <button
+                onClick={() =>
+                  evaluationWallet && fetchEvaluation(evaluationWallet)
+                }
+                className="btn-muted"
+                disabled={!evaluationWallet || evaluationLoading}
+              >
+                {evaluationLoading ? "Refreshing..." : "Refresh"}
+              </button>
+            </div>
           </div>
-        )}
+
+          <p className="text-soft text-sm">
+            Side-by-side source trader trades and your copied outcomes.
+            Auto-refreshes every 15 seconds.
+            {evaluationUpdatedAt && (
+              <span className="text-muted ml-2">
+                · Updated {new Date(evaluationUpdatedAt).toLocaleTimeString()}
+              </span>
+            )}
+          </p>
+
+          {evaluationError && (
+            <div className="p-3 alert-error rounded text-sm">
+              {evaluationError}
+            </div>
+          )}
+
+          {!evaluationWallet ? (
+            <div className="surface-soft p-6 rounded text-sm text-soft">
+              Follow a trader first to view evaluation.
+            </div>
+          ) : evaluationRows.length === 0 ? (
+            <div className="surface-soft p-6 rounded text-sm text-soft">
+              No source trades found yet for this trader.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="table-theme text-xs">
+                <thead>
+                  <tr>
+                    <th className="text-right p-3">Time</th>
+                    <th className="text-left p-3">Market</th>
+                    <th className="text-center p-3">Side</th>
+                    <th className="text-right p-3">Source Notional</th>
+                    <th className="text-right p-3">Trader Wallet</th>
+                    <th className="text-right p-3">Ratio</th>
+                    <th className="text-right p-3">Copy Wallet Base</th>
+                    <th className="text-right p-3">Copied Size</th>
+                    <th className="text-center p-3">Status</th>
+                    <th className="text-left p-3">Warning</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {evaluationRows.map((row) => (
+                    <tr key={row.source_trade_id}>
+                      <td className="p-3 text-right text-muted">
+                        {row.source_timestamp
+                          ? new Date(row.source_timestamp).toLocaleTimeString()
+                          : "—"}
+                      </td>
+                      <td className="p-3 text-white truncate max-w-[210px]">
+                        {row.market_id ? shortAddress(row.market_id) : "—"}
+                      </td>
+                      <td className="p-3 text-center">
+                        <span
+                          className={`text-xs font-semibold ${
+                            row.side === "BUY" ? "status-good" : "status-bad"
+                          }`}
+                        >
+                          {row.side}
+                        </span>
+                      </td>
+                      <td className="p-3 text-right mono">
+                        {formatUSD(row.source_trade_notional)}
+                      </td>
+                      <td className="p-3 text-right mono">
+                        {row.trader_wallet_balance != null
+                          ? formatUSD(row.trader_wallet_balance)
+                          : "—"}
+                      </td>
+                      <td className="p-3 text-right mono">
+                        {row.ratio != null ? formatPct(row.ratio) : "—"}
+                      </td>
+                      <td className="p-3 text-right mono">
+                        {row.copy_wallet_base != null
+                          ? formatUSD(row.copy_wallet_base)
+                          : "—"}
+                      </td>
+                      <td className="p-3 text-right mono">
+                        {row.copied_size != null
+                          ? formatUSD(row.copied_size)
+                          : "—"}
+                      </td>
+                      <td className="p-3 text-center">
+                        <span
+                          className={`chip text-[10px] ${
+                            row.copy_status === "executed"
+                              ? "chip-success"
+                              : row.copy_status === "failed" ||
+                                  row.copy_status === "rejected"
+                                ? "chip-danger"
+                                : "bg-[var(--bg-soft)] text-muted"
+                          }`}
+                        >
+                          {row.copy_status}
+                        </span>
+                      </td>
+                      <td className="p-3 text-left">
+                        {row.warning ? (
+                          <span className="inline-block px-2 py-1 rounded bg-yellow-500/20 text-yellow-300 text-[10px]">
+                            {row.warning}
+                          </span>
+                        ) : (
+                          <span className="text-muted">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
       {activeTab === "copy" && (
         <div className="surface-panel p-6 rounded-lg">
-        <h2 className="text-lg font-semibold mb-4">Followed Traders</h2>
-        {following.length === 0 ? (
-          <p className="text-soft text-sm">
-            You&apos;re not following any traders yet. Visit the{" "}
-            <span className="text-[var(--accent)] font-semibold">Leaderboard</span>{" "}
-            to find traders to follow.
-          </p>
-        ) : (
-          <div className="space-y-4">
-            {following.map((f) => {
-              const key = f.trader_wallet.toLowerCase();
-              const draft = traderConfigDrafts[key] ?? defaultTraderConfig(f);
-              const saving = savingConfigWallet === key;
-              const saveStatus: SaveStatus =
-                saveStatusByWallet[key] ??
-                (isDraftDirtyForWallet(key, draft) ? "unsaved" : "idle");
-              const saveStatusMessage = saveStatusMessageByWallet[key];
-              const isMocked = hasMockCopyTrader(mockTraders, key);
-              const mockIndicator = mockIndicatorByWallet[key];
+          <h2 className="text-lg font-semibold mb-4">Followed Traders</h2>
+          {following.length === 0 ? (
+            <p className="text-soft text-sm">
+              You&apos;re not following any traders yet. Visit the{" "}
+              <span className="text-[var(--accent)] font-semibold">
+                Leaderboard
+              </span>{" "}
+              to find traders to follow.
+            </p>
+          ) : (
+            <div className="space-y-4">
+              {following.map((f) => {
+                const key = f.trader_wallet.toLowerCase();
+                const draft = traderConfigDrafts[key] ?? defaultTraderConfig(f);
+                const saving = savingConfigWallet === key;
+                const saveStatus: SaveStatus =
+                  saveStatusByWallet[key] ??
+                  (isDraftDirtyForWallet(key, draft) ? "unsaved" : "idle");
+                const saveStatusMessage = saveStatusMessageByWallet[key];
+                const isMocked = hasMockCopyTrader(mockTraders, key);
+                const mockIndicator = mockIndicatorByWallet[key];
 
-              return (
-                <div key={f.id} className="surface-soft p-4 rounded-lg space-y-4">
-                  <div className="flex items-start justify-between gap-3 flex-wrap">
-                    <div>
-                      <p className="text-white font-medium">
-                        {getTraderPrimaryLabel(f)}
-                      </p>
-                      <p className="text-muted text-xs mono">
-                        {shortAddress(f.trader_wallet)}
-                      </p>
-                      {getPolymarketProfileUrl(f.trader_wallet) && (
-                        <a
-                          href={getPolymarketProfileUrl(f.trader_wallet) || "#"}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-[11px] text-[var(--accent)] hover:underline"
-                        >
-                          Polymarket Profile
-                        </a>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="chip chip-success text-xs">Active</span>
-                      {getSaveStatusChip(saveStatus)}
-                      {isMocked && (
-                        <span className="chip chip-success text-xs">Mocked</span>
-                      )}
-                      {mockIndicator === "already_exists" && (
-                        <span className="chip chip-warning text-xs">
-                          Already in Mocking
+                return (
+                  <div
+                    key={f.id}
+                    className="surface-soft p-4 rounded-lg space-y-4"
+                  >
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div>
+                        <p className="text-white font-medium">
+                          {getTraderPrimaryLabel(f)}
+                        </p>
+                        <p className="text-muted text-xs mono">
+                          {shortAddress(f.trader_wallet)}
+                        </p>
+                        {getPolymarketProfileUrl(f.trader_wallet) && (
+                          <a
+                            href={
+                              getPolymarketProfileUrl(f.trader_wallet) || "#"
+                            }
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[11px] text-[var(--accent)] hover:underline"
+                          >
+                            Polymarket Profile
+                          </a>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="chip chip-success text-xs">
+                          Active
                         </span>
-                      )}
-                      {mockIndicator === "added" && (
-                        <span className="chip chip-success text-xs">Now Mocked</span>
-                      )}
+                        {getSaveStatusChip(saveStatus)}
+                        {isMocked && (
+                          <span className="chip chip-success text-xs">
+                            Mocked
+                          </span>
+                        )}
+                        {mockIndicator === "already_exists" && (
+                          <span className="chip chip-warning text-xs">
+                            Already in Mocking
+                          </span>
+                        )}
+                        {mockIndicator === "added" && (
+                          <span className="chip chip-success text-xs">
+                            Now Mocked
+                          </span>
+                        )}
+                        <button
+                          onClick={() =>
+                            handleAddFollowedToMock(
+                              f.trader_wallet,
+                              f.trader_alias || f.display_name || null,
+                            )
+                          }
+                          className={`px-3 py-1 rounded text-xs font-semibold transition ${
+                            isMocked
+                              ? "bg-yellow-500/20 text-yellow-300 hover:bg-yellow-500/30"
+                              : "bg-[var(--accent-soft)] text-[var(--accent)] hover:opacity-90"
+                          }`}
+                        >
+                          {isMocked ? "Already Mocked" : "Add Mock"}
+                        </button>
+                        <button
+                          onClick={() =>
+                            openConfirmModal("unfollow", f.trader_wallet)
+                          }
+                          className="px-3 py-1 rounded text-xs font-semibold bg-red-500/20 text-red-400 hover:bg-red-500/30 transition"
+                        >
+                          Unfollow
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <label className="text-xs text-muted">
+                        Wallet Username
+                        <input
+                          type="text"
+                          maxLength={100}
+                          value={draft.trader_alias ?? f.display_name ?? ""}
+                          onChange={(e) =>
+                            updateTraderDraft(f.trader_wallet, {
+                              trader_alias:
+                                f.display_name &&
+                                e.target.value.trim().toLowerCase() ===
+                                  f.display_name.trim().toLowerCase()
+                                  ? null
+                                  : e.target.value,
+                            })
+                          }
+                          className="mt-1 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-2 text-xs"
+                          placeholder="Defaults to Polymarket username"
+                        />
+                      </label>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <label className="text-xs text-muted">
+                        Sizing Mode
+                        <select
+                          value={draft.sizing_mode || "inherit_global"}
+                          onChange={(e) =>
+                            updateTraderDraft(f.trader_wallet, {
+                              sizing_mode: e.target
+                                .value as TraderConfigDraft["sizing_mode"],
+                            })
+                          }
+                          className="mt-1 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-2 text-xs"
+                        >
+                          {SIZING_MODE_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label className="text-xs text-muted">
+                        Max Position (Safety Cap)
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={draft.max_position_size ?? ""}
+                          onChange={(e) =>
+                            updateTraderDraft(f.trader_wallet, {
+                              max_position_size: e.target.value
+                                ? Number(e.target.value)
+                                : null,
+                            })
+                          }
+                          className="mt-1 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-2 text-xs"
+                          placeholder="Optional"
+                        />
+                      </label>
+
+                      <label className="text-xs text-muted">
+                        Fixed Amount Override
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={draft.fixed_trade_amount_override ?? ""}
+                          onChange={(e) =>
+                            updateTraderDraft(f.trader_wallet, {
+                              fixed_trade_amount_override: e.target.value
+                                ? Number(e.target.value)
+                                : null,
+                            })
+                          }
+                          className="mt-1 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-2 text-xs"
+                          placeholder="Used by fixed mode"
+                        />
+                      </label>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <label className="text-xs text-muted">
+                        Copy Wallet Basis
+                        <select
+                          value={
+                            draft.copy_wallet_mode ||
+                            "dynamic_main_wallet_percentage"
+                          }
+                          onChange={(e) =>
+                            updateTraderDraft(f.trader_wallet, {
+                              copy_wallet_mode: e.target
+                                .value as TraderConfigDraft["copy_wallet_mode"],
+                            })
+                          }
+                          className="mt-1 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-2 text-xs"
+                        >
+                          {COPY_WALLET_MODE_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label className="text-xs text-muted">
+                        Copy Wallet %
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.1"
+                          value={draft.copy_wallet_percentage ?? ""}
+                          onChange={(e) =>
+                            updateTraderDraft(f.trader_wallet, {
+                              copy_wallet_percentage: e.target.value
+                                ? Number(e.target.value)
+                                : null,
+                            })
+                          }
+                          className="mt-1 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-2 text-xs"
+                          placeholder="For dynamic mode"
+                          disabled={
+                            draft.copy_wallet_mode === "fixed_snapshot_amount"
+                          }
+                        />
+                      </label>
+
+                      <label className="text-xs text-muted">
+                        Copy Wallet Fixed ($)
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={draft.copy_wallet_fixed_amount ?? ""}
+                          onChange={(e) =>
+                            updateTraderDraft(f.trader_wallet, {
+                              copy_wallet_fixed_amount: e.target.value
+                                ? Number(e.target.value)
+                                : null,
+                            })
+                          }
+                          className="mt-1 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-2 text-xs"
+                          placeholder="For fixed snapshot mode"
+                          disabled={
+                            draft.copy_wallet_mode !== "fixed_snapshot_amount"
+                          }
+                        />
+                      </label>
+                    </div>
+
+                    {saveStatus === "error" && saveStatusMessage && (
+                      <p className="text-xs text-red-300">
+                        {saveStatusMessage}
+                      </p>
+                    )}
+
+                    <div className="flex justify-end">
                       <button
                         onClick={() =>
-                          handleAddFollowedToMock(
-                            f.trader_wallet,
-                            f.trader_alias || f.display_name || null,
-                          )
+                          openConfirmModal("save", f.trader_wallet)
                         }
-                        className={`px-3 py-1 rounded text-xs font-semibold transition ${
-                          isMocked
-                            ? "bg-yellow-500/20 text-yellow-300 hover:bg-yellow-500/30"
-                            : "bg-[var(--accent-soft)] text-[var(--accent)] hover:opacity-90"
-                        }`}
+                        disabled={saving}
+                        className="btn-accent disabled:opacity-60"
                       >
-                        {isMocked ? "Already Mocked" : "Add Mock"}
-                      </button>
-                      <button
-                        onClick={() => openConfirmModal("unfollow", f.trader_wallet)}
-                        className="px-3 py-1 rounded text-xs font-semibold bg-red-500/20 text-red-400 hover:bg-red-500/30 transition"
-                      >
-                        Unfollow
+                        {saving ? "Saving..." : "Save Copy Config"}
                       </button>
                     </div>
                   </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <label className="text-xs text-muted">
-                      Wallet Username
-                      <input
-                        type="text"
-                        maxLength={100}
-                        value={draft.trader_alias ?? f.display_name ?? ""}
-                        onChange={(e) =>
-                          updateTraderDraft(f.trader_wallet, {
-                            trader_alias:
-                              f.display_name &&
-                              e.target.value.trim().toLowerCase() ===
-                                f.display_name.trim().toLowerCase()
-                                ? null
-                                : e.target.value,
-                          })
-                        }
-                        className="mt-1 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-2 text-xs"
-                        placeholder="Defaults to Polymarket username"
-                      />
-                    </label>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <label className="text-xs text-muted">
-                      Sizing Mode
-                      <select
-                        value={draft.sizing_mode || "inherit_global"}
-                        onChange={(e) =>
-                          updateTraderDraft(f.trader_wallet, {
-                            sizing_mode: e.target
-                              .value as TraderConfigDraft["sizing_mode"],
-                          })
-                        }
-                        className="mt-1 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-2 text-xs"
-                      >
-                        {SIZING_MODE_OPTIONS.map((opt) => (
-                          <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-
-                    <label className="text-xs text-muted">
-                      Max Position (Safety Cap)
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={draft.max_position_size ?? ""}
-                        onChange={(e) =>
-                          updateTraderDraft(f.trader_wallet, {
-                            max_position_size: e.target.value
-                              ? Number(e.target.value)
-                              : null,
-                          })
-                        }
-                        className="mt-1 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-2 text-xs"
-                        placeholder="Optional"
-                      />
-                    </label>
-
-                    <label className="text-xs text-muted">
-                      Fixed Amount Override
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={draft.fixed_trade_amount_override ?? ""}
-                        onChange={(e) =>
-                          updateTraderDraft(f.trader_wallet, {
-                            fixed_trade_amount_override: e.target.value
-                              ? Number(e.target.value)
-                              : null,
-                          })
-                        }
-                        className="mt-1 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-2 text-xs"
-                        placeholder="Used by fixed mode"
-                      />
-                    </label>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <label className="text-xs text-muted">
-                      Copy Wallet Basis
-                      <select
-                        value={draft.copy_wallet_mode || "dynamic_main_wallet_percentage"}
-                        onChange={(e) =>
-                          updateTraderDraft(f.trader_wallet, {
-                            copy_wallet_mode: e.target
-                              .value as TraderConfigDraft["copy_wallet_mode"],
-                          })
-                        }
-                        className="mt-1 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-2 text-xs"
-                      >
-                        {COPY_WALLET_MODE_OPTIONS.map((opt) => (
-                          <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-
-                    <label className="text-xs text-muted">
-                      Copy Wallet %
-                      <input
-                        type="number"
-                        min="0"
-                        max="100"
-                        step="0.1"
-                        value={draft.copy_wallet_percentage ?? ""}
-                        onChange={(e) =>
-                          updateTraderDraft(f.trader_wallet, {
-                            copy_wallet_percentage: e.target.value
-                              ? Number(e.target.value)
-                              : null,
-                          })
-                        }
-                        className="mt-1 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-2 text-xs"
-                        placeholder="For dynamic mode"
-                        disabled={draft.copy_wallet_mode === "fixed_snapshot_amount"}
-                      />
-                    </label>
-
-                    <label className="text-xs text-muted">
-                      Copy Wallet Fixed ($)
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={draft.copy_wallet_fixed_amount ?? ""}
-                        onChange={(e) =>
-                          updateTraderDraft(f.trader_wallet, {
-                            copy_wallet_fixed_amount: e.target.value
-                              ? Number(e.target.value)
-                              : null,
-                          })
-                        }
-                        className="mt-1 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-2 text-xs"
-                        placeholder="For fixed snapshot mode"
-                        disabled={draft.copy_wallet_mode !== "fixed_snapshot_amount"}
-                      />
-                    </label>
-                  </div>
-
-                  {saveStatus === "error" && saveStatusMessage && (
-                    <p className="text-xs text-red-300">{saveStatusMessage}</p>
-                  )}
-
-                  <div className="flex justify-end">
-                    <button
-                      onClick={() => openConfirmModal("save", f.trader_wallet)}
-                      disabled={saving}
-                      className="btn-accent disabled:opacity-60"
-                    >
-                      {saving ? "Saving..." : "Save Copy Config"}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
       {activeTab === "copy" && (
         <div className="surface-panel overflow-hidden rounded-lg">
-        <div className="p-4 border-b border-[var(--line)]">
-          <h2 className="text-lg font-semibold">Recent Copy Trades</h2>
-        </div>
-        {copyTrades.length === 0 ? (
-          <div className="p-8 text-center text-soft text-sm">
-            No copy trades executed yet. Trades will appear here when followed
-            traders make moves.
+          <div className="p-4 border-b border-[var(--line)]">
+            <h2 className="text-lg font-semibold">Recent Copy Trades</h2>
           </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="table-theme text-sm">
-              <thead>
-                <tr>
-                  <th className="text-left p-3">Trader</th>
-                  <th className="text-left p-3">Market</th>
-                  <th className="text-center p-3">Side</th>
-                  <th className="text-right p-3">Size</th>
-                  <th className="text-right p-3">Price</th>
-                  <th className="text-center p-3">Status</th>
-                  <th className="text-left p-3">Calc</th>
-                  <th className="text-right p-3">P&L</th>
-                  <th className="text-right p-3">Time</th>
-                </tr>
-              </thead>
-              <tbody>
-                {copyTrades.map((t) => (
-                  <tr key={t.id}>
-                    <td className="p-3 text-xs">
-                      <p className="text-white">{getTraderLabelByWallet(t.trader_wallet)}</p>
-                      <p className="text-muted mono">{shortAddress(t.trader_wallet)}</p>
-                    </td>
-                    <td className="p-3 text-white text-xs truncate max-w-[200px]">
-                      {t.market_id ? shortAddress(t.market_id) : "—"}
-                    </td>
-                    <td className="p-3 text-center">
-                      <span
-                        className={`text-xs font-semibold ${
-                          t.side === "BUY" ? "status-good" : "status-bad"
-                        }`}
-                      >
-                        {t.side}
-                      </span>
-                    </td>
-                    <td className="p-3 text-right mono">{formatUSD(t.size)}</td>
-                    <td className="p-3 text-right mono">${t.price.toFixed(3)}</td>
-                    <td className="p-3 text-center">
-                      <span
-                        className={`chip text-xs ${
-                          t.status === "executed"
-                            ? "chip-success"
-                            : t.status === "failed" || t.status === "rejected"
-                              ? "chip-danger"
-                              : "bg-[var(--bg-soft)] text-muted"
-                        }`}
-                      >
-                        {t.status}
-                      </span>
-                    </td>
-                    <td className="p-3 text-left text-xs">
-                      {t.calculation_warning ? (
-                        <span className="inline-block px-2 py-1 rounded bg-yellow-500/20 text-yellow-300">
-                          {t.calculation_warning}
-                        </span>
-                      ) : (
-                        <span className="text-muted">—</span>
-                      )}
-                    </td>
-                    <td className="p-3 text-right mono">
-                      {t.pnl != null ? (
-                        <span className={t.pnl >= 0 ? "status-good" : "status-bad"}>
-                          {t.pnl >= 0 ? "+" : ""}
-                          {formatUSD(t.pnl)}
-                        </span>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td className="p-3 text-right text-muted text-xs">
-                      {t.timestamp ? new Date(t.timestamp).toLocaleTimeString() : "—"}
-                    </td>
+          {copyTrades.length === 0 ? (
+            <div className="p-8 text-center text-soft text-sm">
+              No copy trades executed yet. Trades will appear here when followed
+              traders make moves.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="table-theme text-sm">
+                <thead>
+                  <tr>
+                    <th className="text-left p-3">Trader</th>
+                    <th className="text-left p-3">Market</th>
+                    <th className="text-center p-3">Side</th>
+                    <th className="text-right p-3">Size</th>
+                    <th className="text-right p-3">Price</th>
+                    <th className="text-center p-3">Status</th>
+                    <th className="text-left p-3">Calc</th>
+                    <th className="text-right p-3">P&L</th>
+                    <th className="text-right p-3">Time</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                </thead>
+                <tbody>
+                  {copyTrades.map((t) => (
+                    <tr key={t.id}>
+                      <td className="p-3 text-xs">
+                        <p className="text-white">
+                          {getTraderLabelByWallet(t.trader_wallet)}
+                        </p>
+                        <p className="text-muted mono">
+                          {shortAddress(t.trader_wallet)}
+                        </p>
+                      </td>
+                      <td className="p-3 text-white text-xs truncate max-w-[200px]">
+                        {t.market_id ? shortAddress(t.market_id) : "—"}
+                      </td>
+                      <td className="p-3 text-center">
+                        <span
+                          className={`text-xs font-semibold ${
+                            t.side === "BUY" ? "status-good" : "status-bad"
+                          }`}
+                        >
+                          {t.side}
+                        </span>
+                      </td>
+                      <td className="p-3 text-right mono">
+                        {formatUSD(t.size)}
+                      </td>
+                      <td className="p-3 text-right mono">
+                        ${t.price.toFixed(3)}
+                      </td>
+                      <td className="p-3 text-center">
+                        <span
+                          className={`chip text-xs ${
+                            t.status === "executed"
+                              ? "chip-success"
+                              : t.status === "failed" || t.status === "rejected"
+                                ? "chip-danger"
+                                : "bg-[var(--bg-soft)] text-muted"
+                          }`}
+                        >
+                          {t.status}
+                        </span>
+                      </td>
+                      <td className="p-3 text-left text-xs">
+                        {t.calculation_warning ? (
+                          <span className="inline-block px-2 py-1 rounded bg-yellow-500/20 text-yellow-300">
+                            {t.calculation_warning}
+                          </span>
+                        ) : (
+                          <span className="text-muted">—</span>
+                        )}
+                      </td>
+                      <td className="p-3 text-right mono">
+                        {t.pnl != null ? (
+                          <span
+                            className={
+                              t.pnl >= 0 ? "status-good" : "status-bad"
+                            }
+                          >
+                            {t.pnl >= 0 ? "+" : ""}
+                            {formatUSD(t.pnl)}
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className="p-3 text-right text-muted text-xs">
+                        {t.timestamp
+                          ? new Date(t.timestamp).toLocaleTimeString()
+                          : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
       {confirmState.open && confirmState.type && confirmState.wallet && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 modal-overlay" onClick={closeConfirmModal} />
+          <div
+            className="absolute inset-0 modal-overlay"
+            onClick={closeConfirmModal}
+          />
           <div className="surface-panel relative z-10 w-full max-w-md p-6 space-y-4">
             <h3 className="text-lg font-semibold text-white">
               {confirmState.type === "save"

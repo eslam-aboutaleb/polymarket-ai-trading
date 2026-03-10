@@ -2,6 +2,27 @@ syntax = "proto3";
 
 package polymarket.analysis;
 
+// ── LLM Provider Selection ─────────────────────────────────
+// Allows per-request provider selection for the factory/gateway pattern
+
+enum LLMProvider {
+  LLM_PROVIDER_DEFAULT = 0;    // Use service default
+  LLM_PROVIDER_OPENAI = 1;     // OpenAI GPT models
+  LLM_PROVIDER_ANTHROPIC = 2;  // Anthropic Claude models
+  LLM_PROVIDER_GOOGLE = 3;     // Google Gemini models
+  LLM_PROVIDER_GROQ = 4;       // Groq fast inference
+  LLM_PROVIDER_OLLAMA = 5;     // Local Ollama models
+  LLM_PROVIDER_GITHUB = 6;     // GitHub Models API
+}
+
+// Configuration for LLM selection per request
+message LLMConfig {
+  LLMProvider provider = 1;    // Which provider to use
+  string model = 2;            // Model name (empty = use provider default)
+  float temperature = 3;       // Temperature (0 = use default)
+  int32 max_tokens = 4;        // Max tokens (0 = use default)
+}
+
 // Analysis Service - implemented by both LLM Chain and CLI Agent
 service AnalysisService {
   // Comprehensive market analysis with optional research
@@ -29,6 +50,20 @@ service AnalysisService {
   
   // Evaluate whether to copy a specific trade
   rpc EvaluateCopyTrade(CopyTradeEvaluationRequest) returns (AnalysisResponse);
+
+  // Evaluate whether an open position should be reversed
+  rpc EvaluateInversePosition(InversePositionEvaluationRequest) returns (AnalysisResponse);
+
+  // ── NEW: Advanced Analysis RPCs ──────────────────────────
+
+  // Analyse public sentiment around a market/topic
+  rpc AnalyzeSentiment(SentimentAnalysisRequest) returns (AnalysisResponse);
+
+  // Autonomous trade discovery — find the single best trade
+  rpc DiscoverBestTrade(DiscoverBestTradeRequest) returns (AnalysisResponse);
+
+  // Index markets into RAG vector store
+  rpc IndexMarketsRAG(IndexMarketsRAGRequest) returns (AnalysisResponse);
   
   // Health check
   rpc HealthCheck(HealthRequest) returns (HealthResponse);
@@ -69,6 +104,7 @@ message MarketAnalysisRequest {
   string end_date = 6;
   bool include_research = 7;
   string user_id = 8;
+  LLMConfig llm_config = 9;  // Optional: per-request LLM configuration
 }
 
 // Quick Analysis
@@ -76,12 +112,14 @@ message QuickAnalysisRequest {
   string question = 1;
   double current_price = 2;
   string user_id = 3;
+  LLMConfig llm_config = 4;  // Optional: per-request LLM configuration
 }
 
 // Market Scan
 message MarketScanRequest {
   repeated MarketInfo markets = 1;
   string user_id = 2;
+  LLMConfig llm_config = 3;  // Optional: per-request LLM configuration
 }
 
 message MarketInfo {
@@ -102,6 +140,7 @@ message RiskAssessmentRequest {
   int32 days_to_expiry = 4;
   string correlation_info = 5;
   string user_id = 6;
+  LLMConfig llm_config = 7;  // Optional: per-request LLM configuration
 }
 
 // Trade Plan
@@ -112,6 +151,7 @@ message TradePlanRequest {
   double current_price = 4;
   string order_book_json = 5;
   string user_id = 6;
+  LLMConfig llm_config = 7;  // Optional: per-request LLM configuration
 }
 
 // ── NEW: Trader Analysis ──────────────────────────────────
@@ -125,6 +165,7 @@ message TraderAnalysisRequest {
   int32  markets_traded = 6;
   string recent_trades_json = 7;   // JSON array of recent trades
   string user_id = 8;
+  LLMConfig llm_config = 9;  // Optional: per-request LLM configuration
 }
 
 message CopyTradeEvaluationRequest {
@@ -137,4 +178,47 @@ message CopyTradeEvaluationRequest {
   double current_price = 7;
   string user_risk_profile = 8;    // e.g. "max_position_daily_loss"
   string user_id = 9;
+  LLMConfig llm_config = 10;  // Optional: per-request LLM configuration
+}
+
+message InversePositionEvaluationRequest {
+  string condition_id = 1;
+  string market_title = 2;
+  string held_outcome = 3;
+  double held_pct = 4;
+  string best_alt_outcome = 5;
+  double best_alt_pct = 6;
+  double delta_pct = 7;
+  string alternatives_json = 8;    // JSON array of alternative outcomes/tokens
+  bool include_research = 9;
+  string user_id = 10;
+  LLMConfig llm_config = 11;  // Optional: per-request LLM configuration
+}
+
+// ── NEW: Sentiment Analysis ──────────────────────────────
+
+message SentimentAnalysisRequest {
+  string query = 1;               // Market question or topic
+  bool include_news = 2;          // Include NewsAPI headlines (default: true)
+  bool include_social = 3;        // Include X/Twitter signals (default: true)
+  string user_id = 4;
+  LLMConfig llm_config = 5;
+}
+
+// ── NEW: Autonomous Trade Discovery ──────────────────────
+
+message DiscoverBestTradeRequest {
+  repeated MarketInfo markets = 1; // Active markets to evaluate
+  double budget = 2;              // Available budget in USDC
+  string risk_tolerance = 3;      // "low", "medium", "high"
+  string user_id = 4;
+  LLMConfig llm_config = 5;
+}
+
+// ── NEW: RAG Index ───────────────────────────────────────
+
+message IndexMarketsRAGRequest {
+  string markets_json = 1;        // JSON array of market dicts to index
+  bool force_reindex = 2;         // Force re-index even if TTL not expired
+  string user_id = 3;
 }

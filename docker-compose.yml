@@ -23,7 +23,8 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:-dev_redis_password} ping"]
+      test:
+        ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:-dev_redis_password} ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -51,8 +52,17 @@ services:
       GRPC_PORT: 50051
       PROMPTS_PATH: /app/prompts/prompts.json
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Research providers (optional — graceful fallback to DuckDuckGo)
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      TAVILY_ENABLED: ${TAVILY_ENABLED:-false}
+      NEWSAPI_API_KEY: ${NEWSAPI_API_KEY:-}
+      NEWSAPI_ENABLED: ${NEWSAPI_ENABLED:-false}
+      # ChromaDB RAG (vector search for market discovery)
+      RAG_ENABLED: ${RAG_ENABLED:-true}
+      CHROMA_PERSIST_DIR: /app/data/chroma
     volumes:
       - ./prompts:/app/prompts:ro
+      - llm_chain_chroma:/app/data/chroma
     healthcheck:
       test: ["CMD", "python", "-c", "import grpc; print('ok')"]
       interval: 30s
@@ -160,3 +170,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  llm_chain_chroma:

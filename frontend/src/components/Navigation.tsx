@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "../store/authStore";
+import { useLoginModal } from "../context/LoginModalContext";
 
 type PageId =
   | "dashboard"
@@ -8,13 +9,20 @@ type PageId =
   | "opportunities"
   | "leaderboard"
   | "copy-trading"
+  | "market-making"
+  | "backtesting"
+  | "news"
+  | "guide"
   | "trades"
+  | "ops"
   | "settings"
   | "debug";
 
 interface NavigationProps {
   walletAddress: string;
   onLogout: () => void | Promise<void>;
+  /** When true, show only public nav items and a Connect Wallet CTA */
+  isPublic?: boolean;
 }
 
 const navItems: { id: PageId; label: string; path: string }[] = [
@@ -23,10 +31,24 @@ const navItems: { id: PageId; label: string; path: string }[] = [
   { id: "opportunities", label: "Opportunities", path: "/opportunities" },
   { id: "leaderboard", label: "Leaderboard", path: "/leaderboard" },
   { id: "copy-trading", label: "Copy Trading", path: "/copy-trading" },
+  { id: "market-making", label: "Market Making", path: "/market-making" },
+  { id: "backtesting", label: "Backtesting", path: "/backtesting" },
+  { id: "news", label: "📰 News", path: "/news" },
+  { id: "guide", label: "\u{1F4D6} Your Guide", path: "/guide" },
   { id: "trades", label: "Trades", path: "/trades" },
+  { id: "ops", label: "Ops Center", path: "/ops" },
   { id: "settings", label: "Settings", path: "/settings" },
   { id: "debug", label: "\u{1F527} Debug", path: "/debug" },
 ];
+
+/** Nav items visible to unauthenticated visitors */
+const PUBLIC_NAV_IDS = new Set<PageId>([
+  "markets",
+  "opportunities",
+  "leaderboard",
+  "copy-trading",
+  "guide",
+]);
 
 /** Map a pathname to the matching nav id */
 function activeId(pathname: string): PageId {
@@ -43,6 +65,7 @@ function activeId(pathname: string): PageId {
 export default function Navigation({
   walletAddress,
   onLogout,
+  isPublic = false,
 }: NavigationProps) {
   const [showMenu, setShowMenu] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
@@ -51,11 +74,14 @@ export default function Navigation({
   const navigate = useNavigate();
   const location = useLocation();
   const { isAdmin } = useAuthStore();
+  const { openLoginModal } = useLoginModal();
   const currentPage = activeId(location.pathname);
 
-  const visibleNavItems = isAdmin
-    ? navItems
-    : navItems.filter((n) => n.id !== "debug");
+  const visibleNavItems = isPublic
+    ? navItems.filter((n) => PUBLIC_NAV_IDS.has(n.id))
+    : isAdmin
+      ? navItems
+      : navItems.filter((n) => n.id !== "debug");
 
   const shortAddress = walletAddress
     ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
@@ -107,7 +133,10 @@ export default function Navigation({
         <div className="max-w-7xl mx-auto px-4">
           <div className="flex items-center justify-between h-16">
             {/* Logo */}
-            <div ref={menuContainerRef} className="relative flex items-center gap-2">
+            <div
+              ref={menuContainerRef}
+              className="relative flex items-center gap-2"
+            >
               <button
                 type="button"
                 onClick={() => setShowMenu((prev) => !prev)}
@@ -131,9 +160,17 @@ export default function Navigation({
                   />
                 </svg>
               </button>
-              <h1 className="text-xl font-extrabold theme-brand">
+              <button
+                type="button"
+                onClick={() => {
+                  navigate(isPublic ? "/markets" : "/");
+                  setShowMenu(false);
+                }}
+                className="text-xl font-extrabold theme-brand hover:opacity-90 transition"
+                aria-label="Go to dashboard"
+              >
                 POLYMARKET AI
-              </h1>
+              </button>
 
               {showMenu && (
                 <div
@@ -166,17 +203,28 @@ export default function Navigation({
 
             {/* Right Section */}
             <div className="flex items-center space-x-4">
-              <div className="hidden sm:flex items-center px-3 py-2 rounded-md text-sm text-soft border border-[var(--line)] bg-[var(--bg-elevated)] mono">
-                {shortAddress}
-              </div>
+              {isPublic ? (
+                <button
+                  onClick={openLoginModal}
+                  className="btn-accent font-semibold text-sm px-4 py-2"
+                >
+                  Connect Wallet
+                </button>
+              ) : (
+                <>
+                  <div className="hidden sm:flex items-center px-3 py-2 rounded-md text-sm text-soft border border-[var(--line)] bg-[var(--bg-elevated)] mono">
+                    {shortAddress}
+                  </div>
 
-              {/* Logout Button */}
-              <button
-                onClick={() => setShowLogoutConfirm(true)}
-                className="btn-danger"
-              >
-                Logout
-              </button>
+                  {/* Logout Button */}
+                  <button
+                    onClick={() => setShowLogoutConfirm(true)}
+                    className="btn-danger"
+                  >
+                    Logout
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -189,7 +237,9 @@ export default function Navigation({
             onClick={() => (logoutLoading ? null : setShowLogoutConfirm(false))}
           />
           <div className="relative z-[81] w-full max-w-sm surface-panel p-5 space-y-4">
-            <h3 className="text-base font-semibold text-white">Confirm Logout</h3>
+            <h3 className="text-base font-semibold text-white">
+              Confirm Logout
+            </h3>
             <p className="text-sm text-soft">
               Are you sure you want to end your session now?
             </p>

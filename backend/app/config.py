@@ -93,6 +93,9 @@ class Settings(BaseSettings):
     cli_agent_grpc_port: int = 50052
     grpc_timeout: int = 60  # seconds
 
+    # Binance Skills Hub (public APIs, no auth required)
+    binance_skills_enabled: bool = True
+
     @field_validator("jwt_secret_key")
     @classmethod
     def validate_jwt_secret_key(cls, value: str) -> str:

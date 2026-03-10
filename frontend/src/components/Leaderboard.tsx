@@ -21,6 +21,7 @@ import {
   upsertMockCopyTrader,
 } from "../utils/mockCopyTraders";
 import { useRafBufferedText } from "../hooks/useRafBufferedText";
+import { useRequireAuth } from "../hooks/useRequireAuth";
 
 type Period = "24h" | "7d" | "30d" | "all_time";
 const PERIODS: { value: Period; label: string }[] = [
@@ -31,6 +32,7 @@ const PERIODS: { value: Period; label: string }[] = [
 ];
 
 export default function Leaderboard() {
+  const { requireAuth } = useRequireAuth();
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -48,8 +50,8 @@ export default function Leaderboard() {
   const [notificationEmailByWallet, setNotificationEmailByWallet] = useState<
     Record<string, boolean>
   >({});
-  const [mockTraders, setMockTraders] = useState<MockCopyTrader[]>(
-    () => loadMockCopyTraders(),
+  const [mockTraders, setMockTraders] = useState<MockCopyTrader[]>(() =>
+    loadMockCopyTraders(),
   );
   const [popupActionMessage, setPopupActionMessage] = useState<string | null>(
     null,
@@ -162,7 +164,8 @@ export default function Leaderboard() {
             const emailByWallet: Record<string, boolean> = {};
             notificationFollowingResult.value.forEach(
               (row: NotificationFollowedTrader) => {
-                emailByWallet[row.trader_wallet.toLowerCase()] = !!row.email_enabled;
+                emailByWallet[row.trader_wallet.toLowerCase()] =
+                  !!row.email_enabled;
               },
             );
             setNotificationEmailByWallet(emailByWallet);
@@ -201,7 +204,9 @@ export default function Leaderboard() {
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to follow trader"));
       setPopupActionMessage(null);
-      setPopupActionError(getApiErrorMessage(err, "Failed to enable copy trade"));
+      setPopupActionError(
+        getApiErrorMessage(err, "Failed to enable copy trade"),
+      );
     }
   };
 
@@ -218,7 +223,9 @@ export default function Leaderboard() {
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to unfollow trader"));
       setPopupActionMessage(null);
-      setPopupActionError(getApiErrorMessage(err, "Failed to disable copy trade"));
+      setPopupActionError(
+        getApiErrorMessage(err, "Failed to disable copy trade"),
+      );
     }
   };
 
@@ -540,9 +547,11 @@ export default function Leaderboard() {
                   </p>
                   <button
                     onClick={() =>
-                      isFollowed
-                        ? handleUnfollow(e.address)
-                        : handleFollow(e.address)
+                      requireAuth(() =>
+                        isFollowed
+                          ? handleUnfollow(e.address)
+                          : handleFollow(e.address),
+                      )
                     }
                     className={`mt-2 px-3 py-1 rounded text-xs font-semibold transition ${
                       isFollowed
@@ -691,9 +700,11 @@ export default function Leaderboard() {
                   <td className="p-3 text-center">
                     <button
                       onClick={() =>
-                        isFollowed
-                          ? handleUnfollow(entry.address)
-                          : handleFollow(entry.address)
+                        requireAuth(() =>
+                          isFollowed
+                            ? handleUnfollow(entry.address)
+                            : handleFollow(entry.address),
+                        )
                       }
                       className={`px-2 py-1 rounded text-xs font-semibold transition ${
                         isFollowed
@@ -1024,9 +1035,11 @@ export default function Leaderboard() {
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                           <button
                             onClick={() =>
-                              isNotificationFollowed
-                                ? handleNotificationUnfollow(wallet)
-                                : handleNotificationFollow(wallet)
+                              requireAuth(() =>
+                                isNotificationFollowed
+                                  ? handleNotificationUnfollow(wallet)
+                                  : handleNotificationFollow(wallet),
+                              )
                             }
                             className={`py-2.5 rounded-xl font-semibold text-sm transition border ${
                               isNotificationFollowed
@@ -1041,9 +1054,11 @@ export default function Leaderboard() {
 
                           <button
                             onClick={() =>
-                              isCopyFollowed
-                                ? handleUnfollow(wallet)
-                                : handleFollow(wallet)
+                              requireAuth(() =>
+                                isCopyFollowed
+                                  ? handleUnfollow(wallet)
+                                  : handleFollow(wallet),
+                              )
                             }
                             className={`py-2.5 rounded-xl font-semibold text-sm transition border ${
                               isCopyFollowed
@@ -1051,18 +1066,24 @@ export default function Leaderboard() {
                                 : "bg-[var(--bg-soft)] text-soft border-[var(--line)] hover:border-[var(--line-strong)]"
                             }`}
                           >
-                            {isCopyFollowed ? "Copy Trade Enabled" : "Copy Trade"}
+                            {isCopyFollowed
+                              ? "Copy Trade Enabled"
+                              : "Copy Trade"}
                           </button>
 
                           <button
-                            onClick={() => handleToggleMockCopy(wallet)}
+                            onClick={() =>
+                              requireAuth(() => handleToggleMockCopy(wallet))
+                            }
                             className={`py-2.5 rounded-xl font-semibold text-sm transition border ${
                               isMockCopied
                                 ? "bg-sky-500/15 text-sky-300 border-sky-500/30 hover:bg-sky-500/25"
                                 : "bg-[var(--bg-soft)] text-soft border-[var(--line)] hover:border-[var(--line-strong)]"
                             }`}
                           >
-                            {isMockCopied ? "Mock Copy Enabled" : "Mock Copy Trade"}
+                            {isMockCopied
+                              ? "Mock Copy Enabled"
+                              : "Mock Copy Trade"}
                           </button>
                         </div>
 
@@ -1071,12 +1092,16 @@ export default function Leaderboard() {
                             type="checkbox"
                             checked={emailEnabled}
                             onChange={(e) =>
-                              handleNotificationEmailToggle(wallet, e.target.checked)
+                              handleNotificationEmailToggle(
+                                wallet,
+                                e.target.checked,
+                              )
                             }
                             disabled={!isNotificationFollowed}
                             className="w-4 h-4 accent-[var(--accent)]"
                           />
-                          Enable email for this trader's open/close notifications
+                          Enable email for this trader's open/close
+                          notifications
                         </label>
 
                         {popupActionError && (
@@ -1091,7 +1116,9 @@ export default function Leaderboard() {
                         )}
 
                         <div className="flex gap-2">
-                          {buildPolymarketProfileUrl(selectedTrader.wallet_address) ? (
+                          {buildPolymarketProfileUrl(
+                            selectedTrader.wallet_address,
+                          ) ? (
                             <a
                               href={
                                 buildPolymarketProfileUrl(

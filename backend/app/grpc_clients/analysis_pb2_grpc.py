@@ -75,6 +75,26 @@ class AnalysisServiceStub(object):
                 request_serializer=analysis__pb2.CopyTradeEvaluationRequest.SerializeToString,
                 response_deserializer=analysis__pb2.AnalysisResponse.FromString,
                 _registered_method=True)
+        self.EvaluateInversePosition = channel.unary_unary(
+                '/polymarket.analysis.AnalysisService/EvaluateInversePosition',
+                request_serializer=analysis__pb2.InversePositionEvaluationRequest.SerializeToString,
+                response_deserializer=analysis__pb2.AnalysisResponse.FromString,
+                _registered_method=True)
+        self.AnalyzeSentiment = channel.unary_unary(
+                '/polymarket.analysis.AnalysisService/AnalyzeSentiment',
+                request_serializer=analysis__pb2.SentimentAnalysisRequest.SerializeToString,
+                response_deserializer=analysis__pb2.AnalysisResponse.FromString,
+                _registered_method=True)
+        self.DiscoverBestTrade = channel.unary_unary(
+                '/polymarket.analysis.AnalysisService/DiscoverBestTrade',
+                request_serializer=analysis__pb2.DiscoverBestTradeRequest.SerializeToString,
+                response_deserializer=analysis__pb2.AnalysisResponse.FromString,
+                _registered_method=True)
+        self.IndexMarketsRAG = channel.unary_unary(
+                '/polymarket.analysis.AnalysisService/IndexMarketsRAG',
+                request_serializer=analysis__pb2.IndexMarketsRAGRequest.SerializeToString,
+                response_deserializer=analysis__pb2.AnalysisResponse.FromString,
+                _registered_method=True)
         self.HealthCheck = channel.unary_unary(
                 '/polymarket.analysis.AnalysisService/HealthCheck',
                 request_serializer=analysis__pb2.HealthRequest.SerializeToString,
@@ -144,6 +164,36 @@ class AnalysisServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def EvaluateInversePosition(self, request, context):
+        """Evaluate whether an open position should be reversed
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def AnalyzeSentiment(self, request, context):
+        """── NEW: Advanced Analysis RPCs ──────────────────────────
+
+        Analyse public sentiment around a market/topic
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DiscoverBestTrade(self, request, context):
+        """Autonomous trade discovery — find the single best trade
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def IndexMarketsRAG(self, request, context):
+        """Index markets into RAG vector store
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def HealthCheck(self, request, context):
         """Health check
         """
@@ -192,6 +242,26 @@ def add_AnalysisServiceServicer_to_server(servicer, server):
             'EvaluateCopyTrade': grpc.unary_unary_rpc_method_handler(
                     servicer.EvaluateCopyTrade,
                     request_deserializer=analysis__pb2.CopyTradeEvaluationRequest.FromString,
+                    response_serializer=analysis__pb2.AnalysisResponse.SerializeToString,
+            ),
+            'EvaluateInversePosition': grpc.unary_unary_rpc_method_handler(
+                    servicer.EvaluateInversePosition,
+                    request_deserializer=analysis__pb2.InversePositionEvaluationRequest.FromString,
+                    response_serializer=analysis__pb2.AnalysisResponse.SerializeToString,
+            ),
+            'AnalyzeSentiment': grpc.unary_unary_rpc_method_handler(
+                    servicer.AnalyzeSentiment,
+                    request_deserializer=analysis__pb2.SentimentAnalysisRequest.FromString,
+                    response_serializer=analysis__pb2.AnalysisResponse.SerializeToString,
+            ),
+            'DiscoverBestTrade': grpc.unary_unary_rpc_method_handler(
+                    servicer.DiscoverBestTrade,
+                    request_deserializer=analysis__pb2.DiscoverBestTradeRequest.FromString,
+                    response_serializer=analysis__pb2.AnalysisResponse.SerializeToString,
+            ),
+            'IndexMarketsRAG': grpc.unary_unary_rpc_method_handler(
+                    servicer.IndexMarketsRAG,
+                    request_deserializer=analysis__pb2.IndexMarketsRAGRequest.FromString,
                     response_serializer=analysis__pb2.AnalysisResponse.SerializeToString,
             ),
             'HealthCheck': grpc.unary_unary_rpc_method_handler(
@@ -416,6 +486,114 @@ class AnalysisService(object):
             target,
             '/polymarket.analysis.AnalysisService/EvaluateCopyTrade',
             analysis__pb2.CopyTradeEvaluationRequest.SerializeToString,
+            analysis__pb2.AnalysisResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def EvaluateInversePosition(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/polymarket.analysis.AnalysisService/EvaluateInversePosition',
+            analysis__pb2.InversePositionEvaluationRequest.SerializeToString,
+            analysis__pb2.AnalysisResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def AnalyzeSentiment(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/polymarket.analysis.AnalysisService/AnalyzeSentiment',
+            analysis__pb2.SentimentAnalysisRequest.SerializeToString,
+            analysis__pb2.AnalysisResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DiscoverBestTrade(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/polymarket.analysis.AnalysisService/DiscoverBestTrade',
+            analysis__pb2.DiscoverBestTradeRequest.SerializeToString,
+            analysis__pb2.AnalysisResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def IndexMarketsRAG(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/polymarket.analysis.AnalysisService/IndexMarketsRAG',
+            analysis__pb2.IndexMarketsRAGRequest.SerializeToString,
             analysis__pb2.AnalysisResponse.FromString,
             options,
             channel_credentials,

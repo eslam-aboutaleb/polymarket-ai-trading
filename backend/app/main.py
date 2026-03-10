@@ -23,6 +23,10 @@ from app.api.routes import markets
 from app.api.routes import portfolio
 from app.api.routes import settings as settings_routes
 from app.api.routes import trades
+from app.api.routes import market_maker
+from app.api.routes import backtesting
+from app.api.routes import binance_signals
+from app.api.routes import news
 from app.middleware.request_logger import RequestLogMiddleware
 from app.security.crypto import EncryptionConfigError, get_fernet_keyring
 from app.utils.database import SessionLocal, engine
@@ -185,9 +189,30 @@ async def lifespan(app: FastAPI):
         from app.services.inverse_bot_monitor import start_inverse_bot_monitor
         await start_inverse_bot_monitor()
 
+        # Start market maker for all enabled configs
+        from app.services.market_maker_service import start_all_enabled_market_makers
+        await start_all_enabled_market_makers()
+
+        # Start position lifecycle manager
+        from app.services.position_lifecycle_service import start_position_lifecycle_manager
+        await start_position_lifecycle_manager()
+
+        # Start trade aggregation service
+        from app.services.trade_aggregation_service import start_aggregation_service
+        await start_aggregation_service()
+
+        # Start arbitrage detection monitor
+        from app.services.arbitrage_service import start_arbitrage_monitor
+        await start_arbitrage_monitor()
+
+        # Start news background generator
+        from app.services.news_service import start_news_generator
+        await start_news_generator()
+
         logger.info(
             "Background services started (trade monitor + leaderboard refresh + "
-            "stop-loss monitor + inverse-bot monitor)"
+            "stop-loss monitor + inverse-bot monitor + market-maker + "
+            "position-lifecycle + trade-aggregation + arbitrage-monitor + news-generator)"
         )
     except Exception as e:
         logger.warning(f"Background services failed to start: {e}")
@@ -208,6 +233,31 @@ async def lifespan(app: FastAPI):
     try:
         from app.services.inverse_bot_monitor import stop_inverse_bot_monitor
         await stop_inverse_bot_monitor()
+    except Exception:
+        pass
+    try:
+        from app.services.market_maker_service import stop_all_market_makers
+        await stop_all_market_makers()
+    except Exception:
+        pass
+    try:
+        from app.services.position_lifecycle_service import stop_position_lifecycle_manager
+        await stop_position_lifecycle_manager()
+    except Exception:
+        pass
+    try:
+        from app.services.trade_aggregation_service import stop_aggregation_service
+        await stop_aggregation_service()
+    except Exception:
+        pass
+    try:
+        from app.services.arbitrage_service import stop_arbitrage_monitor
+        await stop_arbitrage_monitor()
+    except Exception:
+        pass
+    try:
+        from app.services.news_service import stop_news_generator
+        await stop_news_generator()
     except Exception:
         pass
     try:
@@ -281,6 +331,10 @@ if settings.debug_endpoints_active:
 else:
     logger.info("Debug router disabled (DEBUG_ENDPOINTS_ENABLED=false).")
 app.include_router(inverse_bot.router)
+app.include_router(market_maker.router)
+app.include_router(backtesting.router)
+app.include_router(binance_signals.router)
+app.include_router(news.router)
 
 
 # Health check

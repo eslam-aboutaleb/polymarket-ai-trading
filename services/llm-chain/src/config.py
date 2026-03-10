@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     
     # Service
     service_name: str = "llm-chain-service"
-    service_version: str = "0.1.0"
+    service_version: str = "0.2.0"
     grpc_port: int = 50051
     
     # LLM Configuration (provider-agnostic)
@@ -38,6 +38,24 @@ class Settings(BaseSettings):
     
     # Prompts
     prompts_path: str = "/app/prompts/prompts.json"
+    
+    # ChromaDB / RAG settings
+    chroma_persist_dir: str = "/app/data/chroma"
+    chroma_collection_name: str = "polymarket_markets"
+    rag_embedding_model: str = "text-embedding-3-small"
+    rag_enabled: bool = True
+    rag_multi_query_count: int = 5
+    
+    # Tavily premium search (optional)
+    tavily_api_key: str = ""
+    tavily_enabled: bool = False
+    
+    # NewsAPI (optional)
+    newsapi_api_key: str = ""
+    newsapi_enabled: bool = False
+    
+    # Binance Skills Hub (public APIs, no auth required)
+    binance_skills_enabled: bool = True
     
     # Logging
     log_level: str = "INFO"
