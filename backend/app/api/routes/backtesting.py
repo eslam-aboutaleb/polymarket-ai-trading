@@ -1,5 +1,4 @@
 """Backtesting API routes."""
-from typing import List, Optional, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -9,8 +8,8 @@ from app.api.routes.auth import get_current_user_from_token
 from app.models.backtest_run import BacktestRun
 from app.services.backtesting_service import (
     create_and_run_backtest,
-    get_backtest_runs,
     get_backtest_run,
+    get_backtest_runs,
 )
 from app.utils.database import get_db
 
@@ -18,6 +17,7 @@ router = APIRouter(prefix="/api/backtesting", tags=["backtesting"])
 
 
 # ── Pydantic schemas ──
+
 
 class BacktestRequest(BaseModel):
     strategy_type: str = Field(..., pattern="^(copy_trade|indicator|custom)$")
@@ -37,28 +37,29 @@ class BacktestRunResponse(BaseModel):
     total_trades: int
     winning_trades: int
     losing_trades: int
-    win_rate: Optional[float]
+    win_rate: float | None
     total_pnl: float
-    max_drawdown: Optional[float]
-    sharpe_ratio: Optional[float]
-    profit_factor: Optional[float]
-    avg_trade_pnl: Optional[float]
-    max_consecutive_losses: Optional[int]
-    total_volume: Optional[float]
+    max_drawdown: float | None
+    sharpe_ratio: float | None
+    profit_factor: float | None
+    avg_trade_pnl: float | None
+    max_consecutive_losses: int | None
+    total_volume: float | None
     status: str
-    error_message: Optional[str]
-    trade_log: Optional[list]
-    indicator_values: Optional[dict]
+    error_message: str | None
+    trade_log: list | None
+    indicator_values: dict | None
     created_at: str
-    completed_at: Optional[str]
+    completed_at: str | None
 
 
 class BacktestListResponse(BaseModel):
-    runs: List[BacktestRunResponse]
+    runs: list[BacktestRunResponse]
     total: int
 
 
 # ── Helpers ──
+
 
 def _to_response(run: BacktestRun) -> BacktestRunResponse:
     return BacktestRunResponse(
@@ -89,6 +90,7 @@ def _to_response(run: BacktestRun) -> BacktestRunResponse:
 
 
 # ── Endpoints ──
+
 
 @router.get("/runs", response_model=BacktestListResponse)
 async def list_backtest_runs(

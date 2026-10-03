@@ -31,14 +31,17 @@ class AnalysisClientPoolingTests(unittest.IsolatedAsyncioTestCase):
         fake_channel = AsyncMock()
         fake_channel.close = AsyncMock()
 
-        with patch.object(
-            self.analysis_client.grpc.aio,
-            "insecure_channel",
-            return_value=fake_channel,
-        ) as channel_factory, patch(
-            "app.grpc_clients.analysis_pb2_grpc.AnalysisServiceStub",
-            side_effect=lambda channel: {"channel": channel},
-        ) as stub_factory:
+        with (
+            patch.object(
+                self.analysis_client.grpc.aio,
+                "insecure_channel",
+                return_value=fake_channel,
+            ) as channel_factory,
+            patch(
+                "app.grpc_clients.analysis_pb2_grpc.AnalysisServiceStub",
+                side_effect=lambda channel: {"channel": channel},
+            ) as stub_factory,
+        ):
             client_one = self.analysis_client.AnalysisClient()
             client_two = self.analysis_client.AnalysisClient()
 

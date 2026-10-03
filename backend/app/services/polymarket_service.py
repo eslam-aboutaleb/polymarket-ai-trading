@@ -1,13 +1,17 @@
 """Services for Polymarket operations - portfolio, balance, and positions."""
+
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
-import httpx
-from web3 import Web3
-from typing import Optional, Any
-from decimal import Decimal
 import logging
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
+from datetime import UTC, datetime
+from decimal import Decimal
+from typing import Any
+
+import httpx
 from py_clob_client.clob_types import BookParams
+from web3 import Web3
+
 from app.utils.cache import get_cache
 
 logger = logging.getLogger(__name__)
@@ -47,6 +51,7 @@ POLYMARKET_DATA_API = "https://data-api.polymarket.com"
 
 class PolymarketService:
     """Service for interacting with Polymarket and Polygon chain."""
+
     # Dedicated thread pool for blocking Web3 / CLOB calls so that the
     # asyncio event loop is never blocked.  A bounded pool prevents
     # unbounded thread creation under load.
@@ -148,8 +153,8 @@ class PolymarketService:
         if private_key:
             try:
                 from py_clob_client.clob_types import (
-                    BalanceAllowanceParams,
                     AssetType,
+                    BalanceAllowanceParams,
                 )
 
                 # Try POLY_PROXY (1) first, fall back to EOA (0) and
@@ -176,31 +181,47 @@ class PolymarketService:
                         if best_resp is None:
                             best_resp = r
                     except Exception:
+                        # This signature type is unusable for this wallet; fall
+                        # through to the next one.
+                        logger.debug(
+                            "Balance/allowance probe failed for signature_type=%s",
+                            st,
+                            exc_info=True,
+                        )
                         continue
                 resp = best_resp or {"balance": "0"}
                 # resp is a dict, e.g. {"balance": "...", "allowance": "..."}
                 raw = best_balance if best_balance != "0" else resp.get("balance", "0")
 
-                # The CLOB API may return micro-USDC (integer) or USDC with
-                # decimals.  Detect by checking for a decimal point.
-                if "." in str(raw):
-                    usdc_balance = float(raw)
+                # Every signature-type probe failed: fall through
+                # to the on-chain EOA USDC balance instead of
+                # reporting a misleading 0.0.
+                if best_resp is None:
+                    logger.warning(
+                        "All CLOB balance probes failed for %s; falling back to on-chain USDC",
+                        wallet_address,
+                    )
                 else:
-                    usdc_balance = float(Decimal(str(raw)) / Decimal(10**6))
+                    # The CLOB API may return micro-USDC (integer) or USDC with
+                    # decimals.  Detect by checking for a decimal point.
+                    if "." in str(raw):
+                        usdc_balance = float(raw)
+                    else:
+                        usdc_balance = float(Decimal(str(raw)) / Decimal(10**6))
 
-                logger.info(
-                    f"CLOB proxy-wallet USDC balance for {wallet_address}: {usdc_balance}"
-                )
-                return {
-                    "wallet_address": wallet_address,
-                    "matic_balance": round(matic_balance, 6),
-                    "usdc_balance": round(usdc_balance, 2),
-                    "chain": "polygon",
-                }
+                    logger.info(
+                        "CLOB proxy-wallet USDC balance for %s: %s",
+                        wallet_address,
+                        usdc_balance,
+                    )
+                    return {
+                        "wallet_address": wallet_address,
+                        "matic_balance": round(matic_balance, 6),
+                        "usdc_balance": round(usdc_balance, 2),
+                        "chain": "polygon",
+                    }
             except Exception as e:
-                logger.warning(
-                    f"CLOB balance query failed, falling back to on-chain: {e}"
-                )
+                logger.warning(f"CLOB balance query failed, falling back to on-chain: {e}")
 
         # Fallback: read bridged-USDC ERC-20 balance on the EOA
         try:
@@ -240,8 +261,7 @@ class PolymarketService:
         if private_key:
             try:
                 clob = await self._run_blocking(
-                    self._get_clob_client,
-                    private_key, clob_creds, signature_type=1
+                    self._get_clob_client, private_key, clob_creds, signature_type=1
                 )
                 raw_trades = await self._run_blocking(clob.get_trades)
                 if raw_trades:
@@ -276,7 +296,7 @@ class PolymarketService:
 
     def _build_positions_from_trades(self, clob, raw_trades: list) -> list:
         """Aggregate trade history into net positions per (market, outcome).
-        
+
         Only includes positions on markets that are still open (not resolved/closed).
         """
         from collections import defaultdict
@@ -347,12 +367,12 @@ class PolymarketService:
                 logger.debug("Bulk price lookup failed: %s", e)
 
         # Also try midpoints for any missing prices
-        missing = [aid for aid in asset_ids if aid not in current_prices or current_prices[aid] == 0.0]
+        missing = [
+            aid for aid in asset_ids if aid not in current_prices or current_prices[aid] == 0.0
+        ]
         if missing:
             try:
-                mid_resp = clob.get_midpoints(
-                    [BookParams(token_id=aid) for aid in missing]
-                )
+                mid_resp = clob.get_midpoints([BookParams(token_id=aid) for aid in missing])
                 for entry in mid_resp:
                     token_id = entry.get("token_id") or entry.get("asset_id")
                     mid = self._to_float(entry.get("mid"), 0.0)
@@ -375,20 +395,18 @@ class PolymarketService:
             if minfo.get("closed") or not minfo.get("accepting_orders", True):
                 continue
 
-            avg_price = (
-                (b["buy_cost"] / b["buy_size"]) if b["buy_size"] > 0 else 0.0
-            )
+            avg_price = (b["buy_cost"] / b["buy_size"]) if b["buy_size"] > 0 else 0.0
 
             # Current price: prefer bulk lookup, else use order book midpoint
             cur_price = current_prices.get(b["asset_id"] or "", 0.0)
             if cur_price == 0.0:
                 # Try individual price lookup as last resort
-                try:
+                with suppress(Exception):
                     if b["asset_id"]:
                         p = clob.get_last_trade_price(b["asset_id"])
-                        cur_price = self._to_float(p.get("price"), 0.0) if isinstance(p, dict) else 0.0
-                except Exception:
-                    pass
+                        cur_price = (
+                            self._to_float(p.get("price"), 0.0) if isinstance(p, dict) else 0.0
+                        )
             if cur_price == 0.0:
                 cur_price = avg_price
 
@@ -418,9 +436,7 @@ class PolymarketService:
             )
 
         # Sort by invested value descending
-        positions.sort(
-            key=lambda p: abs(p["size"] * p["avgPrice"]), reverse=True
-        )
+        positions.sort(key=lambda p: abs(p["size"] * p["avgPrice"]), reverse=True)
         return positions
 
     @staticmethod
@@ -454,7 +470,10 @@ class PolymarketService:
 
             positions.append(
                 {
-                    "title": item.get("title") or item.get("question") or item.get("market") or "Unknown",
+                    "title": item.get("title")
+                    or item.get("question")
+                    or item.get("market")
+                    or "Unknown",
                     "market": item.get("market") or item.get("condition_id") or "",
                     "market_slug": item.get("market_slug") or item.get("marketSlug"),
                     "outcome": item.get("outcome") or item.get("outcome_name"),
@@ -527,10 +546,9 @@ class PolymarketService:
         timestamp = None
         if match_time:
             try:
-                from datetime import datetime, timezone
-                timestamp = datetime.fromtimestamp(
-                    int(match_time), tz=timezone.utc
-                ).isoformat()
+                from datetime import datetime
+
+                timestamp = datetime.fromtimestamp(int(match_time), tz=UTC).isoformat()
             except (ValueError, OSError):
                 timestamp = match_time
 
@@ -562,7 +580,7 @@ class PolymarketService:
         offset: int,
     ) -> list[dict[str, Any]]:
         """Normalize authenticated trade-history payload in a worker thread."""
-        condition_ids = list(set(t.get("market", "") for t in raw_trades))
+        condition_ids = list({t.get("market", "") for t in raw_trades})
         for cid in condition_ids:
             if cid and cid not in self._market_cache:
                 self._resolve_market_question(clob, cid)
@@ -572,10 +590,8 @@ class PolymarketService:
             minfo = self._market_cache.get(item.get("market", ""), {})
             normalized.append(self._normalize_clob_trade(item, minfo))
 
-        normalized.sort(
-            key=lambda t: t.get("timestamp") or "", reverse=True
-        )
-        return normalized[offset: offset + limit]
+        normalized.sort(key=lambda t: t.get("timestamp") or "", reverse=True)
+        return normalized[offset : offset + limit]
 
     async def get_trade_history(
         self,
@@ -687,9 +703,7 @@ class PolymarketService:
                     normalized_fallback.append(
                         {
                             "id": pos.get("id"),
-                            "market": pos.get("title")
-                            or pos.get("market")
-                            or pos.get("asset"),
+                            "market": pos.get("title") or pos.get("market") or pos.get("asset"),
                             "market_slug": pos.get("marketSlug"),
                             "outcome": pos.get("outcome"),
                             "side": "BUY",
@@ -705,9 +719,7 @@ class PolymarketService:
                         }
                     )
 
-            normalized_fallback.sort(
-                key=lambda t: t.get("timestamp") or "", reverse=True
-            )
+            normalized_fallback.sort(key=lambda t: t.get("timestamp") or "", reverse=True)
             return normalized_fallback[:limit]
         except Exception as e:
             logger.error("Error fetching trade history: %s", e)
@@ -794,6 +806,7 @@ class PolymarketService:
                             if isinstance(raw_prices, str):
                                 try:
                                     import json as _json
+
                                     raw_prices = _json.loads(raw_prices)
                                 except Exception:
                                     raw_prices = None
@@ -834,8 +847,8 @@ class PolymarketService:
 
     # ---- noise-filter patterns for get_newest_markets ----
     _NOISE_TITLE_PATTERNS: list[str] = [
-        "up or down",          # 5-min crypto price up/down markets
-        "updown",              # slug variant
+        "up or down",  # 5-min crypto price up/down markets
+        "updown",  # slug variant
     ]
     _MIN_LIQUIDITY_FOR_NEWEST = 40  # skip ultra-thin markets
 
@@ -846,9 +859,7 @@ class PolymarketService:
             if pattern in title:
                 return True
         liq = event.get("liquidity") or 0
-        if liq < self._MIN_LIQUIDITY_FOR_NEWEST:
-            return True
-        return False
+        return liq < self._MIN_LIQUIDITY_FOR_NEWEST
 
     async def get_newest_markets(self, limit: int = 60) -> list:
         """
@@ -934,6 +945,7 @@ class PolymarketService:
                             if isinstance(raw_prices, str):
                                 try:
                                     import json as _json
+
                                     raw_prices = _json.loads(raw_prices)
                                 except Exception:
                                     raw_prices = None
@@ -1039,8 +1051,10 @@ class PolymarketService:
             )
 
         context_text = (
-            f"Order book participants — YES side: {stats['yes_traders']} | NO side: {stats['no_traders']}\n"
-            f"Volume split — YES: ${stats['yes_volume']:,.2f} ({stats['side_ratio']['yes']:.1f}%) | "
+            f"Order book participants — YES side: {stats['yes_traders']} "
+            f"| NO side: {stats['no_traders']}\n"
+            f"Volume split — YES: ${stats['yes_volume']:,.2f} "
+            f"({stats['side_ratio']['yes']:.1f}%) | "
             f"NO: ${stats['no_volume']:,.2f} ({stats['side_ratio']['no']:.1f}%)\n"
             f"Whale orders (>${500}): {whale_count} detected, bias: {whale_bias}\n"
             f"  YES whale volume: ${yes_whale_vol:,.2f} ({yes_whale_pct}%)\n"
@@ -1089,6 +1103,7 @@ class PolymarketService:
             return
 
         import json as _json
+
         try:
             tids = _json.loads(raw_tids) if isinstance(raw_tids, str) else raw_tids
             outcomes = _json.loads(raw_outcomes) if isinstance(raw_outcomes, str) else raw_outcomes
@@ -1107,29 +1122,155 @@ class PolymarketService:
         m["tokens"] = tokens
 
     MARKET_CATEGORIES = [
-        {"id": "sports", "label": "Sports", "icon": "trophy", "description": "NFL, NBA, Soccer, Tennis & more"},
-        {"id": "politics", "label": "Politics", "icon": "landmark", "description": "Elections, policy & geopolitics"},
-        {"id": "crypto", "label": "Crypto", "icon": "bitcoin", "description": "BTC, ETH, Solana & token prices"},
-        {"id": "pop-culture", "label": "Pop Culture", "icon": "star", "description": "Celebrities, music, movies & TV"},
-        {"id": "business", "label": "Business", "icon": "briefcase", "description": "Earnings, IPOs & corporate moves"},
-        {"id": "science", "label": "Science", "icon": "flask", "description": "Research, space & discoveries"},
-        {"id": "technology", "label": "Technology", "icon": "cpu", "description": "AI, launches & tech industry"},
-        {"id": "world", "label": "World", "icon": "globe", "description": "International events & conflicts"},
-        {"id": "entertainment", "label": "Entertainment", "icon": "film", "description": "Award shows, streaming & media"},
+        {
+            "id": "sports",
+            "label": "Sports",
+            "icon": "trophy",
+            "description": "NFL, NBA, Soccer, Tennis & more",
+        },
+        {
+            "id": "politics",
+            "label": "Politics",
+            "icon": "landmark",
+            "description": "Elections, policy & geopolitics",
+        },
+        {
+            "id": "crypto",
+            "label": "Crypto",
+            "icon": "bitcoin",
+            "description": "BTC, ETH, Solana & token prices",
+        },
+        {
+            "id": "pop-culture",
+            "label": "Pop Culture",
+            "icon": "star",
+            "description": "Celebrities, music, movies & TV",
+        },
+        {
+            "id": "business",
+            "label": "Business",
+            "icon": "briefcase",
+            "description": "Earnings, IPOs & corporate moves",
+        },
+        {
+            "id": "science",
+            "label": "Science",
+            "icon": "flask",
+            "description": "Research, space & discoveries",
+        },
+        {
+            "id": "technology",
+            "label": "Technology",
+            "icon": "cpu",
+            "description": "AI, launches & tech industry",
+        },
+        {
+            "id": "world",
+            "label": "World",
+            "icon": "globe",
+            "description": "International events & conflicts",
+        },
+        {
+            "id": "entertainment",
+            "label": "Entertainment",
+            "icon": "film",
+            "description": "Award shows, streaming & media",
+        },
     ]
 
     # Map our category IDs → sets of Gamma API tag slugs that qualify.
     # The Gamma API ignores the `tag` query-param, so we filter server-side
     # by checking each event's `tags[].slug` against these sets.
     TAG_SLUG_MAP: dict[str, set[str]] = {
-        "sports":        {"sports", "nba", "nfl", "soccer", "hockey", "nhl", "basketball", "stanley-cup", "nba-champion", "nba-finals", "2026-fifa-world-cup", "fifa-world-cup", "world-cup"},
-        "politics":      {"politics", "elections", "congress", "senate-primary", "house", "president", "primaries", "primary-elections", "us-presidential-election", "global-elections", "world-elections", "republican-primary", "us-government", "uptspt-politics", "texas-primary", "texas-senate", "senate-primary"},
-        "crypto":        {"crypto", "crypto-prices", "airdrops", "fdv", "exchange", "megaeth"},
-        "pop-culture":   {"pop-culture", "celebrities", "music", "taylor-swift", "creators", "awards", "gta-vi", "video-games"},
-        "business":      {"business", "finance", "economy", "stocks", "ipos", "macro-geopolitics", "pre-market", "microstrategy", "trade-war", "taxes"},
-        "science":       {"science"},
-        "technology":    {"tech", "ai", "big-tech", "openai", "gpt-5", "sam-altman"},
-        "world":         {"world", "world-affairs", "geopolitics", "foreign-policy", "ukraine", "ukraine-peace-deal", "ukraine-map", "russia", "russia-capture", "china", "india", "eu", "uk", "france", "middle-east", "iran", "israel", "nato", "military-action", "immigration", "immigrationborder", "syria", "poland", "us-iran", "trump-zelenskyy", "trump-putin", "zelensky", "putin", "security-guarantee"},
+        "sports": {
+            "sports",
+            "nba",
+            "nfl",
+            "soccer",
+            "hockey",
+            "nhl",
+            "basketball",
+            "stanley-cup",
+            "nba-champion",
+            "nba-finals",
+            "2026-fifa-world-cup",
+            "fifa-world-cup",
+            "world-cup",
+        },
+        "politics": {
+            "politics",
+            "elections",
+            "congress",
+            "senate-primary",
+            "house",
+            "president",
+            "primaries",
+            "primary-elections",
+            "us-presidential-election",
+            "global-elections",
+            "world-elections",
+            "republican-primary",
+            "us-government",
+            "uptspt-politics",
+            "texas-primary",
+            "texas-senate",
+        },
+        "crypto": {"crypto", "crypto-prices", "airdrops", "fdv", "exchange", "megaeth"},
+        "pop-culture": {
+            "pop-culture",
+            "celebrities",
+            "music",
+            "taylor-swift",
+            "creators",
+            "awards",
+            "gta-vi",
+            "video-games",
+        },
+        "business": {
+            "business",
+            "finance",
+            "economy",
+            "stocks",
+            "ipos",
+            "macro-geopolitics",
+            "pre-market",
+            "microstrategy",
+            "trade-war",
+            "taxes",
+        },
+        "science": {"science"},
+        "technology": {"tech", "ai", "big-tech", "openai", "gpt-5", "sam-altman"},
+        "world": {
+            "world",
+            "world-affairs",
+            "geopolitics",
+            "foreign-policy",
+            "ukraine",
+            "ukraine-peace-deal",
+            "ukraine-map",
+            "russia",
+            "russia-capture",
+            "china",
+            "india",
+            "eu",
+            "uk",
+            "france",
+            "middle-east",
+            "iran",
+            "israel",
+            "nato",
+            "military-action",
+            "immigration",
+            "immigrationborder",
+            "syria",
+            "poland",
+            "us-iran",
+            "trump-zelenskyy",
+            "trump-putin",
+            "zelensky",
+            "putin",
+            "security-guarantee",
+        },
         "entertainment": {"entertainment", "movies", "music", "awards", "creators", "celebrities"},
     }
 
@@ -1233,6 +1374,7 @@ class PolymarketService:
                                     if isinstance(raw_prices, str):
                                         try:
                                             import json as _json
+
                                             raw_prices = _json.loads(raw_prices)
                                         except Exception:
                                             raw_prices = None
@@ -1258,9 +1400,9 @@ class PolymarketService:
                             for m in event_markets:
                                 prices = m.get("outcomePrices", [])
                                 try:
-                                    p0, p1 = float(prices[0]), float(prices[1])
+                                    p0, _p1 = float(prices[0]), float(prices[1])
                                 except (IndexError, ValueError, TypeError):
-                                    p0, p1 = 0.5, 0.5
+                                    p0, _p1 = 0.5, 0.5
                                 # Skip markets whose yes price is 0 or 1 (resolved)
                                 if p0 <= 0.005 or p0 >= 0.995:
                                     continue
@@ -1363,9 +1505,7 @@ class PolymarketService:
                     )
                     if response.status_code != 200:
                         if page_offset == 0:
-                            logger.warning(
-                                "Gamma /events search returned %s", response.status_code
-                            )
+                            logger.warning("Gamma /events search returned %s", response.status_code)
                             return {
                                 "markets": [],
                                 "total": 0,
@@ -1428,9 +1568,7 @@ class PolymarketService:
                             best_bid = m.get("bestBid")
                             last_trade = m.get("lastTradePrice")
                             yes_price = (
-                                _as_prob(best_ask)
-                                or _as_prob(best_bid)
-                                or _as_prob(last_trade)
+                                _as_prob(best_ask) or _as_prob(best_bid) or _as_prob(last_trade)
                             )
 
                             if yes_price is not None:
@@ -1444,6 +1582,7 @@ class PolymarketService:
                                 if isinstance(raw_prices, str):
                                     try:
                                         import json as _json
+
                                         raw_prices = _json.loads(raw_prices)
                                     except Exception:
                                         raw_prices = None
@@ -1473,10 +1612,7 @@ class PolymarketService:
                                 continue
 
                             cid = str(
-                                m.get("condition_id")
-                                or m.get("conditionId")
-                                or m.get("id")
-                                or ""
+                                m.get("condition_id") or m.get("conditionId") or m.get("id") or ""
                             )
                             dedupe_key = cid or str(
                                 (m.get("_event_slug") or m.get("slug") or "")
@@ -1500,10 +1636,16 @@ class PolymarketService:
                 _market_data_cache.set(gamma_cache_key, all_markets, ttl_seconds=30)
                 logger.debug(
                     "search_all_markets cached %d markets (sort=%s, tag=%s)",
-                    len(all_markets), sort, tag,
+                    len(all_markets),
+                    sort,
+                    tag,
                 )
 
-            # Client-side text search (operates on cached list)
+            # Client-side text search (operates on cached list).
+            # Match against both the market question and the
+            # event title — a market always has a question, so
+            # `question or _event_title` would never reach the
+            # event title and title-only searches were a no-op.
             filtered = all_markets
             if query:
                 q_lower = query.lower()
@@ -1512,8 +1654,9 @@ class PolymarketService:
                     for m in all_markets
                     if q_lower
                     in (
-                        (m.get("question") or m.get("_event_title") or "")
-                        .lower()
+                        (m.get("question") or "").lower()
+                        + " "
+                        + (m.get("_event_title") or "").lower()
                     )
                 ]
 
@@ -1560,20 +1703,18 @@ class PolymarketService:
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
                 # ── 1. Get token IDs & live prices from CLOB market endpoint ──
-                market_resp = await client.get(
-                    f"{POLYMARKET_CLOB_API}/markets/{condition_id}"
-                )
+                market_resp = await client.get(f"{POLYMARKET_CLOB_API}/markets/{condition_id}")
                 if market_resp.status_code != 200:
                     logger.warning(
                         "CLOB /markets/%s returned %s",
-                        condition_id[:16], market_resp.status_code,
+                        condition_id[:16],
+                        market_resp.status_code,
                     )
                     return stats
 
                 market_data = market_resp.json()
                 tokens = market_data.get("tokens", [])
                 yes_token_id = None
-                no_token_id = None
                 yes_price = 0.5
                 no_price = 0.5
                 for t in tokens:
@@ -1582,7 +1723,7 @@ class PolymarketService:
                         yes_token_id = t["token_id"]
                         yes_price = float(t.get("price", 0.5))
                     elif outcome == "no":
-                        no_token_id = t["token_id"]
+                        t["token_id"]
                         no_price = float(t.get("price", 0.5))
 
                 # ── 2. Get total volume from Gamma API ────────────────────
@@ -1595,9 +1736,7 @@ class PolymarketService:
                     if gamma_resp.status_code == 200:
                         gamma_markets = gamma_resp.json()
                         if gamma_markets:
-                            total_volume = float(
-                                gamma_markets[0].get("volumeNum", 0)
-                            )
+                            total_volume = float(gamma_markets[0].get("volumeNum", 0))
                 except Exception as ge:
                     logger.debug("Gamma volume lookup failed: %s", ge)
 
@@ -1624,13 +1763,9 @@ class PolymarketService:
                 no_ask_levels = len(asks)
 
                 yes_bid_depth = sum(
-                    float(b.get("size", 0)) * float(b.get("price", 0))
-                    for b in bids
+                    float(b.get("size", 0)) * float(b.get("price", 0)) for b in bids
                 )
-                no_ask_depth = sum(
-                    float(a.get("size", 0)) * float(a.get("price", 0))
-                    for a in asks
-                )
+                no_ask_depth = sum(float(a.get("size", 0)) * float(a.get("price", 0)) for a in asks)
 
                 stats["yes_traders"] = yes_bid_levels
                 stats["no_traders"] = no_ask_levels
@@ -1638,12 +1773,8 @@ class PolymarketService:
                 # Split total volume proportional to outcome prices
                 price_sum = yes_price + no_price
                 if total_volume > 0 and price_sum > 0:
-                    stats["yes_volume"] = round(
-                        total_volume * (yes_price / price_sum), 2
-                    )
-                    stats["no_volume"] = round(
-                        total_volume * (no_price / price_sum), 2
-                    )
+                    stats["yes_volume"] = round(total_volume * (yes_price / price_sum), 2)
+                    stats["no_volume"] = round(total_volume * (no_price / price_sum), 2)
                 elif total_volume > 0:
                     stats["yes_volume"] = round(total_volume / 2, 2)
                     stats["no_volume"] = round(total_volume / 2, 2)
@@ -1677,34 +1808,40 @@ class PolymarketService:
                 top: list[dict] = []
                 for i, order in enumerate(all_orders[:10]):
                     vol = round(order["size"] * order["price"], 2)
-                    top.append({
-                        "address": f"Order-{i+1}",
-                        "short_address": f"@{order['price']:.3f}",
-                        "yes_volume": vol if order["side"] == "YES" else 0,
-                        "no_volume": vol if order["side"] == "NO" else 0,
-                        "total_volume": vol,
-                        "lean": order["side"],
-                    })
+                    top.append(
+                        {
+                            "address": f"Order-{i + 1}",
+                            "short_address": f"@{order['price']:.3f}",
+                            "yes_volume": vol if order["side"] == "YES" else 0,
+                            "no_volume": vol if order["side"] == "NO" else 0,
+                            "total_volume": vol,
+                            "lean": order["side"],
+                        }
+                    )
                 stats["top_traders"] = top
 
                 # ── 6. Recent activity snapshot from book ─────────────────
                 recent: list[dict] = []
                 for b in bids[:10]:
-                    recent.append({
-                        "side": "BUY",
-                        "outcome": "Yes",
-                        "size": float(b.get("size", 0)),
-                        "price": float(b.get("price", 0)),
-                        "trader": f"bid@{b.get('price', '?')}",
-                    })
+                    recent.append(
+                        {
+                            "side": "BUY",
+                            "outcome": "Yes",
+                            "size": float(b.get("size", 0)),
+                            "price": float(b.get("price", 0)),
+                            "trader": f"bid@{b.get('price', '?')}",
+                        }
+                    )
                 for a in asks[:10]:
-                    recent.append({
-                        "side": "SELL",
-                        "outcome": "Yes",
-                        "size": float(a.get("size", 0)),
-                        "price": float(a.get("price", 0)),
-                        "trader": f"ask@{a.get('price', '?')}",
-                    })
+                    recent.append(
+                        {
+                            "side": "SELL",
+                            "outcome": "Yes",
+                            "size": float(a.get("size", 0)),
+                            "price": float(a.get("price", 0)),
+                            "trader": f"ask@{a.get('price', '?')}",
+                        }
+                    )
                 stats["recent_trades"] = recent[:20]
 
         except Exception as e:
@@ -1730,7 +1867,7 @@ class PolymarketService:
                     data = response.json()
                     bids = data.get("bids", [])
                     asks = data.get("asks", [])
-                    
+
                     # Process YES and NO prices from bids/asks
                     for side_data in bids + asks:
                         outcome = (side_data.get("outcome") or "").lower()
@@ -1741,7 +1878,7 @@ class PolymarketService:
                             prices["no_price"] = price
         except Exception as e:
             logger.warning(f"Error fetching prices for {condition_id[:16]}: {e}")
-        
+
         return prices
 
     async def _get_historical_win_stats(self, wallet_address: str) -> dict[str, Any]:
@@ -1758,9 +1895,12 @@ class PolymarketService:
           win_rate = winning_closed_positions / total_positions_history * 100
         """
         wallet = (wallet_address or "").lower()
-        now_ts = datetime.now(timezone.utc).timestamp()
+        now_ts = datetime.now(UTC).timestamp()
         cached = self._historical_winrate_cache.get(wallet)
-        if cached and (now_ts - float(cached.get("ts", 0))) < self._historical_winrate_cache_ttl_seconds:
+        if (
+            cached
+            and (now_ts - float(cached.get("ts", 0))) < self._historical_winrate_cache_ttl_seconds
+        ):
             return cached.get("data", {})
 
         result = {
@@ -1960,7 +2100,7 @@ class PolymarketService:
 
 
 # Singleton instance
-_polymarket_service: Optional[PolymarketService] = None
+_polymarket_service: PolymarketService | None = None
 
 
 def get_polymarket_service() -> PolymarketService:

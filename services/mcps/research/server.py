@@ -13,9 +13,11 @@ Tools:
 - binance_token_data(chain_id, contract_address)              — Real-time token market data
 - binance_market_context(query_tokens, chain)                 — Aggregated Binance context for LLM
 """
+
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import sys
@@ -25,19 +27,10 @@ from ddgs import DDGS
 
 # ── Binance Skills Hub integration ────────────────────────
 try:
-    from binance_skills import (
-        get_smart_money_signals,
-        get_active_buy_signals,
-        get_social_hype_ranking,
-        get_smart_money_inflow,
-        get_trending_tokens,
-        get_pnl_leaderboard,
-        search_token,
-        get_token_dynamic_data,
-        get_crypto_market_context,
-    )
-    # Module-level import for tool dispatch
+    # Module-level import for tool dispatch. Individual tool functions are
+    # reached as `binance_skills.<fn>` rather than imported by name.
     import binance_skills
+
     _BINANCE_AVAILABLE = True
 except ImportError:
     _BINANCE_AVAILABLE = False
@@ -50,11 +43,13 @@ def _run_async(coro):
         loop = asyncio.get_event_loop()
         if loop.is_running():
             import concurrent.futures
+
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 return pool.submit(asyncio.run, coro).result(timeout=30)
         return loop.run_until_complete(coro)
     except RuntimeError:
         return asyncio.run(coro)
+
 
 # ── Optional premium search providers ──────────────────────
 _tavily_client = None
@@ -71,6 +66,7 @@ def _get_tavily():
         return None
     try:
         from tavily import TavilyClient
+
         _tavily_client = TavilyClient(api_key=api_key)
         return _tavily_client
     except ImportError:
@@ -87,6 +83,7 @@ def _get_newsapi():
         return None
     try:
         from newsapi import NewsApiClient
+
         _newsapi_client = NewsApiClient(api_key=api_key)
         return _newsapi_client
     except ImportError:
@@ -148,9 +145,7 @@ def x_posts_search(
         max_results=max_results,
     )
     x_only = [
-        r
-        for r in primary
-        if "x.com/" in r.get("url", "") or "twitter.com/" in r.get("url", "")
+        r for r in primary if "x.com/" in r.get("url", "") or "twitter.com/" in r.get("url", "")
     ]
     if x_only:
         return x_only[: max(1, min(20, int(max_results)))]
@@ -162,9 +157,7 @@ def x_posts_search(
         max_results=max_results,
     )
     return [
-        r
-        for r in fallback
-        if "x.com/" in r.get("url", "") or "twitter.com/" in r.get("url", "")
+        r for r in fallback if "x.com/" in r.get("url", "") or "twitter.com/" in r.get("url", "")
     ][: max(1, min(20, int(max_results)))]
 
 
@@ -173,6 +166,9 @@ def _run_one(payload: dict[str, Any]) -> dict[str, Any]:
     args = payload.get("args") or {}
     if not isinstance(args, dict):
         args = {}
+
+    if tool.startswith("binance_") and not _BINANCE_AVAILABLE:
+        return {"ok": False, "error": "Binance skills module unavailable"}
 
     if tool == "web_search":
         result = web_search(
@@ -200,57 +196,76 @@ def _run_one(payload: dict[str, Any]) -> dict[str, Any]:
         )
     # ── Binance Skills tools ──────────────────────────────
     elif tool == "binance_smart_signals":
-        result = _run_async(binance_skills.get_smart_money_signals(
-            chain=str(args.get("chain", "solana")),
-            page_size=int(args.get("page_size", 50) or 50),
-        ))
+        result = _run_async(
+            binance_skills.get_smart_money_signals(
+                chain=str(args.get("chain", "solana")),
+                page_size=int(args.get("page_size", 50) or 50),
+            )
+        )
     elif tool == "binance_active_buy_signals":
-        result = _run_async(binance_skills.get_active_buy_signals(
-            chain=str(args.get("chain", "solana")),
-            min_smart_money=int(args.get("min_smart_money", 2) or 2),
-        ))
+        result = _run_async(
+            binance_skills.get_active_buy_signals(
+                chain=str(args.get("chain", "solana")),
+                min_smart_money=int(args.get("min_smart_money", 2) or 2),
+            )
+        )
     elif tool == "binance_social_hype":
-        result = _run_async(binance_skills.get_social_hype_ranking(
-            chain=str(args.get("chain", "solana")),
-        ))
+        result = _run_async(
+            binance_skills.get_social_hype_ranking(
+                chain=str(args.get("chain", "solana")),
+            )
+        )
     elif tool == "binance_smart_money_inflow":
-        result = _run_async(binance_skills.get_smart_money_inflow(
-            chain=str(args.get("chain", "solana")),
-            period=str(args.get("period", "24h")),
-        ))
+        result = _run_async(
+            binance_skills.get_smart_money_inflow(
+                chain=str(args.get("chain", "solana")),
+                period=str(args.get("period", "24h")),
+            )
+        )
     elif tool == "binance_trending_tokens":
-        result = _run_async(binance_skills.get_trending_tokens(
-            chain=str(args.get("chain", "solana")),
-            rank_type=int(args.get("rank_type", 10) or 10),
-        ))
+        result = _run_async(
+            binance_skills.get_trending_tokens(
+                chain=str(args.get("chain", "solana")),
+                rank_type=int(args.get("rank_type", 10) or 10),
+            )
+        )
     elif tool == "binance_token_search":
-        result = _run_async(binance_skills.search_token(
-            keyword=str(args.get("keyword", "")),
-        ))
+        result = _run_async(
+            binance_skills.search_token(
+                keyword=str(args.get("keyword", "")),
+            )
+        )
     elif tool == "binance_token_data":
-        result = _run_async(binance_skills.get_token_dynamic_data(
-            chain_id=str(args.get("chain_id", "")),
-            contract_address=str(args.get("contract_address", "")),
-        ))
+        result = _run_async(
+            binance_skills.get_token_dynamic_data(
+                chain_id=str(args.get("chain_id", "")),
+                contract_address=str(args.get("contract_address", "")),
+            )
+        )
     elif tool == "binance_market_context":
         query_tokens = args.get("query_tokens", [])
         if isinstance(query_tokens, str):
             query_tokens = [t.strip() for t in query_tokens.split(",") if t.strip()]
-        result = _run_async(binance_skills.get_crypto_market_context(
-            query_tokens=query_tokens or None,
-            chain=str(args.get("chain", "solana")),
-        ))
+        result = _run_async(
+            binance_skills.get_crypto_market_context(
+                query_tokens=query_tokens or None,
+                chain=str(args.get("chain", "solana")),
+            )
+        )
     elif tool == "binance_pnl_leaderboard":
-        result = _run_async(binance_skills.get_pnl_leaderboard(
-            chain=str(args.get("chain", "solana")),
-            period=str(args.get("period", "30d")),
-        ))
+        result = _run_async(
+            binance_skills.get_pnl_leaderboard(
+                chain=str(args.get("chain", "solana")),
+                period=str(args.get("period", "30d")),
+            )
+        )
     else:
         return {"ok": False, "error": f"Unsupported tool: {tool}"}
     return {"ok": True, "result": result}
 
 
 # ── Tavily premium search ──────────────────────────────────
+
 
 def tavily_search(
     query: str,
@@ -278,19 +293,22 @@ def tavily_search(
         )
         results = []
         for item in response.get("results", []):
-            results.append({
-                "title": str(item.get("title", "")).strip(),
-                "url": str(item.get("url", "")).strip(),
-                "snippet": str(item.get("content", "")).strip(),
-                "score": str(item.get("score", "")),
-            })
-        return results[:max(1, min(10, max_results))]
-    except Exception as exc:
+            results.append(
+                {
+                    "title": str(item.get("title", "")).strip(),
+                    "url": str(item.get("url", "")).strip(),
+                    "snippet": str(item.get("content", "")).strip(),
+                    "score": str(item.get("score", "")),
+                }
+            )
+        return results[: max(1, min(10, max_results))]
+    except Exception:
         # Fallback to DuckDuckGo on failure
         return web_search(query, max_results=max_results)
 
 
 # ── NewsAPI integration ────────────────────────────────────
+
 
 def news_search(
     query: str,
@@ -319,14 +337,16 @@ def news_search(
         )
         results = []
         for article in response.get("articles", []):
-            results.append({
-                "title": str(article.get("title", "")).strip(),
-                "url": str(article.get("url", "")).strip(),
-                "snippet": str(article.get("description", "")).strip(),
-                "source": str((article.get("source") or {}).get("name", "")).strip(),
-                "published_at": str(article.get("publishedAt", "")).strip(),
-            })
-        return results[:max(1, min(20, max_results))]
+            results.append(
+                {
+                    "title": str(article.get("title", "")).strip(),
+                    "url": str(article.get("url", "")).strip(),
+                    "snippet": str(article.get("description", "")).strip(),
+                    "source": str((article.get("source") or {}).get("name", "")).strip(),
+                    "published_at": str(article.get("publishedAt", "")).strip(),
+                }
+            )
+        return results[: max(1, min(20, max_results))]
     except Exception:
         return web_search(f"{query} news", max_results=max_results)
 
@@ -345,6 +365,10 @@ def main() -> int:
             response = {"ok": False, "error": str(exc)}
         sys.stdout.write(json.dumps(response) + "\n")
         sys.stdout.flush()
+    # Release the shared Binance HTTP client on shutdown.
+    if _BINANCE_AVAILABLE:
+        with contextlib.suppress(Exception):
+            _run_async(binance_skills._close_shared_client())
     return 0
 
 

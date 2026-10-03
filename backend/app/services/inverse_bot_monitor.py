@@ -4,12 +4,14 @@ Inverse Position Bot monitor.
 Evaluates configured positions every 5 minutes and auto-reverses when
 guardrails are satisfied.
 """
+
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-from datetime import datetime, timezone, date
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 from sqlalchemy.orm import Session
@@ -19,11 +21,16 @@ from app.grpc_clients.analysis_client import AnalysisClient
 from app.models.inverse_bot_action import InverseBotAction
 from app.models.inverse_bot_position import InverseBotPosition
 from app.models.user import User
-from app.models.user_settings import InverseBotSizeMode, UserSettings, AIBackendType
+from app.models.user_settings import AIBackendType, InverseBotSizeMode, UserSettings
+from app.security.credential_store import CredentialStoreError, load_wallet_credentials
 from app.services.copy_trade_service import _place_order_on_polymarket
 from app.services.polymarket_service import POLYMARKET_CLOB_API, get_polymarket_service
-from app.security.credential_store import CredentialStoreError, load_wallet_credentials
 from app.utils.database import SessionLocal
+from app.utils.scheduler_lock import (
+    acquire_scheduler_lock,
+    release_scheduler_lock,
+    scheduler_heartbeat,
+)
 from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -33,6 +40,16 @@ INVERSE_DELTA_TRIGGER = 0.08
 INVERSE_PERSISTENCE_REQUIRED = 2
 BUY_SLIPPAGE_GUARD = 0.015  # 1.5%
 MIN_BUY_NOTIONAL = 1.0
+
+# Absolute server-side ceilings for manual ("force") reversals.
+#
+# `force=True` is reachable by any authenticated user for their own positions
+# and deliberately skips the configured persistence / cooldown / daily-cap
+# guardrails. Without a bound that skips nothing, holding "evaluate now" could
+# reverse a position against the caller's capital without limit. These two
+# constants are the floor that force can never cross.
+HARD_MAX_REVERSALS_PER_DAY = 10
+HARD_MIN_COOLDOWN_SECONDS = 60
 
 _monitor_task: asyncio.Task | None = None
 _inflight_keys: set[str] = set()
@@ -73,34 +90,41 @@ async def stop_inverse_bot_monitor():
     global _monitor_task
     if _monitor_task and not _monitor_task.done():
         _monitor_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await _monitor_task
-        except asyncio.CancelledError:
-            pass
     _monitor_task = None
     logger.info("Inverse-bot monitor stopped")
 
 
 async def _monitor_loop():
     global _last_tick_at
-    while True:
-        try:
-            _last_tick_at = datetime.now(timezone.utc)
-            await _run_monitor_cycle()
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.error("Inverse-bot monitor cycle failed: %s", e, exc_info=True)
-        await asyncio.sleep(INVERSE_BOT_CHECK_INTERVAL)
+    if not acquire_scheduler_lock("inverse_bot_monitor"):
+        return
+    try:
+        while True:
+            try:
+                _last_tick_at = datetime.now(UTC)
+                await _run_monitor_cycle()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error("Inverse-bot monitor cycle failed: %s", e, exc_info=True)
+            scheduler_heartbeat("inverse_bot_monitor")
+            await asyncio.sleep(INVERSE_BOT_CHECK_INTERVAL)
+    finally:
+        release_scheduler_lock("inverse_bot_monitor")
 
 
 async def _run_monitor_cycle():
     db = SessionLocal()
     try:
         user_ids = [
-            uid for (uid,) in db.query(UserSettings.user_id).filter(
-                UserSettings.inverse_bot_enabled == True,
-            ).all()
+            uid
+            for (uid,) in db.query(UserSettings.user_id)
+            .filter(
+                UserSettings.inverse_bot_enabled,
+            )
+            .all()
         ]
         for user_id in user_ids:
             await _evaluate_user_positions(db, user_id)
@@ -121,25 +145,35 @@ async def _evaluate_user_positions(db: Session, user_id: int):
         db.query(InverseBotPosition)
         .filter(
             InverseBotPosition.user_id == user_id,
-            InverseBotPosition.enabled == True,
+            InverseBotPosition.enabled,
         )
         .all()
     )
     if not entries:
         return
 
+    # Per-user simulation flag: paper mode is decided by the
+    # OWNING user's settings, never by a global switch.
+    simulation_mode = bool(getattr(settings, "simulation_mode", False))
+
     try:
         stored = load_wallet_credentials(user.wallet_address)
     except CredentialStoreError as exc:
         logger.warning("Inverse-bot credential store unavailable for user %s: %s", user_id, exc)
-        return
+        if not simulation_mode:
+            return
+        stored = {}
     if not stored:
-        for row in entries:
-            row.status = "error"
-            row.last_error = "No trading credentials found. Re-login required."
-            row.last_evaluated_at = utc_now()
-        db.commit()
-        return
+        if not simulation_mode:
+            for row in entries:
+                row.status = "error"
+                row.last_error = "No trading credentials found. Re-login required."
+                row.last_evaluated_at = utc_now()
+            db.commit()
+            return
+        # Paper mode needs no credentials: positions are read
+        # through the public data-API fallback.
+        stored = {}
 
     service = get_polymarket_service()
     try:
@@ -184,10 +218,14 @@ async def manual_evaluate_inverse_position(
     settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
     if not settings:
         return {"success": False, "detail": "User settings not found"}
-    row = db.query(InverseBotPosition).filter(
-        InverseBotPosition.id == row_id,
-        InverseBotPosition.user_id == user_id,
-    ).first()
+    row = (
+        db.query(InverseBotPosition)
+        .filter(
+            InverseBotPosition.id == row_id,
+            InverseBotPosition.user_id == user_id,
+        )
+        .first()
+    )
     if not row:
         return {"success": False, "detail": "Inverse bot position not found"}
 
@@ -221,12 +259,12 @@ async def evaluate_inverse_position_row(
     user: User,
     settings: UserSettings,
     row: InverseBotPosition,
-    stored_creds: Optional[dict],
+    stored_creds: dict | None,
     positions_by_token: dict[str, dict],
     force: bool = False,
 ) -> dict[str, Any]:
     _metric_inc("evaluations_total")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     previous_signal = row.last_signal
     row.last_evaluated_at = utc_now()
     row.last_error = None
@@ -331,39 +369,65 @@ async def evaluate_inverse_position_row(
 
     cooldown_min = int(settings.inverse_bot_cooldown_minutes or 30)
     if row.last_reversed_at:
-        seconds_since = (now - row.last_reversed_at.replace(tzinfo=timezone.utc)).total_seconds()
-        if seconds_since < cooldown_min * 60 and not force:
+        seconds_since = (now - row.last_reversed_at.replace(tzinfo=UTC)).total_seconds()
+        # `force` skips the configured cooldown but never the hard floor, so a
+        # burst of manual clicks cannot chain reversals back to back.
+        cooldown_seconds = cooldown_min * 60 if not force else HARD_MIN_COOLDOWN_SECONDS
+        if seconds_since < cooldown_seconds:
             row.status = "cooldown"
             db.commit()
-            return {"status": "cooldown", "seconds_remaining": cooldown_min * 60 - seconds_since}
+            return {"status": "cooldown", "seconds_remaining": cooldown_seconds - seconds_since}
 
-    today = date.today()
+    # Roll the daily counter on the UTC date, matching the cooldown arithmetic
+    # above. `date.today()` used the host's local zone, so on a UTC-7 host the
+    # counter reset seven hours early and allowed extra reversals per day.
+    today = utc_now().date()
     if row.reversals_day != today:
         row.reversals_day = today
         row.reversals_today = 0
-    if row.reversals_today >= int(settings.inverse_bot_max_reversals_per_day or 3) and not force:
+    # `force` may exceed the user's configured cap, but never the server cap.
+    effective_max_reversals = (
+        HARD_MAX_REVERSALS_PER_DAY
+        if force
+        else int(settings.inverse_bot_max_reversals_per_day or 3)
+    )
+    if row.reversals_today >= effective_max_reversals:
         row.status = "cooldown"
         db.commit()
         return {"status": "daily_cap_reached"}
 
-    if not stored_creds:
+    if not stored_creds and not getattr(settings, "simulation_mode", False):
         row.status = "error"
         row.last_error = "No trading credentials found. Re-login required."
         db.commit()
         return {"status": "error", "reason": row.last_error}
 
-    execution = _execute_reversal(
-        row=row,
-        settings=settings,
-        stored_creds=stored_creds,
-        from_size=size,
-        from_price=held_pct,
-        to_token_id=reverse_token["token_id"],
-        to_outcome=reverse_token["outcome"],
-        to_price=reverse_token["price"],
-        confidence=confidence,
-        recommendation=recommendation,
-    )
+    # Paper mode: the AI evaluation and every guardrail above
+    # ran unchanged — only the order submission is replaced by
+    # depth-aware simulated fills.
+    if getattr(settings, "simulation_mode", False):
+        execution = _simulate_reversal(
+            row=row,
+            settings=settings,
+            from_size=size,
+            from_price=held_pct,
+            to_token_id=reverse_token["token_id"],
+            to_outcome=reverse_token["outcome"],
+            to_price=reverse_token["price"],
+        )
+    else:
+        execution = _execute_reversal(
+            row=row,
+            settings=settings,
+            stored_creds=stored_creds,
+            from_size=size,
+            from_price=held_pct,
+            to_token_id=reverse_token["token_id"],
+            to_outcome=reverse_token["outcome"],
+            to_price=reverse_token["price"],
+            confidence=confidence,
+            recommendation=recommendation,
+        )
 
     action = InverseBotAction(
         inverse_bot_position_id=row.id,
@@ -381,11 +445,23 @@ async def evaluate_inverse_position_row(
         recommendation=recommendation,
         status=execution.get("status", "failed"),
         error=execution.get("error"),
-        executed_at=utc_now() if execution.get("status") in ("success", "sell_only") else None,
+        executed_at=utc_now()
+        if execution.get("status") in ("success", "sell_only", "simulated")
+        else None,
     )
     db.add(action)
 
     if execution.get("status") == "success":
+        row.status = "active"
+        row.token_id = reverse_token["token_id"]
+        row.outcome = reverse_token["outcome"]
+        row.last_reversed_at = utc_now()
+        row.reversals_today = int(row.reversals_today or 0) + 1
+        row.persistence_count = 0
+        _metric_inc("reversals_total")
+    elif execution.get("status") == "simulated":
+        # Paper reversal: same state transition as a live
+        # success, but no orders were submitted.
         row.status = "active"
         row.token_id = reverse_token["token_id"]
         row.outcome = reverse_token["outcome"]
@@ -409,13 +485,18 @@ async def evaluate_inverse_position_row(
     db.commit()
     db.refresh(action)
 
-    return {
+    result = {
         "status": execution.get("status", "failed"),
         "action_id": action.id,
         "sell_order_hash": execution.get("sell_order_hash"),
         "buy_order_hash": execution.get("buy_order_hash"),
         "buy_notional": execution.get("buy_notional"),
     }
+    if execution.get("simulated"):
+        # Paper mode only — the live-mode return contract
+        # stays unchanged.
+        result["simulated"] = True
+    return result
 
 
 async def _fetch_market_tokens(condition_id: str) -> dict[str, Any]:
@@ -435,11 +516,13 @@ async def _fetch_market_tokens(condition_id: str) -> dict[str, Any]:
                     price = float(t.get("price") or 0)
                 except (TypeError, ValueError):
                     price = 0.0
-                tokens.append({
-                    "token_id": token_id,
-                    "outcome": str(t.get("outcome") or ""),
-                    "price": price,
-                })
+                tokens.append(
+                    {
+                        "token_id": token_id,
+                        "outcome": str(t.get("outcome") or ""),
+                        "price": price,
+                    }
+                )
             return {"tokens": tokens, "question": payload.get("question", "")}
     except Exception:
         return {}
@@ -479,7 +562,9 @@ def _best_ask_for_token(token_id: str) -> float:
 def _resolve_size_mode(row: InverseBotPosition, settings: UserSettings) -> str:
     mode = (row.size_mode_override or "inherit").lower()
     if mode == "inherit":
-        return (settings.inverse_bot_default_size_mode or InverseBotSizeMode.FULL_NOTIONAL.value).lower()
+        return (
+            settings.inverse_bot_default_size_mode or InverseBotSizeMode.FULL_NOTIONAL.value
+        ).lower()
     return mode
 
 
@@ -561,6 +646,76 @@ def _execute_reversal(
         "sell_order_hash": sell.get("order_hash"),
         "buy_order_hash": buy.get("order_hash"),
         "buy_notional": buy_notional,
+    }
+
+
+def _simulate_reversal(
+    row: InverseBotPosition,
+    settings: UserSettings,
+    from_size: float,
+    from_price: float,
+    to_token_id: str,
+    to_outcome: str,
+    to_price: float,
+) -> dict[str, Any]:
+    """Paper mode: simulate both legs of the reversal.
+
+    The AI evaluation and every guardrail above this point ran
+    unchanged; only the order submission is replaced by
+    depth-aware simulated fills. Mirrors ``_execute_reversal``'s
+    return shape so the caller records the action identically,
+    with ``status="simulated"`` and no order hashes.
+    """
+    from app.services.simulation import simulate_fill
+
+    held_market = {"best_bid": from_price, "best_ask": from_price}
+    alt_market = {"best_bid": to_price, "best_ask": to_price}
+
+    sell_fill = simulate_fill(held_market, "SELL", from_size)
+
+    size_mode = _resolve_size_mode(row, settings)
+    if size_mode == InverseBotSizeMode.FIXED_AMOUNT.value:
+        buy_notional = float(
+            row.fixed_amount_override
+            if row.fixed_amount_override and row.fixed_amount_override > 0
+            else settings.inverse_bot_fixed_amount or 50.0
+        )
+    else:
+        buy_notional = max(MIN_BUY_NOTIONAL, (from_size * from_price) * (1.0 - BUY_SLIPPAGE_GUARD))
+
+    if buy_notional < MIN_BUY_NOTIONAL:
+        return {
+            "status": "sell_only",
+            "error": f"Buy notional below minimum (${buy_notional:.4f}) after sell.",
+            "sell_order_hash": None,
+            "buy_order_hash": None,
+            "buy_notional": buy_notional,
+            "simulated": True,
+            "sell_fill_price": sell_fill["fill_price"],
+        }
+
+    buy_fill = simulate_fill(alt_market, "BUY", buy_notional)
+
+    logger.info(
+        "SIMULATION: inverse bot user=%d simulated reversal %s→%s "
+        "(sell @ %.4f, buy @ %.4f, notional=%.2f)",
+        row.user_id,
+        row.token_id[:20],
+        to_token_id[:20],
+        sell_fill["fill_price"],
+        buy_fill["fill_price"],
+        buy_notional,
+    )
+
+    return {
+        "status": "simulated",
+        "error": None,
+        "sell_order_hash": None,
+        "buy_order_hash": None,
+        "buy_notional": buy_notional,
+        "simulated": True,
+        "sell_fill_price": sell_fill["fill_price"],
+        "buy_fill_price": buy_fill["fill_price"],
     }
 
 

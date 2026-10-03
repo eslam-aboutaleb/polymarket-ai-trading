@@ -1,32 +1,37 @@
+/**
+ * Market-scoped news panel showing the latest AI article for one Polymarket market.
+ *
+ * Fetches by conditionId on mount and can force regeneration; the long-form body, key insights,
+ * trader behaviour summary and market outlook render only once the card is expanded.
+ *
+ * @module components/MarketNewsPanel
+ */
 import { useEffect, useState } from "react";
-import {
-  getMarketNews,
-  generateForMarket,
-  type NewsArticle,
-} from "../services/newsService";
+import { getMarketNews, generateForMarket, type NewsArticle } from "../services/newsService";
 
 interface MarketNewsPanelProps {
   conditionId: string;
   question?: string;
 }
 
-export default function MarketNewsPanel({
-  conditionId,
-  question = "",
-}: MarketNewsPanelProps) {
+export default function MarketNewsPanel({ conditionId, question = "" }: MarketNewsPanelProps) {
   const [article, setArticle] = useState<NewsArticle | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setError(null);
     getMarketNews(conditionId)
       .then((res) => {
         if (!cancelled) setArticle(res.article);
       })
-      .catch(() => {})
+      .catch(() => {
+        if (!cancelled) setError("Failed to load market news.");
+      })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
@@ -63,7 +68,9 @@ export default function MarketNewsPanel({
     return (
       <div className="surface-panel p-3 rounded-lg">
         <div className="flex items-center justify-between">
-          <span className="text-xs text-muted">No news article yet</span>
+          <span className={`text-xs ${error ? "text-red-400" : "text-muted"}`}>
+            {error ?? "No news article yet"}
+          </span>
           <button
             onClick={handleGenerate}
             disabled={generating || !question}
@@ -86,9 +93,7 @@ export default function MarketNewsPanel({
   return (
     <div className="surface-panel p-4 rounded-lg space-y-2">
       <div className="flex items-start justify-between gap-2">
-        <h4 className="text-sm font-semibold text-heading leading-snug">
-          {article.headline}
-        </h4>
+        <h4 className="text-sm font-semibold text-heading leading-snug">{article.headline}</h4>
         <span
           className={`text-[10px] font-medium whitespace-nowrap ${sentimentColor[article.sentiment?.toLowerCase()] ?? "text-gray-400"}`}
         >
@@ -142,7 +147,7 @@ export default function MarketNewsPanel({
           </span>
           <button
             onClick={handleGenerate}
-            disabled={generating}
+            disabled={generating || !question}
             className="text-[10px] text-muted hover:text-accent disabled:opacity-50"
           >
             {generating ? "…" : "↻"}

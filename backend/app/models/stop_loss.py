@@ -1,9 +1,10 @@
 """StopLossOrder model – persistent stop-loss orders monitored in real-time."""
-from sqlalchemy import Column, String, Float, DateTime, Integer, ForeignKey, Boolean
+
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
-from datetime import datetime
-from app.utils.time import utc_now
+
 from app.models.base import Base
+from app.utils.time import utc_now
 
 
 class StopLossOrder(Base):

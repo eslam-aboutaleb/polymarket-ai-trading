@@ -1,3 +1,13 @@
+/**
+ * Hook that coalesces frequent text chunks into at most one state update per animation frame.
+ *
+ * Incoming chunks accumulate in a ref and are flushed via `requestAnimationFrame`, so SSE token
+ * streams do not re-render per fragment. `flushNow()` and `reset()` cancel any pending frame, and
+ * unmount cleanup cancels the outstanding callback.
+ *
+ * @module hooks/useRafBufferedText
+ */
+
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type Options = {
@@ -15,9 +25,7 @@ type UseRafBufferedTextResult = {
  * Buffers frequent text chunks and applies them at most once per animation frame.
  * This reduces render pressure for streaming UIs.
  */
-export function useRafBufferedText(
-  options: Options = {},
-): UseRafBufferedTextResult {
+export function useRafBufferedText(options: Options = {}): UseRafBufferedTextResult {
   const { initialText = "" } = options;
   const [text, setText] = useState(initialText);
   const pendingRef = useRef("");

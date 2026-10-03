@@ -1,10 +1,9 @@
 """Notification feed event model for followed trader activity."""
-from datetime import datetime
-from app.utils.time import utc_now
 
 from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
 
 from app.models.base import Base
+from app.utils.time import utc_now
 
 
 class NotificationFeedEvent(Base):
@@ -15,7 +14,7 @@ class NotificationFeedEvent(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     trader_wallet = Column(String(42), nullable=False, index=True)
-    event_type = Column(String(20), nullable=False)  # opened | closed
+    event_type = Column(String(40), nullable=False)  # opened | closed | alert catalog
     market_id = Column(String(200), nullable=False, default="")
     token_id = Column(String(200), nullable=False, default="")
     side = Column(String(20), nullable=False, default="")
@@ -36,6 +35,7 @@ class NotificationFeedEvent(Base):
     )
     email_error = Column(Text, nullable=True)
     emailed_at = Column(DateTime(timezone=True), nullable=True)
+    read_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     def __repr__(self):

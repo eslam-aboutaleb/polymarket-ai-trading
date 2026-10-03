@@ -1,9 +1,19 @@
+/**
+ * Main portfolio dashboard: balances, positions, following feed, risk ops and trending markets.
+ *
+ * Position prices arrive over the SSE price stream (`usePriceStream`) and
+ * drive the flash animation; a 1s tick loop drives staggered polls for the
+ * following feed (15s) and active stop-losses (10s), pausing while the tab
+ * is hidden. When the price stream drops, the hook falls back to the 15s
+ * price poll and the UI shows a "Delayed" indicator. Positions expose
+ * CashOutModal, StopLossModal, PositionAnalysisPopup and per-position
+ * inverse-bot controls, which explain the latest evaluation through
+ * `analysisService.quickAnalysis`.
+ *
+ * @module components/Dashboard
+ */
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
-import {
-  portfolioService,
-  PortfolioSummary,
-  PolymarketMarket,
-} from "../services/portfolioService";
+import { portfolioService, PortfolioSummary, PolymarketMarket } from "../services/portfolioService";
 import { stopLossService, StopLossOrder } from "../services/stopLossService";
 import {
   inverseBotService,
@@ -13,15 +23,18 @@ import {
 import { emergencyService, ArbitrageOpportunity } from "../services/emergencyService";
 import { FollowingFeedEvent, tradesService } from "../services/tradesService";
 import { analysisService } from "../services/analysisService";
+import { getPaperSummary, PaperSummary } from "../services/settingsService";
 import { useAuthStore } from "../store/authStore";
+import { usePriceStream } from "../hooks/usePriceStream";
 import { getApiErrorMessage } from "../utils/apiError";
 import CashOutModal from "./CashOutModal";
 import StopLossModal from "./StopLossModal";
 import PositionAnalysisPopup, {
   PositionForAnalysis,
+  extractFirstJsonObject,
 } from "./PositionAnalysisPopup";
+import ErrorBoundary from "./ErrorBoundary";
 
-const PRICE_POLL_INTERVAL = 15_000; // 15 seconds
 const STOP_LOSS_POLL_INTERVAL = 10_000; // 10 seconds – match backend check
 const FOLLOWING_FEED_POLL_INTERVAL = 15_000;
 
@@ -36,7 +49,7 @@ type InverseExplanationView = {
   updated_at: string;
 };
 
-export default function Dashboard() {
+function DashboardContent() {
   const { walletAddress, isAuthenticated } = useAuthStore();
   const [portfolio, setPortfolio] = useState<PortfolioSummary | null>(null);
   const [markets, setMarkets] = useState<PolymarketMarket[]>([]);
@@ -44,21 +57,19 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [followingFeed, setFollowingFeed] = useState<FollowingFeedEvent[]>([]);
   const [followingFeedLoading, setFollowingFeedLoading] = useState(false);
-  const [followingFeedError, setFollowingFeedError] = useState<string | null>(
-    null,
-  );
+  const [followingFeedError, setFollowingFeedError] = useState<string | null>(null);
   const [riskOpsBusy, setRiskOpsBusy] = useState<string | null>(null);
   const [riskOpsMessage, setRiskOpsMessage] = useState<string | null>(null);
   const [arbitrageRows, setArbitrageRows] = useState<ArbitrageOpportunity[]>([]);
-  const [feedEventTypeFilter, setFeedEventTypeFilter] = useState<
-    "all" | "opened" | "closed"
-  >("all");
+  const [paperSummary, setPaperSummary] = useState<PaperSummary | null>(null);
+  const [feedEventTypeFilter, setFeedEventTypeFilter] = useState<"all" | "opened" | "closed">(
+    "all",
+  );
   const [feedWalletFilter, setFeedWalletFilter] = useState("");
   // Track which asset_ids just got a price change for flash animation
   const [flashIds, setFlashIds] = useState<Set<string>>(new Set());
   const prevPricesRef = useRef<Record<string, number>>({});
   const flashResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pricesInFlightRef = useRef(false);
   const followingFeedInFlightRef = useRef(false);
   const stopLossInFlightRef = useRef(false);
 
@@ -71,117 +82,133 @@ export default function Dashboard() {
     [],
   );
 
-  useEffect(() => {
-    if (isAuthenticated && walletAddress) {
-      fetchData();
-    }
-  }, [walletAddress, isAuthenticated]);
-
-  const refreshPositionPrices = useCallback(async () => {
-    if (
-      !isAuthenticated ||
-      !portfolio?.positions?.length ||
-      pricesInFlightRef.current
-    ) {
-      return;
-    }
-    pricesInFlightRef.current = true;
-    try {
-      const { prices } = await portfolioService.refreshPositionPrices();
-      if (!prices || Object.keys(prices).length === 0) return;
-
-      setPortfolio((prev) => {
-        if (!prev) return prev;
-        const changed = new Set<string>();
-        const updated = prev.positions.map((pos: any) => {
-          const aid = pos.asset_id;
-          if (!aid || !(aid in prices)) return pos;
-          const newPrice = prices[aid];
-          const oldPrice = prevPricesRef.current[aid] ?? pos.curPrice ?? 0;
-          if (Math.abs(newPrice - oldPrice) > 0.0001) {
-            changed.add(aid);
-          }
-          prevPricesRef.current[aid] = newPrice;
-
-          const size = Number(pos.size || 0);
-          const avgPrice = Number(pos.avgPrice || 0);
-          const invested = size * avgPrice;
-          const value = size * newPrice;
-          return {
-            ...pos,
-            curPrice: newPrice,
-            pnl: +(value - invested).toFixed(4),
-          };
-        });
-
-        if (changed.size > 0) {
-          setFlashIds(changed);
-          if (flashResetTimerRef.current) {
-            clearTimeout(flashResetTimerRef.current);
-          }
-          flashResetTimerRef.current = setTimeout(() => {
-            setFlashIds(new Set());
-            flashResetTimerRef.current = null;
-          }, 900);
-        }
-
-        // Recalculate summary totals
-        let totalInvested = 0;
-        let totalValue = 0;
-        let active = 0;
-        for (const p of updated) {
-          const s = Number((p as any).size || 0);
-          const ap = Number((p as any).avgPrice || 0);
-          const cp = Number((p as any).curPrice || ap);
-          totalInvested += s * ap;
-          totalValue += s * cp;
-          if (s > 0) active++;
-        }
-        const totalPnl = totalValue - totalInvested;
-        const pnlPct = totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0;
-
-        return {
-          ...prev,
-          positions: updated,
-          active_positions: active,
-          total_invested: +totalInvested.toFixed(2),
-          total_current_value: +totalValue.toFixed(2),
-          total_pnl: +totalPnl.toFixed(2),
-          pnl_percentage: +pnlPct.toFixed(2),
-        };
-      });
-    } catch {
-      // Silently ignore price poll errors
-    } finally {
-      pricesInFlightRef.current = false;
-    }
-  }, [isAuthenticated, portfolio?.positions?.length]);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
 
     try {
-      const [summaryResult, marketsResult] = await Promise.allSettled([
+      const [summaryResult, marketsResult, paperResult] = await Promise.allSettled([
         portfolioService.getSummary(),
         portfolioService.getActiveMarkets(6),
+        getPaperSummary(),
       ]);
 
       if (summaryResult.status === "fulfilled") {
         setPortfolio(summaryResult.value);
       } else {
         console.error("Failed to load portfolio:", summaryResult.reason);
+        setError(getApiErrorMessage(summaryResult.reason, "Failed to load portfolio"));
       }
 
       if (marketsResult.status === "fulfilled") {
         setMarkets(marketsResult.value.markets || []);
+      }
+
+      if (paperResult.status === "fulfilled") {
+        setPaperSummary(paperResult.value);
       }
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to load dashboard data"));
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (isAuthenticated && walletAddress) {
+      fetchData();
+    }
+  }, [walletAddress, isAuthenticated, fetchData]);
+
+  // Token ids of the open positions — the price stream subscription set.
+  const positionTokenIds = useMemo(
+    () =>
+      (portfolio?.positions || []).map((pos: any) => String(pos.asset_id || "")).filter(Boolean),
+    [portfolio?.positions],
+  );
+
+  /** Apply a batch of position prices (stream ticks or poll snapshot). */
+  const applyPriceBatch = useCallback((prices: Record<string, number>) => {
+    setPortfolio((prev) => {
+      if (!prev) return prev;
+      const changed = new Set<string>();
+      const updated = prev.positions.map((pos: any) => {
+        const aid = pos.asset_id;
+        if (!aid || !(aid in prices)) return pos;
+        const newPrice = prices[aid];
+        const oldPrice = prevPricesRef.current[aid] ?? pos.curPrice ?? 0;
+        if (Math.abs(newPrice - oldPrice) > 0.0001) {
+          changed.add(aid);
+        }
+        prevPricesRef.current[aid] = newPrice;
+
+        const size = Number(pos.size || 0);
+        const avgPrice = Number(pos.avgPrice || 0);
+        const invested = size * avgPrice;
+        const value = size * newPrice;
+        return {
+          ...pos,
+          curPrice: newPrice,
+          pnl: +(value - invested).toFixed(4),
+        };
+      });
+
+      if (changed.size > 0) {
+        setFlashIds(changed);
+        if (flashResetTimerRef.current) {
+          clearTimeout(flashResetTimerRef.current);
+        }
+        flashResetTimerRef.current = setTimeout(() => {
+          setFlashIds(new Set());
+          flashResetTimerRef.current = null;
+        }, 900);
+      }
+
+      // Recalculate summary totals
+      let totalInvested = 0;
+      let totalValue = 0;
+      let active = 0;
+      for (const p of updated) {
+        const s = Number((p as any).size || 0);
+        const ap = Number((p as any).avgPrice || 0);
+        const cp = Number((p as any).curPrice || ap);
+        totalInvested += s * ap;
+        totalValue += s * cp;
+        if (s > 0) active++;
+      }
+      const totalPnl = totalValue - totalInvested;
+      const pnlPct = totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0;
+
+      return {
+        ...prev,
+        positions: updated,
+        active_positions: active,
+        total_invested: +totalInvested.toFixed(2),
+        total_current_value: +totalValue.toFixed(2),
+        total_pnl: +totalPnl.toFixed(2),
+        pnl_percentage: +pnlPct.toFixed(2),
+      };
+    });
+  }, []);
+
+  /** Polling fallback while the SSE price stream is down. */
+  const fallbackPositionPoll = useCallback(async () => {
+    if (!isAuthenticated || !portfolio?.positions?.length) return {};
+    try {
+      const { prices } = await portfolioService.refreshPositionPrices();
+      return prices || {};
+    } catch {
+      // Silently ignore price poll errors — retried on the next tick.
+      return {};
+    }
+  }, [isAuthenticated, portfolio?.positions?.length]);
+
+  const { status: priceStreamStatus } = usePriceStream({
+    tokenIds: positionTokenIds,
+    enabled: isAuthenticated && !!walletAddress && positionTokenIds.length > 0,
+    fallbackPoll: fallbackPositionPoll,
+    onPrices: applyPriceBatch,
+  });
 
   const fetchFollowingFeed = useCallback(
     async ({ silent = false }: { silent?: boolean } = {}) => {
@@ -199,9 +226,7 @@ export default function Dashboard() {
         setFollowingFeed(rows);
         setFollowingFeedError(null);
       } catch (err: unknown) {
-        setFollowingFeedError(
-          getApiErrorMessage(err, "Failed to load following feed"),
-        );
+        setFollowingFeedError(getApiErrorMessage(err, "Failed to load following feed"));
       } finally {
         followingFeedInFlightRef.current = false;
         if (!silent) {
@@ -294,31 +319,31 @@ export default function Dashboard() {
   const [stopLossPosition, setStopLossPosition] = useState<any | null>(null);
 
   // ── AI Analysis popup state ──
-  const [analysisPosition, setAnalysisPosition] =
-    useState<PositionForAnalysis | null>(null);
+  const [analysisPosition, setAnalysisPosition] = useState<PositionForAnalysis | null>(null);
   const [analysisClickCoords, setAnalysisClickCoords] = useState<{
     x: number;
     y: number;
   }>({ x: 0, y: 0 });
 
+  // Live-updating copy of the analyzed position, looked up by asset_id so
+  // the popup's entry/current price and P&L keep updating while it is open.
+  const analysisLivePosition = useMemo<PositionForAnalysis | null>(() => {
+    const assetId = analysisPosition?.asset_id;
+    if (!assetId) return null;
+    const live = (portfolio?.positions || []).find((pos: any) => pos.asset_id === assetId);
+    return live ? (live as PositionForAnalysis) : null;
+  }, [analysisPosition, portfolio?.positions]);
+
   // ── Active stop-losses ──
   const [activeStopLosses, setActiveStopLosses] = useState<StopLossOrder[]>([]);
-  const [inverseBotPositions, setInverseBotPositions] = useState<
-    InverseBotPosition[]
-  >([]);
+  const [inverseBotPositions, setInverseBotPositions] = useState<InverseBotPosition[]>([]);
   const [inverseBusyToken, setInverseBusyToken] = useState<string | null>(null);
-  const [inverseInfoHoverToken, setInverseInfoHoverToken] = useState<
-    string | null
-  >(null);
-  const [inverseInfoPinnedToken, setInverseInfoPinnedToken] = useState<
-    string | null
-  >(null);
+  const [inverseInfoHoverToken, setInverseInfoHoverToken] = useState<string | null>(null);
+  const [inverseInfoPinnedToken, setInverseInfoPinnedToken] = useState<string | null>(null);
   const [inverseExplainByToken, setInverseExplainByToken] = useState<
     Record<string, InverseExplanationView>
   >({});
-  const [inverseExplainLoadingToken, setInverseExplainLoadingToken] = useState<
-    string | null
-  >(null);
+  const [inverseExplainLoadingToken, setInverseExplainLoadingToken] = useState<string | null>(null);
   const [inverseExplainErrorByToken, setInverseExplainErrorByToken] = useState<
     Record<string, string>
   >({});
@@ -354,7 +379,6 @@ export default function Dashboard() {
     if (!isAuthenticated) return;
 
     const lastRunAt = {
-      prices: 0,
       followingFeed: 0,
       stopLosses: 0,
     };
@@ -372,19 +396,10 @@ export default function Dashboard() {
         lastRunAt.followingFeed = now;
         void fetchFollowingFeed({ silent: true });
       }
-
-      if (
-        portfolio?.positions?.length &&
-        now - lastRunAt.prices >= PRICE_POLL_INTERVAL
-      ) {
-        lastRunAt.prices = now;
-        void refreshPositionPrices();
-      }
     };
 
     const forceRefreshNow = () => {
       if (document.visibilityState !== "visible") return;
-      lastRunAt.prices = 0;
       lastRunAt.followingFeed = 0;
       lastRunAt.stopLosses = 0;
       tick();
@@ -392,9 +407,6 @@ export default function Dashboard() {
 
     void fetchStopLosses();
     void fetchFollowingFeed();
-    if (portfolio?.positions?.length) {
-      void refreshPositionPrices();
-    }
 
     const id = window.setInterval(tick, 1000);
     document.addEventListener("visibilitychange", forceRefreshNow);
@@ -402,13 +414,7 @@ export default function Dashboard() {
       window.clearInterval(id);
       document.removeEventListener("visibilitychange", forceRefreshNow);
     };
-  }, [
-    fetchFollowingFeed,
-    fetchStopLosses,
-    isAuthenticated,
-    portfolio?.positions?.length,
-    refreshPositionPrices,
-  ]);
+  }, [fetchFollowingFeed, fetchStopLosses, isAuthenticated]);
 
   /** Find active stop-loss for a position by token_id */
   const getStopLossForPosition = (pos: any): StopLossOrder | undefined => {
@@ -416,9 +422,7 @@ export default function Dashboard() {
     return activeStopLosses.find((sl) => sl.token_id === tokenId);
   };
 
-  const getInverseBotForPosition = (
-    pos: any,
-  ): InverseBotPosition | undefined => {
+  const getInverseBotForPosition = (pos: any): InverseBotPosition | undefined => {
     const tokenId = String(pos.asset_id || pos.token_id || "");
     return inverseBotPositions.find((row) => row.token_id === tokenId);
   };
@@ -446,13 +450,9 @@ export default function Dashboard() {
       outcome: String(pos.outcome || ""),
       enabled: overrides?.enabled ?? existing?.enabled ?? true,
       size_mode_override:
-        overrides?.size_mode_override ??
-        existing?.size_mode_override ??
-        "inherit",
+        overrides?.size_mode_override ?? existing?.size_mode_override ?? "inherit",
       fixed_amount_override:
-        overrides?.fixed_amount_override ??
-        existing?.fixed_amount_override ??
-        null,
+        overrides?.fixed_amount_override ?? existing?.fixed_amount_override ?? null,
     };
 
     setInverseBusyToken(tokenId);
@@ -461,9 +461,7 @@ export default function Dashboard() {
       await fetchInverseBotPositions();
       return true;
     } catch (err: unknown) {
-      setError(
-        getApiErrorMessage(err, "Failed to update inverse bot settings"),
-      );
+      setError(getApiErrorMessage(err, "Failed to update inverse bot settings"));
       return false;
     } finally {
       setInverseBusyToken(null);
@@ -556,17 +554,10 @@ export default function Dashboard() {
     inverse?: InverseBotPosition,
   ) => {
     if (!inverse) return;
-    if (
-      inverseExplainByToken[tokenId] ||
-      inverseExplainLoadingToken === tokenId
-    ) {
+    if (inverseExplainByToken[tokenId] || inverseExplainLoadingToken === tokenId) {
       return;
     }
-    if (
-      !inverse.last_evaluated_at &&
-      inverse.last_confidence == null &&
-      !inverse.last_reasoning
-    ) {
+    if (!inverse.last_evaluated_at && inverse.last_confidence == null && !inverse.last_reasoning) {
       setInverseExplainByToken((prev) => ({
         ...prev,
         [tokenId]: {
@@ -587,9 +578,7 @@ export default function Dashboard() {
       decision: String(inverse.last_recommendation || "hold"),
       why: String(inverse.last_reasoning || "No model reasoning available."),
       confidence:
-        inverse.last_confidence != null
-          ? `${inverse.last_confidence.toFixed(0)}%`
-          : "Unknown",
+        inverse.last_confidence != null ? `${inverse.last_confidence.toFixed(0)}%` : "Unknown",
       market_signal: String(inverse.last_signal || "No signal captured"),
       web_signal: String(inverse.last_web_summary || "No web summary"),
       x_signal: String(inverse.last_x_summary || "No X summary"),
@@ -621,14 +610,10 @@ export default function Dashboard() {
     try {
       const resp = await analysisService.quickAnalysis({
         question: prompt,
-        current_price: Math.max(
-          0,
-          Math.min(1, (inverse.last_confidence ?? 50) / 100),
-        ),
+        current_price: Math.max(0, Math.min(1, (inverse.last_confidence ?? 50) / 100)),
       });
       const text = String(resp?.data?.analysis || "");
-      const match = text.match(/\{[\s\S]*\}/);
-      const parsed = match ? JSON.parse(match[0]) : null;
+      const parsed = extractFirstJsonObject(text);
       setInverseExplainByToken((prev) => ({
         ...prev,
         [tokenId]:
@@ -636,22 +621,12 @@ export default function Dashboard() {
             ? {
                 decision: String(parsed.decision || fallbackExplain.decision),
                 why: String(parsed.why || fallbackExplain.why),
-                confidence: String(
-                  parsed.confidence || fallbackExplain.confidence,
-                ),
-                market_signal: String(
-                  parsed.market_signal || fallbackExplain.market_signal,
-                ),
-                web_signal: String(
-                  parsed.web_signal || fallbackExplain.web_signal,
-                ),
+                confidence: String(parsed.confidence || fallbackExplain.confidence),
+                market_signal: String(parsed.market_signal || fallbackExplain.market_signal),
+                web_signal: String(parsed.web_signal || fallbackExplain.web_signal),
                 x_signal: String(parsed.x_signal || fallbackExplain.x_signal),
-                next_checks: String(
-                  parsed.next_checks || fallbackExplain.next_checks,
-                ),
-                updated_at: String(
-                  parsed.updated_at || fallbackExplain.updated_at,
-                ),
+                next_checks: String(parsed.next_checks || fallbackExplain.next_checks),
+                updated_at: String(parsed.updated_at || fallbackExplain.updated_at),
               }
             : fallbackExplain,
       }));
@@ -675,7 +650,11 @@ export default function Dashboard() {
   const followingFeedWalletOptions = useMemo(
     () =>
       Array.from(
-        new Set(followingFeed.map((row) => row.trader_wallet.toLowerCase())),
+        new Set(
+          followingFeed
+            .map((row) => row.trader_wallet?.toLowerCase() ?? "")
+            .filter((wallet) => wallet.length > 0),
+        ),
       ).sort(),
     [followingFeed],
   );
@@ -721,9 +700,7 @@ export default function Dashboard() {
         {/* Portfolio Balance */}
         <div className="surface-panel p-6">
           <h3 className="text-soft text-sm font-medium mb-2">USDC Balance</h3>
-          <p className="text-3xl font-bold">
-            {formatUSD(portfolio?.usdc_balance ?? 0)}
-          </p>
+          <p className="text-3xl font-bold">{formatUSD(portfolio?.usdc_balance ?? 0)}</p>
           <p className="text-muted text-sm mt-2">
             {portfolio?.matic_balance?.toFixed(4) ?? "0"} MATIC
           </p>
@@ -731,12 +708,8 @@ export default function Dashboard() {
 
         {/* Positions */}
         <div className="surface-panel p-6">
-          <h3 className="text-soft text-sm font-medium mb-2">
-            Active Positions
-          </h3>
-          <p className="text-3xl font-bold">
-            {portfolio?.active_positions ?? 0}
-          </p>
+          <h3 className="text-soft text-sm font-medium mb-2">Active Positions</h3>
+          <p className="text-3xl font-bold">{portfolio?.active_positions ?? 0}</p>
           <p className="text-muted text-sm mt-2">
             {portfolio?.total_positions ?? 0} total positions
           </p>
@@ -752,26 +725,35 @@ export default function Dashboard() {
           >
             {formatPnL(portfolio?.total_pnl ?? 0)}
           </p>
-          <p className="text-muted text-sm mt-2">
-            {(portfolio?.pnl_percentage ?? 0).toFixed(1)}%
-          </p>
+          <p className="text-muted text-sm mt-2">{(portfolio?.pnl_percentage ?? 0).toFixed(1)}%</p>
         </div>
+
+        {/* Paper P&L — shown separately from real P&L in paper mode */}
+        {paperSummary?.simulation_mode && (
+          <div className="surface-panel p-6">
+            <h3 className="text-soft text-sm font-medium mb-2">Paper P&L</h3>
+            <p
+              className={`text-3xl font-bold ${
+                (paperSummary.paper_pnl ?? 0) >= 0 ? "status-good" : "status-bad"
+              }`}
+            >
+              {formatPnL(paperSummary.paper_pnl ?? 0)}
+            </p>
+            <p className="text-muted text-sm mt-2">
+              Paper balance: {formatUSD(paperSummary.paper_balance ?? 0)} ·{" "}
+              {paperSummary.simulated_trades ?? 0} simulated trades
+            </p>
+          </div>
+        )}
 
         {/* Win Rate */}
         <div className="surface-panel p-6">
           <h3 className="text-soft text-sm font-medium mb-2">Win Rate</h3>
-          <p className="text-3xl font-bold">
-            {`${(portfolio?.win_rate ?? 0).toFixed(0)}%`}
-          </p>
+          <p className="text-3xl font-bold">{`${(portfolio?.win_rate ?? 0).toFixed(0)}%`}</p>
           <p className="text-muted text-sm mt-2">
-            {portfolio?.wins_positions_history ??
-              portfolio?.wins_positions ??
-              0}
-            /
-            {portfolio?.total_positions_history ??
-              portfolio?.resolved_trades ??
-              0}{" "}
-            winning closed / total history
+            {portfolio?.wins_positions_history ?? portfolio?.wins_positions ?? 0}/
+            {portfolio?.total_positions_history ?? portfolio?.resolved_trades ?? 0} winning closed /
+            total history
           </p>
         </div>
       </div>
@@ -790,9 +772,7 @@ export default function Dashboard() {
             disabled={riskOpsBusy !== null}
             className="btn-danger text-xs"
           >
-            {riskOpsBusy === "emergency"
-              ? "Running..."
-              : "Emergency Stop + Close Positions"}
+            {riskOpsBusy === "emergency" ? "Running..." : "Emergency Stop + Close Positions"}
           </button>
           <button
             onClick={handleResumeTrading}
@@ -813,9 +793,7 @@ export default function Dashboard() {
             disabled={riskOpsBusy !== null}
             className="btn-muted text-xs"
           >
-            {riskOpsBusy === "scan_arbitrage"
-              ? "Scanning..."
-              : "Scan Arbitrage Now"}
+            {riskOpsBusy === "scan_arbitrage" ? "Scanning..." : "Scan Arbitrage Now"}
           </button>
           <button
             onClick={refreshArbitrageFeed}
@@ -832,9 +810,7 @@ export default function Dashboard() {
           </p>
         )}
 
-        <p className="text-xs text-soft">
-          Arbitrage opportunities tracked: {arbitrageRows.length}
-        </p>
+        <p className="text-xs text-soft">Arbitrage opportunities tracked: {arbitrageRows.length}</p>
       </div>
 
       <div className="surface-panel p-6">
@@ -844,9 +820,7 @@ export default function Dashboard() {
             <select
               value={feedEventTypeFilter}
               onChange={(e) =>
-                setFeedEventTypeFilter(
-                  e.target.value as "all" | "opened" | "closed",
-                )
+                setFeedEventTypeFilter(e.target.value as "all" | "opened" | "closed")
               }
               className="bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-1.5 text-xs"
             >
@@ -877,43 +851,31 @@ export default function Dashboard() {
         </div>
 
         {followingFeedError && (
-          <div className="p-3 alert-error rounded text-xs mb-3">
-            {followingFeedError}
-          </div>
+          <div className="p-3 alert-error rounded text-xs mb-3">{followingFeedError}</div>
         )}
 
         {followingFeed.length === 0 ? (
-          <div className="text-soft text-sm py-4">
-            No followed-trader events yet.
-          </div>
+          <div className="text-soft text-sm py-4">No followed-trader events yet.</div>
         ) : (
           <div className="space-y-2 max-h-80 overflow-y-auto scroll-soft">
             {followingFeed.map((row) => (
-              <div
-                key={row.id}
-                className="surface-soft p-3 rounded border border-[var(--line)]"
-              >
+              <div key={row.id} className="surface-soft p-3 rounded border border-[var(--line)]">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-xs text-white">
-                      <span className="mono">
-                        {shortAddressValue(row.trader_wallet)}
-                      </span>{" "}
+                      <span className="mono">{shortAddressValue(row.trader_wallet)}</span>{" "}
                       <span
                         className={`chip ml-2 text-[10px] ${
-                          row.event_type === "opened"
-                            ? "chip-success"
-                            : "chip-danger"
+                          row.event_type === "opened" ? "chip-success" : "chip-danger"
                         }`}
                       >
                         {row.event_type}
                       </span>
                     </p>
                     <p className="text-[11px] text-muted mt-1">
-                      Market:{" "}
-                      {row.market_id ? shortAddressValue(row.market_id) : "—"} ·
-                      Side: {row.side || "—"} · Size: {row.size.toFixed(4)} ·
-                      Price: {row.price.toFixed(4)}
+                      Market: {row.market_id ? shortAddressValue(row.market_id) : "—"} · Side:{" "}
+                      {row.side || "—"} · Size: {row.size.toFixed(4)} · Price:{" "}
+                      {row.price.toFixed(4)}
                     </p>
                   </div>
                   <p className="text-[11px] text-muted">
@@ -930,7 +892,23 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Positions */}
         <div className="surface-panel p-6">
-          <h2 className="text-xl font-bold mb-4">Your Positions</h2>
+          <div className="flex items-center gap-2 mb-4">
+            <h2 className="text-xl font-bold">Your Positions</h2>
+            {positionTokenIds.length > 0 && (
+              <span
+                className={`chip text-[10px] ${
+                  priceStreamStatus === "live" ? "chip-success" : "chip-warning"
+                }`}
+                title={
+                  priceStreamStatus === "live"
+                    ? "Prices streaming live over SSE"
+                    : "Price stream unavailable — polling every 15s"
+                }
+              >
+                {priceStreamStatus === "live" ? "Live" : "Delayed"}
+              </span>
+            )}
+          </div>
           {portfolio?.positions && portfolio.positions.length > 0 ? (
             <div className="space-y-3 max-h-80 overflow-y-auto scroll-soft">
               {portfolio.positions.map((pos: any, idx: number) => {
@@ -951,15 +929,10 @@ export default function Dashboard() {
                     <div className="flex justify-between items-start mb-3">
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold text-white truncate mb-1">
-                          {pos.title ||
-                            pos.market ||
-                            pos.asset ||
-                            `Position #${idx + 1}`}
+                          {pos.title || pos.market || pos.asset || `Position #${idx + 1}`}
                         </p>
                         {pos.outcome && (
-                          <span className="chip chip-accent inline-block">
-                            {pos.outcome}
-                          </span>
+                          <span className="chip chip-accent inline-block">{pos.outcome}</span>
                         )}
                       </div>
                     </div>
@@ -1004,18 +977,13 @@ export default function Dashboard() {
                       </div>
                       <div>
                         <span className="text-muted">Current: </span>
-                        <span
-                          className={`font-medium ${isFlashing ? "price-flash" : "text-soft"}`}
-                        >
+                        <span className={`font-medium ${isFlashing ? "price-flash" : "text-soft"}`}>
                           {(curPrice * 100).toFixed(1)}¢
                         </span>
                       </div>
                       <div>
-                        <span
-                          className={pnl >= 0 ? "status-good" : "status-bad"}
-                        >
-                          {pnl >= 0 ? "↑" : "↓"}{" "}
-                          {(Math.abs(curPrice - avgPrice) * 100).toFixed(1)}¢
+                        <span className={pnl >= 0 ? "status-good" : "status-bad"}>
+                          {pnl >= 0 ? "↑" : "↓"} {(Math.abs(curPrice - avgPrice) * 100).toFixed(1)}¢
                         </span>
                       </div>
                     </div>
@@ -1030,8 +998,7 @@ export default function Dashboard() {
                             <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
                           </span>
                           <span className="text-red-300 font-medium">
-                            Stop loss active at{" "}
-                            {(sl.stop_price * 100).toFixed(0)}¢
+                            Stop loss active at {(sl.stop_price * 100).toFixed(0)}¢
                           </span>
                         </div>
                       ) : null;
@@ -1039,14 +1006,11 @@ export default function Dashboard() {
 
                     {(() => {
                       const inverse = getInverseBotForPosition(pos);
-                      const tokenId = String(
-                        pos.asset_id || pos.token_id || "",
-                      );
+                      const tokenId = String(pos.asset_id || pos.token_id || "");
                       const isBusy = inverseBusyToken === tokenId;
                       const enabled = !!inverse?.enabled;
                       const infoOpen =
-                        inverseInfoPinnedToken === tokenId ||
-                        inverseInfoHoverToken === tokenId;
+                        inverseInfoPinnedToken === tokenId || inverseInfoHoverToken === tokenId;
                       return (
                         <div className="mb-3 p-3 rounded-lg border border-[var(--line)] bg-[var(--bg-soft)] space-y-2">
                           <div className="flex items-center justify-between">
@@ -1059,15 +1023,9 @@ export default function Dashboard() {
                                   className="relative"
                                   onMouseEnter={() => {
                                     setInverseInfoHoverToken(tokenId);
-                                    ensureInverseExplanation(
-                                      tokenId,
-                                      pos,
-                                      inverse,
-                                    );
+                                    ensureInverseExplanation(tokenId, pos, inverse);
                                   }}
-                                  onMouseLeave={() =>
-                                    setInverseInfoHoverToken(null)
-                                  }
+                                  onMouseLeave={() => setInverseInfoHoverToken(null)}
                                 >
                                   <button
                                     type="button"
@@ -1077,11 +1035,7 @@ export default function Dashboard() {
                                         setInverseInfoPinnedToken(null);
                                       } else {
                                         setInverseInfoPinnedToken(tokenId);
-                                        ensureInverseExplanation(
-                                          tokenId,
-                                          pos,
-                                          inverse,
-                                        );
+                                        ensureInverseExplanation(tokenId, pos, inverse);
                                       }
                                     }}
                                     className="w-5 h-5 rounded-full border border-[var(--line-strong)] text-[11px] text-soft hover:text-white hover:border-[var(--accent)] transition"
@@ -1095,14 +1049,11 @@ export default function Dashboard() {
                                           Inverse Bot Evaluation
                                         </p>
                                       </div>
-                                      {inverseExplainLoadingToken ===
-                                      tokenId ? (
+                                      {inverseExplainLoadingToken === tokenId ? (
                                         <p className="text-[11px] text-muted p-3">
                                           Generating explanation...
                                         </p>
-                                      ) : inverseExplainErrorByToken[
-                                          tokenId
-                                        ] ? (
+                                      ) : inverseExplainErrorByToken[tokenId] ? (
                                         <p className="text-[11px] text-red-300 p-3">
                                           {inverseExplainErrorByToken[tokenId]}
                                         </p>
@@ -1111,11 +1062,8 @@ export default function Dashboard() {
                                           <table className="table-theme text-[11px] w-full">
                                             <tbody>
                                               {Object.entries(
-                                                inverseExplainByToken[
-                                                  tokenId
-                                                ] || {
-                                                  decision:
-                                                    "No explanation available yet.",
+                                                inverseExplainByToken[tokenId] || {
+                                                  decision: "No explanation available yet.",
                                                   why: "-",
                                                   confidence: "-",
                                                   market_signal: "-",
@@ -1129,9 +1077,7 @@ export default function Dashboard() {
                                                   <td className="p-2 text-muted capitalize">
                                                     {key.replace(/_/g, " ")}
                                                   </td>
-                                                  <td className="p-2 text-soft">
-                                                    {String(value)}
-                                                  </td>
+                                                  <td className="p-2 text-soft">{String(value)}</td>
                                                 </tr>
                                               ))}
                                             </tbody>
@@ -1144,15 +1090,11 @@ export default function Dashboard() {
                               )}
                             </div>
                             <label className="flex items-center gap-2 cursor-pointer">
-                              <span className="text-xs text-muted">
-                                {enabled ? "On" : "Off"}
-                              </span>
+                              <span className="text-xs text-muted">{enabled ? "On" : "Off"}</span>
                               <input
                                 type="checkbox"
                                 checked={enabled}
-                                onChange={(e) =>
-                                  toggleInverseBot(pos, e.target.checked)
-                                }
+                                onChange={(e) => toggleInverseBot(pos, e.target.checked)}
                                 disabled={isBusy}
                                 className="w-4 h-4 accent-[var(--accent)]"
                               />
@@ -1160,9 +1102,7 @@ export default function Dashboard() {
                           </div>
 
                           <div className="flex items-center justify-between gap-2">
-                            <span
-                              className={`chip ${inverseStatusClass(inverse?.status)}`}
-                            >
+                            <span className={`chip ${inverseStatusClass(inverse?.status)}`}>
                               {inverse?.status || "inactive"}
                             </span>
                             <button
@@ -1180,29 +1120,23 @@ export default function Dashboard() {
                               onChange={(e) =>
                                 upsertInverseBotForPosition(pos, {
                                   enabled: true,
-                                  size_mode_override: e.target
-                                    .value as InverseBotSizeOverride,
+                                  size_mode_override: e.target.value as InverseBotSizeOverride,
                                 })
                               }
                               disabled={!enabled || isBusy}
                               className="px-2 py-1.5 rounded bg-[var(--bg)] border border-[var(--line)] text-xs"
                             >
                               <option value="inherit">Inherit</option>
-                              <option value="full_notional">
-                                Full Notional
-                              </option>
+                              <option value="full_notional">Full Notional</option>
                               <option value="fixed_amount">Fixed Amount</option>
                             </select>
-                            {(inverse?.size_mode_override || "inherit") ===
-                              "fixed_amount" && (
+                            {(inverse?.size_mode_override || "inherit") === "fixed_amount" && (
                               <input
                                 type="number"
                                 min={1}
                                 step={1}
                                 placeholder="USDC"
-                                defaultValue={
-                                  inverse?.fixed_amount_override ?? 50
-                                }
+                                defaultValue={inverse?.fixed_amount_override ?? 50}
                                 onBlur={(e) => {
                                   const v = Number(e.target.value);
                                   if (v >= 1) {
@@ -1227,9 +1161,7 @@ export default function Dashboard() {
                             {" · "}
                             Last eval:{" "}
                             {inverse?.last_evaluated_at
-                              ? new Date(
-                                  inverse.last_evaluated_at,
-                                ).toLocaleTimeString()
+                              ? new Date(inverse.last_evaluated_at).toLocaleTimeString()
                               : "—"}
                           </div>
                           {inverse?.last_error && (
@@ -1265,9 +1197,7 @@ export default function Dashboard() {
                         onClick={() => setStopLossPosition(pos)}
                         className="flex-1 btn-danger flex items-center justify-center gap-1.5"
                       >
-                        {getStopLossForPosition(pos)
-                          ? "Edit Stop Loss"
-                          : "Stop Loss"}
+                        {getStopLossForPosition(pos) ? "Edit Stop Loss" : "Stop Loss"}
                       </button>
                     </div>
                   </div>
@@ -1296,14 +1226,9 @@ export default function Dashboard() {
                   </p>
                   <div className="flex justify-between text-xs text-soft">
                     <span>
-                      Vol: $
-                      {Number(
-                        market.volume24hr || market.volume_24hr || 0,
-                      ).toLocaleString()}
+                      Vol: ${Number(market.volume24hr || market.volume_24hr || 0).toLocaleString()}
                     </span>
-                    <span>
-                      Liq: ${Number(market.liquidity || 0).toLocaleString()}
-                    </span>
+                    <span>Liq: ${Number(market.liquidity || 0).toLocaleString()}</span>
                     {market.outcomePrices &&
                       (() => {
                         try {
@@ -1313,9 +1238,7 @@ export default function Dashboard() {
                               : market.outcomePrices;
                           const yesPrice = Number(prices?.[0] || 0);
                           return yesPrice > 0 ? (
-                            <span className="status-good">
-                              Yes: {(yesPrice * 100).toFixed(0)}¢
-                            </span>
+                            <span className="status-good">Yes: {(yesPrice * 100).toFixed(0)}¢</span>
                           ) : null;
                         } catch {
                           return null;
@@ -1326,48 +1249,37 @@ export default function Dashboard() {
               ))}
             </div>
           ) : (
-            <div className="text-soft text-center py-8">
-              Loading trending markets...
-            </div>
+            <div className="text-soft text-center py-8">Loading trending markets...</div>
           )}
         </div>
       </div>
 
       {/* Portfolio Value */}
-      {portfolio &&
-        (portfolio.total_invested > 0 || portfolio.usdc_balance > 0) && (
-          <div className="surface-panel p-6">
-            <h2 className="text-xl font-bold mb-4">Portfolio Overview</h2>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div>
-                <p className="text-soft text-sm">Total Invested</p>
-                <p className="text-lg font-semibold">
-                  {formatUSD(portfolio.total_invested)}
-                </p>
-              </div>
-              <div>
-                <p className="text-soft text-sm">Current Value</p>
-                <p className="text-lg font-semibold">
-                  {formatUSD(portfolio.total_current_value)}
-                </p>
-              </div>
-              <div>
-                <p className="text-soft text-sm">Available USDC</p>
-                <p className="text-lg font-semibold">
-                  {formatUSD(portfolio.usdc_balance)}
-                </p>
-              </div>
-              <div>
-                <p className="text-soft text-sm">Total Portfolio</p>
-                <p className="text-lg font-semibold">
-                  {formatUSD(
-                    portfolio.usdc_balance + portfolio.total_current_value,
-                  )}
-                </p>
-              </div>
+      {portfolio && (portfolio.total_invested > 0 || portfolio.usdc_balance > 0) && (
+        <div className="surface-panel p-6">
+          <h2 className="text-xl font-bold mb-4">Portfolio Overview</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div>
+              <p className="text-soft text-sm">Total Invested</p>
+              <p className="text-lg font-semibold">{formatUSD(portfolio.total_invested)}</p>
+            </div>
+            <div>
+              <p className="text-soft text-sm">Current Value</p>
+              <p className="text-lg font-semibold">{formatUSD(portfolio.total_current_value)}</p>
+            </div>
+            <div>
+              <p className="text-soft text-sm">Available USDC</p>
+              <p className="text-lg font-semibold">{formatUSD(portfolio.usdc_balance)}</p>
+            </div>
+            <div>
+              <p className="text-soft text-sm">Total Portfolio</p>
+              <p className="text-lg font-semibold">
+                {formatUSD(portfolio.usdc_balance + portfolio.total_current_value)}
+              </p>
             </div>
           </div>
-        )}
+        </div>
+      )}
 
       {/* ── Modals ── */}
       {cashOutPosition && (
@@ -1397,11 +1309,20 @@ export default function Dashboard() {
       {analysisPosition && (
         <PositionAnalysisPopup
           position={analysisPosition}
+          livePosition={analysisLivePosition}
           clickX={analysisClickCoords.x}
           clickY={analysisClickCoords.y}
           onClose={() => setAnalysisPosition(null)}
         />
       )}
     </div>
+  );
+}
+
+export default function Dashboard() {
+  return (
+    <ErrorBoundary>
+      <DashboardContent />
+    </ErrorBoundary>
   );
 }

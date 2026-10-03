@@ -1,0 +1,20 @@
+# Dependencies and build output
+node_modules/
+dist/
+build/
+coverage/
+
+# Generated / compiled artefacts
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+
+# Local environment
+.env
+.env.local
+.env.*.local
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

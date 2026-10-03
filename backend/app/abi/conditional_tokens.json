@@ -1,0 +1,65 @@
+[
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "name": "operator", "type": "address" },
+      { "indexed": true, "name": "from", "type": "address" },
+      { "indexed": true, "name": "to", "type": "address" },
+      { "indexed": false, "name": "id", "type": "uint256" },
+      { "indexed": false, "name": "value", "type": "uint256" }
+    ],
+    "name": "TransferSingle",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "name": "operator", "type": "address" },
+      { "indexed": true, "name": "from", "type": "address" },
+      { "indexed": true, "name": "to", "type": "address" },
+      { "indexed": false, "name": "ids", "type": "uint256[]" },
+      { "indexed": false, "name": "values", "type": "uint256[]" }
+    ],
+    "name": "TransferBatch",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "name": "stakeOwner", "type": "address" },
+      { "indexed": false, "name": "collateralManager", "type": "address" },
+      { "indexed": false, "name": "parentCollectionId", "type": "bytes32" },
+      { "indexed": false, "name": "conditionId", "type": "bytes32" },
+      { "indexed": false, "name": "partition", "type": "uint256[]" },
+      { "indexed": false, "name": "amount", "type": "uint256" }
+    ],
+    "name": "PositionSplit",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "name": "stakeOwner", "type": "address" },
+      { "indexed": false, "name": "collateralManager", "type": "address" },
+      { "indexed": false, "name": "parentCollectionId", "type": "bytes32" },
+      { "indexed": false, "name": "conditionId", "type": "bytes32" },
+      { "indexed": false, "name": "partition", "type": "uint256[]" },
+      { "indexed": false, "name": "amount", "type": "uint256" }
+    ],
+    "name": "PositionMerge",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "name": "stakeOwner", "type": "address" },
+      { "indexed": false, "name": "collateralManager", "type": "address" },
+      { "indexed": false, "name": "parentCollectionId", "type": "bytes32" },
+      { "indexed": false, "name": "conditionId", "type": "bytes32" },
+      { "indexed": false, "name": "indexSets", "type": "uint256[]" },
+      { "indexed": false, "name": "payout", "type": "uint256" }
+    ],
+    "name": "Redemption",
+    "type": "event"
+  }
+]

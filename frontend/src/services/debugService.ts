@@ -1,3 +1,13 @@
+/**
+ * Admin-only diagnostic endpoints under `/api/debug`.
+ *
+ * Serves request logs (filterable by level, path, method, and limit), per-endpoint statistics, a
+ * service health/uptime snapshot, and log clearing. These back the Debug Dashboard route, which
+ * `App.tsx` restricts to admins.
+ *
+ * @module services/debugService
+ */
+
 import { apiClient } from "./apiClient";
 
 /* ───────── Types ───────── */
@@ -85,8 +95,6 @@ export const debugService = {
   },
 
   async clearLogs(): Promise<{ cleared: number; message: string }> {
-    return apiClient.delete<{ cleared: number; message: string }>(
-      "/api/debug/logs",
-    );
+    return apiClient.delete<{ cleared: number; message: string }>("/api/debug/logs");
   },
 };

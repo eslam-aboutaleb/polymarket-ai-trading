@@ -1,6 +1,17 @@
+/**
+ * Wallet authentication endpoints under `/api/auth`.
+ *
+ * Covers the sign-in challenge, signature verification, private-key login, logout, and the
+ * `GET /api/auth/me` session probe used to bootstrap auth state. Sessions are cookie-based, so
+ * `keepLoggedIn` is passed through to the backend rather than stored client-side.
+ *
+ * @module services/authService
+ */
+
 import { apiClient } from "./apiClient";
 
 export interface LoginChallenge {
+  challenge_id: string;
   challenge: string;
   timestamp: string;
   nonce: string;
@@ -8,8 +19,13 @@ export interface LoginChallenge {
 }
 
 export interface TokenResponse {
-  access_token: string;
-  refresh_token: string;
+  /**
+   * Only returned by /api/auth/refresh. Login endpoints deliver
+   * tokens via httpOnly cookies and omit them from the body.
+   */
+  access_token?: string;
+  /** Only returned by /api/auth/refresh; see `access_token`. */
+  refresh_token?: string;
   token_type: string;
   expires_in: number;
   wallet_address?: string;
@@ -34,10 +50,12 @@ export const authService = {
     walletAddress: string,
     signature: string,
     keepLoggedIn: boolean = false,
+    challengeId?: string,
   ): Promise<TokenResponse> {
     return apiClient.post<TokenResponse>("/api/auth/verify", {
       wallet_address: walletAddress,
       signature,
+      challenge_id: challengeId,
       keep_logged_in: keepLoggedIn,
     });
   },

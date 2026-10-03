@@ -1,3 +1,14 @@
+/**
+ * Helpers that turn thrown API/stream errors into user-facing messages.
+ *
+ * `getApiErrorMessage` flattens axios error payloads (FastAPI `detail`, pydantic `msg`/`loc`,
+ * generic `message`/`error`/`errors`) and maps 401 and 429 responses to dedicated copy, honouring
+ * `Retry-After` when present. `sanitizeAIError` rewrites raw gRPC/AI backend errors, stripping stack
+ * traces and internal detail so nothing leaks into the UI.
+ *
+ * @module utils/apiError
+ */
+
 import axios from "axios";
 
 function toFlatMessage(value: unknown): string | null {
@@ -18,9 +29,7 @@ function toFlatMessage(value: unknown): string | null {
 
     if (typeof record.msg === "string" && record.msg.trim().length > 0) {
       const loc = Array.isArray(record.loc)
-        ? record.loc
-            .map((part) => (typeof part === "string" ? part : String(part)))
-            .join(".")
+        ? record.loc.map((part) => (typeof part === "string" ? part : String(part))).join(".")
         : "";
       return loc ? `${loc}: ${record.msg}` : record.msg;
     }
@@ -55,9 +64,7 @@ export function getApiErrorMessage(
 
     if (error.response.status === 429) {
       const retryAfterRaw = error.response.headers?.["retry-after"];
-      const retryAfterValue = Array.isArray(retryAfterRaw)
-        ? retryAfterRaw[0]
-        : retryAfterRaw;
+      const retryAfterValue = Array.isArray(retryAfterRaw) ? retryAfterRaw[0] : retryAfterRaw;
       const retryAfterSeconds = Number(retryAfterValue);
 
       if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {

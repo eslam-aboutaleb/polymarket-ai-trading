@@ -66,12 +66,12 @@ class ArbitrageRateLimitTests(unittest.IsolatedAsyncioTestCase):
                 self.in_flight = 0
                 self.max_in_flight = 0
 
-            async def get_markets(self, limit: int, active: bool):
+            async def get_active_markets(self, limit: int = 60):
                 self.in_flight += 1
                 self.max_in_flight = max(self.max_in_flight, self.in_flight)
                 await asyncio.sleep(0.01)
                 self.in_flight -= 1
-                return [{"condition_id": f"{limit}-{active}"}]
+                return [{"condition_id": str(limit)}]
 
         service = _FakeService()
         await asyncio.gather(

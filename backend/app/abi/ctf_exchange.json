@@ -1,0 +1,19 @@
+[
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "name": "operator", "type": "bytes32" },
+      { "indexed": true, "name": "orderId", "type": "bytes32" },
+      { "indexed": true, "name": "maker", "type": "address" },
+      { "indexed": false, "name": "taker", "type": "address" },
+      { "indexed": false, "name": "feeRecipient", "type": "address" },
+      { "indexed": false, "name": "makerAssetId", "type": "uint256" },
+      { "indexed": false, "name": "takerAssetId", "type": "uint256" },
+      { "indexed": false, "name": "makerAmount", "type": "uint256" },
+      { "indexed": false, "name": "takerAmount", "type": "uint256" },
+      { "indexed": false, "name": "feeAmount", "type": "uint256" }
+    ],
+    "name": "OrderFilled",
+    "type": "event"
+  }
+]

@@ -38,17 +38,8 @@ body {
   font-family: "Manrope", "Segoe UI", sans-serif;
   color: var(--text-primary);
   background:
-    radial-gradient(
-      circle at 85% -20%,
-      rgba(247, 166, 0, 0.24),
-      transparent 35%
-    ),
-    radial-gradient(
-      circle at 15% 120%,
-      rgba(47, 80, 145, 0.28),
-      transparent 45%
-    ),
-    var(--bg-base);
+    radial-gradient(circle at 85% -20%, rgba(247, 166, 0, 0.24), transparent 35%),
+    radial-gradient(circle at 15% 120%, rgba(47, 80, 145, 0.28), transparent 45%), var(--bg-base);
 }
 
 body::before {
@@ -58,11 +49,7 @@ body::before {
   pointer-events: none;
   z-index: -1;
   background-image:
-    linear-gradient(
-      120deg,
-      rgba(255, 255, 255, 0.02) 0%,
-      rgba(255, 255, 255, 0) 35%
-    ),
+    linear-gradient(120deg, rgba(255, 255, 255, 0.02) 0%, rgba(255, 255, 255, 0) 35%),
     linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
     linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
   background-size:
@@ -99,11 +86,7 @@ input {
 }
 
 .surface-panel {
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.03) 0%,
-    rgba(255, 255, 255, 0) 100%
-  );
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0) 100%);
   background-color: var(--bg-panel);
   border: 1px solid var(--line);
   border-radius: 0.85rem;

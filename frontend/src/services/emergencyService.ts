@@ -1,3 +1,13 @@
+/**
+ * Trading kill-switch, arbitrage, and trader-scoring endpoints under `/api/trades`.
+ *
+ * `emergencyStop` optionally closes positions while cancelling every stop-loss and take-profit;
+ * `resumeTrading` clears the halt. Also lists or triggers arbitrage scans and reads or recomputes
+ * quality-score breakdowns for tracked traders.
+ *
+ * @module services/emergencyService
+ */
+
 import { apiClient } from "./apiClient";
 
 // --- Types ---
@@ -52,9 +62,7 @@ export const emergencyService = {
 
   /** Get recently detected arbitrage opportunities */
   async getArbitrageOpportunities(): Promise<ArbitrageOpportunity[]> {
-    return apiClient.get<ArbitrageOpportunity[]>(
-      "/api/trades/arbitrage/opportunities",
-    );
+    return apiClient.get<ArbitrageOpportunity[]>("/api/trades/arbitrage/opportunities");
   },
 
   /** Trigger an immediate arbitrage scan */

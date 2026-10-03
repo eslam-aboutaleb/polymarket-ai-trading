@@ -1,18 +1,17 @@
+/**
+ * Trades page with two tabs: paginated trade history and live positions with risk tooling.
+ *
+ * Positions poll prices every 15s (flash-highlighting changes) and are matched by token id to
+ * active stop-losses, take-profits and inverse-bot settings; cash out, stop-loss and take-profit
+ * modals open per position.
+ *
+ * @module components/TradeHistory
+ */
 import { useEffect, useState, useRef, useCallback } from "react";
-import {
-  tradesService,
-  TradeRecord,
-  TradeHistoryResponse,
-} from "../services/tradesService";
-import {
-  portfolioService,
-  PortfolioSummary,
-} from "../services/portfolioService";
+import { tradesService, TradeRecord, TradeHistoryResponse } from "../services/tradesService";
+import { portfolioService, PortfolioSummary } from "../services/portfolioService";
 import { stopLossService, StopLossOrder } from "../services/stopLossService";
-import {
-  takeProfitService,
-  TakeProfitOrder,
-} from "../services/takeProfitService";
+import { takeProfitService, TakeProfitOrder } from "../services/takeProfitService";
 import {
   inverseBotService,
   InverseBotPosition,
@@ -29,6 +28,8 @@ import {
 import CashOutModal from "./CashOutModal";
 import StopLossModal from "./StopLossModal";
 import TakeProfitModal from "./TakeProfitModal";
+import TradingKeyPrompt from "./TradingKeyPrompt";
+import { useTradingKeyStatus } from "../hooks/useTradingKeyStatus";
 
 type FilterType = "all" | "buy" | "sell" | "confirmed" | "matched";
 type TabType = "history" | "positions";
@@ -49,6 +50,7 @@ type InverseExplanationView = {
 
 export default function TradeHistory() {
   const { walletAddress, isAuthenticated } = useAuthStore();
+  const { hasTradingKey } = useTradingKeyStatus();
   const [activeTab, setActiveTab] = useState<TabType>("history");
 
   // --- Trade History State ---
@@ -71,34 +73,23 @@ export default function TradeHistory() {
   // --- Modal state ---
   const [cashOutPosition, setCashOutPosition] = useState<any | null>(null);
   const [stopLossPosition, setStopLossPosition] = useState<any | null>(null);
-  const [takeProfitPosition, setTakeProfitPosition] = useState<any | null>(
-    null,
-  );
+  const [takeProfitPosition, setTakeProfitPosition] = useState<any | null>(null);
 
   // --- Active stop-losses & take-profits ---
   const [activeStopLosses, setActiveStopLosses] = useState<StopLossOrder[]>([]);
-  const [activeTakeProfits, setActiveTakeProfits] = useState<TakeProfitOrder[]>(
-    [],
-  );
-  const [inverseBotPositions, setInverseBotPositions] = useState<
-    InverseBotPosition[]
-  >([]);
+  const [activeTakeProfits, setActiveTakeProfits] = useState<TakeProfitOrder[]>([]);
+  const [inverseBotPositions, setInverseBotPositions] = useState<InverseBotPosition[]>([]);
   const [inverseBusyToken, setInverseBusyToken] = useState<string | null>(null);
-  const [inverseInfoHoverToken, setInverseInfoHoverToken] = useState<
-    string | null
-  >(null);
-  const [inverseInfoPinnedToken, setInverseInfoPinnedToken] = useState<
-    string | null
-  >(null);
+  const [inverseInfoHoverToken, setInverseInfoHoverToken] = useState<string | null>(null);
+  const [inverseInfoPinnedToken, setInverseInfoPinnedToken] = useState<string | null>(null);
   const [inverseExplainByToken, setInverseExplainByToken] = useState<
     Record<string, InverseExplanationView>
   >({});
-  const [inverseExplainLoadingToken, setInverseExplainLoadingToken] = useState<
-    string | null
-  >(null);
+  const [inverseExplainLoadingToken, setInverseExplainLoadingToken] = useState<string | null>(null);
   const [inverseExplainErrorByToken, setInverseExplainErrorByToken] = useState<
     Record<string, string>
   >({});
+  const [tradingKeyPrompt, setTradingKeyPrompt] = useState(false);
 
   useEffect(
     () => () => {
@@ -176,9 +167,7 @@ export default function TradeHistory() {
     return activeTakeProfits.find((tp) => tp.token_id === tokenId);
   };
 
-  const getInverseBotForPosition = (
-    pos: any,
-  ): InverseBotPosition | undefined => {
+  const getInverseBotForPosition = (pos: any): InverseBotPosition | undefined => {
     const tokenId = String(pos.asset_id || pos.token_id || "");
     return inverseBotPositions.find((row) => row.token_id === tokenId);
   };
@@ -198,20 +187,21 @@ export default function TradeHistory() {
       return null;
     }
     const existing = getInverseBotForPosition(pos);
+    const enabled = overrides?.enabled ?? existing?.enabled ?? true;
+    if (enabled && hasTradingKey === false) {
+      setTradingKeyPrompt(true);
+      return null;
+    }
     const payload = {
       token_id: tokenId,
       condition_id: conditionId,
       market_title: String(pos.title || pos.market || ""),
       outcome: String(pos.outcome || ""),
-      enabled: overrides?.enabled ?? existing?.enabled ?? true,
+      enabled,
       size_mode_override:
-        overrides?.size_mode_override ??
-        existing?.size_mode_override ??
-        "inherit",
+        overrides?.size_mode_override ?? existing?.size_mode_override ?? "inherit",
       fixed_amount_override:
-        overrides?.fixed_amount_override ??
-        existing?.fixed_amount_override ??
-        null,
+        overrides?.fixed_amount_override ?? existing?.fixed_amount_override ?? null,
     };
     setInverseBusyToken(tokenId);
     try {
@@ -219,9 +209,7 @@ export default function TradeHistory() {
       await fetchInverseBotPositions();
       return true;
     } catch (err: unknown) {
-      setPosError(
-        getApiErrorMessage(err, "Failed to update inverse bot settings"),
-      );
+      setPosError(getApiErrorMessage(err, "Failed to update inverse bot settings"));
       return false;
     } finally {
       setInverseBusyToken(null);
@@ -260,6 +248,10 @@ export default function TradeHistory() {
 
   const runInverseNow = async (pos: any) => {
     const tokenId = String(pos.asset_id || pos.token_id || "");
+    if (hasTradingKey === false) {
+      setTradingKeyPrompt(true);
+      return;
+    }
     setInverseExplainByToken((prev) => {
       const next = { ...prev };
       delete next[tokenId];
@@ -314,17 +306,10 @@ export default function TradeHistory() {
     inverse?: InverseBotPosition,
   ) => {
     if (!inverse) return;
-    if (
-      inverseExplainByToken[tokenId] ||
-      inverseExplainLoadingToken === tokenId
-    ) {
+    if (inverseExplainByToken[tokenId] || inverseExplainLoadingToken === tokenId) {
       return;
     }
-    if (
-      !inverse.last_evaluated_at &&
-      inverse.last_confidence == null &&
-      !inverse.last_reasoning
-    ) {
+    if (!inverse.last_evaluated_at && inverse.last_confidence == null && !inverse.last_reasoning) {
       setInverseExplainByToken((prev) => ({
         ...prev,
         [tokenId]: {
@@ -345,9 +330,7 @@ export default function TradeHistory() {
       decision: String(inverse.last_recommendation || "hold"),
       why: String(inverse.last_reasoning || "No model reasoning available."),
       confidence:
-        inverse.last_confidence != null
-          ? `${inverse.last_confidence.toFixed(0)}%`
-          : "Unknown",
+        inverse.last_confidence != null ? `${inverse.last_confidence.toFixed(0)}%` : "Unknown",
       market_signal: String(inverse.last_signal || "No signal captured"),
       web_signal: String(inverse.last_web_summary || "No web summary"),
       x_signal: String(inverse.last_x_summary || "No X summary"),
@@ -379,10 +362,7 @@ export default function TradeHistory() {
     try {
       const resp = await analysisService.quickAnalysis({
         question: prompt,
-        current_price: Math.max(
-          0,
-          Math.min(1, (inverse.last_confidence ?? 50) / 100),
-        ),
+        current_price: Math.max(0, Math.min(1, (inverse.last_confidence ?? 50) / 100)),
       });
       const text = String(resp?.data?.analysis || "");
       const match = text.match(/\{[\s\S]*\}/);
@@ -394,22 +374,12 @@ export default function TradeHistory() {
             ? {
                 decision: String(parsed.decision || fallbackExplain.decision),
                 why: String(parsed.why || fallbackExplain.why),
-                confidence: String(
-                  parsed.confidence || fallbackExplain.confidence,
-                ),
-                market_signal: String(
-                  parsed.market_signal || fallbackExplain.market_signal,
-                ),
-                web_signal: String(
-                  parsed.web_signal || fallbackExplain.web_signal,
-                ),
+                confidence: String(parsed.confidence || fallbackExplain.confidence),
+                market_signal: String(parsed.market_signal || fallbackExplain.market_signal),
+                web_signal: String(parsed.web_signal || fallbackExplain.web_signal),
                 x_signal: String(parsed.x_signal || fallbackExplain.x_signal),
-                next_checks: String(
-                  parsed.next_checks || fallbackExplain.next_checks,
-                ),
-                updated_at: String(
-                  parsed.updated_at || fallbackExplain.updated_at,
-                ),
+                next_checks: String(parsed.next_checks || fallbackExplain.next_checks),
+                updated_at: String(parsed.updated_at || fallbackExplain.updated_at),
               }
             : fallbackExplain,
       }));
@@ -429,12 +399,7 @@ export default function TradeHistory() {
 
   // Real-time price polling for positions
   useEffect(() => {
-    if (
-      activeTab !== "positions" ||
-      !isAuthenticated ||
-      !portfolio?.positions?.length
-    )
-      return;
+    if (activeTab !== "positions" || !isAuthenticated || !portfolio?.positions?.length) return;
 
     const poll = async () => {
       try {
@@ -488,8 +453,7 @@ export default function TradeHistory() {
             if (s > 0) active++;
           }
           const totalPnl = totalValue - totalInvested;
-          const pnlPct =
-            totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0;
+          const pnlPct = totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0;
 
           return {
             ...prev,
@@ -527,10 +491,7 @@ export default function TradeHistory() {
     setLoading(true);
     setError(null);
     try {
-      const result: TradeHistoryResponse = await tradesService.getTradeHistory(
-        LIMIT,
-        newOffset,
-      );
+      const result: TradeHistoryResponse = await tradesService.getTradeHistory(LIMIT, newOffset);
       if (newOffset === 0) {
         setTrades(result.trades);
       } else {
@@ -551,12 +512,8 @@ export default function TradeHistory() {
     filter === "all"
       ? trades
       : filter === "buy" || filter === "sell"
-        ? trades.filter(
-            (t) => (t.side || "").toUpperCase() === filter.toUpperCase(),
-          )
-        : trades.filter(
-            (t) => (t.status || "").toUpperCase() === filter.toUpperCase(),
-          );
+        ? trades.filter((t) => (t.side || "").toUpperCase() === filter.toUpperCase())
+        : trades.filter((t) => (t.status || "").toUpperCase() === filter.toUpperCase());
 
   const formatUSD = (v: number) =>
     `$${Math.abs(v).toLocaleString("en-US", {
@@ -585,20 +542,14 @@ export default function TradeHistory() {
     ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
     : "";
 
-  const shortHash = (hash?: string) =>
-    hash ? `${hash.slice(0, 8)}...${hash.slice(-6)}` : null;
+  const shortHash = (hash?: string) => (hash ? `${hash.slice(0, 8)}...${hash.slice(-6)}` : null);
 
   // Stats
   const totalCost = trades.reduce((s, t) => s + t.size * t.price, 0);
   const totalFees = trades.reduce((s, t) => s + (t.fee || 0), 0);
-  const buyCount = trades.filter(
-    (t) => (t.side || "").toUpperCase() === "BUY",
-  ).length;
-  const sellCount = trades.filter(
-    (t) => (t.side || "").toUpperCase() === "SELL",
-  ).length;
-  const uniqueMarkets = new Set(trades.map((t) => t.condition_id || t.market))
-    .size;
+  const buyCount = trades.filter((t) => (t.side || "").toUpperCase() === "BUY").length;
+  const sellCount = trades.filter((t) => (t.side || "").toUpperCase() === "SELL").length;
+  const uniqueMarkets = new Set(trades.map((t) => t.condition_id || t.market)).size;
 
   if (loading && trades.length === 0 && activeTab === "history") {
     return (
@@ -625,9 +576,7 @@ export default function TradeHistory() {
           </p>
         </div>
         <button
-          onClick={() =>
-            activeTab === "history" ? fetchTrades(0) : fetchPositions()
-          }
+          onClick={() => (activeTab === "history" ? fetchTrades(0) : fetchPositions())}
           disabled={loading || posLoading}
           className="btn-muted flex items-center gap-1.5"
         >
@@ -672,21 +621,18 @@ export default function TradeHistory() {
           }`}
         >
           Your Positions
-          {portfolio?.active_positions != null &&
-            portfolio.active_positions > 0 && (
-              <span className="ml-1.5 text-xs opacity-60">
-                ({portfolio.active_positions})
-              </span>
-            )}
+          {portfolio?.active_positions != null && portfolio.active_positions > 0 && (
+            <span className="ml-1.5 text-xs opacity-60">({portfolio.active_positions})</span>
+          )}
         </button>
       </div>
 
       {/* ========== POSITIONS TAB ========== */}
       {activeTab === "positions" && (
         <div className="space-y-6">
-          {posError && (
-            <div className="p-4 alert-error rounded text-sm">{posError}</div>
-          )}
+          {posError && <div className="p-4 alert-error rounded text-sm">{posError}</div>}
+
+          {tradingKeyPrompt && <TradingKeyPrompt strategy="The inverse position bot" />}
 
           {posLoading && !portfolio ? (
             <div className="space-y-3">
@@ -702,18 +648,13 @@ export default function TradeHistory() {
                   label="Active Positions"
                   value={String(portfolio.active_positions ?? 0)}
                 />
-                <StatCard
-                  label="Total Invested"
-                  value={formatUSD(portfolio.total_invested ?? 0)}
-                />
+                <StatCard label="Total Invested" value={formatUSD(portfolio.total_invested ?? 0)} />
                 <StatCard
                   label="Current Value"
                   value={formatUSD(portfolio.total_current_value ?? 0)}
                 />
                 <div className="surface-panel p-3">
-                  <p className="text-muted text-[11px] uppercase tracking-wider mb-1">
-                    Total P&L
-                  </p>
+                  <p className="text-muted text-[11px] uppercase tracking-wider mb-1">Total P&L</p>
                   <p
                     className={`text-lg font-bold ${(portfolio.total_pnl ?? 0) >= 0 ? "status-good" : "status-bad"}`}
                   >
@@ -745,15 +686,10 @@ export default function TradeHistory() {
                       <div className="flex justify-between items-start mb-3">
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-semibold text-white truncate mb-1">
-                            {pos.title ||
-                              pos.market ||
-                              pos.asset ||
-                              `Position #${idx + 1}`}
+                            {pos.title || pos.market || pos.asset || `Position #${idx + 1}`}
                           </p>
                           {pos.outcome && (
-                            <span className="chip chip-accent inline-block">
-                              {pos.outcome}
-                            </span>
+                            <span className="chip chip-accent inline-block">{pos.outcome}</span>
                           )}
                         </div>
                       </div>
@@ -761,9 +697,7 @@ export default function TradeHistory() {
                       {/* P&L Display */}
                       <div className="flex items-center justify-between mb-3">
                         <div>
-                          <p className="text-xs text-soft mb-0.5">
-                            Profit/Loss
-                          </p>
+                          <p className="text-xs text-soft mb-0.5">Profit/Loss</p>
                           <div className="flex items-baseline gap-2">
                             <p
                               className={`text-lg font-bold ${pnl >= 0 ? "status-good" : "status-bad"} ${isFlashing ? "price-flash" : ""}`}
@@ -781,8 +715,7 @@ export default function TradeHistory() {
                         <div className="text-right">
                           <p className="text-xs text-soft mb-0.5">Size</p>
                           <p className="text-sm font-medium text-white">
-                            {size >= 1 ? size.toFixed(2) : size.toFixed(4)}{" "}
-                            shares
+                            {size >= 1 ? size.toFixed(2) : size.toFixed(4)} shares
                           </p>
                         </div>
                       </div>
@@ -804,9 +737,7 @@ export default function TradeHistory() {
                           </span>
                         </div>
                         <div>
-                          <span
-                            className={pnl >= 0 ? "status-good" : "status-bad"}
-                          >
+                          <span className={pnl >= 0 ? "status-good" : "status-bad"}>
                             {pnl >= 0 ? "↑" : "↓"}{" "}
                             {(Math.abs(curPrice - avgPrice) * 100).toFixed(1)}¢
                           </span>
@@ -818,9 +749,7 @@ export default function TradeHistory() {
                         const sl = getStopLossForPosition(pos);
                         return sl ? (
                           <div className="mb-3 px-2.5 py-1.5 rounded bg-red-500/10 border border-red-500/20 flex justify-between items-center">
-                            <span className="text-xs text-red-400">
-                              Stop Loss Active
-                            </span>
+                            <span className="text-xs text-red-400">Stop Loss Active</span>
                             <span className="text-xs mono text-red-300">
                               {(sl.stop_price * 100).toFixed(1)}¢
                             </span>
@@ -833,9 +762,7 @@ export default function TradeHistory() {
                         const tp = getTakeProfitForPosition(pos);
                         return tp ? (
                           <div className="mb-3 px-2.5 py-1.5 rounded bg-emerald-500/10 border border-emerald-500/20 flex justify-between items-center">
-                            <span className="text-xs text-emerald-400">
-                              Take Profit Active
-                            </span>
+                            <span className="text-xs text-emerald-400">Take Profit Active</span>
                             <span className="text-xs mono text-emerald-300">
                               {(tp.take_profit_price * 100).toFixed(1)}¢
                             </span>
@@ -845,14 +772,11 @@ export default function TradeHistory() {
 
                       {(() => {
                         const inverse = getInverseBotForPosition(pos);
-                        const tokenId = String(
-                          pos.asset_id || pos.token_id || "",
-                        );
+                        const tokenId = String(pos.asset_id || pos.token_id || "");
                         const isBusy = inverseBusyToken === tokenId;
                         const enabled = !!inverse?.enabled;
                         const infoOpen =
-                          inverseInfoPinnedToken === tokenId ||
-                          inverseInfoHoverToken === tokenId;
+                          inverseInfoPinnedToken === tokenId || inverseInfoHoverToken === tokenId;
                         return (
                           <div className="mb-3 p-3 rounded-lg border border-[var(--line)] bg-[var(--bg-soft)] space-y-2">
                             <div className="flex items-center justify-between">
@@ -865,31 +789,19 @@ export default function TradeHistory() {
                                     className="relative"
                                     onMouseEnter={() => {
                                       setInverseInfoHoverToken(tokenId);
-                                      ensureInverseExplanation(
-                                        tokenId,
-                                        pos,
-                                        inverse,
-                                      );
+                                      ensureInverseExplanation(tokenId, pos, inverse);
                                     }}
-                                    onMouseLeave={() =>
-                                      setInverseInfoHoverToken(null)
-                                    }
+                                    onMouseLeave={() => setInverseInfoHoverToken(null)}
                                   >
                                     <button
                                       type="button"
                                       title="Explain current evaluation"
                                       onClick={() => {
-                                        if (
-                                          inverseInfoPinnedToken === tokenId
-                                        ) {
+                                        if (inverseInfoPinnedToken === tokenId) {
                                           setInverseInfoPinnedToken(null);
                                         } else {
                                           setInverseInfoPinnedToken(tokenId);
-                                          ensureInverseExplanation(
-                                            tokenId,
-                                            pos,
-                                            inverse,
-                                          );
+                                          ensureInverseExplanation(tokenId, pos, inverse);
                                         }
                                       }}
                                       className="w-5 h-5 rounded-full border border-[var(--line-strong)] text-[11px] text-soft hover:text-white hover:border-[var(--accent)] transition"
@@ -903,31 +815,21 @@ export default function TradeHistory() {
                                             Inverse Bot Evaluation
                                           </p>
                                         </div>
-                                        {inverseExplainLoadingToken ===
-                                        tokenId ? (
+                                        {inverseExplainLoadingToken === tokenId ? (
                                           <p className="text-[11px] text-muted p-3">
                                             Generating explanation...
                                           </p>
-                                        ) : inverseExplainErrorByToken[
-                                            tokenId
-                                          ] ? (
+                                        ) : inverseExplainErrorByToken[tokenId] ? (
                                           <p className="text-[11px] text-red-300 p-3">
-                                            {
-                                              inverseExplainErrorByToken[
-                                                tokenId
-                                              ]
-                                            }
+                                            {inverseExplainErrorByToken[tokenId]}
                                           </p>
                                         ) : (
                                           <div className="overflow-x-auto">
                                             <table className="table-theme text-[11px] w-full">
                                               <tbody>
                                                 {Object.entries(
-                                                  inverseExplainByToken[
-                                                    tokenId
-                                                  ] || {
-                                                    decision:
-                                                      "No explanation available yet.",
+                                                  inverseExplainByToken[tokenId] || {
+                                                    decision: "No explanation available yet.",
                                                     why: "-",
                                                     confidence: "-",
                                                     market_signal: "-",
@@ -956,15 +858,11 @@ export default function TradeHistory() {
                                 )}
                               </div>
                               <label className="flex items-center gap-2 cursor-pointer">
-                                <span className="text-xs text-muted">
-                                  {enabled ? "On" : "Off"}
-                                </span>
+                                <span className="text-xs text-muted">{enabled ? "On" : "Off"}</span>
                                 <input
                                   type="checkbox"
                                   checked={enabled}
-                                  onChange={(e) =>
-                                    toggleInverseBot(pos, e.target.checked)
-                                  }
+                                  onChange={(e) => toggleInverseBot(pos, e.target.checked)}
                                   disabled={isBusy}
                                   className="w-4 h-4 accent-[var(--accent)]"
                                 />
@@ -972,9 +870,7 @@ export default function TradeHistory() {
                             </div>
 
                             <div className="flex items-center justify-between gap-2">
-                              <span
-                                className={`chip ${inverseStatusClass(inverse?.status)}`}
-                              >
+                              <span className={`chip ${inverseStatusClass(inverse?.status)}`}>
                                 {inverse?.status || "inactive"}
                               </span>
                               <button
@@ -992,31 +888,23 @@ export default function TradeHistory() {
                                 onChange={(e) =>
                                   upsertInverseBotForPosition(pos, {
                                     enabled: true,
-                                    size_mode_override: e.target
-                                      .value as InverseBotSizeOverride,
+                                    size_mode_override: e.target.value as InverseBotSizeOverride,
                                   })
                                 }
                                 disabled={!enabled || isBusy}
                                 className="px-2 py-1.5 rounded bg-[var(--bg)] border border-[var(--line)] text-xs"
                               >
                                 <option value="inherit">Inherit</option>
-                                <option value="full_notional">
-                                  Full Notional
-                                </option>
-                                <option value="fixed_amount">
-                                  Fixed Amount
-                                </option>
+                                <option value="full_notional">Full Notional</option>
+                                <option value="fixed_amount">Fixed Amount</option>
                               </select>
-                              {(inverse?.size_mode_override || "inherit") ===
-                                "fixed_amount" && (
+                              {(inverse?.size_mode_override || "inherit") === "fixed_amount" && (
                                 <input
                                   type="number"
                                   min={1}
                                   step={1}
                                   placeholder="USDC"
-                                  defaultValue={
-                                    inverse?.fixed_amount_override ?? 50
-                                  }
+                                  defaultValue={inverse?.fixed_amount_override ?? 50}
                                   onBlur={(e) => {
                                     const v = Number(e.target.value);
                                     if (v >= 1) {
@@ -1041,9 +929,7 @@ export default function TradeHistory() {
                               {" · "}
                               Last eval:{" "}
                               {inverse?.last_evaluated_at
-                                ? new Date(
-                                    inverse.last_evaluated_at,
-                                  ).toLocaleTimeString()
+                                ? new Date(inverse.last_evaluated_at).toLocaleTimeString()
                                 : "—"}
                             </div>
                             {inverse?.last_error && (
@@ -1067,17 +953,13 @@ export default function TradeHistory() {
                           onClick={() => setStopLossPosition(pos)}
                           className="flex-1 btn-danger flex items-center justify-center gap-1.5"
                         >
-                          {getStopLossForPosition(pos)
-                            ? "Edit Stop Loss"
-                            : "Stop Loss"}
+                          {getStopLossForPosition(pos) ? "Edit Stop Loss" : "Stop Loss"}
                         </button>
                         <button
                           onClick={() => setTakeProfitPosition(pos)}
                           className="flex-1 btn-accent flex items-center justify-center gap-1.5"
                         >
-                          {getTakeProfitForPosition(pos)
-                            ? "Edit Take Profit"
-                            : "Take Profit"}
+                          {getTakeProfitForPosition(pos) ? "Edit Take Profit" : "Take Profit"}
                         </button>
                       </div>
                     </div>
@@ -1099,9 +981,7 @@ export default function TradeHistory() {
       {/* ========== TRADE HISTORY TAB ========== */}
       {activeTab === "history" && (
         <div className="space-y-6">
-          {error && (
-            <div className="p-4 alert-error rounded text-sm">{error}</div>
-          )}
+          {error && <div className="p-4 alert-error rounded text-sm">{error}</div>}
 
           {/* Summary Stats */}
           {trades.length > 0 && (
@@ -1109,10 +989,7 @@ export default function TradeHistory() {
               <StatCard label="Total Trades" value={String(trades.length)} />
               <StatCard label="Total Cost" value={formatUSD(totalCost)} />
               <StatCard label="Total Fees" value={formatUSD(totalFees)} />
-              <StatCard
-                label="Buys / Sells"
-                value={`${buyCount} / ${sellCount}`}
-              />
+              <StatCard label="Buys / Sells" value={`${buyCount} / ${sellCount}`} />
               <StatCard label="Markets" value={String(uniqueMarkets)} />
             </div>
           )}
@@ -1142,15 +1019,10 @@ export default function TradeHistory() {
                   <span className="ml-1 opacity-60">
                     (
                     {key === "buy" || key === "sell"
-                      ? trades.filter(
-                          (t) =>
-                            (t.side || "").toUpperCase() === key.toUpperCase(),
-                        ).length
-                      : trades.filter(
-                          (t) =>
-                            (t.status || "").toUpperCase() ===
-                            key.toUpperCase(),
-                        ).length}
+                      ? trades.filter((t) => (t.side || "").toUpperCase() === key.toUpperCase())
+                          .length
+                      : trades.filter((t) => (t.status || "").toUpperCase() === key.toUpperCase())
+                          .length}
                     )
                   </span>
                 )}
@@ -1168,17 +1040,13 @@ export default function TradeHistory() {
                       <th className="text-left p-3">Market</th>
                       <th className="text-center p-3">Side</th>
                       <th className="text-right p-3">
-                        <span title="Number of outcome shares traded (not dollars)">
-                          Shares
-                        </span>
+                        <span title="Number of outcome shares traded (not dollars)">Shares</span>
                       </th>
                       <th className="text-right p-3">
                         <span title="Price per share">Price</span>
                       </th>
                       <th className="text-right p-3">
-                        <span title="Shares × Price = actual dollar cost">
-                          Cost
-                        </span>
+                        <span title="Shares × Price = actual dollar cost">Cost</span>
                       </th>
                       <th className="text-right p-3">Fee</th>
                       <th className="text-center p-3">Status</th>
@@ -1188,17 +1056,14 @@ export default function TradeHistory() {
                   <tbody>
                     {filteredTrades.map((trade, idx) => {
                       const total = trade.size * trade.price;
-                      const isExpanded =
-                        expandedId === (trade.id || String(idx));
+                      const isExpanded = expandedId === (trade.id || String(idx));
                       return (
                         <>
                           <tr
                             key={trade.id || idx}
                             className="transition cursor-pointer hover:bg-[var(--bg-soft)]"
                             onClick={() =>
-                              setExpandedId(
-                                isExpanded ? null : trade.id || String(idx),
-                              )
+                              setExpandedId(isExpanded ? null : trade.id || String(idx))
                             }
                           >
                             <td className="p-3 max-w-[280px]">
@@ -1207,9 +1072,7 @@ export default function TradeHistory() {
                               </p>
                               <div className="flex items-center gap-2 mt-0.5">
                                 {trade.outcome && (
-                                  <span className="text-muted text-xs">
-                                    {trade.outcome}
-                                  </span>
+                                  <span className="text-muted text-xs">{trade.outcome}</span>
                                 )}
                                 {trade.trader_side && (
                                   <span className="text-muted text-[10px] uppercase opacity-50">
@@ -1223,8 +1086,7 @@ export default function TradeHistory() {
                                 className={`inline-block px-2.5 py-0.5 rounded text-xs font-bold ${
                                   (trade.side || "").toUpperCase() === "BUY"
                                     ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/25"
-                                    : (trade.side || "").toUpperCase() ===
-                                        "SELL"
+                                    : (trade.side || "").toUpperCase() === "SELL"
                                       ? "bg-red-500/15 text-red-400 border border-red-500/25"
                                       : "bg-[var(--bg-soft)] text-soft border border-[var(--line)]"
                                 }`}
@@ -1236,9 +1098,7 @@ export default function TradeHistory() {
                               className="p-3 text-right mono text-muted text-xs"
                               title="Outcome shares (not dollars)"
                             >
-                              {trade.size >= 10
-                                ? trade.size.toFixed(0)
-                                : trade.size.toFixed(2)}
+                              {trade.size >= 10 ? trade.size.toFixed(0) : trade.size.toFixed(2)}
                             </td>
                             <td className="p-3 text-right mono text-soft">
                               {trade.price > 0
@@ -1256,14 +1116,11 @@ export default function TradeHistory() {
                             <td className="p-3 text-center">
                               <span
                                 className={`inline-block px-2 py-0.5 rounded text-[10px] uppercase font-bold ${
-                                  (trade.status || "").toUpperCase() ===
-                                  "CONFIRMED"
+                                  (trade.status || "").toUpperCase() === "CONFIRMED"
                                     ? "bg-emerald-500/15 text-emerald-400"
-                                    : (trade.status || "").toUpperCase() ===
-                                        "MATCHED"
+                                    : (trade.status || "").toUpperCase() === "MATCHED"
                                       ? "bg-blue-500/15 text-blue-400"
-                                      : (trade.status || "").toUpperCase() ===
-                                          "OPEN"
+                                      : (trade.status || "").toUpperCase() === "OPEN"
                                         ? "bg-amber-500/15 text-amber-400"
                                         : "bg-[var(--bg-soft)] text-soft"
                                 }`}
@@ -1285,33 +1142,23 @@ export default function TradeHistory() {
                               >
                                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
                                   <div>
-                                    <span className="text-muted block mb-0.5">
-                                      Breakdown
-                                    </span>
+                                    <span className="text-muted block mb-0.5">Breakdown</span>
                                     <span className="mono text-soft">
                                       {trade.size >= 10
                                         ? trade.size.toFixed(0)
                                         : trade.size.toFixed(4)}{" "}
                                       shares ×{" "}
-                                      {trade.price > 0
-                                        ? `${(trade.price * 100).toFixed(2)}¢`
-                                        : "—"}{" "}
+                                      {trade.price > 0 ? `${(trade.price * 100).toFixed(2)}¢` : "—"}{" "}
                                       = {formatUSD(trade.size * trade.price)}
                                     </span>
                                   </div>
                                   {trade.transaction_hash && (
                                     <div>
-                                      <span className="text-muted block mb-0.5">
-                                        Tx Hash
-                                      </span>
-                                      {buildPolygonscanTxUrl(
-                                        trade.transaction_hash,
-                                      ) ? (
+                                      <span className="text-muted block mb-0.5">Tx Hash</span>
+                                      {buildPolygonscanTxUrl(trade.transaction_hash) ? (
                                         <a
                                           href={
-                                            buildPolygonscanTxUrl(
-                                              trade.transaction_hash,
-                                            ) || "#"
+                                            buildPolygonscanTxUrl(trade.transaction_hash) || "#"
                                           }
                                           target="_blank"
                                           rel="noopener noreferrer"
@@ -1328,17 +1175,11 @@ export default function TradeHistory() {
                                   )}
                                   {trade.maker_address && (
                                     <div>
-                                      <span className="text-muted block mb-0.5">
-                                        Counterparty
-                                      </span>
-                                      {buildPolygonscanAddressUrl(
-                                        trade.maker_address,
-                                      ) ? (
+                                      <span className="text-muted block mb-0.5">Counterparty</span>
+                                      {buildPolygonscanAddressUrl(trade.maker_address) ? (
                                         <a
                                           href={
-                                            buildPolygonscanAddressUrl(
-                                              trade.maker_address,
-                                            ) || "#"
+                                            buildPolygonscanAddressUrl(trade.maker_address) || "#"
                                           }
                                           target="_blank"
                                           rel="noopener noreferrer"
@@ -1355,27 +1196,21 @@ export default function TradeHistory() {
                                   )}
                                   {trade.fee_rate_bps != null && (
                                     <div>
-                                      <span className="text-muted block mb-0.5">
-                                        Fee Rate
-                                      </span>
+                                      <span className="text-muted block mb-0.5">Fee Rate</span>
                                       <span className="mono text-soft">
                                         {(trade.fee_rate_bps / 100).toFixed(1)}%
                                       </span>
                                     </div>
                                   )}
                                   <div>
-                                    <span className="text-muted block mb-0.5">
-                                      Trade ID
-                                    </span>
+                                    <span className="text-muted block mb-0.5">Trade ID</span>
                                     <span className="mono text-soft text-[11px] break-all">
                                       {trade.id || "—"}
                                     </span>
                                   </div>
                                   {trade.market_slug && (
                                     <div>
-                                      <span className="text-muted block mb-0.5">
-                                        Polymarket
-                                      </span>
+                                      <span className="text-muted block mb-0.5">Polymarket</span>
                                       {buildPolymarketEventUrl(
                                         trade.market_slug,
                                         trade.market_slug,
@@ -1394,9 +1229,7 @@ export default function TradeHistory() {
                                           View Market
                                         </a>
                                       ) : (
-                                        <span className="text-soft">
-                                          Unavailable
-                                        </span>
+                                        <span className="text-soft">Unavailable</span>
                                       )}
                                     </div>
                                   )}
@@ -1414,11 +1247,7 @@ export default function TradeHistory() {
               {/* Load More */}
               {hasMore && (
                 <div className="p-3 text-center border-t border-[var(--line)]">
-                  <button
-                    onClick={loadMore}
-                    disabled={loading}
-                    className="btn-muted"
-                  >
+                  <button onClick={loadMore} disabled={loading} className="btn-muted">
                     {loading ? "Loading..." : "Load More"}
                   </button>
                 </div>
@@ -1480,9 +1309,7 @@ export default function TradeHistory() {
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="surface-panel p-3">
-      <p className="text-muted text-[11px] uppercase tracking-wider mb-1">
-        {label}
-      </p>
+      <p className="text-muted text-[11px] uppercase tracking-wider mb-1">{label}</p>
       <p className="text-lg font-bold text-white">{value}</p>
     </div>
   );

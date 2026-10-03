@@ -30,3 +30,50 @@ dependencies = [
     "grpcio>=1.60.0",
     "grpcio-tools>=1.60.0",
 ]
+
+[dependency-groups]
+# Test and lint tooling, installed by `uv sync --group dev` and
+# invoked through `uv run --frozen pytest` / `uv run --frozen ruff`
+# (see .pre-commit-config.yaml). Declaring them here keeps the
+# lockfile the single source of truth for the pinned versions.
+dev = [
+    "pytest>=9.0",
+    "pytest-cov>=7.0",
+    "ruff>=0.6.9",
+]
+
+[tool.ruff]
+# Inherit the single repository-wide Ruff configuration so lint results are
+# identical whether Ruff is invoked from the repo root or from backend/.
+extend = "../ruff.toml"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Ensures the `app` package resolves when running pytest from backend/,
+# and that the shared `polymarket_settings` package (mounted from
+# ../services/shared) is importable.
+pythonpath = [".", "../services/shared"]
+addopts = "--cov=app --cov-report=term-missing --cov-report=xml:coverage.xml"
+
+[tool.coverage.run]
+# Migrations and gRPC stubs are infrastructure, not business logic.
+omit = [
+    "*/migrations/*",
+    "*/app/grpc_clients/*_pb2*.py",
+]
+# Services are exercised through mocked I/O; branch coverage is what matters.
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+# Fail the run if total coverage regresses below the agreed floor.
+fail_under = 0
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "@(abc\\.)?abstractmethod",
+]
+
+[tool.coverage.xml]
+output = "coverage.xml"

@@ -1,9 +1,11 @@
 """Centralized encrypted credential storage over key_store cache."""
+
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import Any, Optional, TypedDict
+import sys
+from datetime import UTC, datetime
+from typing import Any, TypedDict
 
 from cryptography.fernet import InvalidToken
 
@@ -12,13 +14,16 @@ from app.security.crypto import EncryptionConfigError, decrypt_text, encrypt_tex
 from app.utils.cache import key_store
 
 logger = logging.getLogger(__name__)
+# Dedicated audit sink: deployments can route "app.security.audit" to a
+# separate, tamper-evident log. Never contains key material.
+audit_logger = logging.getLogger("app.security.audit")
 
 CREDENTIAL_ENVELOPE_VERSION = 1
 
 
 class WalletCredentials(TypedDict):
     private_key: str
-    clob_creds: Optional[dict[str, str]]
+    clob_creds: dict[str, str] | None
 
 
 class CredentialStoreError(RuntimeError):
@@ -31,11 +36,18 @@ _metrics = {
 }
 
 
+def _audit(event: str, wallet_address: str) -> None:
+    """Record a credential access event (wallet + caller module, never secrets)."""
+    frame = sys._getframe(2)
+    caller = frame.f_globals.get("__name__", "unknown")
+    audit_logger.info("event=%s wallet=%s caller=%s", event, wallet_address, caller)
+
+
 def _cache_key(wallet_address: str) -> str:
     return f"pk:{wallet_address.lower()}"
 
 
-def _normalize_clob_creds(clob_creds: Any) -> Optional[dict[str, str]]:
+def _normalize_clob_creds(clob_creds: Any) -> dict[str, str] | None:
     if not isinstance(clob_creds, dict):
         return None
     normalized: dict[str, str] = {}
@@ -46,9 +58,9 @@ def _normalize_clob_creds(clob_creds: Any) -> Optional[dict[str, str]]:
     return normalized or None
 
 
-def _encrypt_payload(private_key: str, clob_creds: Optional[dict[str, str]]) -> dict[str, Any]:
+def _encrypt_payload(private_key: str, clob_creds: dict[str, str] | None) -> dict[str, Any]:
     private_key_enc, kid = encrypt_text(private_key)
-    clob_creds_enc: Optional[dict[str, str]] = None
+    clob_creds_enc: dict[str, str] | None = None
     if clob_creds:
         clob_creds_enc = {}
         for key, value in clob_creds.items():
@@ -60,7 +72,7 @@ def _encrypt_payload(private_key: str, clob_creds: Optional[dict[str, str]]) -> 
         "kid": kid,
         "private_key_enc": private_key_enc,
         "clob_creds_enc": clob_creds_enc,
-        "stored_at": datetime.now(timezone.utc).isoformat(),
+        "stored_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -71,7 +83,7 @@ def _decrypt_payload(payload: dict[str, Any]) -> WalletCredentials:
 
     private_key = decrypt_text(private_key_enc)
     clob_raw = payload.get("clob_creds_enc")
-    clob_creds: Optional[dict[str, str]] = None
+    clob_creds: dict[str, str] | None = None
     if isinstance(clob_raw, dict):
         clob_creds = {}
         for key, value in clob_raw.items():
@@ -98,8 +110,8 @@ def _is_legacy_plaintext_payload(payload: Any) -> bool:
 def store_wallet_credentials(
     wallet_address: str,
     private_key: str,
-    clob_creds: Optional[dict[str, str]] = None,
-    ttl_seconds: Optional[int] = None,
+    clob_creds: dict[str, str] | None = None,
+    ttl_seconds: int | None = None,
 ) -> None:
     """Encrypt and store wallet credentials in cache."""
     settings = get_settings()
@@ -111,9 +123,10 @@ def store_wallet_credentials(
     except EncryptionConfigError as exc:
         raise CredentialStoreError(str(exc)) from exc
     key_store.set(_cache_key(wallet_address), payload, ttl_seconds=ttl)
+    _audit("credentials_stored", wallet_address)
 
 
-def load_wallet_credentials(wallet_address: str) -> Optional[WalletCredentials]:
+def load_wallet_credentials(wallet_address: str) -> WalletCredentials | None:
     """Load wallet credentials and migrate legacy plaintext entries."""
     key = _cache_key(wallet_address)
     stored = key_store.get(key)
@@ -123,7 +136,7 @@ def load_wallet_credentials(wallet_address: str) -> Optional[WalletCredentials]:
     # New encrypted envelope.
     if _is_encrypted_payload(stored):
         try:
-            return _decrypt_payload(stored)
+            credentials = _decrypt_payload(stored)
         except EncryptionConfigError as exc:
             raise CredentialStoreError(str(exc)) from exc
         except InvalidToken:
@@ -131,6 +144,8 @@ def load_wallet_credentials(wallet_address: str) -> Optional[WalletCredentials]:
             key_store.delete(key)
             logger.warning("Deleted undecryptable credential entry for wallet=%s", wallet_address)
             return None
+        _audit("credentials_loaded", wallet_address)
+        return credentials
 
     # Legacy plaintext payload. Migrate and return once.
     if _is_legacy_plaintext_payload(stored):
@@ -150,6 +165,8 @@ def load_wallet_credentials(wallet_address: str) -> Optional[WalletCredentials]:
             # Fail closed: do not retain plaintext when key configuration is invalid.
             key_store.delete(key)
             raise
+        _audit("credentials_loaded", wallet_address)
+        _audit("plaintext_migrated", wallet_address)
         return plaintext
 
     # Unknown payload shape: remove it to avoid repeated parsing failures.
@@ -160,7 +177,10 @@ def load_wallet_credentials(wallet_address: str) -> Optional[WalletCredentials]:
 
 def delete_wallet_credentials(wallet_address: str) -> bool:
     """Delete cached wallet credentials."""
-    return key_store.delete(_cache_key(wallet_address))
+    deleted = key_store.delete(_cache_key(wallet_address))
+    if deleted:
+        _audit("credentials_deleted", wallet_address)
+    return deleted
 
 
 def get_credential_store_metrics() -> dict[str, int]:

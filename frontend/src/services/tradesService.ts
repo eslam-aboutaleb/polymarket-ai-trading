@@ -1,3 +1,15 @@
+/**
+ * Trade execution, history, leaderboard, and copy-trading endpoints under `/api/trades`.
+ *
+ * Covers the user's paginated trade history, leaderboard (sent with a 60s timeout because it is
+ * expensive), trader profiles, follow/unfollow with sizing and copy-wallet configuration, email
+ * notification follows, the followed-trader activity feed, copy-trade records and their evaluation
+ * audit trail, and finally order placement via `executeTrade`/`cashOut` (cash-out always posts
+ * `side: "SELL"`).
+ *
+ * @module services/tradesService
+ */
+
 import { apiClient } from "./apiClient";
 
 // --- Trade History Types ---
@@ -94,11 +106,9 @@ export interface FollowedTrader {
   display_name?: string;
   is_active: boolean;
   max_position_size?: number | null;
-  sizing_mode: "inherit_global" | "fixed_amount" | "trader_wallet_ratio";
+  sizing_mode: "inherit_global" | "fixed_amount" | "trader_wallet_ratio" | "kelly";
   fixed_trade_amount_override?: number | null;
-  copy_wallet_mode:
-    | "dynamic_main_wallet_percentage"
-    | "fixed_snapshot_amount";
+  copy_wallet_mode: "dynamic_main_wallet_percentage" | "fixed_snapshot_amount";
   copy_wallet_percentage: number;
   copy_wallet_fixed_amount?: number | null;
   created_at: string;
@@ -107,11 +117,9 @@ export interface FollowedTrader {
 export interface FollowTraderRequest {
   max_position_size?: number | null;
   trader_alias?: string | null;
-  sizing_mode?: "inherit_global" | "fixed_amount" | "trader_wallet_ratio";
+  sizing_mode?: "inherit_global" | "fixed_amount" | "trader_wallet_ratio" | "kelly";
   fixed_trade_amount_override?: number | null;
-  copy_wallet_mode?:
-    | "dynamic_main_wallet_percentage"
-    | "fixed_snapshot_amount";
+  copy_wallet_mode?: "dynamic_main_wallet_percentage" | "fixed_snapshot_amount";
   copy_wallet_percentage?: number | null;
   copy_wallet_fixed_amount?: number | null;
 }
@@ -221,13 +229,22 @@ export interface ExecuteTradeResponse {
   error?: string | null;
 }
 
+// --- Kelly Size Suggestion ---
+
+export interface SizeSuggestion {
+  suggested_size_usdc: number;
+  edge_probability?: number | null;
+  kelly_fraction: number;
+  capped_by?: string | null;
+  edge_source?: string | null;
+  bankroll_usdc?: number | null;
+  kelly_size_usdc?: number | null;
+}
+
 // --- Service ---
 
 export const tradesService = {
-  async getTradeHistory(
-    limit: number = 50,
-    offset: number = 0,
-  ): Promise<TradeHistoryResponse> {
+  async getTradeHistory(limit: number = 50, offset: number = 0): Promise<TradeHistoryResponse> {
     return apiClient.get<TradeHistoryResponse>(
       `/api/trades/history?limit=${limit}&offset=${offset}`,
     );
@@ -252,9 +269,7 @@ export const tradesService = {
     request?: number | FollowTraderRequest,
   ): Promise<FollowedTrader> {
     const body: FollowTraderRequest =
-      typeof request === "number"
-        ? { max_position_size: request }
-        : request || {};
+      typeof request === "number" ? { max_position_size: request } : request || {};
     return apiClient.post<FollowedTrader>(`/api/trades/follow/${wallet}`, {
       ...body,
     });
@@ -283,9 +298,7 @@ export const tradesService = {
   },
 
   async getNotificationFollowing(): Promise<NotificationFollowedTrader[]> {
-    return apiClient.get<NotificationFollowedTrader[]>(
-      "/api/trades/notification-following",
-    );
+    return apiClient.get<NotificationFollowedTrader[]>("/api/trades/notification-following");
   },
 
   async getFollowingFeed(
@@ -296,33 +309,36 @@ export const tradesService = {
     const params = new URLSearchParams({ limit: String(limit) });
     if (wallet) params.set("wallet", wallet);
     if (event_type) params.set("event_type", event_type);
-    return apiClient.get<FollowingFeedEvent[]>(
-      `/api/trades/following-feed?${params.toString()}`,
-    );
+    return apiClient.get<FollowingFeedEvent[]>(`/api/trades/following-feed?${params.toString()}`);
   },
 
   async getCopyTrades(limit: number = 50): Promise<CopyTradeRecord[]> {
-    return apiClient.get<CopyTradeRecord[]>(
-      `/api/trades/copy-trades?limit=${limit}`,
-    );
+    return apiClient.get<CopyTradeRecord[]>(`/api/trades/copy-trades?limit=${limit}`);
   },
 
   async getCopyTradePnl(): Promise<{ daily_pnl: number }> {
     return apiClient.get<{ daily_pnl: number }>("/api/trades/copy-trades/pnl");
   },
 
-  async getCopyEvaluation(
-    wallet: string,
-    limit: number = 50,
-  ): Promise<CopyEvaluationResponse> {
+  async getCopyEvaluation(wallet: string, limit: number = 50): Promise<CopyEvaluationResponse> {
     return apiClient.get<CopyEvaluationResponse>(
       `/api/trades/copy-evaluation/${wallet}?limit=${limit}`,
     );
   },
 
-  async executeTrade(
-    request: ExecuteTradeRequest,
-  ): Promise<ExecuteTradeResponse> {
+  async getSizeSuggestion(
+    market_id: string,
+    side: "BUY" | "SELL",
+    price?: number,
+  ): Promise<SizeSuggestion> {
+    const params = new URLSearchParams({ market_id, side });
+    if (price != null && Number.isFinite(price)) {
+      params.set("price", String(price));
+    }
+    return apiClient.get<SizeSuggestion>(`/api/trades/size-suggestion?${params.toString()}`);
+  },
+
+  async executeTrade(request: ExecuteTradeRequest): Promise<ExecuteTradeResponse> {
     return apiClient.post<ExecuteTradeResponse>("/api/trades/execute", request);
   },
 

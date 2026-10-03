@@ -1,3 +1,13 @@
+/**
+ * Stop-loss order endpoints under `/api/trades/stop-loss`.
+ *
+ * Creating a stop loss upserts for the position token, listing defaults to `active` orders but
+ * accepts `triggered`/`cancelled`/`failed`/`all`, and cancelling deletes the record. Orders are
+ * filled by a backend watcher rather than the browser.
+ *
+ * @module services/stopLossService
+ */
+
 import { apiClient } from "./apiClient";
 
 // --- Types ---
@@ -39,9 +49,7 @@ export const stopLossService = {
   async getStopLosses(
     status: "active" | "triggered" | "cancelled" | "failed" | "all" = "active",
   ): Promise<StopLossOrder[]> {
-    return apiClient.get<StopLossOrder[]>(
-      `/api/trades/stop-loss?status=${status}`,
-    );
+    return apiClient.get<StopLossOrder[]>(`/api/trades/stop-loss?status=${status}`);
   },
 
   /** Cancel an active stop-loss order. */

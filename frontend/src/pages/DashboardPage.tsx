@@ -1,3 +1,12 @@
+/**
+ * Authenticated shell page that renders the top navigation and the routed child outlet.
+ *
+ * The logout handler calls `POST /api/auth/logout` and clears the auth store in a `finally` block,
+ * so local session state is dropped even if the server call fails.
+ *
+ * @module pages/DashboardPage
+ */
+
 import { Outlet } from "react-router-dom";
 import { useAuthStore } from "../store/authStore";
 import Navigation from "../components/Navigation";

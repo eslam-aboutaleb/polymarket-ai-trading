@@ -1,3 +1,14 @@
+/**
+ * Root React component: bootstraps the wallet session and defines all app routes.
+ *
+ * On mount it drops any persisted auth store, calls `GET /api/auth/me` via `authService`, and
+ * holds `sessionReady` false until that settles so guarded routes never flash. Public routes render
+ * under `PublicAppLayout`; authenticated routes require a session, and `/debug` additionally
+ * requires `isAdmin`.
+ *
+ * @module app
+ */
+
 import { useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useAuthStore } from "./store/authStore";
@@ -13,12 +24,15 @@ import Opportunities from "./components/Opportunities";
 import Leaderboard from "./components/Leaderboard";
 import TradeHistory from "./components/TradeHistory";
 import CopyTrading from "./components/CopyTrading";
+import WhaleFeed from "./components/WhaleFeed";
+import ExecutionAnalytics from "./components/ExecutionAnalytics";
 import MarketMaking from "./components/MarketMaking";
 import Backtesting from "./components/Backtesting";
 import News from "./components/News";
 import UserGuide from "./components/UserGuide";
 import DebugDashboard from "./components/DebugDashboard";
 import OpsCenter from "./components/OpsCenter";
+import LatencyArb from "./components/LatencyArb";
 import { authService } from "./services/authService";
 
 function SessionLoadingScreen() {
@@ -51,13 +65,8 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
 }
 
 function App() {
-  const {
-    isAuthenticated,
-    sessionReady,
-    setSession,
-    setSessionReady,
-    clearSession,
-  } = useAuthStore();
+  const { isAuthenticated, sessionReady, setSession, setSessionReady, clearSession } =
+    useAuthStore();
 
   useEffect(() => {
     let cancelled = false;
@@ -135,6 +144,9 @@ function App() {
               <Route path="backtesting" element={<Backtesting />} />
               <Route path="news" element={<News />} />
               <Route path="trades" element={<TradeHistory />} />
+              <Route path="whales" element={<WhaleFeed />} />
+              <Route path="analytics/execution" element={<ExecutionAnalytics />} />
+              <Route path="latency-arb" element={<LatencyArb />} />
               <Route path="ops" element={<OpsCenter />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route

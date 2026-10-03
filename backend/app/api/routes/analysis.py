@@ -1,26 +1,26 @@
 """AI Analysis API routes for trading recommendations."""
+
+import asyncio
+import json
+import logging
+from collections import OrderedDict
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from typing import List, Optional
 from pydantic import BaseModel, Field
-from datetime import datetime
 from sqlalchemy.orm import Session
-import json
-import asyncio
-import logging
-import hashlib
-
-from collections import OrderedDict
 
 from app.api.routes.auth import get_current_user_from_token, get_optional_user_from_token
-from app.config import get_settings, AIBackend
+from app.config import AIBackend, get_settings
 from app.grpc_clients.analysis_client import AnalysisClient
-from app.models.user_settings import UserSettings, AIBackendType
-from app.utils.database import get_db
-from app.utils.cache import opportunity_cache
-from app.utils.time import utc_now
+from app.models.user_settings import AIBackendType, UserSettings
 from app.services.leaderboard_service import fetch_trader_trades
+from app.services.llm_gateway import get_llm_gateway
 from app.services.polymarket_service import get_polymarket_service
+from app.utils.cache import opportunity_cache
+from app.utils.database import get_db
+from app.utils.time import utc_now
 
 # Semaphore to bound concurrent AI calls during opportunity scanning.
 # Allows up to 4 event groups to be analysed simultaneously while
@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 # Request/Response schemas
 class MarketAnalysisRequest(BaseModel):
     """Request for market analysis."""
+
     market_title: str = Field(..., description="Title of the prediction market")
     market_description: str = Field(..., description="Full market description")
     yes_price: float = Field(..., ge=0, le=1, description="Current YES token price")
@@ -46,62 +47,69 @@ class MarketAnalysisRequest(BaseModel):
 
 class QuickAnalysisRequest(BaseModel):
     """Request for quick market analysis."""
+
     question: str = Field(..., description="Market question")
     current_price: float = Field(..., ge=0, le=1, description="Current price")
 
 
 class QuickGroupSubMarketRequest(BaseModel):
     """Sub-market option for grouped quick analysis."""
+
     label: str = Field(..., min_length=1, description="Sub-market display label")
-    question: Optional[str] = Field(default=None, description="Full sub-market question")
+    question: str | None = Field(default=None, description="Full sub-market question")
     yes_price: float = Field(..., ge=0, le=1, description="YES price for this option")
     no_price: float = Field(..., ge=0, le=1, description="NO price for this option")
     volume_24h: float = Field(default=0, ge=0, description="24-hour volume for this option")
     liquidity: float = Field(default=0, ge=0, description="Liquidity for this option")
-    condition_id: Optional[str] = Field(default=None, description="Condition ID for this option")
+    condition_id: str | None = Field(default=None, description="Condition ID for this option")
 
 
 class QuickGroupAnalysisRequest(BaseModel):
     """Request for grouped quick analysis (event with multiple options)."""
+
     event_title: str = Field(..., min_length=1, description="Event title")
-    event_slug: Optional[str] = Field(default=None, description="Event slug")
+    event_slug: str | None = Field(default=None, description="Event slug")
     event_volume: float = Field(default=0, ge=0, description="Aggregate event volume")
     event_liquidity: float = Field(default=0, ge=0, description="Aggregate event liquidity")
-    sub_markets: List[QuickGroupSubMarketRequest] = Field(
+    sub_markets: list[QuickGroupSubMarketRequest] = Field(
         ...,
-        min_items=2,
-        max_items=20,
+        min_length=2,
+        max_length=20,
         description="Sub-market choices belonging to the same grouped event",
     )
 
 
 class MarketScanRequest(BaseModel):
     """Request for multi-market scan."""
-    markets: List[dict] = Field(..., description="List of markets to scan")
+
+    markets: list[dict] = Field(..., description="List of markets to scan")
 
 
 class RiskAssessmentRequest(BaseModel):
     """Request for risk assessment."""
+
     market_title: str
     position_size: float = Field(..., gt=0, description="Position size in USD")
     entry_price: float = Field(..., ge=0, le=1)
     days_to_expiry: int = Field(..., gt=0)
-    correlation_info: Optional[str] = None
+    correlation_info: str | None = None
 
 
 class TradePlanRequest(BaseModel):
     """Request for trade execution plan."""
+
     action: str = Field(..., pattern="^(buy_yes|buy_no|sell_yes|sell_no)$")
     market_title: str
     target_size: float = Field(..., gt=0)
     current_price: float = Field(..., ge=0, le=1)
-    order_book: Optional[dict] = None
+    order_book: dict | None = None
 
 
 class TraderAnalysisRequest(BaseModel):
     """Request for trader profile analysis."""
+
     wallet_address: str = Field(..., description="Trader's wallet address")
-    display_name: Optional[str] = None
+    display_name: str | None = None
     total_pnl: float = 0.0
     win_rate: float = 0.0
     trade_count: int = 0
@@ -113,6 +121,7 @@ class TraderAnalysisRequest(BaseModel):
 
 class CopyTradeEvalRequest(BaseModel):
     """Request for copy-trade evaluation."""
+
     trader_wallet: str
     trader_stats: str = ""
     market_id: str = ""
@@ -125,60 +134,76 @@ class CopyTradeEvalRequest(BaseModel):
 
 class OpportunityScanRequest(BaseModel):
     """Request for AI opportunity scanning."""
+
     limit: int = Field(default=40, ge=1, le=80, description="Max markets to scan")
     force_refresh: bool = Field(default=False, description="Bypass cache")
 
 
 class AnalyzeMarketsRequest(BaseModel):
     """Request to analyze a specific set of markets (e.g. from infinite scroll)."""
-    markets: List[dict] = Field(..., description="Market objects to analyze")
+
+    markets: list[dict] = Field(..., description="Market objects to analyze")
     force_refresh: bool = Field(default=False, description="Bypass cache")
 
 
 class AnalysisResponse(BaseModel):
     """Standard analysis response."""
+
     success: bool
     data: dict
     timestamp: str
-    backend: Optional[str] = None
+    backend: str | None = None
 
 
-async def get_user_backend(user_id: Optional[int], db: Session) -> AIBackend:
+async def get_user_backend(user_id: int | None, db: Session) -> AIBackend:
     """Get user's preferred AI backend from settings."""
     if user_id is None:
         return AIBackend.LLM_CHAIN
-    settings_record = db.query(UserSettings).filter(
-        UserSettings.user_id == user_id
-    ).first()
-    
+    settings_record = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+
     if settings_record and settings_record.ai_backend == AIBackendType.CLI_AGENT.value:
         return AIBackend.CLI_AGENT
     return AIBackend.LLM_CHAIN
 
 
-async def get_analysis_client_for_user(user_id: Optional[int], db: Session) -> AnalysisClient:
-    """Get analysis client configured for user's preferred backend."""
-    backend = await get_user_backend(user_id, db)
-    return AnalysisClient(backend=backend)
+async def get_analysis_client_for_user(
+    user_id: int | None, db: Session
+) -> tuple[AnalysisClient, dict[str, Any] | None]:
+    """Get the analysis client and LLM config for a user.
+
+    Provider selection follows the gateway precedence: request
+    override (not supplied by these routes) → user preference →
+    system default. The returned ``llm_config`` is ``None`` when
+    no override applies.
+    """
+    settings_record = None
+    if user_id is not None:
+        settings_record = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+
+    gateway = get_llm_gateway()
+    backend, llm_config = gateway.resolve_provider(user_settings=settings_record)
+    client = AnalysisClient(backend=backend)
+    config = llm_config.to_proto_dict() if llm_config else None
+    return client, config
 
 
 @router.post("/market", response_model=AnalysisResponse)
 async def analyze_market(
     request: MarketAnalysisRequest,
     current_user: dict = Depends(get_current_user_from_token),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     Perform comprehensive AI analysis of a Polymarket market.
     Uses the user's preferred AI backend (LLM Chain or CLI Agent).
     Includes web research for current news and events.
-    
+
     Rate limited to 10 requests per minute.
     """
     try:
         user_id = current_user.get("user_id")
-        client = await get_analysis_client_for_user(user_id, db)
-        
+        client, llm_config = await get_analysis_client_for_user(user_id, db)
+
         result = await client.analyze_market(
             market_title=request.market_title,
             market_description=request.market_description,
@@ -186,38 +211,35 @@ async def analyze_market(
             no_price=request.no_price,
             volume_24h=request.volume_24h,
             end_date=request.end_date,
-            include_research=request.include_research
+            include_research=request.include_research,
+            llm_config=llm_config,
         )
-        
+
         await client.close()
-        
+
         # TODO: Store assessment in database for history tracking
-        
+
         return AnalysisResponse(
-            success=True,
-            data=result,
-            timestamp=utc_now().isoformat(),
-            backend=client.backend.value
+            success=True, data=result, timestamp=utc_now().isoformat(), backend=client.backend.value
         )
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Analysis failed: {str(e)}"
-        )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Analysis failed: {str(e)}"
+        ) from e
 
 
 @router.post("/market/stream")
 async def analyze_market_stream(
     request: MarketAnalysisRequest,
-    current_user: Optional[dict] = Depends(get_optional_user_from_token),
-    db: Session = Depends(get_db)
+    current_user: dict | None = Depends(get_optional_user_from_token),
+    db: Session = Depends(get_db),
 ):
     """
     Stream market analysis via Server-Sent Events (SSE) (public).
     Opens immediately and delivers chunks as the LLM generates them.
     """
     user_id = current_user.get("user_id") if current_user else None
-    client = await get_analysis_client_for_user(user_id, db)
+    client, llm_config = await get_analysis_client_for_user(user_id, db)
 
     async def event_generator():
         try:
@@ -228,7 +250,8 @@ async def analyze_market_stream(
                 no_price=request.no_price,
                 volume_24h=request.volume_24h,
                 end_date=request.end_date,
-                include_research=request.include_research
+                include_research=request.include_research,
+                llm_config=llm_config,
             ):
                 payload = json.dumps({"chunk": chunk})
                 yield f"data: {payload}\n\n"
@@ -254,8 +277,8 @@ async def analyze_market_stream(
 @router.post("/quick", response_model=AnalysisResponse)
 async def quick_analysis(
     request: QuickAnalysisRequest,
-    current_user: Optional[dict] = Depends(get_optional_user_from_token),
-    db: Session = Depends(get_db)
+    current_user: dict | None = Depends(get_optional_user_from_token),
+    db: Session = Depends(get_db),
 ):
     """
     Quick 2-3 sentence market analysis without web research (public).
@@ -263,33 +286,34 @@ async def quick_analysis(
     """
     try:
         user_id = current_user.get("user_id") if current_user else None
-        client = await get_analysis_client_for_user(user_id, db)
-        
+        client, llm_config = await get_analysis_client_for_user(user_id, db)
+
         result = await client.quick_analysis(
             question=request.question,
-            current_price=request.current_price
+            current_price=request.current_price,
+            llm_config=llm_config,
         )
-        
+
         await client.close()
-        
+
         return AnalysisResponse(
             success=True,
             data={"analysis": result.get("analysis", ""), "question": request.question},
             timestamp=utc_now().isoformat(),
-            backend=client.backend.value
+            backend=client.backend.value,
         )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Quick analysis failed: {str(e)}"
-        )
+            detail=f"Quick analysis failed: {str(e)}",
+        ) from e
 
 
 @router.post("/quick-group", response_model=AnalysisResponse)
 async def quick_group_analysis(
     request: QuickGroupAnalysisRequest,
-    current_user: Optional[dict] = Depends(get_optional_user_from_token),
-    db: Session = Depends(get_db)
+    current_user: dict | None = Depends(get_optional_user_from_token),
+    db: Session = Depends(get_db),
 ):
     """
     Quick grouped-event analysis without web research (public).
@@ -297,7 +321,7 @@ async def quick_group_analysis(
     """
     try:
         user_id = current_user.get("user_id") if current_user else None
-        client = await get_analysis_client_for_user(user_id, db)
+        client, llm_config = await get_analysis_client_for_user(user_id, db)
 
         result = await client.quick_group_analysis(
             event_title=request.event_title,
@@ -316,6 +340,7 @@ async def quick_group_analysis(
                 }
                 for sm in request.sub_markets
             ],
+            llm_config=llm_config,
         )
 
         await client.close()
@@ -329,20 +354,20 @@ async def quick_group_analysis(
                 "recommended_side": result.get("recommended_side", ""),
             },
             timestamp=utc_now().isoformat(),
-            backend=client.backend.value
+            backend=client.backend.value,
         )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Quick group analysis failed: {str(e)}"
-        )
+            detail=f"Quick group analysis failed: {str(e)}",
+        ) from e
 
 
 @router.post("/scan", response_model=AnalysisResponse)
 async def scan_markets(
     request: MarketScanRequest,
-    current_user: Optional[dict] = Depends(get_optional_user_from_token),
-    db: Session = Depends(get_db)
+    current_user: dict | None = Depends(get_optional_user_from_token),
+    db: Session = Depends(get_db),
 ):
     """
     Scan multiple markets to identify top opportunities.
@@ -350,36 +375,32 @@ async def scan_markets(
     """
     if len(request.markets) > 20:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Maximum 20 markets per scan"
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Maximum 20 markets per scan"
         )
-    
+
     try:
         user_id = current_user.get("user_id") if current_user else None
-        client = await get_analysis_client_for_user(user_id, db)
-        
-        result = await client.scan_markets(markets=request.markets)
-        
+        client, llm_config = await get_analysis_client_for_user(user_id, db)
+
+        result = await client.scan_markets(markets=request.markets, llm_config=llm_config)
+
         await client.close()
-        
+
         return AnalysisResponse(
-            success=True,
-            data=result,
-            timestamp=utc_now().isoformat(),
-            backend=client.backend.value
+            success=True, data=result, timestamp=utc_now().isoformat(), backend=client.backend.value
         )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Market scan failed: {str(e)}"
-        )
+            detail=f"Market scan failed: {str(e)}",
+        ) from e
 
 
 @router.post("/risk", response_model=AnalysisResponse)
 async def assess_risk(
     request: RiskAssessmentRequest,
     current_user: dict = Depends(get_current_user_from_token),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     Assess risk profile for a potential trade.
@@ -387,36 +408,34 @@ async def assess_risk(
     """
     try:
         user_id = current_user.get("user_id")
-        client = await get_analysis_client_for_user(user_id, db)
-        
+        client, llm_config = await get_analysis_client_for_user(user_id, db)
+
         result = await client.assess_risk(
             market_title=request.market_title,
             position_size=request.position_size,
             entry_price=request.entry_price,
             days_to_expiry=request.days_to_expiry,
-            correlation_info=request.correlation_info or "No correlation data"
+            correlation_info=request.correlation_info or "No correlation data",
+            llm_config=llm_config,
         )
-        
+
         await client.close()
-        
+
         return AnalysisResponse(
-            success=True,
-            data=result,
-            timestamp=utc_now().isoformat(),
-            backend=client.backend.value
+            success=True, data=result, timestamp=utc_now().isoformat(), backend=client.backend.value
         )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Risk assessment failed: {str(e)}"
-        )
+            detail=f"Risk assessment failed: {str(e)}",
+        ) from e
 
 
 @router.post("/trade-plan", response_model=AnalysisResponse)
 async def generate_trade_plan(
     request: TradePlanRequest,
     current_user: dict = Depends(get_current_user_from_token),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     Generate a trade execution plan with order type recommendations,
@@ -424,32 +443,31 @@ async def generate_trade_plan(
     """
     try:
         user_id = current_user.get("user_id")
-        client = await get_analysis_client_for_user(user_id, db)
-        
+        client, llm_config = await get_analysis_client_for_user(user_id, db)
+
         result = await client.generate_trade_plan(
             action=request.action,
             market_title=request.market_title,
             target_size=request.target_size,
             current_price=request.current_price,
-            order_book=request.order_book
+            order_book=request.order_book,
+            llm_config=llm_config,
         )
-        
+
         await client.close()
-        
+
         return AnalysisResponse(
-            success=True,
-            data=result,
-            timestamp=utc_now().isoformat(),
-            backend=client.backend.value
+            success=True, data=result, timestamp=utc_now().isoformat(), backend=client.backend.value
         )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Trade plan generation failed: {str(e)}"
-        )
+            detail=f"Trade plan generation failed: {str(e)}",
+        ) from e
 
 
 # ────────────── Trader Analysis & Copy-Trade Evaluation ──────────────
+
 
 async def _enrich_trader_request(request: TraderAnalysisRequest) -> dict:
     """
@@ -504,7 +522,7 @@ async def _enrich_trader_request(request: TraderAnalysisRequest) -> dict:
 @router.post("/trader/stream")
 async def analyze_trader_stream(
     request: TraderAnalysisRequest,
-    current_user: Optional[dict] = Depends(get_optional_user_from_token),
+    current_user: dict | None = Depends(get_optional_user_from_token),
     db: Session = Depends(get_db),
 ):
     """
@@ -517,7 +535,7 @@ async def analyze_trader_stream(
     # Fetch real trade data BEFORE starting the stream
     enriched = await _enrich_trader_request(request)
 
-    client = await get_analysis_client_for_user(user_id, db)
+    client, llm_config = await get_analysis_client_for_user(user_id, db)
 
     async def event_generator():
         try:
@@ -533,6 +551,7 @@ async def analyze_trader_stream(
                 markets_traded=enriched["markets_traded"],
                 recent_trades_json=enriched["recent_trades_json"],
                 user_id=str(user_id),
+                llm_config=llm_config,
             ):
                 payload = json.dumps({"chunk": chunk})
                 yield f"data: {payload}\n\n"
@@ -568,7 +587,7 @@ async def analyze_trader(
     try:
         user_id = current_user.get("user_id")
         enriched = await _enrich_trader_request(request)
-        client = await get_analysis_client_for_user(user_id, db)
+        client, llm_config = await get_analysis_client_for_user(user_id, db)
 
         result = await client.analyze_trader(
             wallet_address=enriched["wallet_address"],
@@ -579,6 +598,7 @@ async def analyze_trader(
             markets_traded=enriched["markets_traded"],
             recent_trades_json=enriched["recent_trades_json"],
             user_id=str(user_id),
+            llm_config=llm_config,
         )
 
         await client.close()
@@ -593,7 +613,7 @@ async def analyze_trader(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Trader analysis failed: {str(e)}",
-        )
+        ) from e
 
 
 @router.post("/copy-trade-eval", response_model=AnalysisResponse)
@@ -608,7 +628,7 @@ async def evaluate_copy_trade(
     """
     try:
         user_id = current_user.get("user_id")
-        client = await get_analysis_client_for_user(user_id, db)
+        client, llm_config = await get_analysis_client_for_user(user_id, db)
 
         result = await client.evaluate_copy_trade(
             trader_wallet=request.trader_wallet,
@@ -620,6 +640,7 @@ async def evaluate_copy_trade(
             current_price=request.current_price,
             user_risk_profile=request.user_risk_profile,
             user_id=str(user_id),
+            llm_config=llm_config,
         )
 
         await client.close()
@@ -634,35 +655,35 @@ async def evaluate_copy_trade(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Copy trade evaluation failed: {str(e)}",
-        )
+        ) from e
 
 
 @router.get("/health")
 async def health_check():
     """Check if the analysis services are healthy."""
     from app.grpc_clients.analysis_client import AnalysisClient
-    
+
     # Check both AI backends
     llm_client = AnalysisClient(backend=AIBackend.LLM_CHAIN)
     llm_healthy = await llm_client.health_check()
     await llm_client.close()
-    
+
     cli_client = AnalysisClient(backend=AIBackend.CLI_AGENT)
     cli_healthy = await cli_client.health_check()
     await cli_client.close()
-    
+
     return {
         "status": "healthy" if (llm_healthy or cli_healthy) else "unhealthy",
         "backends": {
             "llm_chain": {
                 "healthy": llm_healthy,
-                "host": f"{settings.llm_chain_grpc_host}:{settings.llm_chain_grpc_port}"
+                "host": f"{settings.llm_chain_grpc_host}:{settings.llm_chain_grpc_port}",
             },
             "cli_agent": {
                 "healthy": cli_healthy,
-                "host": f"{settings.cli_agent_grpc_host}:{settings.cli_agent_grpc_port}"
-            }
-        }
+                "host": f"{settings.cli_agent_grpc_host}:{settings.cli_agent_grpc_port}",
+            },
+        },
     }
 
 
@@ -677,7 +698,6 @@ def _group_markets_by_event(markets: list) -> list:
     Returns a list of (event_slug, event_title, [markets]) tuples.
     Single-market events come first, multi-option events after.
     """
-    from collections import OrderedDict
 
     groups: OrderedDict = OrderedDict()
     for m in markets:
@@ -697,7 +717,7 @@ def _group_markets_by_event(markets: list) -> list:
 @router.post("/opportunities/analyze-markets")
 async def stream_analyze_markets(
     request: AnalyzeMarketsRequest,
-    current_user: Optional[dict] = Depends(get_optional_user_from_token),
+    current_user: dict | None = Depends(get_optional_user_from_token),
     db: Session = Depends(get_db),
 ):
     """
@@ -720,7 +740,7 @@ async def stream_analyze_markets(
 
         event_groups = _group_markets_by_event(markets)
         total = len(markets)
-        client = await get_analysis_client_for_user(user_id, db)
+        client, llm_config = await get_analysis_client_for_user(user_id, db)
 
         result_queue: asyncio.Queue = asyncio.Queue()
         semaphore = asyncio.Semaphore(_SCAN_CONCURRENCY)
@@ -732,9 +752,7 @@ async def stream_analyze_markets(
             event_liq = str(group.get("liquidity", "0"))
 
             first_cid = (
-                group_markets[0].get("condition_id")
-                or group_markets[0].get("conditionId")
-                or ""
+                group_markets[0].get("condition_id") or group_markets[0].get("conditionId") or ""
             )
             smart_ctx = ""
             try:
@@ -760,12 +778,13 @@ async def stream_analyze_markets(
                     try:
                         yes_p = float(prices[0]) if prices else 0.5
                         no_p = float(prices[1]) if len(prices) > 1 else (1 - yes_p)
+                        vol24 = float(m.get("volume24hr") or m.get("_event_volume_24hr") or 0)
+                        liq = float(m.get("liquidityNum") or m.get("liquidity") or 0)
                     except (ValueError, TypeError):
                         yes_p, no_p = 0.5, 0.5
+                        vol24, liq = 0.0, 0.0
 
-                    vol24 = float(m.get("volume24hr") or m.get("_event_volume_24hr") or 0)
                     end_d = m.get("end_date_iso") or m.get("endDateIso") or ""
-                    liq = float(m.get("liquidityNum") or m.get("liquidity") or 0)
                     pnl = round(max(yes_p, no_p) - min(yes_p, no_p), 4)
 
                     try:
@@ -780,9 +799,12 @@ async def stream_analyze_markets(
                             smart_money_context=smart_ctx,
                             liquidity=liq,
                             condition_id=first_cid,
+                            llm_config=llm_config,
                         )
                     except Exception as exc:
-                        logger.error("analyze-markets scan_opportunity failed for %s: %s", first_cid, exc)
+                        logger.error(
+                            "analyze-markets scan_opportunity failed for %s: %s", first_cid, exc
+                        )
                         scores = {
                             "condition_id": first_cid,
                             "market_title": m.get("question", "Unknown"),
@@ -808,15 +830,19 @@ async def stream_analyze_markets(
                             no_p = float(prices[1]) if len(prices) > 1 else (1 - yes_p)
                         except (ValueError, TypeError):
                             yes_p, no_p = 0.5, 0.5
-                        sub_markets.append({
-                            "label": m.get("groupItemTitle") or m.get("question", ""),
-                            "question": m.get("question", ""),
-                            "condition_id": m.get("condition_id") or m.get("conditionId") or "",
-                            "yes_price": yes_p,
-                            "no_price": no_p,
-                            "volume_24h": float(m.get("volume24hr") or 0),
-                            "liquidity": float(m.get("liquidityNum") or m.get("liquidity") or 0),
-                        })
+                        sub_markets.append(
+                            {
+                                "label": m.get("groupItemTitle") or m.get("question", ""),
+                                "question": m.get("question", ""),
+                                "condition_id": m.get("condition_id") or m.get("conditionId") or "",
+                                "yes_price": yes_p,
+                                "no_price": no_p,
+                                "volume_24h": float(m.get("volume24hr") or 0),
+                                "liquidity": float(
+                                    m.get("liquidityNum") or m.get("liquidity") or 0
+                                ),
+                            }
+                        )
 
                     try:
                         event_scores = await client.scan_event_opportunity(
@@ -825,9 +851,12 @@ async def stream_analyze_markets(
                             event_volume=event_vol,
                             event_liquidity=event_liq,
                             smart_money_context=smart_ctx,
+                            llm_config=llm_config,
                         )
                     except Exception as exc:
-                        logger.error("analyze-markets scan_event failed for %s: %s", event_title, exc)
+                        logger.error(
+                            "analyze-markets scan_event failed for %s: %s", event_title, exc
+                        )
                         event_scores = {
                             "event_title": event_title,
                             "ai_score": 30,
@@ -862,14 +891,16 @@ async def stream_analyze_markets(
                     cid, scores = await asyncio.wait_for(result_queue.get(), timeout=2.0)
                     all_results.append(scores)
                     done_count += 1
-                    payload = json.dumps({
-                        "market_id": cid,
-                        "scores": scores,
-                        "done_count": done_count,
-                        "total": total,
-                    })
+                    payload = json.dumps(
+                        {
+                            "market_id": cid,
+                            "scores": scores,
+                            "done_count": done_count,
+                            "total": total,
+                        }
+                    )
                     yield f"data: {payload}\n\n"
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     if all(t.done() for t in tasks) and result_queue.empty():
                         break
                     continue
@@ -898,7 +929,7 @@ async def stream_analyze_markets(
 @router.post("/opportunities/stream")
 async def stream_opportunity_scan(
     request: OpportunityScanRequest,
-    current_user: Optional[dict] = Depends(get_optional_user_from_token),
+    current_user: dict | None = Depends(get_optional_user_from_token),
     db: Session = Depends(get_db),
 ):
     """
@@ -931,15 +962,18 @@ async def stream_opportunity_scan(
             if cached:
                 logger.info("Serving easy trade scan from cache for user %s", user_id)
                 for i, r in enumerate(cached):
-                    payload = json.dumps({
-                        "market_id": r.get("condition_id", ""),
-                        "scores": r,
-                        "done_count": i + 1,
-                        "total": len(cached),
-                        "cached": True,
-                    })
+                    payload = json.dumps(
+                        {
+                            "market_id": r.get("condition_id", ""),
+                            "scores": r,
+                            "done_count": i + 1,
+                            "total": len(cached),
+                            "cached": True,
+                        }
+                    )
                     yield f"data: {payload}\n\n"
-                yield f"data: {json.dumps({'all_done': True, 'total': len(cached), 'cached': True})}\n\n"
+                done_payload = json.dumps({"all_done": True, "total": len(cached), "cached": True})
+                yield f"data: {done_payload}\n\n"
                 return
 
         # ── Fetch combined (newest + trending) markets ────────
@@ -975,7 +1009,7 @@ async def stream_opportunity_scan(
         # ── Group by event & create analysis client ──────────
         event_groups = _group_markets_by_event(markets)
         total = len(markets)
-        client = await get_analysis_client_for_user(user_id, db)
+        client, llm_config = await get_analysis_client_for_user(user_id, db)
 
         # Result queue for streaming back to the client
         result_queue: asyncio.Queue = asyncio.Queue()
@@ -990,9 +1024,7 @@ async def stream_opportunity_scan(
 
             # ── Fetch smart-money context for the first condition id ──
             first_cid = (
-                group_markets[0].get("condition_id")
-                or group_markets[0].get("conditionId")
-                or ""
+                group_markets[0].get("condition_id") or group_markets[0].get("conditionId") or ""
             )
             smart_ctx = ""
             try:
@@ -1019,12 +1051,13 @@ async def stream_opportunity_scan(
                     try:
                         yes_p = float(prices[0]) if prices else 0.5
                         no_p = float(prices[1]) if len(prices) > 1 else (1 - yes_p)
+                        vol24 = float(m.get("volume24hr") or m.get("_event_volume_24hr") or 0)
+                        liq = float(m.get("liquidityNum") or m.get("liquidity") or 0)
                     except (ValueError, TypeError):
                         yes_p, no_p = 0.5, 0.5
+                        vol24, liq = 0.0, 0.0
 
-                    vol24 = float(m.get("volume24hr") or m.get("_event_volume_24hr") or 0)
                     end_d = m.get("end_date_iso") or m.get("endDateIso") or ""
-                    liq = float(m.get("liquidityNum") or m.get("liquidity") or 0)
                     pnl = round(max(yes_p, no_p) - min(yes_p, no_p), 4)
 
                     try:
@@ -1039,6 +1072,7 @@ async def stream_opportunity_scan(
                             smart_money_context=smart_ctx,
                             liquidity=liq,
                             condition_id=first_cid,
+                            llm_config=llm_config,
                         )
                     except Exception as exc:
                         logger.error("scan_opportunity failed for %s: %s", first_cid, exc)
@@ -1069,15 +1103,19 @@ async def stream_opportunity_scan(
                             no_p = float(prices[1]) if len(prices) > 1 else (1 - yes_p)
                         except (ValueError, TypeError):
                             yes_p, no_p = 0.5, 0.5
-                        sub_markets.append({
-                            "label": m.get("groupItemTitle") or m.get("question", ""),
-                            "question": m.get("question", ""),
-                            "condition_id": m.get("condition_id") or m.get("conditionId") or "",
-                            "yes_price": yes_p,
-                            "no_price": no_p,
-                            "volume_24h": float(m.get("volume24hr") or 0),
-                            "liquidity": float(m.get("liquidityNum") or m.get("liquidity") or 0),
-                        })
+                        sub_markets.append(
+                            {
+                                "label": m.get("groupItemTitle") or m.get("question", ""),
+                                "question": m.get("question", ""),
+                                "condition_id": m.get("condition_id") or m.get("conditionId") or "",
+                                "yes_price": yes_p,
+                                "no_price": no_p,
+                                "volume_24h": float(m.get("volume24hr") or 0),
+                                "liquidity": float(
+                                    m.get("liquidityNum") or m.get("liquidity") or 0
+                                ),
+                            }
+                        )
 
                     try:
                         event_scores = await client.scan_event_opportunity(
@@ -1086,6 +1124,7 @@ async def stream_opportunity_scan(
                             event_volume=event_vol,
                             event_liquidity=event_liq,
                             smart_money_context=smart_ctx,
+                            llm_config=llm_config,
                         )
                     except Exception as exc:
                         logger.error("scan_event_opportunity failed for %s: %s", event_title, exc)
@@ -1127,14 +1166,16 @@ async def stream_opportunity_scan(
                     cid, scores = await asyncio.wait_for(result_queue.get(), timeout=2.0)
                     all_results.append(scores)
                     done_count += 1
-                    payload = json.dumps({
-                        "market_id": cid,
-                        "scores": scores,
-                        "done_count": done_count,
-                        "total": total,
-                    })
+                    payload = json.dumps(
+                        {
+                            "market_id": cid,
+                            "scores": scores,
+                            "done_count": done_count,
+                            "total": total,
+                        }
+                    )
                     yield f"data: {payload}\n\n"
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # Check if all tasks are done (maybe some failed silently)
                     if all(t.done() for t in tasks) and result_queue.empty():
                         break

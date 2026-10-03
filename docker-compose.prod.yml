@@ -19,7 +19,11 @@ services:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-polymarket_user} -d ${POSTGRES_DB:-polymarket}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-polymarket_user} -d ${POSTGRES_DB:-polymarket}",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -68,9 +72,12 @@ services:
       - "50051"
     environment:
       LLM_PROVIDER: ${LLM_PROVIDER:-openai}
-      LLM_MODEL: ${LLM_MODEL:-gpt-4-turbo-preview}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
       LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.3}
       LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-4096}
+      # Per-task model tiering (see polymarket_settings)
+      LLM_TIERING_ENABLED: ${LLM_TIERING_ENABLED:-true}
+      LLM_STRONG_REASONING_EFFORT: ${LLM_STRONG_REASONING_EFFORT:-medium}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
@@ -135,7 +142,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile.prod
     expose:
-      - "8000"
+      - "8002"
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-polymarket}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -152,6 +159,9 @@ services:
       POLYMARKET_PRIVATE_KEY: ${POLYMARKET_PRIVATE_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       PROMPTS_PATH: /app/prompts/prompts.json
+      # Shared polymarket_settings package (read-only mount; the
+      # ./backend build context cannot COPY services/shared).
+      PYTHONPATH: /app:/app/shared
       LLM_CHAIN_GRPC_HOST: llm-chain
       LLM_CHAIN_GRPC_PORT: 50051
       CLI_AGENT_GRPC_HOST: cli-agent
@@ -159,7 +169,15 @@ services:
       DEFAULT_AI_BACKEND: ${DEFAULT_AI_BACKEND:-llm_chain}
       GRPC_TIMEOUT: ${GRPC_TIMEOUT:-60}
       ADMIN_WALLETS: ${ADMIN_WALLETS:-}
-      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      # MUST stay 1: every scheduled background job
+      # (stop-loss, inverse bot, market maker, trade monitor,
+      # aggregation, lifecycle) starts from the FastAPI lifespan
+      # and de-duplicates through process-local in-memory state.
+      # More than one worker runs duplicate schedulers, so a
+      # single stop-loss trigger places two independent orders.
+      # Raising this requires moving the schedulers behind a
+      # Postgres advisory lock first.
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-1}
     depends_on:
       postgres:
         condition: service_healthy
@@ -171,6 +189,7 @@ services:
         condition: service_started
     volumes:
       - ./prompts:/app/prompts:ro
+      - ./services/shared:/app/shared:ro
     restart: unless-stopped
     deploy:
       resources:
@@ -187,7 +206,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile.prod
       args:
-        VITE_API_URL: ""   # empty → relative /api, proxied by nginx
+        VITE_API_URL: "" # empty → relative /api, proxied by nginx
     ports:
       - "${FRONTEND_PORT:-80}:80"
     depends_on:

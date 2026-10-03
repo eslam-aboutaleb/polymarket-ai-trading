@@ -1,3 +1,12 @@
+/**
+ * Operator console exposing risk controls, Binance signals, an analysis lab and category browse.
+ *
+ * Every action calls a service directly (emergencyService, binanceSignalsService, analysisService,
+ * marketsService) and reports through one shared error/success banner; analysis responses are
+ * printed as raw JSON for endpoint validation.
+ *
+ * @module components/OpsCenter
+ */
 import { useEffect, useMemo, useState } from "react";
 import {
   analysisService,
@@ -6,10 +15,7 @@ import {
   TradePlanRequest,
   TraderAnalysisRequest,
 } from "../services/analysisService";
-import {
-  binanceSignalsService,
-  BinanceDashboardData,
-} from "../services/binanceSignalsService";
+import { binanceSignalsService, BinanceDashboardData } from "../services/binanceSignalsService";
 import {
   emergencyService,
   ArbitrageOpportunity,
@@ -26,8 +32,7 @@ export default function OpsCenter() {
 
   // ── Binance data ────────────────────────────────────────────────
   const [binanceBusy, setBinanceBusy] = useState(false);
-  const [binanceDashboard, setBinanceDashboard] =
-    useState<BinanceDashboardData | null>(null);
+  const [binanceDashboard, setBinanceDashboard] = useState<BinanceDashboardData | null>(null);
   const [signalChain, setSignalChain] = useState("ethereum");
   const [signalLimit, setSignalLimit] = useState(10);
   const [smartMoneySignals, setSmartMoneySignals] = useState<any[]>([]);
@@ -40,9 +45,7 @@ export default function OpsCenter() {
   const [tokenSearchRows, setTokenSearchRows] = useState<any[]>([]);
   const [tokenAddress, setTokenAddress] = useState("");
   const [tokenChain, setTokenChain] = useState("ethereum");
-  const [tokenData, setTokenData] = useState<Record<string, unknown> | null>(
-    null,
-  );
+  const [tokenData, setTokenData] = useState<Record<string, unknown> | null>(null);
 
   // ── Risk ops ────────────────────────────────────────────────────
   const [riskBusy, setRiskBusy] = useState<string | null>(null);
@@ -163,14 +166,7 @@ export default function OpsCenter() {
   const loadSignalsAndRankings = async () => {
     try {
       setBinanceBusy(true);
-      const [
-        smartMoney,
-        activeBuys,
-        social,
-        trending,
-        inflow,
-        pnl,
-      ] = await Promise.all([
+      const [smartMoney, activeBuys, social, trending, inflow, pnl] = await Promise.all([
         binanceSignalsService.getSmartMoneySignals(signalChain, signalLimit),
         binanceSignalsService.getActiveBuySignals(signalChain, signalLimit),
         binanceSignalsService.getSocialHype(signalLimit),
@@ -210,10 +206,7 @@ export default function OpsCenter() {
     if (!tokenAddress.trim()) return;
     try {
       setBinanceBusy(true);
-      const data = await binanceSignalsService.getTokenData(
-        tokenAddress.trim(),
-        tokenChain,
-      );
+      const data = await binanceSignalsService.getTokenData(tokenAddress.trim(), tokenChain);
       setTokenData(data || {});
       setNoticeSuccess("Token data loaded.");
     } catch (err: unknown) {
@@ -290,9 +283,7 @@ export default function OpsCenter() {
     if (!qualityWallet.trim()) return;
     try {
       setRiskBusy("quality");
-      const quality = await emergencyService.getTraderQuality(
-        qualityWallet.trim(),
-      );
+      const quality = await emergencyService.getTraderQuality(qualityWallet.trim());
       setTraderQuality(quality);
       setNoticeSuccess("Trader quality loaded.");
     } catch (err: unknown) {
@@ -433,30 +424,29 @@ export default function OpsCenter() {
           <div className="rounded border border-[var(--line)] bg-[var(--bg-soft)] p-3">
             <p className="text-xs font-semibold mb-1">1. Risk Controls</p>
             <p className="text-xs text-soft">
-              Use for emergency stop, resume, trader rescoring, arbitrage scanning,
-              and trader quality checks. Start here when you need immediate risk
-              intervention.
+              Use for emergency stop, resume, trader rescoring, arbitrage scanning, and trader
+              quality checks. Start here when you need immediate risk intervention.
             </p>
           </div>
           <div className="rounded border border-[var(--line)] bg-[var(--bg-soft)] p-3">
             <p className="text-xs font-semibold mb-1">2. Binance Signals</p>
             <p className="text-xs text-soft">
-              Use to refresh Binance intelligence endpoints and inspect token-level
-              market activity before taking discretionary trades.
+              Use to refresh Binance intelligence endpoints and inspect token-level market activity
+              before taking discretionary trades.
             </p>
           </div>
           <div className="rounded border border-[var(--line)] bg-[var(--bg-soft)] p-3">
             <p className="text-xs font-semibold mb-1">3. Analysis Lab</p>
             <p className="text-xs text-soft">
-              Fill request forms and run backend analysis endpoints. Output JSON
-              appears at the bottom of the section for quick validation.
+              Fill request forms and run backend analysis endpoints. Output JSON appears at the
+              bottom of the section for quick validation.
             </p>
           </div>
           <div className="rounded border border-[var(--line)] bg-[var(--bg-soft)] p-3">
             <p className="text-xs font-semibold mb-1">4. Category Browse</p>
             <p className="text-xs text-soft">
-              Pull markets from <span className="mono">/api/markets/browse</span> by
-              category to confirm market inventory and backend browse behavior.
+              Pull markets from <span className="mono">/api/markets/browse</span> by category to
+              confirm market inventory and backend browse behavior.
             </p>
           </div>
         </div>
@@ -535,9 +525,7 @@ export default function OpsCenter() {
         )}
 
         <div>
-          <p className="text-xs text-soft mb-2">
-            Arbitrage opportunities: {arbitrageRows.length}
-          </p>
+          <p className="text-xs text-soft mb-2">Arbitrage opportunities: {arbitrageRows.length}</p>
           <div className="space-y-2 max-h-52 overflow-y-auto scroll-soft">
             {arbitragePreview.map((row, index) => (
               <div
@@ -690,8 +678,8 @@ export default function OpsCenter() {
       <section className="surface-panel p-5 space-y-4">
         <h2 className="text-lg font-semibold">Analysis Lab</h2>
         <p className="text-xs text-soft">
-          This panel is a direct frontend harness for analysis endpoints. Run health
-          first, then scan/risk/trade-plan, then trader/copy evaluation.
+          This panel is a direct frontend harness for analysis endpoints. Run health first, then
+          scan/risk/trade-plan, then trader/copy evaluation.
         </p>
         <div className="flex flex-wrap gap-2">
           <button
@@ -760,9 +748,7 @@ export default function OpsCenter() {
               <input
                 className="input-field w-full mb-2"
                 value={riskForm.market_title}
-                onChange={(e) =>
-                  setRiskForm((prev) => ({ ...prev, market_title: e.target.value }))
-                }
+                onChange={(e) => setRiskForm((prev) => ({ ...prev, market_title: e.target.value }))}
                 placeholder="Market title"
               />
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -967,7 +953,8 @@ export default function OpsCenter() {
 
         {analysisHealth && (
           <p className="text-xs text-soft">
-            Health status: <span className="mono">{String(analysisHealth.status || "unknown")}</span>
+            Health status:{" "}
+            <span className="mono">{String(analysisHealth.status || "unknown")}</span>
           </p>
         )}
         {analysisOutput && (

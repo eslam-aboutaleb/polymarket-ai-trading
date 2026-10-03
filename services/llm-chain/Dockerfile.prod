@@ -15,6 +15,10 @@ RUN pip install --no-cache-dir uv
 # ── Deps layer ────────────────────────────────────────────────
 COPY services/llm-chain/pyproject.toml services/llm-chain/README.md ./
 COPY services/mcps/research/ services/mcps/research/
+# Shared packages used by both AI services (polymarket_mcp and
+# polymarket_settings). Kept as a single implementation so
+# llm-chain and cli-agent cannot drift apart.
+COPY services/shared/ shared/
 RUN uv pip install --system -e .
 
 # ── Application code ──────────────────────────────────────────
@@ -28,7 +32,7 @@ RUN python -m grpc_tools.protoc \
         --grpc_python_out=. \
         proto/analysis.proto
 
-ENV PYTHONPATH=/app
+ENV PYTHONPATH=/app:/app/shared
 
 # ChromaDB data dir
 RUN mkdir -p /app/data/chroma

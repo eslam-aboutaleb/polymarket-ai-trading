@@ -2,22 +2,23 @@
 Request logging middleware — captures every API call into an in-memory ring
 buffer so the debug dashboard can display request logs, errors and stats.
 """
+
 from __future__ import annotations
 
 import asyncio
 import hashlib
 import hmac
+import logging
 import time
 import uuid
 from collections import deque
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import parse_qsl, urlencode
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response
-import logging
 
 from app.config import get_settings
 
@@ -28,8 +29,8 @@ settings = get_settings()
 
 MAX_LOG_ENTRIES = 1000
 
-_log_buffer: deque[Dict[str, Any]] = deque(maxlen=MAX_LOG_ENTRIES)
-_endpoint_stats: Dict[str, Dict[str, Any]] = {}
+_log_buffer: deque[dict[str, Any]] = deque(maxlen=MAX_LOG_ENTRIES)
+_endpoint_stats: dict[str, dict[str, Any]] = {}
 _app_start_time: float = time.time()
 
 # Lock for thread-safe writes (asyncio is single-threaded per loop,
@@ -37,12 +38,12 @@ _app_start_time: float = time.time()
 _stats_lock = asyncio.Lock()
 
 
-def get_log_entries() -> List[Dict[str, Any]]:
+def get_log_entries() -> list[dict[str, Any]]:
     """Return a shallow copy of all log entries (newest first)."""
     return list(reversed(_log_buffer))
 
 
-def get_endpoint_stats() -> Dict[str, Dict[str, Any]]:
+def get_endpoint_stats() -> dict[str, dict[str, Any]]:
     """Return per-endpoint aggregate stats."""
     return dict(_endpoint_stats)
 
@@ -116,9 +117,7 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
     timestamp, client_ip, user_agent, and error details for 4xx/5xx.
     """
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
 
         # Skip noise endpoints
@@ -133,7 +132,7 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
         query = _sanitize_query(str(request.url.query) if request.url.query else "")
         start = time.perf_counter()
 
-        error_detail: Optional[str] = None
+        error_detail: str | None = None
         status_code = 500  # default in case of unhandled exception
 
         try:
@@ -153,9 +152,9 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
             duration_ms = round((time.perf_counter() - start) * 1000, 2)
             level = _classify_level(status_code)
 
-            entry: Dict[str, Any] = {
+            entry: dict[str, Any] = {
                 "request_id": request_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "method": method,
                 "path": path,
                 "query": query,

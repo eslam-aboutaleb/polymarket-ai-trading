@@ -1,6 +1,8 @@
 """Main FastAPI application"""
+
 import asyncio
-import logging
+import importlib
+import logging.config
 import os
 import re
 from contextlib import asynccontextmanager
@@ -8,38 +10,69 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from slowapi.util import get_remote_address
+from sqlalchemy import text
 
-from app.config import get_settings
-from app.api.routes import auth
-from app.api.routes import analysis
-from app.api.routes import debug
-from app.api.routes import inverse_bot
-from app.api.routes import markets
-from app.api.routes import portfolio
+from app.api.routes import (
+    analysis,
+    auth,
+    backtesting,
+    binance_signals,
+    credentials,
+    debug,
+    health,
+    inverse_bot,
+    latency_arb,
+    market_maker,
+    markets,
+    news,
+    notifications,
+    portfolio,
+    trades,
+    whales,
+)
 from app.api.routes import settings as settings_routes
-from app.api.routes import trades
-from app.api.routes import market_maker
-from app.api.routes import backtesting
-from app.api.routes import binance_signals
-from app.api.routes import news
+from app.config import get_settings
 from app.middleware.request_logger import RequestLogMiddleware
 from app.security.crypto import EncryptionConfigError, get_fernet_keyring
+from app.security.rate_limit import limiter
 from app.utils.database import SessionLocal, engine
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# Initialize rate limiter
-limiter = Limiter(
-    key_func=get_remote_address,
-    default_limits=["100/minute"],
-    storage_uri=os.environ.get("REDIS_URL", "memory://")
+# Logging configuration. LOG_LEVEL is read from the environment so
+# operators can raise verbosity without code changes; previously the
+# root logger was never configured and INFO records from the trading
+# paths were discarded.
+logging.config.dictConfig(
+    {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "standard": {
+                "format": "%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+            },
+        },
+        "handlers": {
+            "default": {
+                "class": "logging.StreamHandler",
+                "formatter": "standard",
+            },
+        },
+        "root": {
+            "handlers": ["default"],
+            "level": os.environ.get("LOG_LEVEL", "INFO").upper(),
+        },
+    }
 )
+
+# Rate limiter is constructed in app.security.rate_limit so route
+# modules can reference it without importing app.main (circular).
+# It is wired into the app below via app.state.limiter.
+
 
 def _validate_startup_security() -> None:
     """Fail fast on security-critical misconfiguration."""
@@ -130,6 +163,7 @@ def _sync_admin_wallets():
     finally:
         db.close()
 
+
 # Background task references
 _background_tasks: list = []
 
@@ -143,20 +177,30 @@ async def lifespan(app: FastAPI):
     _sync_admin_wallets()
 
     try:
-        from app.services.trade_monitor import start_trade_monitor
-        from app.services.leaderboard_service import refresh_leaderboard_background
         from app.models.followed_trader import FollowedTrader
         from app.models.notification_followed_trader import NotificationFollowedTrader
+        from app.services.leaderboard_service import refresh_leaderboard_background
+        from app.services.trade_monitor import start_trade_monitor
 
         # Load currently-followed wallets so the monitor can subscribe
         db = SessionLocal()
         try:
-            copy_wallets = db.query(FollowedTrader.trader_wallet).filter(
-                FollowedTrader.is_active == True,
-            ).distinct().all()
-            notif_wallets = db.query(NotificationFollowedTrader.trader_wallet).filter(
-                NotificationFollowedTrader.is_active == True,
-            ).distinct().all()
+            copy_wallets = (
+                db.query(FollowedTrader.trader_wallet)
+                .filter(
+                    FollowedTrader.is_active,
+                )
+                .distinct()
+                .all()
+            )
+            notif_wallets = (
+                db.query(NotificationFollowedTrader.trader_wallet)
+                .filter(
+                    NotificationFollowedTrader.is_active,
+                )
+                .distinct()
+                .all()
+            )
             initial_wallets = list(
                 {
                     w.trader_wallet.lower()
@@ -169,12 +213,18 @@ async def lifespan(app: FastAPI):
 
         if initial_wallets:
             from app.services.trade_monitor import add_watched_wallet
+
             for w in initial_wallets:
                 add_watched_wallet(w)
 
         # Start background tasks
         monitor_task = asyncio.create_task(start_trade_monitor())
         _background_tasks.append(monitor_task)
+
+        # Start the CLOB WebSocket manager for real-time price ticks
+        from app.services.clob_ws_manager import start_clob_ws_manager
+
+        start_clob_ws_manager()
 
         leaderboard_task = asyncio.create_task(
             refresh_leaderboard_background(db=None, interval=300)
@@ -183,31 +233,106 @@ async def lifespan(app: FastAPI):
 
         # Start stop-loss monitor
         from app.services.stop_loss_monitor import start_stop_loss_monitor
+
         await start_stop_loss_monitor()
 
         # Start inverse position bot monitor
         from app.services.inverse_bot_monitor import start_inverse_bot_monitor
+
         await start_inverse_bot_monitor()
 
         # Start market maker for all enabled configs
         from app.services.market_maker_service import start_all_enabled_market_makers
+
         await start_all_enabled_market_makers()
 
         # Start position lifecycle manager
         from app.services.position_lifecycle_service import start_position_lifecycle_manager
+
         await start_position_lifecycle_manager()
 
         # Start trade aggregation service
         from app.services.trade_aggregation_service import start_aggregation_service
+
         await start_aggregation_service()
 
         # Start arbitrage detection monitor
         from app.services.arbitrage_service import start_arbitrage_monitor
+
         await start_arbitrage_monitor()
 
         # Start news background generator
         from app.services.news_service import start_news_generator
+
         await start_news_generator()
+
+        # Start on-chain whale monitor (CTF events)
+        from app.services.ctf_events_service import start_ctf_events_monitor
+
+        await start_ctf_events_monitor()
+
+        # Start on-chain auto-redeem manager (dry-run by default)
+        from app.services.redemption_service import start_redemption_manager
+
+        await start_redemption_manager()
+
+        # Start the latency-arbitrage engine (paper-first;
+        # live mode behind LATENCY_ARB_LIVE)
+        from app.services.latency_arb_service import (
+            start_latency_arb_engine,
+        )
+
+        await start_latency_arb_engine()
+
+        # Dead-man's switch watchdog: alerts when a scheduler
+        # heartbeat goes stale (e.g. a monitor crashed without
+        # cancelling its task).
+        async def _scheduler_watchdog() -> None:
+            from app.utils.scheduler_lock import (
+                SCHEDULER_INTERVALS,
+                scheduler_heartbeat_age,
+                scheduler_stale_threshold,
+            )
+
+            while True:
+                await asyncio.sleep(60)
+                for scheduler_name in SCHEDULER_INTERVALS:
+                    age = scheduler_heartbeat_age(scheduler_name)
+                    if age is None:
+                        continue
+                    threshold = scheduler_stale_threshold(scheduler_name)
+                    if age <= threshold:
+                        continue
+                    logger.error(
+                        "DEAD_MAN_SWITCH: scheduler '%s' heartbeat is %.0fs old "
+                        "(stale threshold %ds)",
+                        scheduler_name,
+                        age,
+                        threshold,
+                    )
+                    try:
+                        from app.services.alert_service import dispatch
+
+                        await dispatch(
+                            "dead_man_switch",
+                            None,
+                            {
+                                "scheduler": scheduler_name,
+                                "heartbeat_age_seconds": round(age, 1),
+                                "threshold_seconds": threshold,
+                            },
+                        )
+                    except ImportError:
+                        pass
+                    except Exception:
+                        logger.warning(
+                            "Dead-man alert dispatch failed for '%s'",
+                            scheduler_name,
+                            exc_info=True,
+                        )
+
+        watchdog_task = asyncio.create_task(_scheduler_watchdog())
+        _background_tasks.append(watchdog_task)
 
         logger.info(
             "Background services started (trade monitor + leaderboard refresh + "
@@ -220,51 +345,55 @@ async def lifespan(app: FastAPI):
     yield
 
     # ── Shutdown ──
-    try:
-        from app.services.trade_monitor import stop_trade_monitor
-        await stop_trade_monitor()
-    except Exception:
-        pass
-    try:
-        from app.services.stop_loss_monitor import stop_stop_loss_monitor
-        await stop_stop_loss_monitor()
-    except Exception:
-        pass
-    try:
-        from app.services.inverse_bot_monitor import stop_inverse_bot_monitor
-        await stop_inverse_bot_monitor()
-    except Exception:
-        pass
-    try:
-        from app.services.market_maker_service import stop_all_market_makers
-        await stop_all_market_makers()
-    except Exception:
-        pass
-    try:
-        from app.services.position_lifecycle_service import stop_position_lifecycle_manager
-        await stop_position_lifecycle_manager()
-    except Exception:
-        pass
-    try:
-        from app.services.trade_aggregation_service import stop_aggregation_service
-        await stop_aggregation_service()
-    except Exception:
-        pass
-    try:
-        from app.services.arbitrage_service import stop_arbitrage_monitor
-        await stop_arbitrage_monitor()
-    except Exception:
-        pass
-    try:
-        from app.services.news_service import stop_news_generator
-        await stop_news_generator()
-    except Exception:
-        pass
-    try:
-        from app.grpc_clients.analysis_client import close_shared_channels
-        await close_shared_channels()
-    except Exception:
-        pass
+    # Each stopper is independent: one failing must not prevent the rest from
+    # releasing their resources, so failures are logged and shutdown continues.
+    shutdown_hooks = [
+        ("trade_monitor", "app.services.trade_monitor", "stop_trade_monitor"),
+        (
+            "clob_ws_manager",
+            "app.services.clob_ws_manager",
+            "stop_clob_ws_manager",
+        ),
+        ("stop_loss_monitor", "app.services.stop_loss_monitor", "stop_stop_loss_monitor"),
+        ("inverse_bot_monitor", "app.services.inverse_bot_monitor", "stop_inverse_bot_monitor"),
+        ("market_maker_service", "app.services.market_maker_service", "stop_all_market_makers"),
+        (
+            "position_lifecycle_service",
+            "app.services.position_lifecycle_service",
+            "stop_position_lifecycle_manager",
+        ),
+        (
+            "trade_aggregation_service",
+            "app.services.trade_aggregation_service",
+            "stop_aggregation_service",
+        ),
+        ("arbitrage_service", "app.services.arbitrage_service", "stop_arbitrage_monitor"),
+        ("news_service", "app.services.news_service", "stop_news_generator"),
+        ("ctf_events_service", "app.services.ctf_events_service", "stop_ctf_events_monitor"),
+        (
+            "redemption_service",
+            "app.services.redemption_service",
+            "stop_redemption_manager",
+        ),
+        (
+            "latency_arb_service",
+            "app.services.latency_arb_service",
+            "stop_latency_arb_engine",
+        ),
+        ("analysis_client", "app.grpc_clients.analysis_client", "close_shared_channels"),
+    ]
+    for label, module_path, attr in shutdown_hooks:
+        try:
+            module = importlib.import_module(module_path)
+            await getattr(module, attr)()
+        except Exception:
+            logger.warning(
+                "Shutdown hook %s (%s.%s) failed; continuing",
+                label,
+                module_path,
+                attr,
+                exc_info=True,
+            )
     for task in _background_tasks:
         task.cancel()
     logger.info("Background services stopped")
@@ -292,6 +421,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # Add baseline browser security headers for API responses.
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
@@ -315,12 +445,14 @@ async def add_security_headers(request: Request, call_next):
 
     return response
 
+
 # Add request logging middleware (outermost — captures everything incl. CORS)
 app.add_middleware(RequestLogMiddleware)
 
 
 # Include routers
 app.include_router(auth.router)
+app.include_router(credentials.router)
 app.include_router(analysis.router)
 app.include_router(portfolio.router)
 app.include_router(settings_routes.router)
@@ -335,24 +467,17 @@ app.include_router(market_maker.router)
 app.include_router(backtesting.router)
 app.include_router(binance_signals.router)
 app.include_router(news.router)
-
-
-# Health check
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {"status": "ok", "message": "Polymarket API is running"}
+app.include_router(health.router)
+app.include_router(whales.router)
+app.include_router(notifications.router)
+app.include_router(latency_arb.router)
 
 
 # Root endpoint
 @app.get("/")
 async def root():
     """Root endpoint"""
-    return {
-        "message": "Welcome to Polymarket AI Trading API",
-        "docs": "/docs",
-        "redoc": "/redoc"
-    }
+    return {"message": "Welcome to Polymarket AI Trading API", "docs": "/docs", "redoc": "/redoc"}
 
 
 # Error handlers
@@ -361,17 +486,10 @@ async def general_exception_handler(request: Request, exc: Exception):
     """Handle general exceptions"""
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
     detail = str(exc) if settings.is_local_environment else "Internal server error"
-    return JSONResponse(
-        status_code=500,
-        content={"detail": detail}
-    )
+    return JSONResponse(status_code=500, content={"detail": detail})
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        "app.main:app",
-        host=settings.host,
-        port=settings.port,
-        reload=settings.reload
-    )
+
+    uvicorn.run("app.main:app", host=settings.host, port=settings.port, reload=settings.reload)

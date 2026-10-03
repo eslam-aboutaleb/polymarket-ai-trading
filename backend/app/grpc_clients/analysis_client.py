@@ -3,22 +3,28 @@ Analysis Service gRPC Client
 Provides a unified interface to communicate with AI backend services.
 Supports per-request LLM provider selection via the gateway pattern.
 """
-import asyncio
-import grpc
-import json
-import os
-from typing import Dict, Any, AsyncIterator, Optional
-from functools import lru_cache
 
-from app.config import get_settings, AIBackend
+import asyncio
+import json
+import logging
+import re
+from collections.abc import AsyncIterator
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+
+import grpc
+
+from app.config import AIBackend, get_settings
 
 # These will be generated from proto
 # Import after generation: from app.grpc_clients import analysis_pb2, analysis_pb2_grpc
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
-_shared_channels: Dict[str, grpc.aio.Channel] = {}
-_shared_stubs: Dict[str, Any] = {}
-_shared_channels_lock: Optional[asyncio.Lock] = None
+_shared_channels: dict[str, grpc.aio.Channel] = {}
+_shared_stubs: dict[str, Any] = {}
+_shared_channels_lock: asyncio.Lock | None = None
 
 
 def _get_channels_lock() -> asyncio.Lock:
@@ -36,40 +42,42 @@ def _get_channels_lock() -> asyncio.Lock:
 
 
 @lru_cache(maxsize=1)
-def _load_prompts() -> Dict[str, Any]:
+def _load_prompts() -> dict[str, Any]:
     """Load prompts from common runtime locations."""
+    module_dir = Path(__file__).parent
     candidates = [
-        os.path.join(os.path.dirname(__file__), "..", "..", "prompts", "prompts.json"),
-        os.path.join(os.path.dirname(__file__), "..", "..", "..", "prompts", "prompts.json"),
-        "/app/prompts/prompts.json",
+        module_dir / ".." / ".." / "prompts" / "prompts.json",
+        module_dir / ".." / ".." / ".." / "prompts" / "prompts.json",
+        Path("/app/prompts/prompts.json"),
     ]
     for path in candidates:
         try:
-            with open(path) as f:
+            with path.open() as f:
                 return json.load(f)
         except Exception:
+            logger.debug("Prompts file not readable at %s", path, exc_info=True)
             continue
     return {}
 
 
-def _build_llm_config(llm_config: Optional[Dict[str, Any]]):
+def _build_llm_config(llm_config: dict[str, Any] | None):
     """
     Build a proto LLMConfig message from a dictionary.
-    
+
     Args:
         llm_config: Dictionary with provider, model, temperature, max_tokens
-    
+
     Returns:
         LLMConfig proto message or None if llm_config is None/empty
     """
     if not llm_config:
         return None
-    
+
     try:
         from app.grpc_clients import analysis_pb2
-        
+
         config = analysis_pb2.LLMConfig()
-        
+
         if "provider" in llm_config:
             config.provider = int(llm_config["provider"])
         if "model" in llm_config and llm_config["model"]:
@@ -78,7 +86,7 @@ def _build_llm_config(llm_config: Optional[Dict[str, Any]]):
             config.temperature = float(llm_config["temperature"])
         if "max_tokens" in llm_config and llm_config["max_tokens"]:
             config.max_tokens = int(llm_config["max_tokens"])
-        
+
         return config
     except (ImportError, AttributeError):
         # Proto not regenerated yet, or LLMConfig not available
@@ -90,21 +98,20 @@ class AnalysisClient:
     gRPC client for AI analysis services.
     Supports both LLM Chain and CLI Agent backends.
     """
-    
+
     def __init__(self, backend: AIBackend = None):
         """Initialize client for specified backend."""
         self.backend = backend or settings.default_ai_backend
         self._channel = None
         self._stub = None
-    
+
     @property
     def service_address(self) -> str:
         """Get the gRPC service address based on backend."""
         if self.backend == AIBackend.LLM_CHAIN:
             return f"{settings.llm_chain_grpc_host}:{settings.llm_chain_grpc_port}"
-        else:
-            return f"{settings.cli_agent_grpc_host}:{settings.cli_agent_grpc_port}"
-    
+        return f"{settings.cli_agent_grpc_host}:{settings.cli_agent_grpc_port}"
+
     async def _get_stub(self):
         """Get or create gRPC stub, reusing shared channels per address.
 
@@ -142,11 +149,11 @@ class AnalysisClient:
                     channel = grpc.aio.insecure_channel(
                         addr,
                         options=[
-                            ('grpc.max_receive_message_length', 50 * 1024 * 1024),
-                            ('grpc.keepalive_time_ms', 10000),
-                            ('grpc.keepalive_timeout_ms', 5000),
-                            ('grpc.http2.min_ping_interval_without_data_ms', 10000),
-                        ]
+                            ("grpc.max_receive_message_length", 50 * 1024 * 1024),
+                            ("grpc.keepalive_time_ms", 10000),
+                            ("grpc.keepalive_timeout_ms", 5000),
+                            ("grpc.http2.min_ping_interval_without_data_ms", 10000),
+                        ],
                     )
                     _shared_channels[addr] = channel
                     _shared_stubs[addr] = analysis_pb2_grpc.AnalysisServiceStub(channel)
@@ -158,9 +165,9 @@ class AnalysisClient:
                 "gRPC stubs not generated. Run: "
                 "python -m grpc_tools.protoc -I./proto --python_out=./app/grpc_clients "
                 "--grpc_python_out=./app/grpc_clients proto/analysis.proto"
-            )
+            ) from None
         return self._stub
-    
+
     async def analyze_market(
         self,
         market_title: str,
@@ -170,11 +177,11 @@ class AnalysisClient:
         volume_24h: float,
         end_date: str,
         include_research: bool = True,
-        llm_config: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        llm_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Full market analysis with research.
-        
+
         Args:
             market_title: Title of the prediction market
             market_description: Full market description
@@ -184,14 +191,14 @@ class AnalysisClient:
             end_date: Market resolution date (ISO format)
             include_research: Include web research
             llm_config: Optional LLM configuration override (provider, model, etc.)
-        
+
         Returns:
             Analysis result dictionary
         """
         from app.grpc_clients import analysis_pb2
-        
+
         stub = await self._get_stub()
-        
+
         request_kwargs = {
             "market_title": market_title,
             "market_description": market_description,
@@ -201,83 +208,72 @@ class AnalysisClient:
             "end_date": end_date,
             "include_research": include_research,
         }
-        
+
         # Add llm_config if provided and proto supports it
         proto_llm_config = _build_llm_config(llm_config)
         if proto_llm_config is not None:
             request_kwargs["llm_config"] = proto_llm_config
-        
+
         request = analysis_pb2.MarketAnalysisRequest(**request_kwargs)
-        
+
         try:
-            response = await stub.AnalyzeMarket(
-                request,
-                timeout=settings.grpc_timeout
-            )
+            response = await stub.AnalyzeMarket(request, timeout=settings.grpc_timeout)
             return self._parse_response(response)
         except grpc.RpcError as e:
-            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}")
-    
+            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}") from e
+
     async def quick_analysis(
-        self,
-        question: str,
-        current_price: float,
-        llm_config: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        self, question: str, current_price: float, llm_config: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """
         Quick 2-3 sentence market analysis.
-        
+
         Args:
             question: Market question
             current_price: Current market price (0-1)
             llm_config: Optional LLM configuration override
-        
+
         Returns:
             Quick analysis result
         """
         from app.grpc_clients import analysis_pb2
-        
+
         stub = await self._get_stub()
-        
+
         request_kwargs = {
             "question": question,
             "current_price": current_price,
         }
-        
+
         proto_llm_config = _build_llm_config(llm_config)
         if proto_llm_config is not None:
             request_kwargs["llm_config"] = proto_llm_config
-        
+
         request = analysis_pb2.QuickAnalysisRequest(**request_kwargs)
-        
+
         try:
-            response = await stub.QuickAnalysis(
-                request,
-                timeout=settings.grpc_timeout
-            )
+            response = await stub.QuickAnalysis(request, timeout=settings.grpc_timeout)
             return self._parse_response(response)
         except grpc.RpcError as e:
-            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}")
-    
+            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}") from e
+
     async def scan_markets(
-        self,
-        markets: list,
-        llm_config: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        self, markets: list, llm_config: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """
         Scan multiple markets to identify opportunities.
-        
+
         Args:
             markets: List of market dictionaries
             llm_config: Optional LLM configuration override
-        
+
         Returns:
             Scan results with ranked opportunities
         """
         from app.grpc_clients import analysis_pb2
-        
+
         stub = await self._get_stub()
-        
+
         request = analysis_pb2.MarketScanRequest()
         for market in markets:
             request.markets.append(
@@ -291,21 +287,18 @@ class AnalysisClient:
                     market_id=str(market.get("market_id", "")),
                 )
             )
-        
+
         # Add llm_config if provided
         proto_llm_config = _build_llm_config(llm_config)
         if proto_llm_config is not None:
             request.llm_config.CopyFrom(proto_llm_config)
-        
+
         try:
-            response = await stub.ScanMarkets(
-                request,
-                timeout=settings.grpc_timeout
-            )
+            response = await stub.ScanMarkets(request, timeout=settings.grpc_timeout)
             return self._parse_response(response)
         except grpc.RpcError as e:
-            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}")
-    
+            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}") from e
+
     async def assess_risk(
         self,
         market_title: str,
@@ -313,11 +306,11 @@ class AnalysisClient:
         entry_price: float,
         days_to_expiry: int,
         correlation_info: str = "",
-        llm_config: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        llm_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Assess risk for a potential position.
-        
+
         Args:
             market_title: Market title
             position_size: Position size in USD
@@ -325,14 +318,14 @@ class AnalysisClient:
             days_to_expiry: Days until market expiry
             correlation_info: Optional correlation information
             llm_config: Optional LLM configuration override
-        
+
         Returns:
             Risk assessment result
         """
         from app.grpc_clients import analysis_pb2
-        
+
         stub = await self._get_stub()
-        
+
         request_kwargs = {
             "market_title": market_title,
             "position_size": position_size,
@@ -340,64 +333,65 @@ class AnalysisClient:
             "days_to_expiry": days_to_expiry,
             "correlation_info": correlation_info,
         }
-        
+
         proto_llm_config = _build_llm_config(llm_config)
         if proto_llm_config is not None:
             request_kwargs["llm_config"] = proto_llm_config
-        
+
         request = analysis_pb2.RiskAssessmentRequest(**request_kwargs)
-        
+
         try:
-            response = await stub.AssessRisk(
-                request,
-                timeout=settings.grpc_timeout
-            )
+            response = await stub.AssessRisk(request, timeout=settings.grpc_timeout)
             return self._parse_response(response)
         except grpc.RpcError as e:
-            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}")
-    
+            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}") from e
+
     async def generate_trade_plan(
         self,
         action: str,
         market_title: str,
         target_size: float,
         current_price: float,
-        order_book: dict = None
-    ) -> Dict[str, Any]:
+        order_book: dict = None,
+        llm_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Generate execution plan for a trade.
-        
+
         Args:
             action: Trade action (buy_yes, buy_no, sell_yes, sell_no)
             market_title: Market title
             target_size: Target size in USD
             current_price: Current price (0-1)
             order_book: Optional order book data
-        
+            llm_config: Optional per-request LLM configuration
+
         Returns:
             Trade execution plan
         """
         from app.grpc_clients import analysis_pb2
-        
+
         stub = await self._get_stub()
-        
-        request = analysis_pb2.TradePlanRequest(
-            action=action,
-            market_title=market_title,
-            target_size=target_size,
-            current_price=current_price,
-            order_book_json=json.dumps(order_book or {})
-        )
-        
+
+        request_kwargs = {
+            "action": action,
+            "market_title": market_title,
+            "target_size": target_size,
+            "current_price": current_price,
+            "order_book_json": json.dumps(order_book or {}),
+        }
+        proto_llm_config = _build_llm_config(llm_config)
+        if proto_llm_config is not None:
+            request_kwargs["llm_config"] = proto_llm_config
+
+        request = analysis_pb2.TradePlanRequest(**request_kwargs)
+
         try:
-            response = await stub.GenerateTradePlan(
-                request,
-                timeout=settings.grpc_timeout
-            )
+            response = await stub.GenerateTradePlan(request, timeout=settings.grpc_timeout)
             return self._parse_response(response)
         except grpc.RpcError as e:
-            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}")
-    
+            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}") from e
+
     async def analyze_market_stream(
         self,
         market_title: str,
@@ -406,41 +400,44 @@ class AnalysisClient:
         no_price: float,
         volume_24h: float,
         end_date: str,
-        include_research: bool = True
+        include_research: bool = True,
+        llm_config: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
         """
         Streaming market analysis - yields chunks as they're generated.
-        
+
         Yields:
             Analysis text chunks
         """
         from app.grpc_clients import analysis_pb2
-        
+
         stub = await self._get_stub()
-        
-        request = analysis_pb2.MarketAnalysisRequest(
-            market_title=market_title,
-            market_description=market_description,
-            yes_price=yes_price,
-            no_price=no_price,
-            volume_24h=volume_24h,
-            end_date=end_date,
-            include_research=include_research
-        )
-        
+
+        request_kwargs = {
+            "market_title": market_title,
+            "market_description": market_description,
+            "yes_price": yes_price,
+            "no_price": no_price,
+            "volume_24h": volume_24h,
+            "end_date": end_date,
+            "include_research": include_research,
+        }
+        proto_llm_config = _build_llm_config(llm_config)
+        if proto_llm_config is not None:
+            request_kwargs["llm_config"] = proto_llm_config
+
+        request = analysis_pb2.MarketAnalysisRequest(**request_kwargs)
+
         try:
-            async for chunk in stub.AnalyzeMarketStream(
-                request,
-                timeout=settings.grpc_timeout * 2
-            ):
+            async for chunk in stub.AnalyzeMarketStream(request, timeout=settings.grpc_timeout * 2):
                 yield chunk.chunk
         except grpc.RpcError as e:
-            raise RuntimeError(f"gRPC streaming error: {e.code()}: {e.details()}")
-    
+            raise RuntimeError(f"gRPC streaming error: {e.code()}: {e.details()}") from e
+
     async def health_check(self) -> bool:
         """Check if the backend service is healthy."""
         from app.grpc_clients import analysis_pb2
-        
+
         try:
             stub = await self._get_stub()
             request = analysis_pb2.HealthRequest()
@@ -459,8 +456,8 @@ class AnalysisClient:
         markets_traded: int = 0,
         recent_trades_json: str = "[]",
         user_id: str = "",
-        llm_config: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        llm_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Full trader profile analysis with internet research."""
         from app.grpc_clients import analysis_pb2
 
@@ -476,7 +473,7 @@ class AnalysisClient:
             "recent_trades_json": recent_trades_json,
             "user_id": user_id,
         }
-        
+
         proto_llm_config = _build_llm_config(llm_config)
         if proto_llm_config is not None:
             request_kwargs["llm_config"] = proto_llm_config
@@ -484,12 +481,10 @@ class AnalysisClient:
         request = analysis_pb2.TraderAnalysisRequest(**request_kwargs)
 
         try:
-            response = await stub.AnalyzeTrader(
-                request, timeout=settings.grpc_timeout
-            )
+            response = await stub.AnalyzeTrader(request, timeout=settings.grpc_timeout)
             return self._parse_response(response)
         except grpc.RpcError as e:
-            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}")
+            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}") from e
 
     async def analyze_trader_stream(
         self,
@@ -501,6 +496,7 @@ class AnalysisClient:
         markets_traded: int = 0,
         recent_trades_json: str = "[]",
         user_id: str = "",
+        llm_config: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
         """
         Streaming trader analysis - yields text chunks.
@@ -516,6 +512,7 @@ class AnalysisClient:
             markets_traded=markets_traded,
             recent_trades_json=recent_trades_json,
             user_id=user_id,
+            llm_config=llm_config,
         )
 
         analysis_text = result.get("analysis", "")
@@ -525,7 +522,8 @@ class AnalysisClient:
 
         # Stream in sentence-like chunks for a real-time feel
         import re as _re
-        sentences = _re.split(r'(?<=[.!?\n])\s+', analysis_text)
+
+        sentences = _re.split(r"(?<=[.!?\n])\s+", analysis_text)
         for sentence in sentences:
             if sentence.strip():
                 yield sentence.strip() + " "
@@ -542,8 +540,8 @@ class AnalysisClient:
         current_price: float = 0.0,
         user_risk_profile: str = "max_position_daily_loss",
         user_id: str = "",
-        llm_config: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        llm_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Evaluate whether to copy a specific trade."""
         from app.grpc_clients import analysis_pb2
 
@@ -560,7 +558,7 @@ class AnalysisClient:
             "user_risk_profile": user_risk_profile,
             "user_id": user_id,
         }
-        
+
         proto_llm_config = _build_llm_config(llm_config)
         if proto_llm_config is not None:
             request_kwargs["llm_config"] = proto_llm_config
@@ -568,9 +566,7 @@ class AnalysisClient:
         request = analysis_pb2.CopyTradeEvaluationRequest(**request_kwargs)
 
         try:
-            response = await stub.EvaluateCopyTrade(
-                request, timeout=settings.grpc_timeout
-            )
+            response = await stub.EvaluateCopyTrade(request, timeout=settings.grpc_timeout)
             result = self._parse_response(response)
             # Extract recommendation metadata
             meta = result.get("metadata", {})
@@ -579,7 +575,7 @@ class AnalysisClient:
             result["risk_level"] = meta.get("risk_level", "medium")
             return result
         except grpc.RpcError as e:
-            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}")
+            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}") from e
 
     async def evaluate_inverse_position(
         self,
@@ -593,8 +589,8 @@ class AnalysisClient:
         alternatives_json: Any,
         include_research: bool = True,
         user_id: str = "",
-        llm_config: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        llm_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Evaluate whether to reverse an open position."""
         from app.grpc_clients import analysis_pb2
 
@@ -612,7 +608,7 @@ class AnalysisClient:
             "include_research": include_research,
             "user_id": user_id,
         }
-        
+
         proto_llm_config = _build_llm_config(llm_config)
         if proto_llm_config is not None:
             request_kwargs["llm_config"] = proto_llm_config
@@ -648,7 +644,7 @@ class AnalysisClient:
                 result["key_risks"] = []
             return result
         except grpc.RpcError as e:
-            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}")
+            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}") from e
 
     async def generate_news(
         self,
@@ -661,8 +657,8 @@ class AnalysisClient:
         end_date: str = "",
         trader_stats_json: str = "{}",
         smart_money_json: str = "{}",
-        llm_config: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        llm_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Generate an AI-powered news article for a prediction market.
 
@@ -712,36 +708,93 @@ class AnalysisClient:
             if not response.success:
                 raise RuntimeError(f"News generation error: {response.error}")
 
-            return {
-                "headline": response.headline,
-                "summary": response.summary,
-                "body": response.body,
-                "sentiment": response.sentiment,
-                "confidence": float(response.confidence),
-                "key_insights": list(response.key_insights),
-                "trader_behavior_summary": response.trader_behavior_summary,
-                "market_outlook": response.market_outlook,
-                "tags": list(response.tags),
-                "market_question": response.market_question,
-                "condition_id": response.condition_id,
-                "generated_at": response.generated_at,
-                "metadata": dict(response.metadata) if response.metadata else {},
-            }
+            return self._parse_news_response(response)
         except grpc.RpcError as e:
-            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}")
-    
-    def _parse_response(self, response) -> Dict[str, Any]:
+            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}") from e
+
+    @staticmethod
+    def _parse_news_response(response) -> dict[str, Any]:
+        """Normalise a GenerateNewsResponse into the article dict shape.
+
+        ``question`` mirrors ``market_question``: the frontend's
+        ``NewsArticle`` type reads ``question``, while older
+        consumers read ``market_question``.
+        """
+        return {
+            "headline": response.headline,
+            "summary": response.summary,
+            "body": response.body,
+            "sentiment": response.sentiment,
+            "confidence": float(response.confidence),
+            "key_insights": list(response.key_insights),
+            "trader_behavior_summary": response.trader_behavior_summary,
+            "market_outlook": response.market_outlook,
+            "tags": list(response.tags),
+            "question": response.market_question,
+            "market_question": response.market_question,
+            "condition_id": response.condition_id,
+            "generated_at": response.generated_at,
+            "metadata": dict(response.metadata) if response.metadata else {},
+        }
+
+    async def generate_news_batch(
+        self,
+        markets: list[dict[str, Any]],
+        llm_config: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Generate news articles for multiple markets in a single RPC.
+
+        Args:
+            markets: List of dicts with ``question`` and ``condition_id``
+                keys (other GenerateNewsRequest fields are optional).
+            llm_config: Optional LLM configuration override
+
+        Returns:
+            List of news article dictionaries (see ``generate_news``).
+        """
+        from app.grpc_clients import analysis_pb2
+
+        stub = await self._get_stub()
+
+        proto_llm_config = _build_llm_config(llm_config)
+        requests = []
+        for mkt in markets:
+            request_kwargs = {
+                "market_question": mkt.get("question", ""),
+                "market_description": mkt.get("description", ""),
+                "condition_id": mkt.get("condition_id", ""),
+            }
+            if proto_llm_config is not None:
+                request_kwargs["llm_config"] = proto_llm_config
+            requests.append(analysis_pb2.GenerateNewsRequest(**request_kwargs))
+
+        request = analysis_pb2.GenerateNewsBatchRequest(markets=requests)
+
+        try:
+            response = await stub.GenerateNewsBatch(
+                request,
+                timeout=settings.grpc_timeout * 2,  # news generation may be slower
+            )
+
+            if not response.success:
+                raise RuntimeError(f"News batch generation error: {response.error}")
+
+            return [self._parse_news_response(article) for article in response.articles]
+        except grpc.RpcError as e:
+            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}") from e
+
+    def _parse_response(self, response) -> dict[str, Any]:
         """Parse gRPC response to dictionary."""
         if not response.success:
             raise RuntimeError(f"Analysis service error: {response.error}")
-        result = {
+        return {
             "analysis": response.analysis,
             "research_context": response.research_context,
             "metadata": dict(response.metadata) if response.metadata else {},
             "timestamp": response.timestamp,
         }
-        return result
-    
+
     async def close(self):
         """Close the gRPC channel."""
         self._channel = None
@@ -759,14 +812,14 @@ class AnalysisClient:
         smart_money_context: str,
         liquidity: float = 0,
         condition_id: str = "",
-    ) -> Dict[str, Any]:
+        llm_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Score a single market opportunity by leveraging the existing
         AnalyzeMarket RPC with an enriched opportunity-scoring prompt.
         Returns structured JSON scoring.
         """
         from app.grpc_clients import analysis_pb2
-        import re
 
         # Load opportunity prompt templates.
         prompts = _load_prompts()
@@ -775,9 +828,7 @@ class AnalysisClient:
             prompts.get("opportunity_analysis", {}).get("system_prompt", "")
             or "You are an expert prediction market analyst. Respond with ONLY valid JSON."
         )
-        scoring_template = (
-            prompts.get("opportunity_analysis", {}).get("market_scoring", "")
-        )
+        scoring_template = prompts.get("opportunity_analysis", {}).get("market_scoring", "")
 
         if scoring_template:
             enriched_desc = scoring_template.format(
@@ -804,28 +855,31 @@ class AnalysisClient:
         full_description = f"{system_prompt}\n\n{enriched_desc}"
 
         stub = await self._get_stub()
-        request = analysis_pb2.MarketAnalysisRequest(
-            market_title=market_title,
-            market_description=full_description,
-            yes_price=yes_price,
-            no_price=no_price,
-            volume_24h=volume_24h,
-            end_date=end_date,
-            include_research=True,
-        )
+        request_kwargs = {
+            "market_title": market_title,
+            "market_description": full_description,
+            "yes_price": yes_price,
+            "no_price": no_price,
+            "volume_24h": volume_24h,
+            "end_date": end_date,
+            "include_research": True,
+        }
+        proto_llm_config = _build_llm_config(llm_config)
+        if proto_llm_config is not None:
+            request_kwargs["llm_config"] = proto_llm_config
+
+        request = analysis_pb2.MarketAnalysisRequest(**request_kwargs)
 
         try:
-            response = await stub.AnalyzeMarket(
-                request, timeout=settings.grpc_timeout * 2
-            )
+            response = await stub.AnalyzeMarket(request, timeout=settings.grpc_timeout * 2)
             raw = response.analysis if response.success else ""
-        except Exception as e:
+        except Exception:
             raw = ""
 
         # Parse JSON from LLM response
         scored = {}
         if raw:
-            json_match = re.search(r'\{[\s\S]*\}', raw)
+            json_match = re.search(r"\{[\s\S]*\}", raw)
             if json_match:
                 try:
                     scored = json.loads(json_match.group())
@@ -858,14 +912,14 @@ class AnalysisClient:
         event_volume: str = "0",
         event_liquidity: str = "0",
         smart_money_context: str = "",
-    ) -> Dict[str, Any]:
+        llm_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Score an entire event group (multiple related sub-markets) with
         ONE LLM call via the AnalyzeMarket RPC.  Returns structured JSON
         scoring that includes 'recommended_option'.
         """
         from app.grpc_clients import analysis_pb2
-        import re
 
         # Load prompts
         prompts = _load_prompts()
@@ -905,7 +959,8 @@ class AnalysisClient:
             enriched_desc = (
                 f"Event: {event_title}\n\n{sub_markets_table}\n\n"
                 f"SMART MONEY DATA:\n{smart_money_context}\n\n"
-                f"Respond with JSON: ai_score, risk_level, recommendation, recommended_option, reasoning"
+                f"Respond with JSON: ai_score, risk_level, recommendation, "
+                f"recommended_option, reasoning"
             )
 
         full_description = f"{system_prompt}\n\n{enriched_desc}"
@@ -913,27 +968,30 @@ class AnalysisClient:
         # Use the first sub-market's prices as representative for the RPC
         first = sub_markets[0] if sub_markets else {}
         stub = await self._get_stub()
-        request = analysis_pb2.MarketAnalysisRequest(
-            market_title=event_title,
-            market_description=full_description,
-            yes_price=first.get("yes_price", 0.5),
-            no_price=first.get("no_price", 0.5),
-            volume_24h=float(event_volume) if event_volume else 0,
-            end_date="",
-            include_research=True,
-        )
+        request_kwargs = {
+            "market_title": event_title,
+            "market_description": full_description,
+            "yes_price": first.get("yes_price", 0.5),
+            "no_price": first.get("no_price", 0.5),
+            "volume_24h": float(event_volume) if event_volume else 0,
+            "end_date": "",
+            "include_research": True,
+        }
+        proto_llm_config = _build_llm_config(llm_config)
+        if proto_llm_config is not None:
+            request_kwargs["llm_config"] = proto_llm_config
+
+        request = analysis_pb2.MarketAnalysisRequest(**request_kwargs)
 
         try:
-            response = await stub.AnalyzeMarket(
-                request, timeout=settings.grpc_timeout * 2
-            )
+            response = await stub.AnalyzeMarket(request, timeout=settings.grpc_timeout * 2)
             raw = response.analysis if response.success else ""
-        except Exception as e:
+        except Exception:
             raw = ""
 
         scored = {}
         if raw:
-            json_match = re.search(r'\{[\s\S]*\}', raw)
+            json_match = re.search(r"\{[\s\S]*\}", raw)
             if json_match:
                 try:
                     scored = json.loads(json_match.group())
@@ -970,7 +1028,6 @@ class AnalysisClient:
         too large (> 20 markets per batch).
         """
         from app.grpc_clients import analysis_pb2
-        import re
 
         prompts = _load_prompts()
 
@@ -978,14 +1035,14 @@ class AnalysisClient:
             prompts.get("easy_trade_analysis", {}).get("system_prompt", "")
             or "You are an expert prediction market analyst. Respond with ONLY valid JSON."
         )
-        scoring_template = (
-            prompts.get("easy_trade_analysis", {}).get("batch_scoring", "")
-        )
+        scoring_template = prompts.get("easy_trade_analysis", {}).get("batch_scoring", "")
 
         # Build markdown table of markets
         table_lines = [
-            "| # | Question | Condition ID | YES Price | NO Price | 24h Volume | Liquidity | End Date |",
-            "|---|----------|--------------|-----------|----------|------------|-----------|----------|",
+            "| # | Question | Condition ID | YES Price | NO Price "
+            "| 24h Volume | Liquidity | End Date |",
+            "|---|----------|--------------|-----------|----------|"
+            "------------|-----------|----------|",
         ]
         for i, m in enumerate(markets, 1):
             question = m.get("question", "Unknown")[:80]
@@ -994,13 +1051,15 @@ class AnalysisClient:
             try:
                 yes_p = float(prices[0]) if prices else 0.5
                 no_p = float(prices[1]) if len(prices) > 1 else 1.0 - yes_p
+                vol = float(m.get("volume24hr", 0) or 0)
+                liq = float(m.get("liquidity", 0) or 0)
             except (ValueError, TypeError):
                 yes_p, no_p = 0.5, 0.5
-            vol = float(m.get("volume24hr", 0) or 0)
-            liq = float(m.get("liquidity", 0) or 0)
+                vol, liq = 0.0, 0.0
             end = m.get("endDate") or m.get("end_date_iso") or ""
             table_lines.append(
-                f"| {i} | {question} | {cid[:16]}... | {yes_p * 100:.1f}¢ | {no_p * 100:.1f}¢ | ${vol:,.0f} | ${liq:,.0f} | {end[:10]} |"
+                f"| {i} | {question} | {cid[:16]}... | {yes_p * 100:.1f}¢ "
+                f"| {no_p * 100:.1f}¢ | ${vol:,.0f} | ${liq:,.0f} | {end[:10]} |"
             )
         markets_table = "\n".join(table_lines)
 
@@ -1012,7 +1071,8 @@ class AnalysisClient:
         else:
             enriched_desc = (
                 f"Scan these markets for easy, obvious trades:\n\n{markets_table}\n\n"
-                f"Return top {max_results} easiest trades as JSON with ease_score, recommended_side, reasoning."
+                f"Return top {max_results} easiest trades as JSON with ease_score, "
+                f"recommended_side, reasoning."
             )
 
         full_description = f"{system_prompt}\n\n{enriched_desc}"
@@ -1037,9 +1097,7 @@ class AnalysisClient:
         )
 
         try:
-            response = await stub.AnalyzeMarket(
-                request, timeout=settings.grpc_timeout * 3
-            )
+            response = await stub.AnalyzeMarket(request, timeout=settings.grpc_timeout * 3)
             raw = response.analysis if response.success else ""
         except Exception as e:
             logger.error("Easy trade scan gRPC failed: %s", e)
@@ -1047,7 +1105,7 @@ class AnalysisClient:
 
         results = []
         if raw:
-            json_match = re.search(r'\{[\s\S]*\}', raw)
+            json_match = re.search(r"\{[\s\S]*\}", raw)
             if json_match:
                 try:
                     parsed = json.loads(json_match.group())
@@ -1056,32 +1114,39 @@ class AnalysisClient:
                         for trade in easy_trades:
                             if not isinstance(trade, dict):
                                 continue
-                            results.append({
-                                "condition_id": trade.get("condition_id", ""),
-                                "market_title": trade.get("market_title", ""),
-                                "ai_score": int(trade.get("ease_score", 50)),
-                                "ease_score": int(trade.get("ease_score", 50)),
-                                "risk_level": trade.get("risk_level", "medium"),
-                                "pnl_potential": abs(float(trade.get("edge_estimate", 0))),
-                                "credibility_score": int(trade.get("confidence", 0.5) * 100),
-                                "smart_money_signal": "neutral",
-                                "smart_money_summary": "",
-                                "recommendation": (
-                                    "strong_buy" if trade.get("ease_score", 0) >= 80
-                                    else "buy" if trade.get("ease_score", 0) >= 60
-                                    else "hold" if trade.get("ease_score", 0) >= 40
-                                    else "avoid"
-                                ),
-                                "recommended_side": trade.get("recommended_side", "YES"),
-                                "recommended_option": trade.get("recommended_option", ""),
-                                "reasoning": trade.get("reasoning", ""),
-                                "search_summary": parsed.get("scan_summary", ""),
-                                "key_risks": [],
-                                "expected_probability": float(trade.get("expected_probability", 0.5)),
-                                "edge_estimate": float(trade.get("edge_estimate", 0)),
-                                "confidence": float(trade.get("confidence", 0.5)),
-                                "category": trade.get("category", "other"),
-                            })
+                            results.append(
+                                {
+                                    "condition_id": trade.get("condition_id", ""),
+                                    "market_title": trade.get("market_title", ""),
+                                    "ai_score": int(trade.get("ease_score", 50)),
+                                    "ease_score": int(trade.get("ease_score", 50)),
+                                    "risk_level": trade.get("risk_level", "medium"),
+                                    "pnl_potential": abs(float(trade.get("edge_estimate", 0))),
+                                    "credibility_score": int(trade.get("confidence", 0.5) * 100),
+                                    "smart_money_signal": "neutral",
+                                    "smart_money_summary": "",
+                                    "recommendation": (
+                                        "strong_buy"
+                                        if trade.get("ease_score", 0) >= 80
+                                        else "buy"
+                                        if trade.get("ease_score", 0) >= 60
+                                        else "hold"
+                                        if trade.get("ease_score", 0) >= 40
+                                        else "avoid"
+                                    ),
+                                    "recommended_side": trade.get("recommended_side", "YES"),
+                                    "recommended_option": trade.get("recommended_option", ""),
+                                    "reasoning": trade.get("reasoning", ""),
+                                    "search_summary": parsed.get("scan_summary", ""),
+                                    "key_risks": [],
+                                    "expected_probability": float(
+                                        trade.get("expected_probability", 0.5)
+                                    ),
+                                    "edge_estimate": float(trade.get("edge_estimate", 0)),
+                                    "confidence": float(trade.get("confidence", 0.5)),
+                                    "category": trade.get("category", "other"),
+                                }
+                            )
                 except json.JSONDecodeError:
                     logger.warning("Failed to parse easy trade JSON response")
 
@@ -1096,13 +1161,13 @@ class AnalysisClient:
         event_volume: float = 0,
         event_liquidity: float = 0,
         event_slug: str = "",
-    ) -> Dict[str, Any]:
+        llm_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Quick event-level analysis for grouped trades (multiple sub-markets).
         Uses one AnalyzeMarket call with include_research=False and strict JSON output.
         """
         from app.grpc_clients import analysis_pb2
-        import re
 
         prompts = _load_prompts()
 
@@ -1126,9 +1191,7 @@ class AnalysisClient:
             )
         sub_markets_table = "\n".join(table_lines)
 
-        quick_template = (
-            prompts.get("opportunity_analysis", {}).get("event_quick_analysis", "")
-        )
+        quick_template = prompts.get("opportunity_analysis", {}).get("event_quick_analysis", "")
         if quick_template:
             enriched_desc = quick_template.format(
                 event_title=event_title,
@@ -1142,9 +1205,9 @@ class AnalysisClient:
                 f"Event: {event_title}\nSlug: {event_slug or 'unknown'}\n\n"
                 f"{sub_markets_table}\n\n"
                 "Respond with JSON only: {"
-                "\"analysis\": \"2-3 sentence grouped analysis\", "
-                "\"recommended_option\": \"best option label\", "
-                "\"recommended_side\": \"YES or NO\""
+                '"analysis": "2-3 sentence grouped analysis", '
+                '"recommended_option": "best option label", '
+                '"recommended_side": "YES or NO"'
                 "}"
             )
 
@@ -1164,15 +1227,20 @@ class AnalysisClient:
         no_price = float(representative.get("no_price", 0.5) or 0.5)
 
         stub = await self._get_stub()
-        request = analysis_pb2.MarketAnalysisRequest(
-            market_title=event_title,
-            market_description=full_description,
-            yes_price=yes_price,
-            no_price=no_price,
-            volume_24h=float(event_volume or 0),
-            end_date="",
-            include_research=False,
-        )
+        request_kwargs = {
+            "market_title": event_title,
+            "market_description": full_description,
+            "yes_price": yes_price,
+            "no_price": no_price,
+            "volume_24h": float(event_volume or 0),
+            "end_date": "",
+            "include_research": False,
+        }
+        proto_llm_config = _build_llm_config(llm_config)
+        if proto_llm_config is not None:
+            request_kwargs["llm_config"] = proto_llm_config
+
+        request = analysis_pb2.MarketAnalysisRequest(**request_kwargs)
 
         raw = ""
         try:
@@ -1210,8 +1278,8 @@ class AnalysisClient:
         query: str,
         include_news: bool = True,
         include_social: bool = True,
-        llm_config: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        llm_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Analyse public sentiment around a market/topic via the gRPC
         AnalyzeSentiment RPC.
@@ -1233,9 +1301,7 @@ class AnalysisClient:
             request.llm_config.CopyFrom(proto_config)
 
         try:
-            response = await stub.AnalyzeSentiment(
-                request, timeout=settings.grpc_timeout * 2
-            )
+            response = await stub.AnalyzeSentiment(request, timeout=settings.grpc_timeout * 2)
             if not response.success:
                 raise RuntimeError(response.error)
 
@@ -1248,7 +1314,7 @@ class AnalysisClient:
             result["metadata"] = dict(response.metadata) if response.metadata else {}
             return result
         except grpc.RpcError as e:
-            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}")
+            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}") from e
 
     # ── NEW: Autonomous Trade Discovery ────────────────────────
 
@@ -1257,8 +1323,8 @@ class AnalysisClient:
         markets: list,
         budget: float = 100.0,
         risk_tolerance: str = "medium",
-        llm_config: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        llm_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Autonomous trade discovery via the gRPC DiscoverBestTrade RPC.
         Sends a batch of active markets and receives the AI's best trade recommendation.
@@ -1279,15 +1345,19 @@ class AnalysisClient:
             except (ValueError, TypeError, IndexError):
                 yes_p, no_p = 0.5, 0.5
 
-            market_infos.append(analysis_pb2.MarketInfo(
-                title=str(m.get("question", m.get("title", ""))),
-                description=str(m.get("description", ""))[:500],
-                yes_price=yes_p,
-                no_price=no_p,
-                volume_24h=float(m.get("volume_24h", m.get("volume24hr", 0)) or 0),
-                end_date=str(m.get("end_date", m.get("endDate", "")) or ""),
-                market_id=str(m.get("condition_id", m.get("conditionId", m.get("market_id", ""))) or ""),
-            ))
+            market_infos.append(
+                analysis_pb2.MarketInfo(
+                    title=str(m.get("question", m.get("title", ""))),
+                    description=str(m.get("description", ""))[:500],
+                    yes_price=yes_p,
+                    no_price=no_p,
+                    volume_24h=float(m.get("volume_24h", m.get("volume24hr", 0)) or 0),
+                    end_date=str(m.get("end_date", m.get("endDate", "")) or ""),
+                    market_id=str(
+                        m.get("condition_id", m.get("conditionId", m.get("market_id", ""))) or ""
+                    ),
+                )
+            )
 
         request = analysis_pb2.DiscoverBestTradeRequest(
             markets=market_infos,
@@ -1299,7 +1369,8 @@ class AnalysisClient:
 
         try:
             response = await stub.DiscoverBestTrade(
-                request, timeout=settings.grpc_timeout * 5  # Long-running
+                request,
+                timeout=settings.grpc_timeout * 5,  # Long-running
             )
             if not response.success:
                 raise RuntimeError(response.error)
@@ -1312,7 +1383,7 @@ class AnalysisClient:
             result["metadata"] = dict(response.metadata) if response.metadata else {}
             return result
         except grpc.RpcError as e:
-            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}")
+            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}") from e
 
     # ── NEW: RAG Index ─────────────────────────────────────────
 
@@ -1320,7 +1391,7 @@ class AnalysisClient:
         self,
         markets: list,
         force_reindex: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Send markets to the LLM-Chain service for ChromaDB RAG indexing.
         """
@@ -1333,26 +1404,24 @@ class AnalysisClient:
         )
 
         try:
-            response = await stub.IndexMarketsRAG(
-                request, timeout=settings.grpc_timeout
-            )
+            response = await stub.IndexMarketsRAG(request, timeout=settings.grpc_timeout)
             return {
                 "success": response.success,
                 "message": response.analysis,
                 "metadata": dict(response.metadata) if response.metadata else {},
             }
         except grpc.RpcError as e:
-            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}")
+            raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}") from e
 
 
 # Client factory for dependency injection
 def get_analysis_client(backend: AIBackend = None) -> AnalysisClient:
     """
     Factory function to get an analysis client.
-    
+
     Args:
         backend: Optional backend override
-    
+
     Returns:
         AnalysisClient instance
     """

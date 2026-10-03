@@ -48,9 +48,7 @@ export interface ResolvedPrimaryOption<T extends Groupable> {
  * Group markets by `_event_slug`. Markets without an event slug are treated
  * as unique single-market events.
  */
-export function groupMarketsByEvent<T extends Groupable>(
-  markets: T[],
-): EventGroup<T>[] {
+export function groupMarketsByEvent<T extends Groupable>(markets: T[]): EventGroup<T>[] {
   const map = new Map<string, EventGroup<T>>();
   let uniqCounter = 0;
 
@@ -85,10 +83,7 @@ export function groupMarketsByEvent<T extends Groupable>(
  *  2. The suffix of `question` that differs from `_event_title`
  *  3. The full `question`
  */
-export function getSubMarketLabel<T extends Groupable>(
-  market: T,
-  eventTitle: string,
-): string {
+export function getSubMarketLabel<T extends Groupable>(market: T, eventTitle: string): string {
   // 1. Prefer explicit Gamma group-item title
   if (market.groupItemTitle) return market.groupItemTitle;
 

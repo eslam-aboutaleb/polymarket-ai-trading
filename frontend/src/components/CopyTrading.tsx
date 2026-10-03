@@ -1,3 +1,13 @@
+/**
+ * Copy-trading dashboard with two tabs: live copied trades and locally simulated "mock" trading.
+ *
+ * The copy tab manages followed wallets through `tradesService` (follow/unfollow, per-trader sizing
+ * and copy-wallet settings with draft/save status tracking) and polls copy-evaluation rows every
+ * 15 seconds. The mock tab keeps wallets in `mockCopyTraders` storage and estimates ROI from the
+ * leaderboard PnL/volume ratio. Unauthenticated visitors get a connect-wallet prompt instead.
+ *
+ * @module components/CopyTrading
+ */
 import { useEffect, useState, useCallback, useMemo } from "react";
 import {
   tradesService,
@@ -65,24 +75,16 @@ const defaultTraderConfig = (f: FollowedTrader): TraderConfigDraft => ({
 });
 
 const normalizeTraderConfig = (cfg: TraderConfigDraft) => ({
-  max_position_size:
-    cfg.max_position_size == null ? null : Number(cfg.max_position_size),
-  trader_alias:
-    cfg.trader_alias == null ? null : cfg.trader_alias.trim() || null,
+  max_position_size: cfg.max_position_size == null ? null : Number(cfg.max_position_size),
+  trader_alias: cfg.trader_alias == null ? null : cfg.trader_alias.trim() || null,
   sizing_mode: cfg.sizing_mode ?? "inherit_global",
   fixed_trade_amount_override:
-    cfg.fixed_trade_amount_override == null
-      ? null
-      : Number(cfg.fixed_trade_amount_override),
+    cfg.fixed_trade_amount_override == null ? null : Number(cfg.fixed_trade_amount_override),
   copy_wallet_mode: cfg.copy_wallet_mode ?? "dynamic_main_wallet_percentage",
   copy_wallet_percentage:
-    cfg.copy_wallet_percentage == null
-      ? null
-      : Number(cfg.copy_wallet_percentage),
+    cfg.copy_wallet_percentage == null ? null : Number(cfg.copy_wallet_percentage),
   copy_wallet_fixed_amount:
-    cfg.copy_wallet_fixed_amount == null
-      ? null
-      : Number(cfg.copy_wallet_fixed_amount),
+    cfg.copy_wallet_fixed_amount == null ? null : Number(cfg.copy_wallet_fixed_amount),
 });
 
 export default function CopyTrading() {
@@ -95,14 +97,10 @@ export default function CopyTrading() {
       <div className="max-w-3xl mx-auto mt-16 px-4 text-center space-y-6">
         <h1 className="text-2xl font-bold text-white">Copy Trading</h1>
         <p className="text-soft text-base leading-relaxed max-w-lg mx-auto">
-          Automatically mirror the trades of top Polymarket traders. Follow
-          wallets, configure position sizing, and track performance — all from
-          one dashboard.
+          Automatically mirror the trades of top Polymarket traders. Follow wallets, configure
+          position sizing, and track performance — all from one dashboard.
         </p>
-        <button
-          onClick={openLoginModal}
-          className="btn-accent font-semibold text-sm px-6 py-3"
-        >
+        <button onClick={openLoginModal} className="btn-accent font-semibold text-sm px-6 py-3">
           Connect Wallet to Get Started
         </button>
       </div>
@@ -127,21 +125,17 @@ export default function CopyTrading() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [traderConfigDrafts, setTraderConfigDrafts] = useState<
-    Record<string, TraderConfigDraft>
-  >({});
-  const [savingConfigWallet, setSavingConfigWallet] = useState<string | null>(
-    null,
+  const [traderConfigDrafts, setTraderConfigDrafts] = useState<Record<string, TraderConfigDraft>>(
+    {},
   );
-  const [saveStatusByWallet, setSaveStatusByWallet] = useState<
-    Record<string, SaveStatus>
-  >({});
+  const [savingConfigWallet, setSavingConfigWallet] = useState<string | null>(null);
+  const [saveStatusByWallet, setSaveStatusByWallet] = useState<Record<string, SaveStatus>>({});
   const [saveStatusMessageByWallet, setSaveStatusMessageByWallet] = useState<
     Record<string, string | null>
   >({});
-  const [mockIndicatorByWallet, setMockIndicatorByWallet] = useState<
-    Record<string, MockIndicator>
-  >({});
+  const [mockIndicatorByWallet, setMockIndicatorByWallet] = useState<Record<string, MockIndicator>>(
+    {},
+  );
   const [confirmState, setConfirmState] = useState<{
     open: boolean;
     type: ConfirmActionType | null;
@@ -157,18 +151,12 @@ export default function CopyTrading() {
   const [evaluationRows, setEvaluationRows] = useState<CopyEvaluationRow[]>([]);
   const [evaluationLoading, setEvaluationLoading] = useState(false);
   const [evaluationError, setEvaluationError] = useState<string | null>(null);
-  const [evaluationUpdatedAt, setEvaluationUpdatedAt] = useState<string | null>(
-    null,
-  );
+  const [evaluationUpdatedAt, setEvaluationUpdatedAt] = useState<string | null>(null);
 
   const [mockWalletInput, setMockWalletInput] = useState("");
   const [mockPeriod, setMockPeriod] = useState<MockPeriod>("30d");
-  const [mockTraders, setMockTraders] = useState<MockCopyTrader[]>(() =>
-    loadMockCopyTraders(),
-  );
-  const [mockLeaderboard, setMockLeaderboard] = useState<LeaderboardEntry[]>(
-    [],
-  );
+  const [mockTraders, setMockTraders] = useState<MockCopyTrader[]>(() => loadMockCopyTraders());
+  const [mockLeaderboard, setMockLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [mockLoading, setMockLoading] = useState(false);
   const [mockError, setMockError] = useState<string | null>(null);
   const [mockSuccess, setMockSuccess] = useState<string | null>(null);
@@ -231,9 +219,7 @@ export default function CopyTrading() {
       setEvaluationRows(data.rows);
       setEvaluationUpdatedAt(data.updated_at);
     } catch (err: unknown) {
-      setEvaluationError(
-        getApiErrorMessage(err, "Failed to load copy evaluation"),
-      );
+      setEvaluationError(getApiErrorMessage(err, "Failed to load copy evaluation"));
     } finally {
       setEvaluationLoading(false);
     }
@@ -295,13 +281,10 @@ export default function CopyTrading() {
   const shortAddress = (addr: string) =>
     addr.length >= 10 ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : addr;
 
-  const getPolymarketProfileUrl = (wallet: string) =>
-    buildPolymarketProfileUrl(wallet);
+  const getPolymarketProfileUrl = (wallet: string) => buildPolymarketProfileUrl(wallet);
 
   const getTraderPrimaryLabel = (trader: FollowedTrader) =>
-    trader.trader_alias?.trim() ||
-    trader.display_name ||
-    shortAddress(trader.trader_wallet);
+    trader.trader_alias?.trim() || trader.display_name || shortAddress(trader.trader_wallet);
 
   const getPersistedConfigForWallet = useCallback(
     (wallet: string): TraderConfigDraft | null => {
@@ -319,9 +302,7 @@ export default function CopyTrading() {
       if (!persisted) return false;
       const persistedNormalized = normalizeTraderConfig(persisted);
       const draftNormalized = normalizeTraderConfig(draft);
-      return (
-        JSON.stringify(draftNormalized) !== JSON.stringify(persistedNormalized)
-      );
+      return JSON.stringify(draftNormalized) !== JSON.stringify(persistedNormalized);
     },
     [getPersistedConfigForWallet],
   );
@@ -336,8 +317,7 @@ export default function CopyTrading() {
     })}`;
   };
 
-  const formatPct = (v: number) =>
-    `${v >= 0 ? "+" : ""}${(v * 100).toFixed(2)}%`;
+  const formatPct = (v: number) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(2)}%`;
 
   const handleUnfollow = async (wallet: string): Promise<boolean> => {
     const key = wallet.toLowerCase();
@@ -364,9 +344,7 @@ export default function CopyTrading() {
 
   const handleFollowByWallet = async () => {
     const wallet = walletInput.trim().toLowerCase();
-    const parsedMaxPosition = maxPositionInput.trim()
-      ? Number(maxPositionInput.trim())
-      : undefined;
+    const parsedMaxPosition = maxPositionInput.trim() ? Number(maxPositionInput.trim()) : undefined;
 
     if (!isValidWallet(wallet)) {
       setError("Enter a valid Polymarket wallet address (0x + 40 hex chars).");
@@ -396,9 +374,7 @@ export default function CopyTrading() {
       });
 
       setFollowing((prev) => {
-        const idx = prev.findIndex(
-          (f) => f.trader_wallet.toLowerCase() === wallet,
-        );
+        const idx = prev.findIndex((f) => f.trader_wallet.toLowerCase() === wallet);
         if (idx >= 0) {
           const next = [...prev];
           next[idx] = record;
@@ -417,18 +393,13 @@ export default function CopyTrading() {
         setEvaluationWallet(wallet);
       }
     } catch (err: unknown) {
-      setError(
-        getApiErrorMessage(err, "Failed to follow trader by wallet address"),
-      );
+      setError(getApiErrorMessage(err, "Failed to follow trader by wallet address"));
     } finally {
       setAddingWallet(false);
     }
   };
 
-  const updateTraderDraft = (
-    wallet: string,
-    patch: Partial<TraderConfigDraft>,
-  ) => {
+  const updateTraderDraft = (wallet: string, patch: Partial<TraderConfigDraft>) => {
     const key = wallet.toLowerCase();
     setTraderConfigDrafts((prev) => {
       const nextDraft: TraderConfigDraft = {
@@ -458,8 +429,7 @@ export default function CopyTrading() {
 
     if (
       draft.max_position_size != null &&
-      (!Number.isFinite(draft.max_position_size) ||
-        draft.max_position_size <= 0)
+      (!Number.isFinite(draft.max_position_size) || draft.max_position_size <= 0)
     ) {
       setError("Max position size must be a positive number.");
       setSaveStatusByWallet((prev) => ({ ...prev, [key]: "error" }));
@@ -476,9 +446,7 @@ export default function CopyTrading() {
         !Number.isFinite(draft.fixed_trade_amount_override) ||
         draft.fixed_trade_amount_override <= 0
       ) {
-        setError(
-          "Fixed amount mode requires a positive fixed amount override.",
-        );
+        setError("Fixed amount mode requires a positive fixed amount override.");
         setSaveStatusByWallet((prev) => ({ ...prev, [key]: "error" }));
         setSaveStatusMessageByWallet((prev) => ({
           ...prev,
@@ -495,9 +463,7 @@ export default function CopyTrading() {
           !Number.isFinite(draft.copy_wallet_fixed_amount) ||
           draft.copy_wallet_fixed_amount <= 0
         ) {
-          setError(
-            "Fixed snapshot mode requires a positive copy wallet fixed amount.",
-          );
+          setError("Fixed snapshot mode requires a positive copy wallet fixed amount.");
           setSaveStatusByWallet((prev) => ({ ...prev, [key]: "error" }));
           setSaveStatusMessageByWallet((prev) => ({
             ...prev,
@@ -530,26 +496,18 @@ export default function CopyTrading() {
     setSuccessMessage(null);
 
     try {
-      const normalizedAlias =
-        draft.trader_alias == null ? null : draft.trader_alias.trim() || null;
+      const normalizedAlias = draft.trader_alias == null ? null : draft.trader_alias.trim() || null;
       const payload: FollowTraderRequest = {
-        max_position_size:
-          draft.max_position_size == null ? null : draft.max_position_size,
+        max_position_size: draft.max_position_size == null ? null : draft.max_position_size,
         trader_alias: normalizedAlias,
         sizing_mode: draft.sizing_mode,
         fixed_trade_amount_override:
-          draft.fixed_trade_amount_override == null
-            ? null
-            : draft.fixed_trade_amount_override,
+          draft.fixed_trade_amount_override == null ? null : draft.fixed_trade_amount_override,
         copy_wallet_mode: draft.copy_wallet_mode,
         copy_wallet_percentage:
-          draft.copy_wallet_percentage == null
-            ? null
-            : draft.copy_wallet_percentage,
+          draft.copy_wallet_percentage == null ? null : draft.copy_wallet_percentage,
         copy_wallet_fixed_amount:
-          draft.copy_wallet_fixed_amount == null
-            ? null
-            : draft.copy_wallet_fixed_amount,
+          draft.copy_wallet_fixed_amount == null ? null : draft.copy_wallet_fixed_amount,
       };
 
       const updated = await tradesService.followTrader(key, payload);
@@ -565,10 +523,7 @@ export default function CopyTrading() {
       setSaveStatusMessageByWallet((prev) => ({ ...prev, [key]: "Saved" }));
       return true;
     } catch (err: unknown) {
-      const message = getApiErrorMessage(
-        err,
-        "Failed to save trader copy settings",
-      );
+      const message = getApiErrorMessage(err, "Failed to save trader copy settings");
       setError(message);
       setSaveStatusByWallet((prev) => ({ ...prev, [key]: "error" }));
       setSaveStatusMessageByWallet((prev) => ({ ...prev, [key]: message }));
@@ -589,9 +544,7 @@ export default function CopyTrading() {
   const handleAddMockTrader = () => {
     const wallet = mockWalletInput.trim().toLowerCase();
     if (!isValidWallet(wallet)) {
-      setMockError(
-        "Enter a valid Polymarket wallet address (0x + 40 hex chars).",
-      );
+      setMockError("Enter a valid Polymarket wallet address (0x + 40 hex chars).");
       setMockSuccess(null);
       return;
     }
@@ -607,9 +560,7 @@ export default function CopyTrading() {
     upsertMockTrader(wallet);
     setMockWalletInput("");
     setMockError(null);
-    setMockSuccess(
-      `Mock copy started for ${shortAddress(wallet)} with $10,000.`,
-    );
+    setMockSuccess(`Mock copy started for ${shortAddress(wallet)} with $10,000.`);
     setMockIndicatorByWallet((prev) => ({
       ...prev,
       [wallet]: "added",
@@ -629,9 +580,7 @@ export default function CopyTrading() {
     }
     upsertMockTrader(normalized, alias);
     setMockError(null);
-    setMockSuccess(
-      `Added ${shortAddress(normalized)} to mock copy trading with $10,000.`,
-    );
+    setMockSuccess(`Added ${shortAddress(normalized)} to mock copy trading with $10,000.`);
     setMockIndicatorByWallet((prev) => ({
       ...prev,
       [normalized]: "added",
@@ -679,8 +628,7 @@ export default function CopyTrading() {
   };
 
   const handleConfirmAction = async () => {
-    if (!confirmState.open || !confirmState.type || !confirmState.wallet)
-      return;
+    if (!confirmState.open || !confirmState.type || !confirmState.wallet) return;
     setConfirmLoading(true);
     let ok = false;
     try {
@@ -712,9 +660,7 @@ export default function CopyTrading() {
       const data = await tradesService.getLeaderboard(1000, mockPeriod);
       setMockLeaderboard(data.entries);
     } catch (err: unknown) {
-      setMockError(
-        getApiErrorMessage(err, "Failed to refresh mock performance data"),
-      );
+      setMockError(getApiErrorMessage(err, "Failed to refresh mock performance data"));
     } finally {
       setMockLoading(false);
     }
@@ -726,15 +672,12 @@ export default function CopyTrading() {
 
   const mockRows = useMemo(() => {
     const byWallet = new Map(
-      mockLeaderboard.map(
-        (entry) => [entry.address.toLowerCase(), entry] as const,
-      ),
+      mockLeaderboard.map((entry) => [entry.address.toLowerCase(), entry] as const),
     );
 
     return mockTraders.map((trader) => {
       const entry = byWallet.get(trader.wallet.toLowerCase());
-      const rawRoi =
-        entry && entry.volume > 0 ? entry.profit_loss / entry.volume : 0;
+      const rawRoi = entry && entry.volume > 0 ? entry.profit_loss / entry.volume : 0;
       const roi = Math.max(-1, Math.min(3, rawRoi));
       const estimatedPnl = trader.initial_capital * roi;
       const virtualBalance = trader.initial_capital + estimatedPnl;
@@ -742,10 +685,7 @@ export default function CopyTrading() {
       return {
         ...trader,
         display_name: entry?.display_name,
-        primary_name:
-          trader.alias?.trim() ||
-          entry?.display_name ||
-          shortAddress(trader.wallet),
+        primary_name: trader.alias?.trim() || entry?.display_name || shortAddress(trader.wallet),
         roi,
         estimatedPnl,
         virtualBalance,
@@ -755,10 +695,7 @@ export default function CopyTrading() {
   }, [mockLeaderboard, mockTraders]);
 
   const followedByWallet = useMemo(
-    () =>
-      new Map(
-        following.map((f) => [f.trader_wallet.toLowerCase(), f] as const),
-      ),
+    () => new Map(following.map((f) => [f.trader_wallet.toLowerCase(), f] as const)),
     [following],
   );
 
@@ -784,14 +721,8 @@ export default function CopyTrading() {
   };
 
   const mockTotals = useMemo(() => {
-    const allocated = mockRows.reduce(
-      (sum, row) => sum + row.initial_capital,
-      0,
-    );
-    const estimatedPnl = mockRows.reduce(
-      (sum, row) => sum + row.estimatedPnl,
-      0,
-    );
+    const allocated = mockRows.reduce((sum, row) => sum + row.initial_capital, 0);
+    const estimatedPnl = mockRows.reduce((sum, row) => sum + row.estimatedPnl, 0);
     return {
       allocated,
       estimatedPnl,
@@ -828,11 +759,7 @@ export default function CopyTrading() {
           onClick={activeTab === "copy" ? fetchData : refreshMockLeaderboard}
           className="btn-muted"
         >
-          {activeTab === "copy"
-            ? "Refresh"
-            : mockLoading
-              ? "Refreshing..."
-              : "Refresh Mock Data"}
+          {activeTab === "copy" ? "Refresh" : mockLoading ? "Refreshing..." : "Refresh Mock Data"}
         </button>
       </div>
 
@@ -874,8 +801,8 @@ export default function CopyTrading() {
             <div>
               <h2 className="text-lg font-semibold">Mock Copy Trading</h2>
               <p className="text-soft text-sm">
-                Paper-copy Polymarket wallets with virtual funds. Each mock
-                trader starts with {formatUSD(MOCK_CAPITAL_PER_TRADER)}.
+                Paper-copy Polymarket wallets with virtual funds. Each mock trader starts with{" "}
+                {formatUSD(MOCK_CAPITAL_PER_TRADER)}.
               </p>
             </div>
             <button onClick={refreshMockLeaderboard} className="btn-muted">
@@ -883,9 +810,7 @@ export default function CopyTrading() {
             </button>
           </div>
 
-          {mockError && (
-            <div className="p-3 alert-error rounded text-sm">{mockError}</div>
-          )}
+          {mockError && <div className="p-3 alert-error rounded text-sm">{mockError}</div>}
           {mockSuccess && (
             <div className="p-3 rounded text-sm border border-green-500/30 bg-green-500/10 text-green-300">
               {mockSuccess}
@@ -909,8 +834,7 @@ export default function CopyTrading() {
               ))}
             </div>
             <span className="text-xs text-muted">
-              Performance shown as an estimate from leaderboard PnL/volume
-              ratio.
+              Performance shown as an estimate from leaderboard PnL/volume ratio.
             </span>
           </div>
 
@@ -929,23 +853,15 @@ export default function CopyTrading() {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="surface-soft p-4 rounded-lg">
-              <p className="text-muted text-xs uppercase tracking-wide">
-                Mock Traders
-              </p>
+              <p className="text-muted text-xs uppercase tracking-wide">Mock Traders</p>
               <p className="text-2xl font-bold mt-1">{mockRows.length}</p>
             </div>
             <div className="surface-soft p-4 rounded-lg">
-              <p className="text-muted text-xs uppercase tracking-wide">
-                Virtual Equity
-              </p>
-              <p className="text-2xl font-bold mt-1">
-                {formatUSD(mockTotals.equity)}
-              </p>
+              <p className="text-muted text-xs uppercase tracking-wide">Virtual Equity</p>
+              <p className="text-2xl font-bold mt-1">{formatUSD(mockTotals.equity)}</p>
             </div>
             <div className="surface-soft p-4 rounded-lg">
-              <p className="text-muted text-xs uppercase tracking-wide">
-                Est. P&L ({mockPeriod})
-              </p>
+              <p className="text-muted text-xs uppercase tracking-wide">Est. P&L ({mockPeriod})</p>
               <p
                 className={`text-2xl font-bold mt-1 ${
                   mockTotals.estimatedPnl >= 0 ? "status-good" : "status-bad"
@@ -959,8 +875,8 @@ export default function CopyTrading() {
 
           {mockRows.length === 0 ? (
             <div className="surface-soft p-6 rounded text-sm text-soft">
-              No mock traders added yet. Add any Polymarket wallet to simulate
-              copy trading with {formatUSD(MOCK_CAPITAL_PER_TRADER)} per trader.
+              No mock traders added yet. Add any Polymarket wallet to simulate copy trading with{" "}
+              {formatUSD(MOCK_CAPITAL_PER_TRADER)} per trader.
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -980,12 +896,8 @@ export default function CopyTrading() {
                   {mockRows.map((row) => (
                     <tr key={row.wallet}>
                       <td className="p-3">
-                        <p className="text-white font-medium text-xs">
-                          {row.primary_name}
-                        </p>
-                        <p className="text-muted text-xs mono">
-                          {shortAddress(row.wallet)}
-                        </p>
+                        <p className="text-white font-medium text-xs">{row.primary_name}</p>
+                        <p className="text-muted text-xs mono">{shortAddress(row.wallet)}</p>
                         {getPolymarketProfileUrl(row.wallet) && (
                           <a
                             href={getPolymarketProfileUrl(row.wallet) || "#"}
@@ -1013,16 +925,10 @@ export default function CopyTrading() {
                           className="mt-2 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-1.5 text-xs"
                         />
                       </td>
-                      <td className="p-3 text-right mono">
-                        {formatUSD(row.initial_capital)}
-                      </td>
+                      <td className="p-3 text-right mono">{formatUSD(row.initial_capital)}</td>
                       <td className="p-3 text-right mono">
                         {row.hasLeaderboardData ? (
-                          <span
-                            className={
-                              row.roi >= 0 ? "status-good" : "status-bad"
-                            }
-                          >
+                          <span className={row.roi >= 0 ? "status-good" : "status-bad"}>
                             {formatPct(row.roi)}
                           </span>
                         ) : (
@@ -1031,13 +937,7 @@ export default function CopyTrading() {
                       </td>
                       <td className="p-3 text-right mono">
                         {row.hasLeaderboardData ? (
-                          <span
-                            className={
-                              row.estimatedPnl >= 0
-                                ? "status-good"
-                                : "status-bad"
-                            }
-                          >
+                          <span className={row.estimatedPnl >= 0 ? "status-good" : "status-bad"}>
                             {row.estimatedPnl >= 0 ? "+" : ""}
                             {formatUSD(row.estimatedPnl)}
                           </span>
@@ -1049,9 +949,7 @@ export default function CopyTrading() {
                         {row.hasLeaderboardData ? (
                           formatUSD(row.virtualBalance)
                         ) : (
-                          <span className="text-muted">
-                            {formatUSD(row.initial_capital)}
-                          </span>
+                          <span className="text-muted">{formatUSD(row.initial_capital)}</span>
                         )}
                       </td>
                       <td className="p-3 text-right text-muted text-xs">
@@ -1111,25 +1009,17 @@ export default function CopyTrading() {
       {activeTab === "copy" && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="surface-panel p-4 rounded-lg">
-            <p className="text-muted text-xs uppercase tracking-wide">
-              Following
-            </p>
+            <p className="text-muted text-xs uppercase tracking-wide">Following</p>
             <p className="text-2xl font-bold mt-1">{following.length}</p>
           </div>
           <div className="surface-panel p-4 rounded-lg">
-            <p className="text-muted text-xs uppercase tracking-wide">
-              Copy Trades (Today)
-            </p>
+            <p className="text-muted text-xs uppercase tracking-wide">Copy Trades (Today)</p>
             <p className="text-2xl font-bold mt-1">{copyTrades.length}</p>
           </div>
           <div className="surface-panel p-4 rounded-lg">
-            <p className="text-muted text-xs uppercase tracking-wide">
-              Daily P&L
-            </p>
+            <p className="text-muted text-xs uppercase tracking-wide">Daily P&L</p>
             <p
-              className={`text-2xl font-bold mt-1 ${
-                dailyPnl >= 0 ? "status-good" : "status-bad"
-              }`}
+              className={`text-2xl font-bold mt-1 ${dailyPnl >= 0 ? "status-good" : "status-bad"}`}
             >
               {dailyPnl >= 0 ? "+" : ""}
               {formatUSD(dailyPnl)}
@@ -1156,9 +1046,7 @@ export default function CopyTrading() {
                 ))}
               </select>
               <button
-                onClick={() =>
-                  evaluationWallet && fetchEvaluation(evaluationWallet)
-                }
+                onClick={() => evaluationWallet && fetchEvaluation(evaluationWallet)}
                 className="btn-muted"
                 disabled={!evaluationWallet || evaluationLoading}
               >
@@ -1168,8 +1056,8 @@ export default function CopyTrading() {
           </div>
 
           <p className="text-soft text-sm">
-            Side-by-side source trader trades and your copied outcomes.
-            Auto-refreshes every 15 seconds.
+            Side-by-side source trader trades and your copied outcomes. Auto-refreshes every 15
+            seconds.
             {evaluationUpdatedAt && (
               <span className="text-muted ml-2">
                 · Updated {new Date(evaluationUpdatedAt).toLocaleTimeString()}
@@ -1178,9 +1066,7 @@ export default function CopyTrading() {
           </p>
 
           {evaluationError && (
-            <div className="p-3 alert-error rounded text-sm">
-              {evaluationError}
-            </div>
+            <div className="p-3 alert-error rounded text-sm">{evaluationError}</div>
           )}
 
           {!evaluationWallet ? (
@@ -1240,22 +1126,17 @@ export default function CopyTrading() {
                         {row.ratio != null ? formatPct(row.ratio) : "—"}
                       </td>
                       <td className="p-3 text-right mono">
-                        {row.copy_wallet_base != null
-                          ? formatUSD(row.copy_wallet_base)
-                          : "—"}
+                        {row.copy_wallet_base != null ? formatUSD(row.copy_wallet_base) : "—"}
                       </td>
                       <td className="p-3 text-right mono">
-                        {row.copied_size != null
-                          ? formatUSD(row.copied_size)
-                          : "—"}
+                        {row.copied_size != null ? formatUSD(row.copied_size) : "—"}
                       </td>
                       <td className="p-3 text-center">
                         <span
                           className={`chip text-[10px] ${
                             row.copy_status === "executed"
                               ? "chip-success"
-                              : row.copy_status === "failed" ||
-                                  row.copy_status === "rejected"
+                              : row.copy_status === "failed" || row.copy_status === "rejected"
                                 ? "chip-danger"
                                 : "bg-[var(--bg-soft)] text-muted"
                           }`}
@@ -1287,10 +1168,8 @@ export default function CopyTrading() {
           {following.length === 0 ? (
             <p className="text-soft text-sm">
               You&apos;re not following any traders yet. Visit the{" "}
-              <span className="text-[var(--accent)] font-semibold">
-                Leaderboard
-              </span>{" "}
-              to find traders to follow.
+              <span className="text-[var(--accent)] font-semibold">Leaderboard</span> to find
+              traders to follow.
             </p>
           ) : (
             <div className="space-y-4">
@@ -1306,23 +1185,14 @@ export default function CopyTrading() {
                 const mockIndicator = mockIndicatorByWallet[key];
 
                 return (
-                  <div
-                    key={f.id}
-                    className="surface-soft p-4 rounded-lg space-y-4"
-                  >
+                  <div key={f.id} className="surface-soft p-4 rounded-lg space-y-4">
                     <div className="flex items-start justify-between gap-3 flex-wrap">
                       <div>
-                        <p className="text-white font-medium">
-                          {getTraderPrimaryLabel(f)}
-                        </p>
-                        <p className="text-muted text-xs mono">
-                          {shortAddress(f.trader_wallet)}
-                        </p>
+                        <p className="text-white font-medium">{getTraderPrimaryLabel(f)}</p>
+                        <p className="text-muted text-xs mono">{shortAddress(f.trader_wallet)}</p>
                         {getPolymarketProfileUrl(f.trader_wallet) && (
                           <a
-                            href={
-                              getPolymarketProfileUrl(f.trader_wallet) || "#"
-                            }
+                            href={getPolymarketProfileUrl(f.trader_wallet) || "#"}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-[11px] text-[var(--accent)] hover:underline"
@@ -1332,24 +1202,14 @@ export default function CopyTrading() {
                         )}
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="chip chip-success text-xs">
-                          Active
-                        </span>
+                        <span className="chip chip-success text-xs">Active</span>
                         {getSaveStatusChip(saveStatus)}
-                        {isMocked && (
-                          <span className="chip chip-success text-xs">
-                            Mocked
-                          </span>
-                        )}
+                        {isMocked && <span className="chip chip-success text-xs">Mocked</span>}
                         {mockIndicator === "already_exists" && (
-                          <span className="chip chip-warning text-xs">
-                            Already in Mocking
-                          </span>
+                          <span className="chip chip-warning text-xs">Already in Mocking</span>
                         )}
                         {mockIndicator === "added" && (
-                          <span className="chip chip-success text-xs">
-                            Now Mocked
-                          </span>
+                          <span className="chip chip-success text-xs">Now Mocked</span>
                         )}
                         <button
                           onClick={() =>
@@ -1367,9 +1227,7 @@ export default function CopyTrading() {
                           {isMocked ? "Already Mocked" : "Add Mock"}
                         </button>
                         <button
-                          onClick={() =>
-                            openConfirmModal("unfollow", f.trader_wallet)
-                          }
+                          onClick={() => openConfirmModal("unfollow", f.trader_wallet)}
                           className="px-3 py-1 rounded text-xs font-semibold bg-red-500/20 text-red-400 hover:bg-red-500/30 transition"
                         >
                           Unfollow
@@ -1407,8 +1265,7 @@ export default function CopyTrading() {
                           value={draft.sizing_mode || "inherit_global"}
                           onChange={(e) =>
                             updateTraderDraft(f.trader_wallet, {
-                              sizing_mode: e.target
-                                .value as TraderConfigDraft["sizing_mode"],
+                              sizing_mode: e.target.value as TraderConfigDraft["sizing_mode"],
                             })
                           }
                           className="mt-1 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-2 text-xs"
@@ -1430,9 +1287,7 @@ export default function CopyTrading() {
                           value={draft.max_position_size ?? ""}
                           onChange={(e) =>
                             updateTraderDraft(f.trader_wallet, {
-                              max_position_size: e.target.value
-                                ? Number(e.target.value)
-                                : null,
+                              max_position_size: e.target.value ? Number(e.target.value) : null,
                             })
                           }
                           className="mt-1 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-2 text-xs"
@@ -1464,10 +1319,7 @@ export default function CopyTrading() {
                       <label className="text-xs text-muted">
                         Copy Wallet Basis
                         <select
-                          value={
-                            draft.copy_wallet_mode ||
-                            "dynamic_main_wallet_percentage"
-                          }
+                          value={draft.copy_wallet_mode || "dynamic_main_wallet_percentage"}
                           onChange={(e) =>
                             updateTraderDraft(f.trader_wallet, {
                               copy_wallet_mode: e.target
@@ -1501,9 +1353,7 @@ export default function CopyTrading() {
                           }
                           className="mt-1 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-2 text-xs"
                           placeholder="For dynamic mode"
-                          disabled={
-                            draft.copy_wallet_mode === "fixed_snapshot_amount"
-                          }
+                          disabled={draft.copy_wallet_mode === "fixed_snapshot_amount"}
                         />
                       </label>
 
@@ -1523,24 +1373,18 @@ export default function CopyTrading() {
                           }
                           className="mt-1 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-2 text-xs"
                           placeholder="For fixed snapshot mode"
-                          disabled={
-                            draft.copy_wallet_mode !== "fixed_snapshot_amount"
-                          }
+                          disabled={draft.copy_wallet_mode !== "fixed_snapshot_amount"}
                         />
                       </label>
                     </div>
 
                     {saveStatus === "error" && saveStatusMessage && (
-                      <p className="text-xs text-red-300">
-                        {saveStatusMessage}
-                      </p>
+                      <p className="text-xs text-red-300">{saveStatusMessage}</p>
                     )}
 
                     <div className="flex justify-end">
                       <button
-                        onClick={() =>
-                          openConfirmModal("save", f.trader_wallet)
-                        }
+                        onClick={() => openConfirmModal("save", f.trader_wallet)}
                         disabled={saving}
                         className="btn-accent disabled:opacity-60"
                       >
@@ -1562,8 +1406,7 @@ export default function CopyTrading() {
           </div>
           {copyTrades.length === 0 ? (
             <div className="p-8 text-center text-soft text-sm">
-              No copy trades executed yet. Trades will appear here when followed
-              traders make moves.
+              No copy trades executed yet. Trades will appear here when followed traders make moves.
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -1585,12 +1428,8 @@ export default function CopyTrading() {
                   {copyTrades.map((t) => (
                     <tr key={t.id}>
                       <td className="p-3 text-xs">
-                        <p className="text-white">
-                          {getTraderLabelByWallet(t.trader_wallet)}
-                        </p>
-                        <p className="text-muted mono">
-                          {shortAddress(t.trader_wallet)}
-                        </p>
+                        <p className="text-white">{getTraderLabelByWallet(t.trader_wallet)}</p>
+                        <p className="text-muted mono">{shortAddress(t.trader_wallet)}</p>
                       </td>
                       <td className="p-3 text-white text-xs truncate max-w-[200px]">
                         {t.market_id ? shortAddress(t.market_id) : "—"}
@@ -1604,12 +1443,8 @@ export default function CopyTrading() {
                           {t.side}
                         </span>
                       </td>
-                      <td className="p-3 text-right mono">
-                        {formatUSD(t.size)}
-                      </td>
-                      <td className="p-3 text-right mono">
-                        ${t.price.toFixed(3)}
-                      </td>
+                      <td className="p-3 text-right mono">{formatUSD(t.size)}</td>
+                      <td className="p-3 text-right mono">${t.price.toFixed(3)}</td>
                       <td className="p-3 text-center">
                         <span
                           className={`chip text-xs ${
@@ -1634,11 +1469,7 @@ export default function CopyTrading() {
                       </td>
                       <td className="p-3 text-right mono">
                         {t.pnl != null ? (
-                          <span
-                            className={
-                              t.pnl >= 0 ? "status-good" : "status-bad"
-                            }
-                          >
+                          <span className={t.pnl >= 0 ? "status-good" : "status-bad"}>
                             {t.pnl >= 0 ? "+" : ""}
                             {formatUSD(t.pnl)}
                           </span>
@@ -1647,9 +1478,7 @@ export default function CopyTrading() {
                         )}
                       </td>
                       <td className="p-3 text-right text-muted text-xs">
-                        {t.timestamp
-                          ? new Date(t.timestamp).toLocaleTimeString()
-                          : "—"}
+                        {t.timestamp ? new Date(t.timestamp).toLocaleTimeString() : "—"}
                       </td>
                     </tr>
                   ))}
@@ -1662,15 +1491,10 @@ export default function CopyTrading() {
 
       {confirmState.open && confirmState.type && confirmState.wallet && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div
-            className="absolute inset-0 modal-overlay"
-            onClick={closeConfirmModal}
-          />
+          <div className="absolute inset-0 modal-overlay" onClick={closeConfirmModal} />
           <div className="surface-panel relative z-10 w-full max-w-md p-6 space-y-4">
             <h3 className="text-lg font-semibold text-white">
-              {confirmState.type === "save"
-                ? "Confirm Save Configuration"
-                : "Confirm Unfollow"}
+              {confirmState.type === "save" ? "Confirm Save Configuration" : "Confirm Unfollow"}
             </h3>
             <p className="text-sm text-soft">
               {confirmState.type === "save"

@@ -1,4 +1,15 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+/**
+ * "Easy Trades" board that ranks Polymarket markets by AI opportunity score.
+ *
+ * Loads markets from portfolioService and merges per-token price ticks
+ * streamed from the SSE price stream (`usePriceStream`) into card view
+ * models; when the stream drops, the hook falls back to the 15s price
+ * poll and the footer shows a "delayed" indicator. Card actions open TradeModal
+ * or a streamed detail analysis popup; the drawer adds per-market and per-group quick analysis.
+ *
+ * @module components/Opportunities
+ */
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   portfolioService,
   PolymarketMarket,
@@ -13,6 +24,7 @@ import {
   OpportunityScore,
 } from "../services/analysisService";
 import { getApiErrorMessage, sanitizeAIError } from "../utils/apiError";
+import { usePriceStream } from "../hooks/usePriceStream";
 import AnalysisDisplay from "./AnalysisDisplay";
 import TradeModal, { TradeModalMarket } from "./TradeModal";
 import {
@@ -57,8 +69,8 @@ interface GroupQuickAnalysisState {
   recommended_side?: string;
 }
 
-/** How often (ms) to auto-refresh prices */
-const PRICE_POLL_INTERVAL = 15_000;
+/** How often (ms) the polling fallback refreshes prices */
+const FALLBACK_POLL_INTERVAL_MS = 15_000;
 const MIN_VISIBLE_TRADE_PANELS = 10;
 const INITIAL_MARKETS_LIMIT = 60;
 const MAX_MARKETS_LIMIT = 180;
@@ -98,14 +110,7 @@ const TAG_SLUG_MAP: Record<string, Set<string>> = {
     "texas-primary",
     "texas-senate",
   ]),
-  crypto: new Set([
-    "crypto",
-    "crypto-prices",
-    "airdrops",
-    "fdv",
-    "exchange",
-    "megaeth",
-  ]),
+  crypto: new Set(["crypto", "crypto-prices", "airdrops", "fdv", "exchange", "megaeth"]),
   "pop-culture": new Set([
     "pop-culture",
     "celebrities",
@@ -129,14 +134,7 @@ const TAG_SLUG_MAP: Record<string, Set<string>> = {
     "taxes",
   ]),
   science: new Set(["science"]),
-  technology: new Set([
-    "tech",
-    "ai",
-    "big-tech",
-    "openai",
-    "gpt-5",
-    "sam-altman",
-  ]),
+  technology: new Set(["tech", "ai", "big-tech", "openai", "gpt-5", "sam-altman"]),
   world: new Set([
     "world",
     "world-affairs",
@@ -167,21 +165,11 @@ const TAG_SLUG_MAP: Record<string, Set<string>> = {
     "putin",
     "security-guarantee",
   ]),
-  entertainment: new Set([
-    "entertainment",
-    "movies",
-    "music",
-    "awards",
-    "creators",
-    "celebrities",
-  ]),
+  entertainment: new Set(["entertainment", "movies", "music", "awards", "creators", "celebrities"]),
 };
 
 /** Check if a market belongs to a category by its _event_tags */
-function marketMatchesCategory(
-  market: MarketWithAnalysis,
-  categoryId: string,
-): boolean {
+function marketMatchesCategory(market: MarketWithAnalysis, categoryId: string): boolean {
   const allowed = TAG_SLUG_MAP[categoryId];
   if (!allowed) return false;
   const tags = (market as Record<string, unknown>)._event_tags;
@@ -192,13 +180,7 @@ function marketMatchesCategory(
   });
 }
 
-const PREFERRED_ANALYSIS_KEYS = [
-  "analysis",
-  "recommendation",
-  "scan_results",
-  "results",
-  "error",
-];
+const PREFERRED_ANALYSIS_KEYS = ["analysis", "recommendation", "scan_results", "results", "error"];
 
 function stringifyAnalysisData(data: unknown): string {
   if (typeof data === "string") {
@@ -231,8 +213,7 @@ function parseOutcomePrices(market: MarketWithAnalysis): {
     // Prefer live order-book prices over stale outcomePrices
     const bestAsk = market.bestAsk != null ? Number(market.bestAsk) : NaN;
     const bestBid = market.bestBid != null ? Number(market.bestBid) : NaN;
-    const lastTrade =
-      market.lastTradePrice != null ? Number(market.lastTradePrice) : NaN;
+    const lastTrade = market.lastTradePrice != null ? Number(market.lastTradePrice) : NaN;
 
     let yesPrice = NaN;
     if (!isNaN(bestAsk) && bestAsk > 0 && bestAsk < 1) {
@@ -278,6 +259,38 @@ function getMarketWatchKey(market: MarketWithAnalysis): string {
   ).toLowerCase();
 }
 
+/** Yes/No token ids for a market, mirroring the trade-ticket extraction. */
+function marketTokenPair(market: MarketWithAnalysis): { yes: string; no: string } {
+  let yes = "";
+  let no = "";
+
+  if (Array.isArray(market.tokens) && market.tokens.length >= 2) {
+    const yesT = market.tokens.find((t) => t.outcome === "Yes") || market.tokens[0];
+    const noT = market.tokens.find((t) => t.outcome === "No") || market.tokens[1];
+    yes = yesT?.token_id || "";
+    no = noT?.token_id || "";
+  }
+
+  if (!yes) {
+    const clob = market.clobTokenIds;
+    if (Array.isArray(clob) && clob.length > 0) {
+      yes = clob[0] || "";
+      no = clob[1] || "";
+    } else if (typeof clob === "string") {
+      try {
+        const arr = JSON.parse(clob);
+        yes = arr[0] || "";
+        no = arr[1] || "";
+      } catch {
+        yes = clob;
+      }
+    }
+  }
+
+  if (!yes) yes = market.condition_id || market.conditionId || market.id || "";
+  return { yes, no };
+}
+
 const fmtCompactUSD = (value: number | string | undefined | null) => {
   const n = Math.abs(Number(value || 0));
   if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(1)}B`;
@@ -297,9 +310,7 @@ const getCadenceLabel = (endDate?: string) => {
 };
 
 function isPriceDirectionMarket(market: MarketWithAnalysis): boolean {
-  const question = String(
-    market.question || market._event_title || "",
-  ).toLowerCase();
+  const question = String(market.question || market._event_title || "").toLowerCase();
   return question.includes("up or down") || question.includes("minute");
 }
 
@@ -311,8 +322,7 @@ export default function Opportunities() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Streaming detail analysis state
-  const [selectedMarket, setSelectedMarket] =
-    useState<MarketWithAnalysis | null>(null);
+  const [selectedMarket, setSelectedMarket] = useState<MarketWithAnalysis | null>(null);
   const {
     text: streamedText,
     append: appendStreamedText,
@@ -330,18 +340,18 @@ export default function Opportunities() {
   /** Trade modal */
   const [tradeMarket, setTradeMarket] = useState<TradeModalMarket | null>(null);
   /** Selected event group for drawer/modal */
-  const [selectedGroup, setSelectedGroup] =
-    useState<EventGroup<MarketWithAnalysis> | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<EventGroup<MarketWithAnalysis> | null>(null);
   /** Group-level quick analysis keyed by event slug */
-  const [groupQuickBySlug, setGroupQuickBySlug] = useState<
-    Record<string, GroupQuickAnalysisState>
-  >({});
+  const [groupQuickBySlug, setGroupQuickBySlug] = useState<Record<string, GroupQuickAnalysisState>>(
+    {},
+  );
 
   // ── AI Opportunity Scanning ──
   const [aiScanning, setAiScanning] = useState(false);
-  const [aiProgress, setAiProgress] = useState<{ done: number; total: number }>(
-    { done: 0, total: 0 },
-  );
+  const [aiProgress, setAiProgress] = useState<{ done: number; total: number }>({
+    done: 0,
+    total: 0,
+  });
   const [aiScanError, setAiScanError] = useState<string | null>(null);
   const [sortMode, setSortMode] = useState<SortMode>("ease");
   const [searchInput, setSearchInput] = useState("");
@@ -349,15 +359,11 @@ export default function Opportunities() {
   const [selectedTag, setSelectedTag] = useState("");
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
   const [showCategoryScrollHint, setShowCategoryScrollHint] = useState(false);
-  const [watchlistKeys, setWatchlistKeys] = useState<string[]>(
-    loadMarketWatchlist(),
+  const [watchlistKeys, setWatchlistKeys] = useState<string[]>(loadMarketWatchlist());
+  const [recentTrades, setRecentTrades] = useState<RecentTradeMarket[]>(loadRecentTradeMarkets(8));
+  const [tradeDefaultOutcome, setTradeDefaultOutcome] = useState<TradeTicketOutcome | undefined>(
+    undefined,
   );
-  const [recentTrades, setRecentTrades] = useState<RecentTradeMarket[]>(
-    loadRecentTradeMarkets(8),
-  );
-  const [tradeDefaultOutcome, setTradeDefaultOutcome] = useState<
-    TradeTicketOutcome | undefined
-  >(undefined);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const categoryRailRef = useRef<HTMLDivElement | null>(null);
   const aiAbortRef = useRef<AbortController | null>(null);
@@ -371,20 +377,15 @@ export default function Opportunities() {
   const [loadingMore, setLoadingMore] = useState(false);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
-  const openTradeModal = (
-    market: MarketWithAnalysis,
-    preferredOutcome?: TradeTicketOutcome,
-  ) => {
+  const openTradeModal = (market: MarketWithAnalysis, preferredOutcome?: TradeTicketOutcome) => {
     // Extract token_ids from clobTokenIds, tokens array, or condition_id
     let yesTokenId = "";
     let noTokenId = "";
 
     // Try tokens array first (has outcome labels)
     if (Array.isArray(market.tokens) && market.tokens.length >= 2) {
-      const yesT =
-        market.tokens.find((t) => t.outcome === "Yes") || market.tokens[0];
-      const noT =
-        market.tokens.find((t) => t.outcome === "No") || market.tokens[1];
+      const yesT = market.tokens.find((t) => t.outcome === "Yes") || market.tokens[0];
+      const noT = market.tokens.find((t) => t.outcome === "No") || market.tokens[1];
       yesTokenId = yesT?.token_id || "";
       noTokenId = noT?.token_id || "";
     }
@@ -406,8 +407,7 @@ export default function Opportunities() {
       }
     }
 
-    if (!yesTokenId)
-      yesTokenId = market.condition_id || market.conditionId || market.id || "";
+    if (!yesTokenId) yesTokenId = market.condition_id || market.conditionId || market.id || "";
 
     const prices = parseOutcomePrices(market);
     setTradeMarket({
@@ -443,11 +443,7 @@ export default function Opportunities() {
   }, []);
 
   useEffect(() => subscribeMarketWatchlist(setWatchlistKeys), []);
-  useEffect(
-    () =>
-      subscribeRecentTradeMarkets((rows) => setRecentTrades(rows.slice(0, 8))),
-    [],
-  );
+  useEffect(() => subscribeRecentTradeMarkets((rows) => setRecentTrades(rows.slice(0, 8))), []);
 
   useEffect(() => {
     const onFocusSearch = () => {
@@ -455,15 +451,7 @@ export default function Opportunities() {
       searchInputRef.current?.select();
     };
     window.addEventListener(FOCUS_MARKET_SEARCH_EVENT, onFocusSearch);
-    return () =>
-      window.removeEventListener(FOCUS_MARKET_SEARCH_EVENT, onFocusSearch);
-  }, []);
-
-  // Auto-poll prices every PRICE_POLL_INTERVAL ms
-  useEffect(() => {
-    const id = setInterval(refreshPrices, PRICE_POLL_INTERVAL);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => window.removeEventListener(FOCUS_MARKET_SEARCH_EVENT, onFocusSearch);
   }, []);
 
   // Clear flash after 1.2 s
@@ -490,8 +478,10 @@ export default function Opportunities() {
     setPageOffset(0);
     setHasMore(true);
     try {
-      const result: CombinedMarketsResponse =
-        await portfolioService.getCombinedMarkets(PAGE_SIZE, 0);
+      const result: CombinedMarketsResponse = await portfolioService.getCombinedMarkets(
+        PAGE_SIZE,
+        0,
+      );
       const fresh = (result.markets || []) as MarketWithAnalysis[];
 
       // Seed the previous-price map
@@ -547,8 +537,7 @@ export default function Opportunities() {
     const ctrl = analysisService.streamAnalyzeMarkets(marketData, {
       onStatus: (_status: string, _total?: number) => {
         setAiScanning(true);
-        if (_total)
-          setAiProgress((p) => ({ ...p, total: (p.total || 0) + _total }));
+        if (_total) setAiProgress((p) => ({ ...p, total: (p.total || 0) + _total }));
       },
       onMarketScored: (
         marketId: string,
@@ -591,8 +580,10 @@ export default function Opportunities() {
     if (loadingMore || !hasMore) return;
     setLoadingMore(true);
     try {
-      const result: CombinedMarketsResponse =
-        await portfolioService.getCombinedMarkets(PAGE_SIZE, pageOffset);
+      const result: CombinedMarketsResponse = await portfolioService.getCombinedMarkets(
+        PAGE_SIZE,
+        pageOffset,
+      );
       const incoming = (result.markets || []) as MarketWithAnalysis[];
       if (incoming.length === 0) {
         setHasMore(false);
@@ -707,101 +698,127 @@ export default function Opportunities() {
     return () => observer.disconnect();
   }, [hasMore, loadingMore, loading, loadMoreMarkets]);
 
-  /** Lightweight price-only refresh — merges into existing state */
-  const refreshPrices = async () => {
+  // Mirror of `markets` for closures that must not go stale.
+  const marketsRef = useRef<MarketWithAnalysis[]>(markets);
+  useEffect(() => {
+    marketsRef.current = markets;
+  }, [markets]);
+
+  // Token ids of the visible markets — the price stream subscription set.
+  const marketTokenIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const m of markets) {
+      const { yes, no } = marketTokenPair(m);
+      if (yes) ids.push(yes);
+      if (no) ids.push(no);
+    }
+    return ids;
+  }, [markets]);
+
+  /** Polling fallback while the SSE price stream is down. */
+  const pollMarketTokenPrices = useCallback(async () => {
     try {
       const resp = await portfolioService.refreshPrices(20);
-      const incoming = resp.markets;
-      if (!incoming || incoming.length === 0) return;
-
-      // Build lookup by question (most stable key across CLOB/Gamma)
-      const priceByQ = new Map<string, (typeof incoming)[0]>();
-      for (const m of incoming) {
-        priceByQ.set(m.question, m);
+      const priceByQ = new Map(resp.markets.map((m) => [m.question, m]));
+      const result: Record<string, number> = {};
+      for (const m of marketsRef.current) {
+        const tick = priceByQ.get(m.question || "");
+        if (!tick) continue;
+        const tickAsMarket = {
+          outcomePrices: tick.outcomePrices as string[] | undefined,
+          bestAsk: tick.bestAsk,
+          bestBid: tick.bestBid,
+          lastTradePrice: tick.lastTradePrice,
+        } as MarketWithAnalysis;
+        const parsed = parseOutcomePrices(tickAsMarket);
+        const { yes } = marketTokenPair(m);
+        if (yes) result[yes] = parsed.yes;
       }
-
-      setMarkets((prev) =>
-        prev.map((market) => {
-          const key = market.question || "";
-          const tick = priceByQ.get(key);
-          if (!tick) return market;
-
-          const oldYes = prevPricesRef.current.get(key) ?? 0;
-          // Build a temporary market-like object for parseOutcomePrices
-          const tickAsMarket = {
-            outcomePrices: tick.outcomePrices as string[] | undefined,
-            bestAsk: tick.bestAsk,
-            bestBid: tick.bestBid,
-            lastTradePrice: tick.lastTradePrice,
-          } as MarketWithAnalysis;
-          const newP = parseOutcomePrices(tickAsMarket);
-          const dir = newP.yes > oldYes ? 1 : newP.yes < oldYes ? -1 : 0;
-          prevPricesRef.current.set(key, newP.yes);
-
-          return {
-            ...market,
-            outcomePrices: tick.outcomePrices as string[] | undefined,
-            bestAsk: tick.bestAsk,
-            bestBid: tick.bestBid,
-            lastTradePrice: tick.lastTradePrice,
-            slug: tick.slug || market.slug,
-            volume24hr: tick.volume24hr ?? market.volume24hr,
-            liquidity: tick.liquidity ?? market.liquidity,
-            priceDirection: dir,
-          };
-        }),
-      );
-      setLastPriceUpdate(new Date());
+      return result;
     } catch {
-      // Silently ignore poll errors — we'll retry next interval
+      // Silently ignore poll errors — retried on the next tick.
+      return {};
     }
-  };
+  }, []);
 
-  const handleQuickAnalysis = useCallback(
-    async (market: MarketWithAnalysis) => {
-      const marketKey = market.question || market.id || "";
+  const { prices: streamPrices, status: priceStreamStatus } = usePriceStream({
+    tokenIds: marketTokenIds,
+    fallbackPoll: pollMarketTokenPrices,
+    fallbackPollIntervalMs: FALLBACK_POLL_INTERVAL_MS,
+  });
+
+  // Merge streamed prices into the market cards (drives the flash animation).
+  useEffect(() => {
+    setMarkets((prev) => {
+      let changed = false;
+      const next = prev.map((market) => {
+        const { yes, no } = marketTokenPair(market);
+        let newYes: number | null = null;
+        if (yes && streamPrices[yes] != null) {
+          newYes = streamPrices[yes];
+        } else if (no && streamPrices[no] != null) {
+          newYes = 1 - streamPrices[no];
+        }
+        if (newYes == null) return market;
+        const key = market.question || market.id || "";
+        const oldYes = prevPricesRef.current.get(key) ?? 0;
+        const dir = newYes > oldYes ? 1 : newYes < oldYes ? -1 : 0;
+        if (dir !== 0) changed = true;
+        prevPricesRef.current.set(key, newYes);
+        return {
+          ...market,
+          lastTradePrice: newYes,
+          bestAsk: newYes,
+          priceDirection: dir,
+        };
+      });
+      return changed ? next : prev;
+    });
+    setLastPriceUpdate(new Date());
+  }, [streamPrices]);
+
+  const handleQuickAnalysis = useCallback(async (market: MarketWithAnalysis) => {
+    const marketKey = market.question || market.id || "";
+    setMarkets((prev) =>
+      prev.map((m) =>
+        (m.question || m.id || "") === marketKey
+          ? { ...m, analysisLoading: true, analysisError: undefined }
+          : m,
+      ),
+    );
+
+    try {
+      const prices = parseOutcomePrices(market);
+      const request: QuickAnalysisRequest = {
+        question: market.question || "Unknown market",
+        current_price: prices.yes,
+      };
+      const result = await analysisService.quickAnalysis(request);
       setMarkets((prev) =>
         prev.map((m) =>
           (m.question || m.id || "") === marketKey
-            ? { ...m, analysisLoading: true, analysisError: undefined }
+            ? {
+                ...m,
+                analysis: stringifyAnalysisData(result.data),
+                analysisLoading: false,
+              }
             : m,
         ),
       );
-
-      try {
-        const prices = parseOutcomePrices(market);
-        const request: QuickAnalysisRequest = {
-          question: market.question || "Unknown market",
-          current_price: prices.yes,
-        };
-        const result = await analysisService.quickAnalysis(request);
-        setMarkets((prev) =>
-          prev.map((m) =>
-            (m.question || m.id || "") === marketKey
-              ? {
-                  ...m,
-                  analysis: stringifyAnalysisData(result.data),
-                  analysisLoading: false,
-                }
-              : m,
-          ),
-        );
-      } catch (err: unknown) {
-        setMarkets((prev) =>
-          prev.map((m) =>
-            (m.question || m.id || "") === marketKey
-              ? {
-                  ...m,
-                  analysisLoading: false,
-                  analysisError: getApiErrorMessage(err, "Analysis failed"),
-                }
-              : m,
-          ),
-        );
-      }
-    },
-    [],
-  );
+    } catch (err: unknown) {
+      setMarkets((prev) =>
+        prev.map((m) =>
+          (m.question || m.id || "") === marketKey
+            ? {
+                ...m,
+                analysisLoading: false,
+                analysisError: getApiErrorMessage(err, "Analysis failed"),
+              }
+            : m,
+        ),
+      );
+    }
+  }, []);
 
   const buildGroupQuickRequest = useCallback(
     (group: EventGroup<MarketWithAnalysis>): QuickGroupAnalysisRequest => {
@@ -896,10 +913,7 @@ export default function Opportunities() {
   };
 
   /** Open popup immediately and stream the analysis */
-  const handleDetailAnalysis = (
-    market: MarketWithAnalysis,
-    e?: React.MouseEvent,
-  ) => {
+  const handleDetailAnalysis = (market: MarketWithAnalysis, e?: React.MouseEvent) => {
     // Cancel any previous stream
     abortRef.current?.abort();
 
@@ -1003,20 +1017,15 @@ export default function Opportunities() {
     return copy;
   }, [markets, sortMode]);
 
-  const eventGroups = React.useMemo(
-    () => groupMarketsByEvent(sortedMarkets),
-    [sortedMarkets],
-  );
-  const watchlistSet = React.useMemo(
-    () => new Set(watchlistKeys),
-    [watchlistKeys],
-  );
+  const eventGroups = React.useMemo(() => groupMarketsByEvent(sortedMarkets), [sortedMarkets]);
+  const watchlistSet = React.useMemo(() => new Set(watchlistKeys), [watchlistKeys]);
   const normalizedSearch = searchInput.trim().toLowerCase();
   const categoryLabelById = React.useMemo(
     () =>
-      Object.fromEntries(
-        categories.map((cat) => [cat.id, cat.label.toLowerCase()]),
-      ) as Record<string, string>,
+      Object.fromEntries(categories.map((cat) => [cat.id, cat.label.toLowerCase()])) as Record<
+        string,
+        string
+      >,
     [categories],
   );
 
@@ -1033,9 +1042,7 @@ export default function Opportunities() {
           );
           if (!categoryHit) {
             // Fallback: text match on title/question for markets without tags
-            const normalizedCat = (
-              categoryLabelById[selectedTag] || selectedTag
-            ).toLowerCase();
+            const normalizedCat = (categoryLabelById[selectedTag] || selectedTag).toLowerCase();
             const title = group.eventTitle.toLowerCase();
             const textHit =
               title.includes(normalizedCat) ||
@@ -1055,18 +1062,13 @@ export default function Opportunities() {
         }
 
         if (!normalizedSearch) return true;
-        const titleHit = group.eventTitle
-          .toLowerCase()
-          .includes(normalizedSearch);
+        const titleHit = group.eventTitle.toLowerCase().includes(normalizedSearch);
         if (titleHit) return true;
 
         return group.markets.some((market) => {
           const question = String(market.question || "").toLowerCase();
           const label = String(market.groupItemTitle || "").toLowerCase();
-          return (
-            question.includes(normalizedSearch) ||
-            label.includes(normalizedSearch)
-          );
+          return question.includes(normalizedSearch) || label.includes(normalizedSearch);
         });
       }),
     [
@@ -1080,8 +1082,7 @@ export default function Opportunities() {
   );
 
   const visibleOptionsCount = React.useMemo(
-    () =>
-      filteredEventGroups.reduce((sum, group) => sum + group.markets.length, 0),
+    () => filteredEventGroups.reduce((sum, group) => sum + group.markets.length, 0),
     [filteredEventGroups],
   );
   const favoriteCount = watchlistKeys.length;
@@ -1096,16 +1097,13 @@ export default function Opportunities() {
   const refreshCategoryScrollHint = useCallback(() => {
     const rail = categoryRailRef.current;
     if (!rail) return;
-    setShowCategoryScrollHint(
-      rail.scrollWidth - rail.clientWidth - rail.scrollLeft > 8,
-    );
+    setShowCategoryScrollHint(rail.scrollWidth - rail.clientWidth - rail.scrollLeft > 8);
   }, []);
 
   useEffect(() => {
     refreshCategoryScrollHint();
     window.addEventListener("resize", refreshCategoryScrollHint);
-    return () =>
-      window.removeEventListener("resize", refreshCategoryScrollHint);
+    return () => window.removeEventListener("resize", refreshCategoryScrollHint);
   }, [refreshCategoryScrollHint, categoriesWithAll.length, selectedTag]);
 
   const openTradeFromRecent = useCallback((row: RecentTradeMarket) => {
@@ -1144,8 +1142,7 @@ export default function Opportunities() {
     for (const market of group.markets) {
       if (
         market.opportunityScore &&
-        (!best ||
-          (market.opportunityScore.ai_score ?? 0) > (best.ai_score ?? 0))
+        (!best || (market.opportunityScore.ai_score ?? 0) > (best.ai_score ?? 0))
       ) {
         best = market.opportunityScore;
       }
@@ -1163,9 +1160,7 @@ export default function Opportunities() {
     return labels[rec] ?? rec.replace(/_/g, " ");
   };
 
-  const selectedGroupBest = selectedGroup
-    ? bestGroupScore(selectedGroup)
-    : null;
+  const selectedGroupBest = selectedGroup ? bestGroupScore(selectedGroup) : null;
   const selectedGroupPrimary = selectedGroup
     ? resolvePrimaryGroupOption(selectedGroup, {
         parsePrices: parseOutcomePrices,
@@ -1191,9 +1186,7 @@ export default function Opportunities() {
         const card: MarketBoardCardVM = {
           id: group.eventSlug,
           source: "opportunities",
-          variant: isPriceDirectionMarket(market)
-            ? "price_direction"
-            : "binary_single",
+          variant: isPriceDirectionMarket(market) ? "price_direction" : "binary_single",
           title: market.question || group.eventTitle,
           image: market.image || market._event_image,
           href: getPolymarketUrl(market),
@@ -1320,21 +1313,13 @@ export default function Opportunities() {
                 stroke="currentColor"
                 strokeWidth="1.8"
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M4 6h16M7 12h10M10 18h4"
-                />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M7 12h10M10 18h4" />
               </svg>
             </button>
             <button
               type="button"
               className="pm-board-icon-btn"
-              aria-label={
-                showFavoritesOnly
-                  ? "Show all easy trades"
-                  : "Show watchlist only"
-              }
+              aria-label={showFavoritesOnly ? "Show all easy trades" : "Show watchlist only"}
               onClick={() => setShowFavoritesOnly((prev) => !prev)}
             >
               <svg
@@ -1413,11 +1398,7 @@ export default function Opportunities() {
                 stroke="currentColor"
                 strokeWidth="1.8"
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="m7 4 6 6-6 6"
-                />
+                <path strokeLinecap="round" strokeLinejoin="round" d="m7 4 6 6-6 6" />
               </svg>
             </button>
           )}
@@ -1494,12 +1475,8 @@ export default function Opportunities() {
         {recentTrades.length > 0 && (
           <div className="rounded-xl border border-[var(--pm-border)] bg-[var(--pm-card)] p-3">
             <div className="mb-2 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-[var(--pm-text)]">
-                Recent traded markets
-              </h2>
-              <span className="text-xs text-[var(--pm-text-soft)]">
-                Quick re-entry
-              </span>
+              <h2 className="text-sm font-semibold text-[var(--pm-text)]">Recent traded markets</h2>
+              <span className="text-xs text-[var(--pm-text-soft)]">Quick re-entry</span>
             </div>
             <div className="flex gap-2 overflow-x-auto pb-1">
               {recentTrades.slice(0, 8).map((row) => (
@@ -1566,9 +1543,7 @@ export default function Opportunities() {
           </div>
         ) : markets.length === 0 ? (
           <div className="rounded-xl border border-[var(--pm-border)] bg-[var(--pm-card)] px-6 py-14 text-center">
-            <p className="text-lg font-semibold text-[var(--pm-text)]">
-              No markets found
-            </p>
+            <p className="text-lg font-semibold text-[var(--pm-text)]">No markets found</p>
             <p className="mt-1 text-sm text-[var(--pm-text-soft)]">
               No active markets to scan right now. Check back later.
             </p>
@@ -1590,20 +1565,15 @@ export default function Opportunities() {
                   key={item.card.id}
                   card={item.card}
                   onTrade={(outcome) =>
-                    requireAuth(() =>
-                      openTradeModal(item.primaryMarket, outcome),
-                    )
+                    requireAuth(() => openTradeModal(item.primaryMarket, outcome))
                   }
                   onRowTrade={(rowId, outcome) => {
                     const market = item.rowMarketMap.get(rowId);
-                    if (market)
-                      requireAuth(() => openTradeModal(market, outcome));
+                    if (market) requireAuth(() => openTradeModal(market, outcome));
                   }}
                   onOpenDetail={() => setSelectedGroup(item.group)}
                   onToggleFavorite={() =>
-                    requireAuth(() =>
-                      toggleMarketWatchlist(item.group.eventSlug),
-                    )
+                    requireAuth(() => toggleMarketWatchlist(item.group.eventSlug))
                   }
                 />
               ))}
@@ -1613,11 +1583,7 @@ export default function Opportunities() {
             <div ref={loadMoreRef} className="flex justify-center py-6">
               {loadingMore && (
                 <div className="flex items-center gap-2 text-sm text-[var(--pm-text-soft)]">
-                  <svg
-                    className="animate-spin h-4 w-4"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                  >
+                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
                     <circle
                       className="opacity-25"
                       cx="12"
@@ -1684,10 +1650,7 @@ export default function Opportunities() {
                   </svg>
                   New Window
                 </button>
-                <button
-                  onClick={closeDetailPopup}
-                  className="btn-muted !px-3 !py-1.5 text-xs"
-                >
+                <button onClick={closeDetailPopup} className="btn-muted !px-3 !py-1.5 text-xs">
                   Close
                 </button>
               </div>
@@ -1711,9 +1674,7 @@ export default function Opportunities() {
             </div>
 
             {streamError ? (
-              <div className="p-4 alert-error rounded text-sm">
-                {streamError}
-              </div>
+              <div className="p-4 alert-error rounded text-sm">{streamError}</div>
             ) : streamedText ? (
               <AnalysisDisplay text={streamedText} streaming={!streamDone} />
             ) : (
@@ -1728,8 +1689,8 @@ export default function Opportunities() {
 
       {lastPriceUpdate && (
         <p className="text-xs text-[var(--pm-text-soft)]">
-          Prices auto-refresh every {PRICE_POLL_INTERVAL / 1000}s · last update{" "}
-          {lastPriceUpdate.toLocaleTimeString()}
+          Prices {priceStreamStatus === "live" ? "streaming live" : "delayed · polling"}
+          {" · "}last update {lastPriceUpdate.toLocaleTimeString()}
         </p>
       )}
 
@@ -1744,11 +1705,9 @@ export default function Opportunities() {
                 <span className="chip chip-success px-2 py-0.5 text-[10px]">
                   AI {(selectedGroupBest.ai_score ?? 0).toFixed(0)}
                 </span>
-                {(selectedGroupPrimary?.label ||
-                  selectedGroupBest.recommended_option) && (
+                {(selectedGroupPrimary?.label || selectedGroupBest.recommended_option) && (
                   <span className="text-[10px] text-emerald-300 max-w-[140px] truncate">
-                    {selectedGroupPrimary?.label ||
-                      selectedGroupBest.recommended_option}
+                    {selectedGroupPrimary?.label || selectedGroupBest.recommended_option}
                   </span>
                 )}
               </div>
@@ -1761,9 +1720,7 @@ export default function Opportunities() {
             return (
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium text-white truncate">
-                    {subLabel}
-                  </span>
+                  <span className="text-sm font-medium text-white truncate">{subLabel}</span>
                   <div className="flex items-center gap-2">
                     <span className="chip chip-success px-2 py-0.5 text-xs">
                       Yes {(prices.yes * 100).toFixed(1)}c
@@ -1791,11 +1748,7 @@ export default function Opportunities() {
                 <div className="flex items-center justify-between">
                   <div className="flex gap-3 text-xs text-muted">
                     <span>Vol: {fmtCompactUSD(market.volume24hr || 0)}</span>
-                    {endDate && (
-                      <span>
-                        Ends: {new Date(endDate).toLocaleDateString()}
-                      </span>
-                    )}
+                    {endDate && <span>Ends: {new Date(endDate).toLocaleDateString()}</span>}
                   </div>
                   <div className="flex gap-2">
                     <button

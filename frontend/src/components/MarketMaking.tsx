@@ -1,3 +1,13 @@
+/**
+ * Admin panel for automated market-making configs served by `marketMakerService`.
+ *
+ * Creates configs from a form covering Bands or AMM strategy settings (band count, spreads, order
+ * size, collateral, sync interval, liquidity) and requires condition id plus both token ids. The
+ * list re-polls every 15 seconds with running counts and per-config order/cancel/volume counters,
+ * and supports start, stop, manual sync and disable actions.
+ *
+ * @module components/MarketMaking
+ */
 import { useEffect, useState, useCallback } from "react";
 import {
   marketMakerService,
@@ -135,15 +145,8 @@ export default function MarketMaking() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {metrics && (
-            <span className="text-xs text-soft">
-              {metrics.total_running} running
-            </span>
-          )}
-          <button
-            onClick={() => setShowForm(!showForm)}
-            className="btn-primary text-sm"
-          >
+          {metrics && <span className="text-xs text-soft">{metrics.total_running} running</span>}
+          <button onClick={() => setShowForm(!showForm)} className="btn-primary text-sm">
             {showForm ? "Cancel" : "+ New Config"}
           </button>
         </div>
@@ -152,10 +155,7 @@ export default function MarketMaking() {
       {error && (
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
           {error}
-          <button
-            onClick={() => setError(null)}
-            className="ml-2 text-red-300 hover:text-white"
-          >
+          <button onClick={() => setError(null)} className="ml-2 text-red-300 hover:text-white">
             ✕
           </button>
         </div>
@@ -164,62 +164,44 @@ export default function MarketMaking() {
       {/* Create/Edit Form */}
       {showForm && (
         <div className="surface-panel p-5 space-y-4">
-          <h3 className="text-base font-semibold text-white">
-            New Market Maker Config
-          </h3>
+          <h3 className="text-base font-semibold text-white">New Market Maker Config</h3>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs text-soft mb-1">
-                Condition ID *
-              </label>
+              <label className="block text-xs text-soft mb-1">Condition ID *</label>
               <input
                 type="text"
                 value={form.condition_id}
-                onChange={(e) =>
-                  setForm({ ...form, condition_id: e.target.value })
-                }
+                onChange={(e) => setForm({ ...form, condition_id: e.target.value })}
                 className="input-field w-full"
                 placeholder="0x..."
               />
             </div>
             <div>
-              <label className="block text-xs text-soft mb-1">
-                Market Title
-              </label>
+              <label className="block text-xs text-soft mb-1">Market Title</label>
               <input
                 type="text"
                 value={form.market_title || ""}
-                onChange={(e) =>
-                  setForm({ ...form, market_title: e.target.value })
-                }
+                onChange={(e) => setForm({ ...form, market_title: e.target.value })}
                 className="input-field w-full"
                 placeholder="Market name"
               />
             </div>
             <div>
-              <label className="block text-xs text-soft mb-1">
-                Token ID (Yes) *
-              </label>
+              <label className="block text-xs text-soft mb-1">Token ID (Yes) *</label>
               <input
                 type="text"
                 value={form.token_id_yes}
-                onChange={(e) =>
-                  setForm({ ...form, token_id_yes: e.target.value })
-                }
+                onChange={(e) => setForm({ ...form, token_id_yes: e.target.value })}
                 className="input-field w-full"
               />
             </div>
             <div>
-              <label className="block text-xs text-soft mb-1">
-                Token ID (No) *
-              </label>
+              <label className="block text-xs text-soft mb-1">Token ID (No) *</label>
               <input
                 type="text"
                 value={form.token_id_no}
-                onChange={(e) =>
-                  setForm({ ...form, token_id_no: e.target.value })
-                }
+                onChange={(e) => setForm({ ...form, token_id_no: e.target.value })}
                 className="input-field w-full"
               />
             </div>
@@ -247,9 +229,7 @@ export default function MarketMaking() {
               <input
                 type="number"
                 value={form.num_bands}
-                onChange={(e) =>
-                  setForm({ ...form, num_bands: Number(e.target.value) })
-                }
+                onChange={(e) => setForm({ ...form, num_bands: Number(e.target.value) })}
                 className="input-field w-full"
                 min={1}
                 max={20}
@@ -261,9 +241,7 @@ export default function MarketMaking() {
                 type="number"
                 step="0.001"
                 value={form.min_spread}
-                onChange={(e) =>
-                  setForm({ ...form, min_spread: Number(e.target.value) })
-                }
+                onChange={(e) => setForm({ ...form, min_spread: Number(e.target.value) })}
                 className="input-field w-full"
               />
             </div>
@@ -273,9 +251,7 @@ export default function MarketMaking() {
                 type="number"
                 step="0.001"
                 value={form.max_spread}
-                onChange={(e) =>
-                  setForm({ ...form, max_spread: Number(e.target.value) })
-                }
+                onChange={(e) => setForm({ ...form, max_spread: Number(e.target.value) })}
                 className="input-field w-full"
               />
             </div>
@@ -283,35 +259,25 @@ export default function MarketMaking() {
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div>
-              <label className="block text-xs text-soft mb-1">
-                Band Order Size ($)
-              </label>
+              <label className="block text-xs text-soft mb-1">Band Order Size ($)</label>
               <input
                 type="number"
                 value={form.band_order_size}
-                onChange={(e) =>
-                  setForm({ ...form, band_order_size: Number(e.target.value) })
-                }
+                onChange={(e) => setForm({ ...form, band_order_size: Number(e.target.value) })}
                 className="input-field w-full"
               />
             </div>
             <div>
-              <label className="block text-xs text-soft mb-1">
-                Max Collateral ($)
-              </label>
+              <label className="block text-xs text-soft mb-1">Max Collateral ($)</label>
               <input
                 type="number"
                 value={form.max_collateral}
-                onChange={(e) =>
-                  setForm({ ...form, max_collateral: Number(e.target.value) })
-                }
+                onChange={(e) => setForm({ ...form, max_collateral: Number(e.target.value) })}
                 className="input-field w-full"
               />
             </div>
             <div>
-              <label className="block text-xs text-soft mb-1">
-                Sync Interval (s)
-              </label>
+              <label className="block text-xs text-soft mb-1">Sync Interval (s)</label>
               <input
                 type="number"
                 value={form.sync_interval_seconds}
@@ -326,15 +292,11 @@ export default function MarketMaking() {
               />
             </div>
             <div>
-              <label className="block text-xs text-soft mb-1">
-                AMM Liquidity ($)
-              </label>
+              <label className="block text-xs text-soft mb-1">AMM Liquidity ($)</label>
               <input
                 type="number"
                 value={form.amm_liquidity}
-                onChange={(e) =>
-                  setForm({ ...form, amm_liquidity: Number(e.target.value) })
-                }
+                onChange={(e) => setForm({ ...form, amm_liquidity: Number(e.target.value) })}
                 className="input-field w-full"
               />
             </div>
@@ -350,11 +312,7 @@ export default function MarketMaking() {
             >
               Cancel
             </button>
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="btn-primary text-sm"
-            >
+            <button onClick={handleSave} disabled={saving} className="btn-primary text-sm">
               {saving ? "Saving..." : "Save Config"}
             </button>
           </div>
@@ -379,10 +337,7 @@ export default function MarketMaking() {
                     {cfg.market_title || cfg.condition_id.slice(0, 20) + "..."}
                   </h4>
                   <p className="text-xs text-soft mt-0.5">
-                    Strategy:{" "}
-                    <span className="text-white">
-                      {cfg.strategy.toUpperCase()}
-                    </span>
+                    Strategy: <span className="text-white">{cfg.strategy.toUpperCase()}</span>
                     {" · "}
                     Bands: {cfg.num_bands}
                     {" · "}
@@ -409,65 +364,44 @@ export default function MarketMaking() {
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
                 <div>
                   <span className="text-soft">Open Orders</span>
-                  <p className="text-white font-semibold">
-                    {cfg.current_open_orders}
-                  </p>
+                  <p className="text-white font-semibold">{cfg.current_open_orders}</p>
                 </div>
                 <div>
                   <span className="text-soft">Total Placed</span>
-                  <p className="text-white font-semibold">
-                    {cfg.total_orders_placed}
-                  </p>
+                  <p className="text-white font-semibold">{cfg.total_orders_placed}</p>
                 </div>
                 <div>
                   <span className="text-soft">Total Cancelled</span>
-                  <p className="text-white font-semibold">
-                    {cfg.total_orders_cancelled}
-                  </p>
+                  <p className="text-white font-semibold">{cfg.total_orders_cancelled}</p>
                 </div>
                 <div>
                   <span className="text-soft">Volume (USDC)</span>
-                  <p className="text-white font-semibold">
-                    ${cfg.total_volume_usdc.toFixed(2)}
-                  </p>
+                  <p className="text-white font-semibold">${cfg.total_volume_usdc.toFixed(2)}</p>
                 </div>
                 <div>
                   <span className="text-soft">Last Sync</span>
                   <p className="text-white font-semibold text-[11px]">
-                    {cfg.last_sync_at
-                      ? new Date(cfg.last_sync_at).toLocaleTimeString()
-                      : "Never"}
+                    {cfg.last_sync_at ? new Date(cfg.last_sync_at).toLocaleTimeString() : "Never"}
                   </p>
                 </div>
               </div>
 
               {cfg.last_error && (
-                <p className="text-xs text-red-400 bg-red-500/10 rounded p-2">
-                  {cfg.last_error}
-                </p>
+                <p className="text-xs text-red-400 bg-red-500/10 rounded p-2">{cfg.last_error}</p>
               )}
 
               {/* Actions */}
               <div className="flex gap-2">
                 {cfg.is_running ? (
-                  <button
-                    onClick={() => handleStop(cfg.id)}
-                    className="btn-danger text-xs"
-                  >
+                  <button onClick={() => handleStop(cfg.id)} className="btn-danger text-xs">
                     Stop
                   </button>
                 ) : (
-                  <button
-                    onClick={() => handleStart(cfg.id)}
-                    className="btn-primary text-xs"
-                  >
+                  <button onClick={() => handleStart(cfg.id)} className="btn-primary text-xs">
                     Start
                   </button>
                 )}
-                <button
-                  onClick={() => handleSync(cfg.id)}
-                  className="btn-muted text-xs"
-                >
+                <button onClick={() => handleSync(cfg.id)} className="btn-muted text-xs">
                   Sync Now
                 </button>
                 <button

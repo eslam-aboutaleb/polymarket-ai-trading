@@ -1,7 +1,9 @@
 """Database connection and session management"""
+
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import QueuePool
+
 from app.config import get_settings
 
 settings = get_settings()

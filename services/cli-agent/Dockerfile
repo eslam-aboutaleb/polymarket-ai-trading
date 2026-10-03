@@ -26,9 +26,14 @@ COPY services/cli-agent/src/ ./src/
 COPY services/cli-agent/mcp-config.json .
 COPY services/cli-agent/mcps/ ./mcps/
 COPY services/mcps/research/ ./services/mcps/research/
+# Shared packages used by both AI services (polymarket_mcp and
+# polymarket_settings). Kept as a single implementation so
+# llm-chain and cli-agent cannot drift apart.
+COPY services/shared/ ./shared/
 
-# Set Python path
-ENV PYTHONPATH=/app/src
+# Set Python path. /app/src gives the `server` module; /app/shared gives
+# `polymarket_mcp` and `polymarket_settings`.
+ENV PYTHONPATH=/app/src:/app/shared
 
 EXPOSE 50052
 

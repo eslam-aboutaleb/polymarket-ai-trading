@@ -1,3 +1,15 @@
+/**
+ * Browser wallet connection layer for EIP-1193 providers (injected wallets and WalletConnect).
+ *
+ * Exports `connectInjectedWallet` and `connectWalletConnect`, both returning a normalized
+ * `WalletSession` with `personal_sign`, disconnect, and account/disconnect subscriptions. WalletConnect
+ * targets Polygon chain 137 and requires `VITE_WALLETCONNECT_PROJECT_ID`. Provider rejections
+ * (EIP-1193 code 4001) are normalised into a single user-facing message, and failed WalletConnect
+ * attempts disconnect the provider before rethrowing.
+ *
+ * @module services/walletConnector
+ */
+
 import EthereumProvider from "@walletconnect/ethereum-provider";
 
 export type WalletProviderType = "injected" | "walletconnect";
@@ -74,9 +86,7 @@ function getInjectedProvider(): Eip1193Provider | null {
   if (!window.ethereum) {
     return null;
   }
-  const providers = Array.isArray(window.ethereum.providers)
-    ? window.ethereum.providers
-    : [];
+  const providers = Array.isArray(window.ethereum.providers) ? window.ethereum.providers : [];
   if (providers.length > 0) {
     return providers.find((p) => p.isMetaMask) ?? providers[0];
   }

@@ -1,5 +1,16 @@
+/**
+ * Wraps the AI backend endpoints under `/api/analysis` for market, trader, and copy-trade analysis.
+ *
+ * JSON methods cover one-shot work (market/quick/group analysis, scans, risk, trade plans, backend
+ * health, copy-trade evaluation). The `stream*` methods use SSE via `streamSSE` and hand back an
+ * `AbortController` the caller owns; opportunity scanning and batch market analysis dispatch
+ * per-market score events as they arrive rather than waiting for the full result.
+ *
+ * @module services/analysisService
+ */
+
 import { apiClient } from "./apiClient";
-import { API_BASE_URL } from "../config/api";
+import { streamSSE } from "./sseStream";
 
 // --- Request Types ---
 
@@ -140,27 +151,18 @@ export interface HealthCheckResponse {
 
 export const analysisService = {
   /** Full AI market analysis with optional web research */
-  async analyzeMarket(
-    request: MarketAnalysisRequest,
-  ): Promise<AnalysisResponse> {
+  async analyzeMarket(request: MarketAnalysisRequest): Promise<AnalysisResponse> {
     return apiClient.post<AnalysisResponse>("/api/analysis/market", request);
   },
 
   /** Quick 2-3 sentence analysis */
-  async quickAnalysis(
-    request: QuickAnalysisRequest,
-  ): Promise<AnalysisResponse> {
+  async quickAnalysis(request: QuickAnalysisRequest): Promise<AnalysisResponse> {
     return apiClient.post<AnalysisResponse>("/api/analysis/quick", request);
   },
 
   /** Quick grouped-event analysis (event treated as one trade with multiple options) */
-  async quickGroupAnalysis(
-    request: QuickGroupAnalysisRequest,
-  ): Promise<AnalysisResponse> {
-    return apiClient.post<AnalysisResponse>(
-      "/api/analysis/quick-group",
-      request,
-    );
+  async quickGroupAnalysis(request: QuickGroupAnalysisRequest): Promise<AnalysisResponse> {
+    return apiClient.post<AnalysisResponse>("/api/analysis/quick-group", request);
   },
 
   /** Scan multiple markets for top opportunities */
@@ -174,13 +176,8 @@ export const analysisService = {
   },
 
   /** Generate a trade execution plan */
-  async generateTradePlan(
-    request: TradePlanRequest,
-  ): Promise<AnalysisResponse> {
-    return apiClient.post<AnalysisResponse>(
-      "/api/analysis/trade-plan",
-      request,
-    );
+  async generateTradePlan(request: TradePlanRequest): Promise<AnalysisResponse> {
+    return apiClient.post<AnalysisResponse>("/api/analysis/trade-plan", request);
   },
 
   /** Check health of AI backends */
@@ -189,16 +186,12 @@ export const analysisService = {
   },
 
   /** Full AI analysis of a trader's profile and patterns */
-  async analyzeTrader(
-    request: TraderAnalysisRequest,
-  ): Promise<AnalysisResponse> {
+  async analyzeTrader(request: TraderAnalysisRequest): Promise<AnalysisResponse> {
     return apiClient.post<AnalysisResponse>("/api/analysis/trader", request);
   },
 
   /** Evaluate whether a copy-trade should be executed */
-  async evaluateCopyTrade(
-    request: CopyTradeEvalRequest,
-  ): Promise<AnalysisResponse> {
+  async evaluateCopyTrade(request: CopyTradeEvalRequest): Promise<AnalysisResponse> {
     return apiClient.post<AnalysisResponse>("/api/analysis/copy-trade-eval", {
       trade_side: "BUY",
       trade_size: 0,
@@ -222,69 +215,12 @@ export const analysisService = {
   ): AbortController {
     const controller = new AbortController();
 
-    (async () => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/analysis/trader/stream`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          credentials: "include",
-          body: JSON.stringify(request),
-          signal: controller.signal,
-        });
-
-        if (!res.ok) {
-          const errBody = await res.text();
-          callbacks.onError(errBody || `HTTP ${res.status}`);
-          return;
-        }
-
-        const reader = res.body?.getReader();
-        if (!reader) {
-          callbacks.onError("No response body");
-          return;
-        }
-
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data: ")) continue;
-            const jsonStr = trimmed.slice(6);
-            try {
-              const parsed = JSON.parse(jsonStr);
-              if (parsed.error) {
-                callbacks.onError(parsed.error);
-                return;
-              }
-              if (parsed.done) {
-                callbacks.onDone();
-                return;
-              }
-              if (parsed.chunk) {
-                callbacks.onChunk(parsed.chunk);
-              }
-            } catch {
-              // skip malformed JSON
-            }
-          }
-        }
-        callbacks.onDone();
-      } catch (err: unknown) {
-        if ((err as Error).name === "AbortError") return;
-        callbacks.onError((err as Error).message || "Stream failed");
-      }
-    })();
+    void streamSSE(
+      { path: "/api/analysis/trader/stream", body: request, signal: controller.signal },
+      callbacks,
+    ).catch((err: unknown) => {
+      callbacks.onError(err instanceof Error ? err.message : "Stream failed");
+    });
 
     return controller;
   },
@@ -304,70 +240,12 @@ export const analysisService = {
   ): AbortController {
     const controller = new AbortController();
 
-    (async () => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/analysis/market/stream`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          credentials: "include",
-          body: JSON.stringify(request),
-          signal: controller.signal,
-        });
-
-        if (!res.ok) {
-          const errBody = await res.text();
-          callbacks.onError(errBody || `HTTP ${res.status}`);
-          return;
-        }
-
-        const reader = res.body?.getReader();
-        if (!reader) {
-          callbacks.onError("No response body");
-          return;
-        }
-
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data: ")) continue;
-            const jsonStr = trimmed.slice(6);
-            try {
-              const parsed = JSON.parse(jsonStr);
-              if (parsed.error) {
-                callbacks.onError(parsed.error);
-                return;
-              }
-              if (parsed.done) {
-                callbacks.onDone();
-                return;
-              }
-              if (parsed.chunk) {
-                callbacks.onChunk(parsed.chunk);
-              }
-            } catch {
-              // skip malformed JSON
-            }
-          }
-        }
-        // stream ended without explicit done event
-        callbacks.onDone();
-      } catch (err: unknown) {
-        if ((err as Error).name === "AbortError") return;
-        callbacks.onError((err as Error).message || "Stream failed");
-      }
-    })();
+    void streamSSE(
+      { path: "/api/analysis/market/stream", body: request, signal: controller.signal },
+      callbacks,
+    ).catch((err: unknown) => {
+      callbacks.onError(err instanceof Error ? err.message : "Stream failed");
+    });
 
     return controller;
   },
@@ -393,81 +271,27 @@ export const analysisService = {
   ): AbortController {
     const controller = new AbortController();
 
-    (async () => {
-      try {
-        const res = await fetch(
-          `${API_BASE_URL}/api/analysis/opportunities/stream`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            credentials: "include",
-            body: JSON.stringify(request),
-            signal: controller.signal,
-          },
-        );
-
-        if (!res.ok) {
-          const errBody = await res.text();
-          callbacks.onError(errBody || `HTTP ${res.status}`);
-          return;
-        }
-
-        const reader = res.body?.getReader();
-        if (!reader) {
-          callbacks.onError("No response body");
-          return;
-        }
-
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data: ")) continue;
-            const jsonStr = trimmed.slice(6);
-            try {
-              const parsed = JSON.parse(jsonStr);
-              if (parsed.error) {
-                callbacks.onError(parsed.error);
-                return;
-              }
-              if (parsed.all_done) {
-                callbacks.onDone(parsed.total || 0);
-                return;
-              }
-              if (parsed.status) {
-                callbacks.onStatus(parsed.status, parsed.total);
-                continue;
-              }
-              if (parsed.scores && parsed.market_id) {
-                callbacks.onMarketScored(
-                  parsed.market_id,
-                  parsed.scores as OpportunityScore,
-                  parsed.done_count || 0,
-                  parsed.total || 0,
-                );
-              }
-            } catch {
-              // skip malformed JSON
-            }
+    void streamSSE(
+      { path: "/api/analysis/opportunities/stream", body: request, signal: controller.signal },
+      {
+        onEvent: (payload) => {
+          if (payload.status) {
+            callbacks.onStatus(String(payload.status), Number(payload.total ?? 0));
+          } else if (payload.scores && payload.market_id) {
+            callbacks.onMarketScored(
+              String(payload.market_id),
+              payload.scores as OpportunityScore,
+              Number(payload.done_count ?? 0),
+              Number(payload.total ?? 0),
+            );
           }
-        }
-        callbacks.onDone(0);
-      } catch (err: unknown) {
-        if ((err as Error).name === "AbortError") return;
-        callbacks.onError((err as Error).message || "Stream failed");
-      }
-    })();
+        },
+        onDone: (payload) => callbacks.onDone(Number(payload?.total ?? 0)),
+        onError: callbacks.onError,
+      },
+    ).catch((err: unknown) => {
+      callbacks.onError(err instanceof Error ? err.message : "Stream failed");
+    });
 
     return controller;
   },
@@ -492,79 +316,31 @@ export const analysisService = {
   ): AbortController {
     const controller = new AbortController();
 
-    (async () => {
-      try {
-        const res = await fetch(
-          `${API_BASE_URL}/api/analysis/opportunities/analyze-markets`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            credentials: "include",
-            body: JSON.stringify({ markets }),
-            signal: controller.signal,
-          },
-        );
-
-        if (!res.ok) {
-          const errBody = await res.text();
-          callbacks.onError(errBody || `HTTP ${res.status}`);
-          return;
-        }
-
-        const reader = res.body?.getReader();
-        if (!reader) {
-          callbacks.onError("No response body");
-          return;
-        }
-
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data: ")) continue;
-            const jsonStr = trimmed.slice(6);
-            try {
-              const parsed = JSON.parse(jsonStr);
-              if (parsed.error) {
-                callbacks.onError(parsed.error);
-                return;
-              }
-              if (parsed.all_done) {
-                callbacks.onDone(parsed.total || 0);
-                return;
-              }
-              if (parsed.status) {
-                callbacks.onStatus(parsed.status, parsed.total);
-                continue;
-              }
-              if (parsed.scores && parsed.market_id) {
-                callbacks.onMarketScored(
-                  parsed.market_id,
-                  parsed.scores as OpportunityScore,
-                  parsed.done_count || 0,
-                  parsed.total || 0,
-                );
-              }
-            } catch {
-              // skip malformed JSON
-            }
+    void streamSSE(
+      {
+        path: "/api/analysis/opportunities/analyze-markets",
+        body: { markets },
+        signal: controller.signal,
+      },
+      {
+        onEvent: (payload) => {
+          if (payload.status) {
+            callbacks.onStatus(String(payload.status), Number(payload.total ?? 0));
+          } else if (payload.scores && payload.market_id) {
+            callbacks.onMarketScored(
+              String(payload.market_id),
+              payload.scores as OpportunityScore,
+              Number(payload.done_count ?? 0),
+              Number(payload.total ?? 0),
+            );
           }
-        }
-        callbacks.onDone(0);
-      } catch (err: unknown) {
-        if ((err as Error).name === "AbortError") return;
-        callbacks.onError((err as Error).message || "Stream failed");
-      }
-    })();
+        },
+        onDone: (payload) => callbacks.onDone(Number(payload?.total ?? 0)),
+        onError: callbacks.onError,
+      },
+    ).catch((err: unknown) => {
+      callbacks.onError(err instanceof Error ? err.message : "Stream failed");
+    });
 
     return controller;
   },

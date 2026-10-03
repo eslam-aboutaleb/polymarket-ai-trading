@@ -1,10 +1,9 @@
 """Audit log for inverse-bot reversal attempts and outcomes."""
-from datetime import datetime
-from app.utils.time import utc_now
 
-from sqlalchemy import Column, String, Float, DateTime, Integer, ForeignKey, Text
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
 
 from app.models.base import Base
+from app.utils.time import utc_now
 
 
 class InverseBotAction(Base):

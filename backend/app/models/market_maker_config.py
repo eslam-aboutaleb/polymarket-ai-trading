@@ -1,12 +1,13 @@
 """Market maker configuration per market per user."""
+
 from sqlalchemy import (
-    Column,
-    String,
-    Float,
-    DateTime,
-    Integer,
-    ForeignKey,
     Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
     Text,
 )
 

@@ -1,3 +1,13 @@
+/**
+ * Market-making bot configuration endpoints under `/api/market-maker`.
+ *
+ * CRUD over per-market maker configs (bands or AMM strategy, spread bands, sizing, collateral caps),
+ * plus start/stop/sync controls and a metrics summary of which configs are currently running.
+ * Configs hold cumulative order/volume counters and the last sync time and error.
+ *
+ * @module services/marketMakerService
+ */
+
 import { apiClient } from "./apiClient";
 
 // ── Types ──
@@ -81,31 +91,16 @@ export async function deleteMarketMakerConfig(configId: number): Promise<void> {
   await apiClient.delete(`/api/market-maker/configs/${configId}`);
 }
 
-export async function startMarketMaker(
-  configId: number,
-): Promise<{ status: string }> {
-  return apiClient.post<{ status: string }>(
-    `/api/market-maker/configs/${configId}/start`,
-    {},
-  );
+export async function startMarketMaker(configId: number): Promise<{ status: string }> {
+  return apiClient.post<{ status: string }>(`/api/market-maker/configs/${configId}/start`, {});
 }
 
-export async function stopMarketMaker(
-  configId: number,
-): Promise<{ status: string }> {
-  return apiClient.post<{ status: string }>(
-    `/api/market-maker/configs/${configId}/stop`,
-    {},
-  );
+export async function stopMarketMaker(configId: number): Promise<{ status: string }> {
+  return apiClient.post<{ status: string }>(`/api/market-maker/configs/${configId}/stop`, {});
 }
 
-export async function syncMarketMaker(
-  configId: number,
-): Promise<MarketMakerSyncResponse> {
-  return apiClient.post<MarketMakerSyncResponse>(
-    `/api/market-maker/configs/${configId}/sync`,
-    {},
-  );
+export async function syncMarketMaker(configId: number): Promise<MarketMakerSyncResponse> {
+  return apiClient.post<MarketMakerSyncResponse>(`/api/market-maker/configs/${configId}/sync`, {});
 }
 
 export async function getMarketMakerMetrics(): Promise<MarketMakerMetrics> {

@@ -28,9 +28,7 @@ class RequestLoggerSanitizationTests(unittest.TestCase):
         get_settings.cache_clear()
 
     def test_sensitive_query_params_are_redacted(self):
-        redacted = self.request_logger._sanitize_query(
-            "token=abc&market=foo&api_key=xyz&limit=10"
-        )
+        redacted = self.request_logger._sanitize_query("token=abc&market=foo&api_key=xyz&limit=10")
         self.assertIn("token=%2A%2A%2A", redacted)
         self.assertIn("api_key=%2A%2A%2A", redacted)
         self.assertIn("market=foo", redacted)

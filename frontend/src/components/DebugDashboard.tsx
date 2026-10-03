@@ -1,3 +1,13 @@
+/**
+ * Backend monitoring view over `debugService`: request logs, per-endpoint stats and service health.
+ *
+ * Auto-refresh polls every 5s and doubles the interval (capped at 60s) after a failed fetch;
+ * polling stops while the tab is hidden and resumes with a fresh backoff when it becomes visible.
+ * Logs support level/path filtering with expandable error details, and endpoint stats are
+ * sortable by call count, errors, warnings and duration.
+ *
+ * @module components/DebugDashboard
+ */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   debugService,
@@ -25,14 +35,10 @@ export default function DebugDashboard() {
   const [pageHidden, setPageHidden] = useState(
     typeof document !== "undefined" ? document.hidden : false,
   );
-  const [nextRefreshInSeconds, setNextRefreshInSeconds] = useState<number | null>(
-    null,
-  );
+  const [nextRefreshInSeconds, setNextRefreshInSeconds] = useState<number | null>(null);
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"logs" | "endpoints" | "health">(
-    "logs",
-  );
+  const [activeTab, setActiveTab] = useState<"logs" | "endpoints" | "health">("logs");
   const [sortCol, setSortCol] = useState<keyof EndpointStat>("call_count");
   const [sortAsc, setSortAsc] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -87,9 +93,7 @@ export default function DebugDashboard() {
       timeoutRef.current = setTimeout(async () => {
         if (!autoRefresh || document.hidden) return;
         const ok = await refresh();
-        backoffMsRef.current = ok
-          ? 5000
-          : Math.min(backoffMsRef.current * 2, 60000);
+        backoffMsRef.current = ok ? 5000 : Math.min(backoffMsRef.current * 2, 60000);
         scheduleNextRefresh(backoffMsRef.current);
       }, delayMs);
     },
@@ -238,9 +242,7 @@ export default function DebugDashboard() {
         const bv = b[sortCol] ?? 0;
         if (typeof av === "string" && typeof bv === "string")
           return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
-        return sortAsc
-          ? (av as number) - (bv as number)
-          : (bv as number) - (av as number);
+        return sortAsc ? (av as number) - (bv as number) : (bv as number) - (av as number);
       })
     : [];
 
@@ -252,8 +254,7 @@ export default function DebugDashboard() {
     }
   };
 
-  const sortIcon = (col: keyof EndpointStat) =>
-    sortCol === col ? (sortAsc ? " ↑" : " ↓") : "";
+  const sortIcon = (col: keyof EndpointStat) => (sortCol === col ? (sortAsc ? " ↑" : " ↓") : "");
 
   /* ──── loading skeleton ──── */
   if (loading) {
@@ -277,9 +278,7 @@ export default function DebugDashboard() {
       <div className="flex justify-between items-start flex-wrap gap-4">
         <div>
           <h1 className="text-3xl font-bold mb-1">🔧 Debug Dashboard</h1>
-          <p className="text-soft text-sm">
-            Real-time request monitoring &amp; service health
-          </p>
+          <p className="text-soft text-sm">Real-time request monitoring &amp; service health</p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -340,23 +339,14 @@ export default function DebugDashboard() {
       {health && (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           {health.services.map((s) => (
-            <div
-              key={s.name}
-              className={`rounded-xl border p-3 ${healthColor(s.status)}`}
-            >
+            <div key={s.name} className={`rounded-xl border p-3 ${healthColor(s.status)}`}>
               <div className="flex items-center gap-2 mb-1">
-                <span
-                  className={`w-2.5 h-2.5 rounded-full inline-block ${healthDot(s.status)}`}
-                />
-                <span className="text-xs font-semibold text-white truncate">
-                  {s.name}
-                </span>
+                <span className={`w-2.5 h-2.5 rounded-full inline-block ${healthDot(s.status)}`} />
+                <span className="text-xs font-semibold text-white truncate">{s.name}</span>
               </div>
               <p className="text-[10px] text-muted truncate">{s.detail}</p>
               {s.latency_ms !== null && (
-                <p className="text-[10px] text-muted mt-0.5 mono">
-                  {s.latency_ms}ms
-                </p>
+                <p className="text-[10px] text-muted mt-0.5 mono">{s.latency_ms}ms</p>
               )}
             </div>
           ))}
@@ -407,9 +397,7 @@ export default function DebugDashboard() {
                     : "bg-[var(--bg-elevated)] text-muted border-[var(--line)]"
                 }`}
               >
-                {lv === "all"
-                  ? `All (${totalLogs})`
-                  : lv.charAt(0).toUpperCase() + lv.slice(1)}
+                {lv === "all" ? `All (${totalLogs})` : lv.charAt(0).toUpperCase() + lv.slice(1)}
               </button>
             ))}
 
@@ -421,10 +409,7 @@ export default function DebugDashboard() {
               className="input-theme text-xs px-3 py-1.5 w-48"
             />
 
-            <button
-              onClick={handleClearLogs}
-              className="ml-auto btn-danger text-xs px-3 py-1"
-            >
+            <button onClick={handleClearLogs} className="ml-auto btn-danger text-xs px-3 py-1">
               🗑 Clear Logs
             </button>
           </div>
@@ -447,10 +432,7 @@ export default function DebugDashboard() {
                 {logs.length === 0 && (
                   <tr>
                     <td colSpan={7} className="text-center text-muted py-8">
-                      No log entries{" "}
-                      {levelFilter !== "all"
-                        ? `matching "${levelFilter}"`
-                        : "yet"}
+                      No log entries {levelFilter !== "all" ? `matching "${levelFilter}"` : "yet"}
                     </td>
                   </tr>
                 )}
@@ -460,11 +442,7 @@ export default function DebugDashboard() {
                     entry={entry}
                     expanded={expandedRow === entry.request_id}
                     onToggle={() =>
-                      setExpandedRow(
-                        expandedRow === entry.request_id
-                          ? null
-                          : entry.request_id,
-                      )
+                      setExpandedRow(expandedRow === entry.request_id ? null : entry.request_id)
                     }
                     fmtTime={fmtTime}
                     methodColor={methodColor}
@@ -486,10 +464,7 @@ export default function DebugDashboard() {
             <thead>
               <tr>
                 <th>Endpoint</th>
-                <th
-                  className="cursor-pointer select-none"
-                  onClick={() => handleSort("call_count")}
-                >
+                <th className="cursor-pointer select-none" onClick={() => handleSort("call_count")}>
                   Calls{sortIcon("call_count")}
                 </th>
                 <th
@@ -544,9 +519,7 @@ export default function DebugDashboard() {
                     </span>
                     <span className="mono">{ep.path}</span>
                   </td>
-                  <td className="mono font-semibold">
-                    {ep.call_count.toLocaleString()}
-                  </td>
+                  <td className="mono font-semibold">{ep.call_count.toLocaleString()}</td>
                   <td
                     className={`mono font-semibold ${ep.error_count > 0 ? "text-red-400" : "text-muted"}`}
                   >
@@ -560,16 +533,12 @@ export default function DebugDashboard() {
                   <td className={`mono ${durationColor(ep.avg_duration_ms)}`}>
                     {ep.avg_duration_ms.toFixed(1)}
                   </td>
-                  <td className="mono text-muted">
-                    {ep.min_duration_ms.toFixed(1)}
-                  </td>
+                  <td className="mono text-muted">{ep.min_duration_ms.toFixed(1)}</td>
                   <td className={`mono ${durationColor(ep.max_duration_ms)}`}>
                     {ep.max_duration_ms.toFixed(1)}
                   </td>
                   <td className="text-muted">{fmtTime(ep.last_called)}</td>
-                  <td
-                    className={`mono font-bold ${statusColor(ep.last_status)}`}
-                  >
+                  <td className={`mono font-bold ${statusColor(ep.last_status)}`}>
                     {ep.last_status}
                   </td>
                 </tr>
@@ -600,15 +569,11 @@ export default function DebugDashboard() {
               </div>
               <div>
                 <p className="text-muted text-xs">Python Version</p>
-                <p className="font-bold text-white mono">
-                  {health.python_version}
-                </p>
+                <p className="font-bold text-white mono">{health.python_version}</p>
               </div>
               <div>
                 <p className="text-muted text-xs">Endpoints Tracked</p>
-                <p className="font-bold text-white">
-                  {stats?.endpoints.length ?? 0}
-                </p>
+                <p className="font-bold text-white">{stats?.endpoints.length ?? 0}</p>
               </div>
             </div>
           </div>
@@ -616,15 +581,10 @@ export default function DebugDashboard() {
           {/* Detailed service cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {health.services.map((svc) => (
-              <div
-                key={svc.name}
-                className={`rounded-xl border p-4 ${healthColor(svc.status)}`}
-              >
+              <div key={svc.name} className={`rounded-xl border p-4 ${healthColor(svc.status)}`}>
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
-                    <span
-                      className={`w-3 h-3 rounded-full ${healthDot(svc.status)}`}
-                    />
+                    <span className={`w-3 h-3 rounded-full ${healthDot(svc.status)}`} />
                     <span className="font-semibold text-white">{svc.name}</span>
                   </div>
                   <span
@@ -641,9 +601,7 @@ export default function DebugDashboard() {
                 </div>
                 <p className="text-xs text-muted mb-1">{svc.detail}</p>
                 {svc.latency_ms !== null && (
-                  <p className="text-xs mono text-muted">
-                    Latency: {svc.latency_ms}ms
-                  </p>
+                  <p className="text-xs mono text-muted">Latency: {svc.latency_ms}ms</p>
                 )}
               </div>
             ))}
@@ -674,11 +632,7 @@ function KpiCard({
         ? "border-yellow-500/30"
         : "border-[var(--line)]";
   const valColor =
-    accent === "danger"
-      ? "text-red-400"
-      : accent === "warning"
-        ? "text-yellow-400"
-        : "text-white";
+    accent === "danger" ? "text-red-400" : accent === "warning" ? "text-yellow-400" : "text-white";
   return (
     <div className={`rounded-xl border p-3.5 bg-[var(--bg-soft)] ${border}`}>
       <div className="flex items-center gap-2 mb-1">
@@ -731,49 +685,31 @@ function LogRow({
         </td>
         <td className="mono truncate max-w-[300px]" title={entry.path}>
           {entry.path}
-          {entry.query && (
-            <span className="text-muted ml-1">?{entry.query}</span>
-          )}
+          {entry.query && <span className="text-muted ml-1">?{entry.query}</span>}
         </td>
-        <td className={`mono font-bold ${statusColor(entry.status_code)}`}>
-          {entry.status_code}
-        </td>
+        <td className={`mono font-bold ${statusColor(entry.status_code)}`}>{entry.status_code}</td>
         <td className={`mono ${durationColor(entry.duration_ms)}`}>
           {entry.duration_ms.toFixed(0)}ms
         </td>
         <td>
-          <span className={`chip text-[10px] ${levelBadge(entry.level)}`}>
-            {entry.level}
-          </span>
+          <span className={`chip text-[10px] ${levelBadge(entry.level)}`}>{entry.level}</span>
         </td>
-        <td>
-          {entry.error_detail && (
-            <span className="text-muted">{expanded ? "▾" : "▸"}</span>
-          )}
-        </td>
+        <td>{entry.error_detail && <span className="text-muted">{expanded ? "▾" : "▸"}</span>}</td>
       </tr>
       {expanded && entry.error_detail && (
         <tr>
           <td colSpan={7} className="p-0">
             <div className="bg-[var(--bg-elevated)] border-t border-b border-[var(--line)] p-3">
               <div className="flex items-center gap-2 mb-2">
-                <span className="text-xs font-semibold text-muted">
-                  Error Detail
-                </span>
-                <span className="text-[10px] text-muted mono">
-                  ID: {entry.request_id}
-                </span>
-                <span className="text-[10px] text-muted">
-                  IP: {entry.client_ip}
-                </span>
+                <span className="text-xs font-semibold text-muted">Error Detail</span>
+                <span className="text-[10px] text-muted mono">ID: {entry.request_id}</span>
+                <span className="text-[10px] text-muted">IP: {entry.client_ip}</span>
               </div>
               <pre className="text-[11px] text-red-300 whitespace-pre-wrap leading-relaxed max-h-60 overflow-y-auto scroll-soft mono bg-[var(--bg-base)] rounded p-3">
                 {entry.error_detail}
               </pre>
               {entry.user_agent && (
-                <p className="text-[10px] text-muted mt-2 truncate">
-                  UA: {entry.user_agent}
-                </p>
+                <p className="text-[10px] text-muted mt-2 truncate">UA: {entry.user_agent}</p>
               )}
             </div>
           </td>

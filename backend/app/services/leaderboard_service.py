@@ -7,37 +7,43 @@ Strategy:
 2. Merge volume + profit datasets so we have both metrics per trader.
 3. Persist results in the `winners` table and cache in-memory.
 """
+
 import asyncio
 import json
-import re
-import httpx
 import logging
-from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
+import re
+from datetime import UTC, datetime
+from typing import Any
 
+import httpx
 from sqlalchemy.orm import Session
 
 from app.models.winner import Winner
-from app.utils.cache import get_cache
 from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
 
 POLYMARKET_URL = "https://polymarket.com"
 POLYMARKET_DATA_API = "https://data-api.polymarket.com"
+
+# Polymarket's public pages reject requests without a browser-like User-Agent.
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
 POLYMARKET_CLOB_API = "https://clob.polymarket.com"
 POLYMARKET_GAMMA_API = "https://gamma-api.polymarket.com"
 
 # In-memory TTL cache (seconds)
 LEADERBOARD_CACHE_TTL = 300
-_leaderboard_cache: Dict[str, Any] = {}
-_trader_trades_cache: Dict[str, Any] = {}  # wallet -> {data, ts}
+_leaderboard_cache: dict[str, Any] = {}
+_trader_trades_cache: dict[str, Any] = {}  # wallet -> {data, ts}
 TRADER_TRADES_CACHE_TTL = 120  # 2 minutes
-_profile_stats_cache: Dict[str, Any] = {}  # wallet -> {data, ts}
+_profile_stats_cache: dict[str, Any] = {}  # wallet -> {data, ts}
 PROFILE_STATS_CACHE_TTL = 120  # 2 minutes
 
 
-def _parse_next_data(html: str) -> Optional[dict]:
+def _parse_next_data(html: str) -> dict | None:
     """Extract __NEXT_DATA__ JSON from a Next.js rendered page."""
     if not html:
         return None
@@ -54,7 +60,7 @@ def _parse_next_data(html: str) -> Optional[dict]:
     script_end = html.find("</script>", tag_end)
     if script_end == -1:
         return None
-    payload = html[tag_end + 1:script_end].strip()
+    payload = html[tag_end + 1 : script_end].strip()
     if not payload:
         return None
     try:
@@ -64,7 +70,7 @@ def _parse_next_data(html: str) -> Optional[dict]:
         return None
 
 
-def _extract_leaderboard_from_next_data(next_data: dict) -> Dict[str, List[Dict]]:
+def _extract_leaderboard_from_next_data(next_data: dict) -> dict[str, list[dict]]:
     """
     Walk the dehydrated React-Query cache in __NEXT_DATA__ and pull out
     volume, profit, and biggestWins datasets.
@@ -74,7 +80,7 @@ def _extract_leaderboard_from_next_data(next_data: dict) -> Dict[str, List[Dict]
       ["/leaderboard", "profit", "30d", 1, "overall", null]
       ["/leaderboard", "biggestWins", "30d", 20, "overall"]
     """
-    result: Dict[str, List[Dict]] = {"volume": [], "profit": [], "biggestWins": []}
+    result: dict[str, list[dict]] = {"volume": [], "profit": [], "biggestWins": []}
 
     try:
         queries = (
@@ -99,7 +105,7 @@ def _extract_leaderboard_from_next_data(next_data: dict) -> Dict[str, List[Dict]
 
 
 # Map our period values to Polymarket's v1 API timePeriod parameter
-_PERIOD_TO_API: Dict[str, str] = {
+_PERIOD_TO_API: dict[str, str] = {
     "24h": "day",
     "7d": "week",
     "30d": "month",
@@ -107,7 +113,7 @@ _PERIOD_TO_API: Dict[str, str] = {
 }
 
 # Also keep the old HTML path mapping as fallback
-_PERIOD_TO_PM_PATH: Dict[str, str] = {
+_PERIOD_TO_PM_PATH: dict[str, str] = {
     "24h": "weekly",
     "7d": "weekly",
     "30d": "monthly",
@@ -125,7 +131,7 @@ def _normalize_api_entry(item: dict, rank: int = 0, period: str = "all_time") ->
     name = item.get("userName") or item.get("name") or item.get("pseudonym")
 
     # Clean up auto-generated names like "0xAbC...1234-1769439463256"
-    if name and re.match(r'^0x[0-9A-Fa-f]', name) and '-' in name:
+    if name and re.match(r"^0x[0-9A-Fa-f]", name) and "-" in name:
         name = name[:12] + "..."
 
     profile_image = item.get("profileImage") or item.get("profileImageOptimized")
@@ -156,7 +162,7 @@ def _normalize_api_entry(item: dict, rank: int = 0, period: str = "all_time") ->
     }
 
 
-async def _fetch_from_api(limit: int = 50, period: str = "all_time") -> List[Dict]:
+async def _fetch_from_api(limit: int = 50, period: str = "all_time") -> list[dict]:
     """
     Fetch leaderboard data from Polymarket's v1/leaderboard API.
     Supports pagination (max 50 per page) up to the requested limit.
@@ -168,7 +174,7 @@ async def _fetch_from_api(limit: int = 50, period: str = "all_time") -> List[Dic
     }
 
     time_period = _PERIOD_TO_API.get(period, "all")
-    all_entries: List[Dict] = []
+    all_entries: list[dict] = []
 
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
         offset = 0
@@ -190,7 +196,10 @@ async def _fetch_from_api(limit: int = 50, period: str = "all_time") -> List[Dic
                 if resp.status_code != 200:
                     logger.error(
                         "Leaderboard API error %d for offset=%d period=%s: %s",
-                        resp.status_code, offset, period, resp.text[:200],
+                        resp.status_code,
+                        offset,
+                        period,
+                        resp.text[:200],
                     )
                     break
 
@@ -205,7 +214,9 @@ async def _fetch_from_api(limit: int = 50, period: str = "all_time") -> List[Dic
 
                 logger.debug(
                     "Leaderboard API page: offset=%d, got %d entries (total %d)",
-                    offset, len(data), len(all_entries),
+                    offset,
+                    len(data),
+                    len(all_entries),
                 )
 
                 # If we got fewer than requested, we've reached the end
@@ -235,14 +246,15 @@ async def _fetch_from_api(limit: int = 50, period: str = "all_time") -> List[Dic
 
     logger.info(
         "Leaderboard API fetch complete: %d entries for period=%s",
-        len(all_entries), period,
+        len(all_entries),
+        period,
     )
     return all_entries[:limit]
 
 
 async def _fetch_volume_rankings(
-    pnl_entries: List[Dict], time_period: str, headers: dict
-) -> List[Dict]:
+    pnl_entries: list[dict], time_period: str, headers: dict
+) -> list[dict]:
     """Fetch volume rankings to supplement PnL data with accurate volume."""
     volume_entries = []
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
@@ -271,10 +283,12 @@ async def _fetch_volume_rankings(
                 for item in data:
                     wallet = str(item.get("proxyWallet", "")).lower()
                     if wallet:
-                        volume_entries.append({
-                            "address": wallet,
-                            "volume": _safe_float(item.get("vol", 0)),
-                        })
+                        volume_entries.append(
+                            {
+                                "address": wallet,
+                                "volume": _safe_float(item.get("vol", 0)),
+                            }
+                        )
                 if len(data) < page_size:
                     break
                 offset += len(data)
@@ -283,7 +297,9 @@ async def _fetch_volume_rankings(
     return volume_entries
 
 
-async def _fetch_from_polymarket_page(limit: int = 50, period: str = "all_time") -> Dict[str, List[Dict]]:
+async def _fetch_from_polymarket_page(
+    limit: int = 50, period: str = "all_time"
+) -> dict[str, list[dict]]:
     """
     Scrape polymarket.com/leaderboard and extract the __NEXT_DATA__ JSON
     which contains pre-rendered leaderboard data (volume + profit + biggestWins).
@@ -294,7 +310,7 @@ async def _fetch_from_polymarket_page(limit: int = 50, period: str = "all_time")
       /leaderboard/overall/all/profit      → all-time data
     """
     headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": BROWSER_USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
     }
@@ -306,7 +322,9 @@ async def _fetch_from_polymarket_page(limit: int = 50, period: str = "all_time")
         try:
             resp = await client.get(url, headers=headers)
             if resp.status_code != 200:
-                logger.error("Polymarket leaderboard page returned %d for %s", resp.status_code, url)
+                logger.error(
+                    "Polymarket leaderboard page returned %d for %s", resp.status_code, url
+                )
                 return {"volume": [], "profit": [], "biggestWins": []}
 
             next_data = _parse_next_data(resp.text)
@@ -316,7 +334,8 @@ async def _fetch_from_polymarket_page(limit: int = 50, period: str = "all_time")
 
             datasets = _extract_leaderboard_from_next_data(next_data)
             logger.info(
-                "Leaderboard scraped (period=%s, url=%s): %d volume entries, %d profit entries, %d biggest wins",
+                "Leaderboard scraped (period=%s, url=%s): %d volume entries, "
+                "%d profit entries, %d biggest wins",
                 period,
                 url,
                 len(datasets["volume"]),
@@ -330,7 +349,9 @@ async def _fetch_from_polymarket_page(limit: int = 50, period: str = "all_time")
             return {"volume": [], "profit": [], "biggestWins": []}
 
 
-def _merge_datasets(datasets: Dict[str, List[Dict]], sort_by: str, limit: int, period: str = "all_time") -> List[Dict]:
+def _merge_datasets(
+    datasets: dict[str, list[dict]], sort_by: str, limit: int, period: str = "all_time"
+) -> list[dict]:
     """
     Merge volume and profit datasets from HTML scraping into a single list.
     Fallback path – used only when the v1/leaderboard API is unavailable.
@@ -340,7 +361,7 @@ def _merge_datasets(datasets: Dict[str, List[Dict]], sort_by: str, limit: int, p
         """Normalise a raw __NEXT_DATA__ entry."""
         wallet = (item.get("proxyWallet") or item.get("address") or "").lower()
         name = item.get("name") or item.get("pseudonym") or item.get("userName")
-        if name and re.match(r'^0x[0-9A-Fa-f]', name) and '-' in name:
+        if name and re.match(r"^0x[0-9A-Fa-f]", name) and "-" in name:
             name = name[:12] + "..."
         profile_image = item.get("profileImage") or item.get("profileImageOptimized")
         fallback_img = "https://polymarket-upload.s3.us-east-2.amazonaws.com/fallback-image.png"
@@ -366,7 +387,7 @@ def _merge_datasets(datasets: Dict[str, List[Dict]], sort_by: str, limit: int, p
         }
 
     # Index by wallet address
-    by_wallet: Dict[str, Dict] = {}
+    by_wallet: dict[str, dict] = {}
 
     # Process profit entries (has accurate PnL)
     for item in datasets.get("profit", []):
@@ -404,21 +425,23 @@ def _merge_datasets(datasets: Dict[str, List[Dict]], sort_by: str, limit: int, p
 
 
 # ── Per-trader enrichment cache (win rate, markets, positions) ──
-_enrichment_cache: Dict[str, Any] = {}  # wallet -> {data, ts}
+_enrichment_cache: dict[str, Any] = {}  # wallet -> {data, ts}
 ENRICHMENT_CACHE_TTL = 600  # 10 minutes – heavier to compute
 
 
-async def _enrich_single_trader(client: httpx.AsyncClient, wallet: str, headers: dict) -> Dict[str, Any]:
+async def _enrich_single_trader(
+    client: httpx.AsyncClient, wallet: str, headers: dict
+) -> dict[str, Any]:
     """
     Fetch real-time stats for a single trader wallet from Polymarket APIs.
     Returns dict with win_rate, markets_traded, positions_value, position_count.
     """
-    now_ts = datetime.now(timezone.utc).timestamp()
+    now_ts = datetime.now(UTC).timestamp()
     cached = _enrichment_cache.get(wallet)
     if cached and (now_ts - cached["ts"]) < ENRICHMENT_CACHE_TTL:
         return cached["data"]
 
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "win_rate": 0.0,
         "markets_traded": 0,
         "positions_value": 0.0,
@@ -428,7 +451,7 @@ async def _enrich_single_trader(client: httpx.AsyncClient, wallet: str, headers:
     market_ids: set = set()
     wins = 0
     total_resolved = 0
-    market_trades: Dict[str, List[Dict]] = {}
+    market_trades: dict[str, list[dict]] = {}
 
     # 1. Fetch activity feed (buys, sells, redemptions) – fetch up to 500 for better accuracy
     try:
@@ -450,7 +473,7 @@ async def _enrich_single_trader(client: httpx.AsyncClient, wallet: str, headers:
 
     # 2. Compute win rate from market-level analysis
     # Polymarket Data API types: TRADE (with side BUY/SELL), REDEEM, MERGE, REWARD
-    for mid, acts in market_trades.items():
+    for _mid, acts in market_trades.items():
         buy_cost = 0.0
         sell_revenue = 0.0
         has_redemption = False
@@ -515,11 +538,11 @@ async def _enrich_single_trader(client: httpx.AsyncClient, wallet: str, headers:
     return result
 
 
-async def _enrich_entries(entries: List[Dict], max_enrich: int = 100) -> List[Dict]:
+async def _enrich_entries(entries: list[dict], max_enrich: int = 100) -> list[dict]:
     """
     Enrich leaderboard entries with real-time win_rate, markets_traded,
     and positions_value by fetching data concurrently for each trader.
-    
+
     Uses a semaphore to limit concurrent requests (avoid overwhelming Polymarket API).
     Only enriches the top `max_enrich` entries to keep response times reasonable.
     """
@@ -533,7 +556,7 @@ async def _enrich_entries(entries: List[Dict], max_enrich: int = 100) -> List[Di
 
     # Only enrich the top N entries
     to_enrich = entries[:max_enrich]
-    remaining = entries[max_enrich:]
+    entries[max_enrich:]
 
     sem = asyncio.Semaphore(10)  # Max 10 concurrent enrichment requests
 
@@ -543,14 +566,12 @@ async def _enrich_entries(entries: List[Dict], max_enrich: int = 100) -> List[Di
 
     async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
         tasks = [
-            _limited_enrich(client, e["address"], headers)
-            for e in to_enrich
-            if e.get("address")
+            _limited_enrich(client, e["address"], headers) for e in to_enrich if e.get("address")
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
     enriched_entries = [e for e in to_enrich if e.get("address")]
-    for entry, enrichment in zip(enriched_entries, results):
+    for entry, enrichment in zip(enriched_entries, results, strict=False):
         if isinstance(enrichment, Exception):
             logger.debug("Enrichment failed for %s: %s", entry.get("address", "")[:10], enrichment)
             continue
@@ -564,9 +585,9 @@ async def _enrich_entries(entries: List[Dict], max_enrich: int = 100) -> List[Di
     return entries  # Return all entries (enriched top + remaining)
 
 
-def _apply_cached_enrichment(entries: List[Dict]) -> List[Dict]:
+def _apply_cached_enrichment(entries: list[dict]) -> list[dict]:
     """Apply any previously-cached enrichment data to entries without making new requests."""
-    now_ts = datetime.now(timezone.utc).timestamp()
+    now_ts = datetime.now(UTC).timestamp()
     for entry in entries:
         wallet = entry.get("address", "")
         cached = _enrichment_cache.get(wallet)
@@ -582,18 +603,19 @@ def _apply_cached_enrichment(entries: List[Dict]) -> List[Dict]:
 
 
 async def _background_enrich_and_cache(
-    entries: List[Dict], cache_key: str, enrich_count: int
+    entries: list[dict], cache_key: str, enrich_count: int
 ) -> None:
     """Run enrichment in the background and update the leaderboard cache."""
     try:
         enriched = await _enrich_entries(entries, max_enrich=enrich_count)
         _leaderboard_cache[cache_key] = {
             "data": enriched,
-            "ts": datetime.now(timezone.utc).timestamp(),
+            "ts": datetime.now(UTC).timestamp(),
         }
         logger.info(
             "Background enrichment done for %s – %d entries enriched",
-            cache_key, enrich_count,
+            cache_key,
+            enrich_count,
         )
     except Exception as e:
         logger.warning("Background enrichment failed for %s: %s", cache_key, e)
@@ -602,7 +624,7 @@ async def _background_enrich_and_cache(
 async def fetch_leaderboard(
     limit: int = 50,
     period: str = "all_time",
-) -> List[Dict]:
+) -> list[dict]:
     """
     Public entry-point: return leaderboard data with in-memory caching.
     Fetches from Polymarket's v1/leaderboard API with pagination support
@@ -614,7 +636,7 @@ async def fetch_leaderboard(
     """
     cache_key = f"leaderboard:{period}:{limit}"
     cached = _leaderboard_cache.get(cache_key)
-    if cached and (datetime.now(timezone.utc).timestamp() - cached["ts"]) < LEADERBOARD_CACHE_TTL:
+    if cached and (datetime.now(UTC).timestamp() - cached["ts"]) < LEADERBOARD_CACHE_TTL:
         return cached["data"]
 
     # Primary: use the direct v1/leaderboard API (supports up to 1000+ traders)
@@ -636,13 +658,14 @@ async def fetch_leaderboard(
     # Cache base data right away so the response is fast
     _leaderboard_cache[cache_key] = {
         "data": entries,
-        "ts": datetime.now(timezone.utc).timestamp(),
+        "ts": datetime.now(UTC).timestamp(),
     }
     logger.info("Leaderboard cached (base): %d entries for period=%s", len(entries), period)
 
     # Kick off enrichment in the background – subsequent requests will get
     # fully enriched data without blocking the current response
     import copy
+
     enrich_count = min(100, len(entries))
     bg_entries = copy.deepcopy(entries)
     asyncio.ensure_future(_background_enrich_and_cache(bg_entries, cache_key, enrich_count))
@@ -650,7 +673,7 @@ async def fetch_leaderboard(
     return entries
 
 
-def upsert_winners(db: Session, entries: List[Dict]) -> int:
+def upsert_winners(db: Session, entries: list[dict]) -> int:
     """Persist leaderboard entries into the winners table. Returns count."""
     count = 0
     for e in entries:
@@ -681,14 +704,14 @@ def upsert_winners(db: Session, entries: List[Dict]) -> int:
     return count
 
 
-async def fetch_trader_profile(wallet_address: str) -> Dict[str, Any]:
+async def fetch_trader_profile(wallet_address: str) -> dict[str, Any]:
     """
     Fetch a single trader's profile data.
     Uses data-api.polymarket.com/activity for recent trades.
     Also checks if we have cached leaderboard data for this wallet.
     """
     addr = wallet_address.lower()
-    profile: Dict[str, Any] = {
+    profile: dict[str, Any] = {
         "wallet_address": addr,
         "display_name": None,
         "profit_loss": 0.0,
@@ -701,7 +724,7 @@ async def fetch_trader_profile(wallet_address: str) -> Dict[str, Any]:
     }
 
     # Check cached leaderboard data for this trader's stats
-    for cache_key, cached in _leaderboard_cache.items():
+    for _cache_key, cached in _leaderboard_cache.items():
         for entry in cached.get("data", []):
             if entry.get("address", "").lower() == addr:
                 profile["display_name"] = entry.get("display_name")
@@ -736,22 +759,23 @@ async def fetch_trader_profile(wallet_address: str) -> Dict[str, Any]:
 
 # ────────────── Comprehensive Trade Fetching & Analysis ──────────────
 
-async def _scrape_profile_stats(client: httpx.AsyncClient, wallet: str) -> Dict[str, Any]:
+
+async def _scrape_profile_stats(client: httpx.AsyncClient, wallet: str) -> dict[str, Any]:
     """
     Scrape the Polymarket profile page to extract real stats from __NEXT_DATA__.
     Returns dict with pnl, volume, trades_count, markets_traded, join_date, largest_win.
     """
-    now_ts = datetime.now(timezone.utc).timestamp()
+    now_ts = datetime.now(UTC).timestamp()
     cached = _profile_stats_cache.get(wallet)
     if cached and (now_ts - cached["ts"]) < PROFILE_STATS_CACHE_TTL:
         return dict(cached["data"])
 
-    result: Dict[str, Any] = {}
+    result: dict[str, Any] = {}
     try:
         resp = await client.get(
             f"{POLYMARKET_URL}/profile/{wallet}",
             headers={
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": BROWSER_USER_AGENT,
                 "Accept": "text/html,application/xhtml+xml",
             },
         )
@@ -806,7 +830,7 @@ async def _scrape_profile_stats(client: httpx.AsyncClient, wallet: str) -> Dict[
     return result
 
 
-async def fetch_trader_trades(wallet_address: str, max_trades: int = 500) -> Dict[str, Any]:
+async def fetch_trader_trades(wallet_address: str, max_trades: int = 500) -> dict[str, Any]:
     """
     Fetch ALL available trades for a trader from Polymarket APIs.
     Returns comprehensive trade data with computed statistics including real win rate.
@@ -818,7 +842,7 @@ async def fetch_trader_trades(wallet_address: str, max_trades: int = 500) -> Dic
     Returns dict with keys: trades, activity, positions, stats, trade_summary, profile_stats
     """
     addr = wallet_address.lower()
-    now_ts = datetime.now(timezone.utc).timestamp()
+    now_ts = datetime.now(UTC).timestamp()
 
     # Check cache
     cached = _trader_trades_cache.get(addr)
@@ -831,8 +855,8 @@ async def fetch_trader_trades(wallet_address: str, max_trades: int = 500) -> Dic
         "Accept": "application/json",
     }
 
-    all_activity: List[Dict] = []
-    profile_stats: Dict[str, Any] = {}
+    all_activity: list[dict] = []
+    profile_stats: dict[str, Any] = {}
 
     async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
         # ── 1. Scrape profile page for real stats (PnL, trade count, markets) ──
@@ -889,10 +913,10 @@ async def fetch_trader_trades(wallet_address: str, max_trades: int = 500) -> Dic
 
 
 def _compute_trade_stats(
-    trades: List[Dict], 
-    activity: List[Dict], 
-    positions: List[Dict],
-) -> Dict[str, Any]:
+    trades: list[dict],
+    activity: list[dict],
+    positions: list[dict],
+) -> dict[str, Any]:
     """
     Compute real statistics from actual trade data.
 
@@ -904,7 +928,7 @@ def _compute_trade_stats(
 
     Win rate = redeem_markets / (redeem_markets + merge_markets + sold-at-loss markets)
     """
-    stats: Dict[str, Any] = {
+    stats: dict[str, Any] = {
         "total_trades": 0,
         "winning_trades": 0,
         "losing_trades": 0,
@@ -928,9 +952,9 @@ def _compute_trade_stats(
         return stats
 
     market_ids: set = set()
-    trade_sizes: List[float] = []
-    trade_dates: List[str] = []
-    buy_prices: List[float] = []
+    trade_sizes: list[float] = []
+    trade_dates: list[str] = []
+    buy_prices: list[float] = []
 
     # ── Analyze CLOB trades (if any) ──
     for t in trades:
@@ -952,7 +976,7 @@ def _compute_trade_stats(
 
     # ── Analyze activity entries ──
     # Data API returns: type=TRADE (with side=BUY/SELL), REDEEM, MERGE, REWARD
-    market_trades: Dict[str, List[Dict]] = {}
+    market_trades: dict[str, list[dict]] = {}
 
     for a in activity:
         act_type = str(a.get("type", "")).upper()
@@ -981,15 +1005,49 @@ def _compute_trade_stats(
         title = str(a.get("title", a.get("question", a.get("marketTitle", "")))).lower()
         if title:
             for cat_name, cat_keywords in [
-                ("politics", ["election", "president", "senate", "congress", "trump", "biden", "political", "governor", "vote"]),
-                ("crypto", ["bitcoin", "btc", "ethereum", "eth", "crypto", "token", "defi", "blockchain"]),
-                ("sports", ["nba", "nfl", "mlb", "soccer", "football", "tennis", "match", "game", "championship"]),
-                ("economics", ["gdp", "inflation", "fed", "interest rate", "economic", "recession", "jobs"]),
+                (
+                    "politics",
+                    [
+                        "election",
+                        "president",
+                        "senate",
+                        "congress",
+                        "trump",
+                        "biden",
+                        "political",
+                        "governor",
+                        "vote",
+                    ],
+                ),
+                (
+                    "crypto",
+                    ["bitcoin", "btc", "ethereum", "eth", "crypto", "token", "defi", "blockchain"],
+                ),
+                (
+                    "sports",
+                    [
+                        "nba",
+                        "nfl",
+                        "mlb",
+                        "soccer",
+                        "football",
+                        "tennis",
+                        "match",
+                        "game",
+                        "championship",
+                    ],
+                ),
+                (
+                    "economics",
+                    ["gdp", "inflation", "fed", "interest rate", "economic", "recession", "jobs"],
+                ),
                 ("tech", ["ai", "apple", "google", "openai", "tech", "software", "twitter"]),
                 ("entertainment", ["oscar", "movie", "award", "grammy", "film"]),
             ]:
                 if any(kw in title for kw in cat_keywords):
-                    stats["market_categories"][cat_name] = stats["market_categories"].get(cat_name, 0) + 1
+                    stats["market_categories"][cat_name] = (
+                        stats["market_categories"].get(cat_name, 0) + 1
+                    )
                     break
 
     # ── Win/Loss counting from activity ──
@@ -999,7 +1057,7 @@ def _compute_trade_stats(
     losses = 0
     total_pnl = 0.0
 
-    for market_id, market_acts in market_trades.items():
+    for _market_id, market_acts in market_trades.items():
         buy_cost = 0.0
         sell_revenue = 0.0
         has_redemption = False
@@ -1041,7 +1099,7 @@ def _compute_trade_stats(
                 wins += 1
             else:
                 losses += 1
-    
+
     # ── Compute final stats ──
     total_trades_count = max(len(trades), len(activity))
     stats["total_trades"] = total_trades_count
@@ -1050,45 +1108,45 @@ def _compute_trade_stats(
     stats["win_rate"] = round((wins / total_resolved * 100), 1) if total_resolved > 0 else 0.0
     stats["unique_markets"] = len(market_ids)
     stats["total_pnl"] = round(total_pnl, 2)
-    
+
     if trade_sizes:
         stats["total_volume"] = round(sum(trade_sizes), 2)
         stats["avg_trade_size"] = round(sum(trade_sizes) / len(trade_sizes), 2)
         stats["largest_trade"] = round(max(trade_sizes), 2)
-    
+
     if buy_prices:
         stats["avg_buy_price"] = round(sum(buy_prices) / len(buy_prices), 3)
-    
+
     # Date analysis
     parsed_dates = []
     for d in trade_dates:
         try:
             if isinstance(d, (int, float)):
-                parsed_dates.append(datetime.fromtimestamp(float(d), tz=timezone.utc))
+                parsed_dates.append(datetime.fromtimestamp(float(d), tz=UTC))
             elif "T" in str(d):
                 parsed_dates.append(datetime.fromisoformat(str(d).replace("Z", "+00:00")))
             else:
-                parsed_dates.append(datetime.fromtimestamp(int(d), tz=timezone.utc))
+                parsed_dates.append(datetime.fromtimestamp(int(d), tz=UTC))
         except (ValueError, TypeError, OSError):
             continue
-    
+
     if parsed_dates:
         parsed_dates.sort()
         stats["first_trade_date"] = parsed_dates[0].isoformat()
         stats["last_trade_date"] = parsed_dates[-1].isoformat()
-        unique_days = len(set(d.date() for d in parsed_dates))
+        unique_days = len({d.date() for d in parsed_dates})
         stats["active_days"] = unique_days
         if unique_days > 0:
             trades_per_day = total_trades_count / unique_days
             stats["trade_frequency"] = f"{trades_per_day:.1f} trades/day"
-    
+
     return stats
 
 
 def _build_trade_summary(
-    trades: List[Dict],
-    activity: List[Dict],
-    stats: Dict[str, Any],
+    trades: list[dict],
+    activity: list[dict],
+    stats: dict[str, Any],
 ) -> str:
     """
     Build a human-readable trade summary for the AI to analyze.
@@ -1107,14 +1165,14 @@ def _build_trade_summary(
     lines.append(f"Active Trading Days: {stats['active_days']}")
     lines.append(f"Trade Frequency: {stats['trade_frequency']}")
     lines.append(f"Open Positions: {stats['position_count']}")
-    
+
     if stats.get("first_trade_date"):
         lines.append(f"First Trade: {stats['first_trade_date'][:10]}")
     if stats.get("last_trade_date"):
         lines.append(f"Last Trade: {stats['last_trade_date'][:10]}")
     if stats.get("avg_buy_price"):
         lines.append(f"Average Buy Price: ${stats['avg_buy_price']}")
-    
+
     # Market category breakdown
     cats = stats.get("market_categories", {})
     if cats:
@@ -1122,20 +1180,22 @@ def _build_trade_summary(
         sorted_cats = sorted(cats.items(), key=lambda x: x[1], reverse=True)
         for cat, count in sorted_cats:
             lines.append(f"  {cat.title()}: {count} trades")
-    
+
     # Recent trade details (last 50)
     recent = activity[:50] if activity else trades[:50]
     if recent:
         lines.append(f"\n=== RECENT TRADES (last {len(recent)}) ===")
         for i, t in enumerate(recent[:50]):
             act_type = str(t.get("type", t.get("action", t.get("side", "unknown")))).upper()
-            title = t.get("title", t.get("question", t.get("marketTitle", t.get("market", "Unknown Market"))))
+            title = t.get(
+                "title", t.get("question", t.get("marketTitle", t.get("market", "Unknown Market")))
+            )
             size = _safe_float(t.get("usdcSize", t.get("value", t.get("size", 0))))
             price = _safe_float(t.get("price", 0))
             outcome = t.get("outcome", t.get("outcomeIndex", ""))
             ts = t.get("timestamp", t.get("createdAt", t.get("created_at", "")))
-            
-            trade_line = f"  {i+1}. [{act_type}] {title}"
+
+            trade_line = f"  {i + 1}. [{act_type}] {title}"
             if size:
                 trade_line += f" | ${size:,.2f}"
             if price:
@@ -1145,7 +1205,7 @@ def _build_trade_summary(
             if ts:
                 trade_line += f" | {str(ts)[:19]}"
             lines.append(trade_line)
-    
+
     return "\n".join(lines)
 
 
@@ -1159,7 +1219,7 @@ def _safe_float(val, default=0.0) -> float:
         return default
 
 
-async def refresh_leaderboard_background(db: Optional[Session] = None, interval: int = 300):
+async def refresh_leaderboard_background(db: Session | None = None, interval: int = 300):
     """
     Long-running background task: refresh the leaderboard every *interval* seconds
     and persist results.  Intended to run via ``asyncio.create_task`` at startup.

@@ -1,5 +1,16 @@
+/**
+ * Market discovery endpoints under `/api/markets` plus per-market trader-positioning analysis.
+ *
+ * Provides the category list, category browse, and offset-paginated search with optional text query,
+ * tag, and sort. `streamTraderAnalysis` consumes an SSE stream whose first event carries aggregate
+ * `TraderStats` and whose later events deliver text chunks, returning an `AbortController` for
+ * cancellation.
+ *
+ * @module services/marketsService
+ */
+
 import { apiClient } from "./apiClient";
-import { API_BASE_URL } from "../config/api";
+import { streamSSE } from "./sseStream";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -85,9 +96,7 @@ export const marketsService = {
     tag: string,
     limit: number = 20,
   ): Promise<{ tag: string; markets: BrowseMarket[]; count: number }> {
-    return apiClient.get(
-      `/api/markets/browse?tag=${encodeURIComponent(tag)}&limit=${limit}`,
-    );
+    return apiClient.get(`/api/markets/browse?tag=${encodeURIComponent(tag)}&limit=${limit}`);
   },
 
   /** Search / browse all active markets with optional text query + category filter */
@@ -127,75 +136,25 @@ export const marketsService = {
   ): AbortController {
     const controller = new AbortController();
 
-    (async () => {
-      try {
-        const res = await fetch(
-          `${API_BASE_URL}/api/markets/trader-analysis/stream`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            credentials: "include",
-            body: JSON.stringify(request),
-            signal: controller.signal,
-          },
-        );
-
-        if (!res.ok) {
-          const errBody = await res.text();
-          callbacks.onError(errBody || `HTTP ${res.status}`);
-          return;
-        }
-
-        const reader = res.body?.getReader();
-        if (!reader) {
-          callbacks.onError("No response body");
-          return;
-        }
-
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data: ")) continue;
-            const jsonStr = trimmed.slice(6);
-            try {
-              const parsed = JSON.parse(jsonStr);
-              if (parsed.error) {
-                callbacks.onError(parsed.error);
-                return;
-              }
-              if (parsed.done) {
-                callbacks.onDone();
-                return;
-              }
-              if (parsed.trader_stats) {
-                callbacks.onStats(parsed.trader_stats);
-              }
-              if (parsed.chunk) {
-                callbacks.onChunk(parsed.chunk);
-              }
-            } catch {
-              // skip malformed JSON
-            }
+    void streamSSE(
+      {
+        path: "/api/markets/trader-analysis/stream",
+        body: request,
+        signal: controller.signal,
+      },
+      {
+        onChunk: callbacks.onChunk,
+        onEvent: (payload) => {
+          if (payload.trader_stats) {
+            callbacks.onStats(payload.trader_stats as TraderStats);
           }
-        }
-        callbacks.onDone();
-      } catch (err: unknown) {
-        if ((err as Error).name === "AbortError") return;
-        callbacks.onError((err as Error).message || "Stream failed");
-      }
-    })();
+        },
+        onDone: () => callbacks.onDone(),
+        onError: callbacks.onError,
+      },
+    ).catch((err: unknown) => {
+      callbacks.onError(err instanceof Error ? err.message : "Stream failed");
+    });
 
     return controller;
   },

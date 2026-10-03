@@ -1,6 +1,6 @@
 import os
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 from fastapi.responses import Response
@@ -8,8 +8,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.requests import Request
 
+from app.api.routes.auth import logout, refresh_access_token
 from app.config import get_settings
-from app.api.routes.auth import refresh_access_token, logout
 from app.models.token import RefreshToken
 from app.models.user import User
 from app.schemas.auth import LogoutRequest, TokenRefresh
@@ -75,7 +75,7 @@ class RefreshTokenSecurityTests(unittest.TestCase):
             self.db,
             user_id=self.user.id,
             raw_refresh_token=old_token,
-            expires_at=datetime.now(timezone.utc) + timedelta(days=5),
+            expires_at=datetime.now(UTC) + timedelta(days=5),
         )
         self.db.commit()
 
@@ -96,9 +96,7 @@ class RefreshTokenSecurityTests(unittest.TestCase):
             )
 
         self.assertNotEqual(response_payload.refresh_token, old_token)
-        self.assertIsNone(
-            find_active_refresh_token_record(self.db, raw_refresh_token=old_token)
-        )
+        self.assertIsNone(find_active_refresh_token_record(self.db, raw_refresh_token=old_token))
         self.assertIsNotNone(
             find_active_refresh_token_record(
                 self.db, raw_refresh_token=response_payload.refresh_token
@@ -115,7 +113,7 @@ class RefreshTokenSecurityTests(unittest.TestCase):
             self.db,
             user_id=self.user.id,
             raw_refresh_token=token,
-            expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+            expires_at=datetime.now(UTC) + timedelta(days=1),
         )
         self.db.commit()
 

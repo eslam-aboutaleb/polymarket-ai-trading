@@ -1,10 +1,9 @@
 """Net position tracker per source trader wallet/token."""
-from datetime import datetime
-from app.utils.time import utc_now
 
 from sqlalchemy import Column, DateTime, Float, Integer, String, UniqueConstraint
 
 from app.models.base import Base
+from app.utils.time import utc_now
 
 
 class TraderPositionState(Base):

@@ -1,9 +1,16 @@
+/**
+ * Endpoints for the inverse-position bot under `/api/inverse-bot`.
+ *
+ * Manages the tracked positions the bot auto-reverses: list/upsert configs, disable one, trigger an
+ * on-demand evaluation of a single position, and read aggregate metrics. Per-position records carry
+ * the last AI signal, confidence, web/X summaries, reversal count for the day, and cooldown state.
+ *
+ * @module services/inverseBotService
+ */
+
 import { apiClient } from "./apiClient";
 
-export type InverseBotSizeOverride =
-  | "inherit"
-  | "full_notional"
-  | "fixed_amount";
+export type InverseBotSizeOverride = "inherit" | "full_notional" | "fixed_amount";
 
 export type InverseBotStatus = "active" | "cooldown" | "sell_only" | "error";
 

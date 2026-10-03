@@ -1,0 +1,22 @@
+# Build-context hygiene for services that build from the repo root
+# (services/llm-chain, services/cli-agent). Keeps secrets, VCS data
+# and heavy local artefacts out of the context sent to the daemon.
+# Patterns without a slash match at the root only; nested source
+# under services/ is always included.
+.git
+.kilo
+.env
+.env.*
+!.env.example
+!.env.prod.example
+.venv
+venv
+node_modules
+.pytest_cache
+.ruff_cache
+.coverage
+coverage.xml
+htmlcov
+docs
+study-app
+*.log

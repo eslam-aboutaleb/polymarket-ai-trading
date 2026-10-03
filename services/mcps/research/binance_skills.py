@@ -8,11 +8,13 @@ Public REST APIs from https://developers.binance.com/en/skills providing:
 
 No authentication required — all endpoints are public.
 """
+
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -35,31 +37,60 @@ SUPPORTED_CHAINS = {
     "ethereum": "1",
 }
 
-# In-memory TTL cache
+# In-memory TTL cache: key -> (expires_at_epoch, value)
 _cache: dict[str, tuple[float, Any]] = {}
 _DEFAULT_TTL = 300  # 5 minutes
 
 
 def _cache_get(key: str) -> Any | None:
     entry = _cache.get(key)
-    if entry and time.time() - entry[0] < _DEFAULT_TTL:
+    if entry and entry[0] > time.time():
         return entry[1]
     return None
 
 
 def _cache_set(key: str, value: Any, ttl: int = _DEFAULT_TTL) -> None:
-    _cache[key] = (time.time(), value)
+    _cache[key] = (time.time() + ttl, value)
 
 
 # ── HTTP helpers ───────────────────────────────────────────
 
+# One shared client per event loop so connections are pooled across the
+# ~14 calls in get_crypto_market_context. The MCP server runs each request
+# on its own loop (and test harnesses spin up a fresh loop per case), so
+# the client is recreated whenever the running loop changes.
+_shared_client: httpx.AsyncClient | None = None
+_shared_client_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _get_shared_client() -> httpx.AsyncClient:
+    """Lazily create the shared HTTP client for the current event loop."""
+    global _shared_client, _shared_client_loop
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if _shared_client is None or _shared_client.is_closed or _shared_client_loop is not loop:
+        _shared_client = httpx.AsyncClient(timeout=15.0, headers=COMMON_HEADERS)
+        _shared_client_loop = loop
+    return _shared_client
+
+
+async def _close_shared_client() -> None:
+    """Close the shared HTTP client (called on server shutdown)."""
+    global _shared_client, _shared_client_loop
+    if _shared_client is not None and not _shared_client.is_closed:
+        await _shared_client.aclose()
+    _shared_client = None
+    _shared_client_loop = None
+
+
 async def _get(url: str, params: dict | None = None, timeout: float = 15.0) -> dict:
     """Perform an async GET request with error handling."""
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.get(url, params=params, headers=COMMON_HEADERS)
-            resp.raise_for_status()
-            return resp.json()
+        resp = await _get_shared_client().get(url, params=params, timeout=timeout)
+        resp.raise_for_status()
+        return resp.json()
     except httpx.TimeoutException:
         logger.warning(f"Binance API timeout: {url}")
         return {}
@@ -70,12 +101,15 @@ async def _get(url: str, params: dict | None = None, timeout: float = 15.0) -> d
 
 async def _post(url: str, json_body: dict, timeout: float = 15.0) -> dict:
     """Perform an async POST request with error handling."""
-    headers = {**COMMON_HEADERS, "Content-Type": "application/json"}
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(url, json=json_body, headers=headers)
-            resp.raise_for_status()
-            return resp.json()
+        resp = await _get_shared_client().post(
+            url,
+            json=json_body,
+            headers={"Content-Type": "application/json"},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()
     except httpx.TimeoutException:
         logger.warning(f"Binance API timeout: {url}")
         return {}
@@ -88,7 +122,9 @@ async def _post(url: str, json_body: dict, timeout: float = 15.0) -> dict:
 # 1. TRADING SIGNALS — Smart Money buy/sell signals
 # ═══════════════════════════════════════════════════════════
 
-SMART_MONEY_SIGNALS_URL = f"{BINANCE_WEB3_BASE}/bapi/defi/v1/public/wallet-direct/buw/wallet/web/signal/smart-money"
+SMART_MONEY_SIGNALS_URL = (
+    f"{BINANCE_WEB3_BASE}/bapi/defi/v1/public/wallet-direct/buw/wallet/web/signal/smart-money"
+)
 
 
 async def get_smart_money_signals(
@@ -104,43 +140,50 @@ async def get_smart_money_signals(
     currentPrice, maxGain, exitRate, smartMoneyCount, status.
     """
     chain_id = SUPPORTED_CHAINS.get(chain.lower(), "CT_501")
-    cache_key = f"smart_signals:{chain_id}:{page}:{signal_type}"
+    cache_key = f"smart_signals:{chain_id}:{page}:{page_size}:{signal_type}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
 
-    data = await _post(SMART_MONEY_SIGNALS_URL, {
-        "smartSignalType": signal_type,
-        "page": page,
-        "pageSize": min(page_size, 100),
-        "chainId": chain_id,
-    })
+    data = await _post(
+        SMART_MONEY_SIGNALS_URL,
+        {
+            "smartSignalType": signal_type,
+            "page": page,
+            "pageSize": min(page_size, 100),
+            "chainId": chain_id,
+        },
+    )
 
     signals = data.get("data", []) or []
-    # Normalize into a cleaner format
+    # Normalize into a cleaner format. The API routinely returns null or
+    # numeric strings for these fields, so coerce once here: a single
+    # malformed record must not drop the whole section downstream.
     result = []
     for s in signals:
-        result.append({
-            "signal_id": s.get("signalId"),
-            "ticker": s.get("ticker", ""),
-            "chain_id": s.get("chainId", ""),
-            "contract_address": s.get("contractAddress", ""),
-            "direction": s.get("direction", ""),  # buy / sell
-            "smart_money_count": s.get("smartMoneyCount", 0),
-            "alert_price": s.get("alertPrice", "0"),
-            "current_price": s.get("currentPrice", "0"),
-            "highest_price": s.get("highestPrice", "0"),
-            "max_gain_pct": s.get("maxGain", "0"),
-            "exit_rate": s.get("exitRate", 0),
-            "status": s.get("status", ""),  # active / timeout / completed
-            "total_value_usd": s.get("totalTokenValue", "0"),
-            "signal_time": s.get("signalTriggerTime", 0),
-            "signal_count": s.get("signalCount", 0),
-            "launch_platform": s.get("launchPlatform", ""),
-            "is_alpha": s.get("isAlpha", False),
-            "logo_url": _icon_url(s.get("logoUrl", "")),
-            "tags": _flatten_tags(s.get("tokenTag", {})),
-        })
+        result.append(
+            {
+                "signal_id": s.get("signalId"),
+                "ticker": s.get("ticker", ""),
+                "chain_id": s.get("chainId", ""),
+                "contract_address": s.get("contractAddress", ""),
+                "direction": s.get("direction") or "",  # buy / sell
+                "smart_money_count": float(s.get("smartMoneyCount") or 0),
+                "alert_price": float(s.get("alertPrice") or 0),
+                "current_price": float(s.get("currentPrice") or 0),
+                "highest_price": float(s.get("highestPrice") or 0),
+                "max_gain_pct": float(s.get("maxGain") or 0),
+                "exit_rate": float(s.get("exitRate") or 0),
+                "status": s.get("status", ""),  # active / timeout / completed
+                "total_value_usd": float(s.get("totalTokenValue") or 0),
+                "signal_time": float(s.get("signalTriggerTime") or 0),
+                "signal_count": float(s.get("signalCount") or 0),
+                "launch_platform": s.get("launchPlatform", ""),
+                "is_alpha": s.get("isAlpha", False),
+                "logo_url": _icon_url(s.get("logoUrl", "")),
+                "tags": _flatten_tags(s.get("tokenTag", {})),
+            }
+        )
 
     _cache_set(cache_key, result)
     return result
@@ -150,7 +193,8 @@ async def get_active_buy_signals(chain: str = "solana", min_smart_money: int = 2
     """Get only active BUY signals with minimum smart money count — best for bot decisions."""
     signals = await get_smart_money_signals(chain=chain, page_size=100)
     return [
-        s for s in signals
+        s
+        for s in signals
         if s["direction"] == "buy"
         and s["status"] == "active"
         and s["smart_money_count"] >= min_smart_money
@@ -161,10 +205,20 @@ async def get_active_buy_signals(chain: str = "solana", min_smart_money: int = 2
 # 2. CRYPTO MARKET RANKINGS
 # ═══════════════════════════════════════════════════════════
 
-SOCIAL_HYPE_URL = f"{BINANCE_WEB3_BASE}/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/pulse/social/hype/rank/leaderboard"
-UNIFIED_RANK_URL = f"{BINANCE_WEB3_BASE}/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/pulse/unified/rank/list"
-SMART_MONEY_INFLOW_URL = f"{BINANCE_WEB3_BASE}/bapi/defi/v1/public/wallet-direct/tracker/wallet/token/inflow/rank/query"
-PNL_LEADERBOARD_URL = f"{BINANCE_WEB3_BASE}/bapi/defi/v1/public/wallet-direct/market/leaderboard/query"
+SOCIAL_HYPE_URL = (
+    f"{BINANCE_WEB3_BASE}/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/pulse"
+    "/social/hype/rank/leaderboard"
+)
+UNIFIED_RANK_URL = (
+    f"{BINANCE_WEB3_BASE}/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/pulse"
+    "/unified/rank/list"
+)
+SMART_MONEY_INFLOW_URL = (
+    f"{BINANCE_WEB3_BASE}/bapi/defi/v1/public/wallet-direct/tracker/wallet/token/inflow/rank/query"
+)
+PNL_LEADERBOARD_URL = (
+    f"{BINANCE_WEB3_BASE}/bapi/defi/v1/public/wallet-direct/market/leaderboard/query"
+)
 
 
 async def get_social_hype_ranking(
@@ -183,13 +237,16 @@ async def get_social_hype_ranking(
     if cached is not None:
         return cached
 
-    data = await _get(SOCIAL_HYPE_URL, {
-        "chainId": chain_id,
-        "sentiment": sentiment,
-        "socialLanguage": "ALL",
-        "targetLanguage": "en",
-        "timeRange": time_range,
-    })
+    data = await _get(
+        SOCIAL_HYPE_URL,
+        {
+            "chainId": chain_id,
+            "sentiment": sentiment,
+            "socialLanguage": "ALL",
+            "targetLanguage": "en",
+            "timeRange": time_range,
+        },
+    )
 
     items = (data.get("data", {}) or {}).get("leaderBoardList", []) or []
     result = []
@@ -197,20 +254,24 @@ async def get_social_hype_ranking(
         meta = item.get("metaInfo", {}) or {}
         market = item.get("marketInfo", {}) or {}
         social = item.get("socialHypeInfo", {}) or {}
-        result.append({
-            "symbol": meta.get("symbol", ""),
-            "chain_id": meta.get("chainId", ""),
-            "contract_address": meta.get("contractAddress", ""),
-            "market_cap": market.get("marketCap", 0),
-            "price_change_pct": market.get("priceChange", 0),
-            "social_hype_score": social.get("socialHype", 0),
-            "sentiment": social.get("sentiment", "Neutral"),
-            "summary": social.get("socialSummaryBriefTranslated", "")
-                       or social.get("socialSummaryBrief", ""),
-            "detail": social.get("socialSummaryDetailTranslated", "")
-                      or social.get("socialSummaryDetail", ""),
-            "logo_url": _icon_url(meta.get("logo", "")),
-        })
+        result.append(
+            {
+                "symbol": meta.get("symbol", ""),
+                "chain_id": meta.get("chainId", ""),
+                "contract_address": meta.get("contractAddress", ""),
+                "market_cap": market.get("marketCap", 0),
+                "price_change_pct": market.get("priceChange", 0),
+                "social_hype_score": social.get("socialHype", 0),
+                "sentiment": social.get("sentiment", "Neutral"),
+                "summary": social.get("socialSummaryBriefTranslated")
+                or social.get("socialSummaryBrief")
+                or "",
+                "detail": social.get("socialSummaryDetailTranslated")
+                or social.get("socialSummaryDetail")
+                or "",
+                "logo_url": _icon_url(meta.get("logo", "")),
+            }
+        )
 
     _cache_set(cache_key, result)
     return result
@@ -228,37 +289,42 @@ async def get_trending_tokens(
     period: 10=1m, 20=5m, 30=1h, 40=4h, 50=24h
     """
     chain_id = SUPPORTED_CHAINS.get(chain.lower(), "CT_501")
-    cache_key = f"trending:{chain_id}:{rank_type}:{period}"
+    cache_key = f"trending:{chain_id}:{rank_type}:{period}:{size}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
 
-    data = await _post(UNIFIED_RANK_URL, {
-        "rankType": rank_type,
-        "chainId": chain_id,
-        "period": period,
-        "sortBy": 70,  # Sort by volume
-        "orderAsc": False,
-        "page": 1,
-        "size": min(size, 200),
-    })
+    data = await _post(
+        UNIFIED_RANK_URL,
+        {
+            "rankType": rank_type,
+            "chainId": chain_id,
+            "period": period,
+            "sortBy": 70,  # Sort by volume
+            "orderAsc": False,
+            "page": 1,
+            "size": min(size, 200),
+        },
+    )
 
     tokens = (data.get("data", {}) or {}).get("tokens", []) or []
     result = []
     for t in tokens:
-        result.append({
-            "symbol": t.get("symbol", ""),
-            "chain_id": t.get("chainId", ""),
-            "contract_address": t.get("contractAddress", ""),
-            "price": t.get("price", "0"),
-            "market_cap": t.get("marketCap", "0"),
-            "volume_24h": t.get("volume24h", t.get("volume", "0")),
-            "liquidity": t.get("liquidity", "0"),
-            "holders": t.get("holders", "0"),
-            "price_change_24h": t.get("percentChange24h", "0"),
-            "price_change_1h": t.get("percentChange1h", "0"),
-            "logo_url": _icon_url(t.get("icon", "")),
-        })
+        result.append(
+            {
+                "symbol": t.get("symbol", ""),
+                "chain_id": t.get("chainId", ""),
+                "contract_address": t.get("contractAddress", ""),
+                "price": t.get("price", "0"),
+                "market_cap": t.get("marketCap", "0"),
+                "volume_24h": t.get("volume24h", t.get("volume", "0")),
+                "liquidity": t.get("liquidity", "0"),
+                "holders": t.get("holders", "0"),
+                "price_change_24h": t.get("percentChange24h", "0"),
+                "price_change_1h": t.get("percentChange1h", "0"),
+                "logo_url": _icon_url(t.get("icon", "")),
+            }
+        )
 
     _cache_set(cache_key, result)
     return result
@@ -278,29 +344,34 @@ async def get_smart_money_inflow(
     if cached is not None:
         return cached
 
-    data = await _post(SMART_MONEY_INFLOW_URL, {
-        "chainId": chain_id,
-        "period": period,
-        "tagType": 2,
-    })
+    data = await _post(
+        SMART_MONEY_INFLOW_URL,
+        {
+            "chainId": chain_id,
+            "period": period,
+            "tagType": 2,
+        },
+    )
 
     items = data.get("data", []) or []
     result = []
     for t in items:
-        result.append({
-            "symbol": t.get("tokenName", ""),
-            "contract_address": t.get("ca", ""),
-            "price": t.get("price", "0"),
-            "market_cap": t.get("marketCap", "0"),
-            "volume": t.get("volume", "0"),
-            "liquidity": t.get("liquidity", "0"),
-            "price_change_pct": t.get("priceChangeRate", "0"),
-            "inflow_usd": t.get("inflow", 0),
-            "smart_traders": t.get("traders", 0),
-            "holders": t.get("holders", "0"),
-            "risk_level": t.get("tokenRiskLevel", -1),
-            "logo_url": _icon_url(t.get("tokenIconUrl", "")),
-        })
+        result.append(
+            {
+                "symbol": t.get("tokenName", ""),
+                "contract_address": t.get("ca", ""),
+                "price": t.get("price", "0"),
+                "market_cap": t.get("marketCap", "0"),
+                "volume": t.get("volume", "0"),
+                "liquidity": t.get("liquidity", "0"),
+                "price_change_pct": t.get("priceChangeRate", "0"),
+                "inflow_usd": float(t.get("inflow") or 0),
+                "smart_traders": t.get("traders", 0),
+                "holders": t.get("holders", "0"),
+                "risk_level": t.get("tokenRiskLevel", -1),
+                "logo_url": _icon_url(t.get("tokenIconUrl", "")),
+            }
+        )
 
     _cache_set(cache_key, result)
     return result
@@ -321,37 +392,44 @@ async def get_pnl_leaderboard(
     if cached is not None:
         return cached
 
-    data = await _get(PNL_LEADERBOARD_URL, {
-        "chainId": chain_id,
-        "period": period,
-        "tag": "ALL",
-        "sortBy": 0,
-        "orderBy": 0,
-        "pageNo": 1,
-        "pageSize": min(page_size, 25),
-    })
+    data = await _get(
+        PNL_LEADERBOARD_URL,
+        {
+            "chainId": chain_id,
+            "period": period,
+            "tag": "ALL",
+            "sortBy": 0,
+            "orderBy": 0,
+            "pageNo": 1,
+            "pageSize": min(page_size, 25),
+        },
+    )
 
     items = (data.get("data", {}) or {}).get("data", []) or []
     result = []
     for addr in items:
-        result.append({
-            "address": addr.get("address", ""),
-            "label": addr.get("addressLabel", ""),
-            "realized_pnl": addr.get("realizedPnl", "0"),
-            "realized_pnl_pct": addr.get("realizedPnlPercent", "0"),
-            "win_rate": addr.get("winRate", "0"),
-            "total_volume": addr.get("totalVolume", "0"),
-            "total_tx_count": addr.get("totalTxCnt", 0),
-            "tokens_traded": addr.get("totalTradedTokens", 0),
-            "top_earning_tokens": [
-                {
-                    "symbol": tok.get("tokenSymbol", ""),
-                    "pnl": tok.get("realizedPnl", "0"),
-                }
-                for tok in (addr.get("topEarningTokens", []) or [])[:3]
-            ],
-            "tags": [t.get("tagName", "") for t in (addr.get("genericAddressTagList", []) or [])],
-        })
+        result.append(
+            {
+                "address": addr.get("address", ""),
+                "label": addr.get("addressLabel", ""),
+                "realized_pnl": addr.get("realizedPnl", "0"),
+                "realized_pnl_pct": addr.get("realizedPnlPercent", "0"),
+                "win_rate": addr.get("winRate", "0"),
+                "total_volume": addr.get("totalVolume", "0"),
+                "total_tx_count": addr.get("totalTxCnt", 0),
+                "tokens_traded": addr.get("totalTradedTokens", 0),
+                "top_earning_tokens": [
+                    {
+                        "symbol": tok.get("tokenSymbol", ""),
+                        "pnl": tok.get("realizedPnl", "0"),
+                    }
+                    for tok in (addr.get("topEarningTokens", []) or [])[:3]
+                ],
+                "tags": [
+                    t.get("tagName", "") for t in (addr.get("genericAddressTagList", []) or [])
+                ],
+            }
+        )
 
     _cache_set(cache_key, result)
     return result
@@ -361,8 +439,12 @@ async def get_pnl_leaderboard(
 # 3. TOKEN INFO — Search, market data, K-line charts
 # ═══════════════════════════════════════════════════════════
 
-TOKEN_SEARCH_URL = f"{BINANCE_WEB3_BASE}/bapi/defi/v5/public/wallet-direct/buw/wallet/market/token/search"
-TOKEN_DYNAMIC_URL = f"{BINANCE_WEB3_BASE}/bapi/defi/v4/public/wallet-direct/buw/wallet/market/token/dynamic/info"
+TOKEN_SEARCH_URL = (
+    f"{BINANCE_WEB3_BASE}/bapi/defi/v5/public/wallet-direct/buw/wallet/market/token/search"
+)
+TOKEN_DYNAMIC_URL = (
+    f"{BINANCE_WEB3_BASE}/bapi/defi/v4/public/wallet-direct/buw/wallet/market/token/dynamic/info"
+)
 TOKEN_KLINE_URL = f"{KLINE_BASE}/u-kline/v1/k-line/candles"
 
 CHAIN_TO_PLATFORM = {
@@ -389,27 +471,32 @@ async def search_token(
     if cached is not None:
         return cached
 
-    data = await _get(TOKEN_SEARCH_URL, {
-        "keyword": keyword.strip(),
-        "chainIds": chains,
-        "orderBy": "volume24h",
-    })
+    data = await _get(
+        TOKEN_SEARCH_URL,
+        {
+            "keyword": keyword.strip(),
+            "chainIds": chains,
+            "orderBy": "volume24h",
+        },
+    )
 
     tokens = data.get("data", []) or []
     result = []
     for t in tokens[:10]:
-        result.append({
-            "name": t.get("name", ""),
-            "symbol": t.get("symbol", ""),
-            "chain_id": t.get("chainId", ""),
-            "contract_address": t.get("contractAddress", ""),
-            "price": t.get("price", "0"),
-            "price_change_24h": t.get("percentChange24h", "0"),
-            "volume_24h": t.get("volume24h", "0"),
-            "market_cap": t.get("marketCap", "0"),
-            "liquidity": t.get("liquidity", "0"),
-            "logo_url": _icon_url(t.get("icon", "")),
-        })
+        result.append(
+            {
+                "name": t.get("name", ""),
+                "symbol": t.get("symbol", ""),
+                "chain_id": t.get("chainId", ""),
+                "contract_address": t.get("contractAddress", ""),
+                "price": t.get("price", "0"),
+                "price_change_24h": t.get("percentChange24h", "0"),
+                "volume_24h": t.get("volume24h", "0"),
+                "market_cap": t.get("marketCap", "0"),
+                "liquidity": t.get("liquidity", "0"),
+                "logo_url": _icon_url(t.get("icon", "")),
+            }
+        )
 
     _cache_set(cache_key, result)
     return result
@@ -430,10 +517,13 @@ async def get_token_dynamic_data(
     if cached is not None:
         return cached
 
-    data = await _get(TOKEN_DYNAMIC_URL, {
-        "chainId": chain_id,
-        "contractAddress": contract_address,
-    })
+    data = await _get(
+        TOKEN_DYNAMIC_URL,
+        {
+            "chainId": chain_id,
+            "contractAddress": contract_address,
+        },
+    )
 
     d = data.get("data", {}) or {}
     if not d:
@@ -482,26 +572,31 @@ async def get_token_kline(
     if cached is not None:
         return cached
 
-    data = await _get(TOKEN_KLINE_URL, {
-        "address": contract_address,
-        "platform": platform,
-        "interval": interval,
-        "limit": min(limit, 500),
-    })
+    data = await _get(
+        TOKEN_KLINE_URL,
+        {
+            "address": contract_address,
+            "platform": platform,
+            "interval": interval,
+            "limit": min(limit, 500),
+        },
+    )
 
     candles_raw = data.get("data", []) or []
     result = []
     for c in candles_raw:
         if isinstance(c, list) and len(c) >= 7:
-            result.append({
-                "open": c[0],
-                "high": c[1],
-                "low": c[2],
-                "close": c[3],
-                "volume": c[4],
-                "timestamp": c[5],
-                "tx_count": c[6],
-            })
+            result.append(
+                {
+                    "open": c[0],
+                    "high": c[1],
+                    "low": c[2],
+                    "close": c[3],
+                    "volume": c[4],
+                    "timestamp": c[5],
+                    "tx_count": c[6],
+                }
+            )
 
     _cache_set(cache_key, result)
     return result
@@ -510,6 +605,7 @@ async def get_token_kline(
 # ═══════════════════════════════════════════════════════════
 # 4. HIGH-LEVEL AGGREGATORS — for bot consumption
 # ═══════════════════════════════════════════════════════════
+
 
 async def get_crypto_market_context(
     query_tokens: list[str] | None = None,
@@ -528,51 +624,72 @@ async def get_crypto_market_context(
         trending_tokens, token_data (if query_tokens provided)
     """
     context: dict[str, Any] = {}
+    chain_id = SUPPORTED_CHAINS.get(chain.lower(), "CT_501")
 
-    # Always fetch: active smart money signals
-    try:
-        signals = await get_active_buy_signals(chain=chain)
-        context["smart_money_signals"] = signals[:10]
-        context["smart_money_signals_summary"] = _summarize_signals(signals[:10])
-    except Exception as exc:
-        logger.warning(f"Failed to fetch smart money signals: {exc}")
-        context["smart_money_signals"] = []
-        context["smart_money_signals_summary"] = "Smart money signals unavailable."
+    # The four ranking sources are independent — fetch them concurrently so
+    # a slow endpoint cannot multiply the total latency.
+    async def fetch_signals() -> tuple[list[dict[str, Any]], str]:
+        try:
+            signals = await get_active_buy_signals(chain=chain)
+            top = signals[:10]
+            return top, _summarize_signals(top)
+        except Exception as exc:
+            logger.warning(f"Failed to fetch smart money signals: {exc}")
+            return [], "Smart money signals unavailable."
 
-    # Social hype sentiment
-    try:
-        hype = await get_social_hype_ranking(chain=chain)
-        context["social_hype"] = hype[:10]
-        context["social_hype_summary"] = _summarize_social_hype(hype[:10])
-    except Exception as exc:
-        logger.warning(f"Failed to fetch social hype: {exc}")
-        context["social_hype"] = []
-        context["social_hype_summary"] = "Social hype data unavailable."
+    async def fetch_hype() -> tuple[list[dict[str, Any]], str]:
+        try:
+            hype = await get_social_hype_ranking(chain=chain)
+            top = hype[:10]
+            return top, _summarize_social_hype(top)
+        except Exception as exc:
+            logger.warning(f"Failed to fetch social hype: {exc}")
+            return [], "Social hype data unavailable."
 
-    # Smart money inflow
-    try:
-        inflow = await get_smart_money_inflow(chain=chain)
-        context["smart_money_inflow"] = inflow[:10]
-        context["smart_money_inflow_summary"] = _summarize_inflow(inflow[:10])
-    except Exception as exc:
-        logger.warning(f"Failed to fetch smart money inflow: {exc}")
-        context["smart_money_inflow"] = []
-        context["smart_money_inflow_summary"] = "Smart money inflow data unavailable."
+    async def fetch_inflow() -> tuple[list[dict[str, Any]], str]:
+        try:
+            inflow = await get_smart_money_inflow(chain=chain)
+            top = inflow[:10]
+            return top, _summarize_inflow(top)
+        except Exception as exc:
+            logger.warning(f"Failed to fetch smart money inflow: {exc}")
+            return [], "Smart money inflow data unavailable."
 
-    # Trending tokens
-    try:
-        trending = await get_trending_tokens(chain=chain)
-        context["trending_tokens"] = trending[:10]
-    except Exception as exc:
-        logger.warning(f"Failed to fetch trending tokens: {exc}")
-        context["trending_tokens"] = []
+    async def fetch_trending() -> list[dict[str, Any]]:
+        try:
+            trending = await get_trending_tokens(chain=chain)
+            return trending[:10]
+        except Exception as exc:
+            logger.warning(f"Failed to fetch trending tokens: {exc}")
+            return []
 
-    # Specific token lookups
+    (
+        (signals, signals_summary),
+        (hype, hype_summary),
+        (inflow, inflow_summary),
+        trending,
+    ) = await asyncio.gather(
+        fetch_signals(),
+        fetch_hype(),
+        fetch_inflow(),
+        fetch_trending(),
+    )
+
+    context["smart_money_signals"] = signals
+    context["smart_money_signals_summary"] = signals_summary
+    context["social_hype"] = hype
+    context["social_hype_summary"] = hype_summary
+    context["smart_money_inflow"] = inflow
+    context["smart_money_inflow_summary"] = inflow_summary
+    context["trending_tokens"] = trending
+
+    # Specific token lookups — scoped to the requested chain so e.g.
+    # Ethereum tokens are not excluded by the default chain filter.
     if query_tokens:
         token_data = {}
         for symbol in query_tokens[:5]:
             try:
-                results = await search_token(symbol)
+                results = await search_token(symbol, chains=chain_id)
                 if results:
                     best = results[0]
                     dynamic = await get_token_dynamic_data(
@@ -627,6 +744,7 @@ def format_binance_context_for_prompt(context: dict[str, Any]) -> str:
 # Helpers
 # ═══════════════════════════════════════════════════════════
 
+
 def _icon_url(path: str) -> str:
     if not path:
         return ""
@@ -639,7 +757,7 @@ def _flatten_tags(tag_obj: dict) -> list[str]:
     tags = []
     if not isinstance(tag_obj, dict):
         return tags
-    for category, tag_list in tag_obj.items():
+    for _category, tag_list in tag_obj.items():
         if isinstance(tag_list, list):
             for t in tag_list:
                 name = t.get("tagName", "") if isinstance(t, dict) else str(t)

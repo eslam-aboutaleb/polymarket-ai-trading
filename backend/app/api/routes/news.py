@@ -8,12 +8,11 @@ Endpoints:
   POST /api/news/generate/stream       – SSE stream while generating
   POST /api/news/refresh-feed          – regenerate feed for trending markets
 """
-import asyncio
+
 import json
 import logging
-from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -26,21 +25,23 @@ router = APIRouter(prefix="/api/news", tags=["news"])
 
 # ── Schemas ─────────────────────────────────────────────────
 
+
 class GenerateNewsRequest(BaseModel):
     condition_id: str = Field(..., description="Market condition ID")
     question: str = Field(..., description="Market question text")
     force: bool = Field(False, description="Bypass cache and regenerate")
-    provider: Optional[str] = Field(None, description="LLM provider override")
-    model: Optional[str] = Field(None, description="LLM model override")
+    provider: str | None = Field(None, description="LLM provider override")
+    model: str | None = Field(None, description="LLM model override")
 
 
 class RefreshFeedRequest(BaseModel):
     max_markets: int = Field(5, ge=1, le=20, description="Number of markets")
-    provider: Optional[str] = None
-    model: Optional[str] = None
+    provider: str | None = None
+    model: str | None = None
 
 
 # ── Endpoints ───────────────────────────────────────────────
+
 
 @router.get("/feed")
 async def get_news_feed(limit: int = Query(20, ge=1, le=50)):
@@ -118,6 +119,7 @@ async def refresh_feed(body: RefreshFeedRequest):
 
 
 # ── Helpers ─────────────────────────────────────────────────
+
 
 def _sse_event(event: str, data: dict) -> str:
     payload = json.dumps(data, default=str)

@@ -2,28 +2,83 @@
 LangChain-based trading analysis service.
 Provides AI-powered market analysis using configurable LLM providers.
 """
+
+import contextlib
 import json
 import logging
-import os
 import re
-from typing import Dict, List, Optional, Any, AsyncIterator
+from collections.abc import AsyncIterator
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
-from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.tools import Tool
 from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_core.callbacks import StreamingStdOutCallbackHandler
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.tools import Tool
 
 from src.config import get_settings
-from src.llm_factory import create_llm, create_llm_for_request, get_provider_info, LLMRequestConfig
+from src.llm_factory import (
+    LLMRequestConfig,
+    create_llm,
+    create_llm_for_request,
+    create_llm_for_task,
+    get_provider_info,
+)
 from src.mcp_client import ResearchMCPClient
 
 logger = logging.getLogger(__name__)
 
+# Auto-discovery fan-out caps. Each stage is bounded so a single invocation
+# cannot fan out into an unbounded number of LLM calls.
+EVENTS_TO_SCREEN = 5
+MARKETS_TO_CONSIDER = 40
+MARKETS_TO_SELECT = 10
+MARKETS_TO_FORECAST = 5
+
 # Lazy imports for optional providers
 _TavilyClient = None
 _NewsApiClient = None
+
+
+def _parse_copy_recommendation(content: str) -> str:
+    """Extract the copy-trade verdict from free-form model output.
+
+    The prompt asks for a numbered ``Recommendation: COPY / REDUCE_SIZE / SKIP``
+    line, so that field is preferred. Matching bare substrings anywhere in the
+    response is unreliable: a market titled "Will Skips McGee ..." flips the
+    verdict, and prose that merely mentions "skip" while recommending COPY does
+    the same.
+
+    Fails closed to ``"avoid"`` when no verdict is recognisable -- an
+    unparseable answer must never authorise a trade.
+    """
+    text = content or ""
+
+    match = re.search(
+        r"recommendation\s*[:\-]\s*\**\s*(copy|reduce[_ ]?size|skip|avoid)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if match:
+        verdict = match.group(1).lower().replace(" ", "_")
+        if verdict == "reduce_size":
+            return "reduce_size"
+        if verdict == "copy":
+            return "copy"
+        return "avoid"
+
+    # No explicit field: fall back to a whole-word search for the verdict verbs.
+    for pattern, verdict in (
+        (r"\breduce[_ ]?size\b", "reduce_size"),
+        (r"\b(skip|avoid)\b", "avoid"),
+        (r"\bcopy\b", "copy"),
+    ):
+        if re.search(pattern, text, re.IGNORECASE):
+            return verdict
+
+    logger.warning("Copy-trade verdict not recognisable; failing closed to 'avoid'.")
+    return "avoid"
 
 
 def _get_tavily_client():
@@ -35,6 +90,7 @@ def _get_tavily_client():
     if _TavilyClient is None:
         try:
             from tavily import TavilyClient
+
             _TavilyClient = TavilyClient
         except ImportError:
             logger.warning("tavily-python not installed")
@@ -51,6 +107,7 @@ def _get_newsapi_client():
     if _NewsApiClient is None:
         try:
             from newsapi import NewsApiClient
+
             _NewsApiClient = NewsApiClient
         except ImportError:
             logger.warning("newsapi-python not installed")
@@ -60,44 +117,57 @@ def _get_newsapi_client():
 
 class PromptManager:
     """Manages loading and accessing prompts from external JSON file."""
-    
+
     _instance = None
-    _prompts: Dict = {}
-    
+    _prompts: dict = {}
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._load_prompts()
         return cls._instance
-    
+
     def _load_prompts(self):
         """Load prompts from external JSON file."""
         settings = get_settings()
         prompts_path = settings.prompts_path
         try:
-            with open(prompts_path, "r") as f:
+            with Path(prompts_path).open() as f:
                 self._prompts = json.load(f)
-            print(f"Loaded prompts from {prompts_path}")
+            logger.info("Loaded prompts from %s", prompts_path)
         except FileNotFoundError:
-            print(f"Warning: Prompts file not found at {prompts_path}, using defaults")
+            logger.warning("Prompts file not found at %s, using defaults", prompts_path)
             self._prompts = self._default_prompts()
-    
-    def _default_prompts(self) -> Dict:
+
+    def _default_prompts(self) -> dict:
         return {
             "market_analysis": {
-                "system_prompt": "You are an expert prediction market analyst. Provide actionable trading insights with probability assessments.",
-                "market_assessment": "Analyze this market: {market_title}\nDescription: {market_description}\nYes: ${yes_price}, No: ${no_price}\nVolume: ${volume_24h}\nEnd: {end_date}\n\nContext:\n{news_context}",
+                "system_prompt": (
+                    "You are an expert prediction market analyst. "
+                    "Provide actionable trading insights with probability assessments."
+                ),
+                "market_assessment": (
+                    "Analyze this market: {market_title}\n"
+                    "Description: {market_description}\n"
+                    "Yes: ${yes_price}, No: ${no_price}\n"
+                    "Volume: ${volume_24h}\nEnd: {end_date}\n\nContext:\n{news_context}"
+                ),
                 "quick_analysis": "Quick analysis: {question} at ${current_price}",
-                "multi_market_scan": "Scan markets:\n{markets_json}"
+                "multi_market_scan": "Scan markets:\n{markets_json}",
             },
             "risk_management": {
-                "risk_assessment": "Risk for {market_title}: Size ${position_size}, Entry ${entry_price}, {days_to_expiry} days"
+                "risk_assessment": (
+                    "Risk for {market_title}: Size ${position_size}, "
+                    "Entry ${entry_price}, {days_to_expiry} days"
+                )
             },
             "trading": {
-                "trade_execution_plan": "Plan for {action} on {market_title}: Target ${target_size} at ${current_price}"
-            }
+                "trade_execution_plan": (
+                    "Plan for {action} on {market_title}: Target ${target_size} at ${current_price}"
+                )
+            },
         }
-    
+
     def get(self, category: str, prompt_name: str) -> str:
         """Get a prompt by category and name."""
         if category in self._prompts and prompt_name in self._prompts[category]:
@@ -107,7 +177,7 @@ class PromptManager:
         if category in defaults and prompt_name in defaults[category]:
             return defaults[category][prompt_name]
         raise KeyError(f"Prompt not found: {category}.{prompt_name}")
-    
+
     def reload(self):
         """Reload prompts from file."""
         self._load_prompts()
@@ -119,47 +189,72 @@ class TradingAnalysisChain:
     Implements the analysis logic for the gRPC service.
     Supports multiple LLM providers via configuration.
     """
-    
+
     def __init__(self, streaming: bool = False, llm_instance=None):
         """
         Initialize the trading analysis chain.
-        
+
         Args:
             streaming: Enable streaming responses
             llm_instance: Optional pre-configured LLM instance (for per-request overrides)
         """
-        settings = get_settings()
         self.prompts = PromptManager()
-        
+        self._streaming = streaming
+        self._task_llm_cache: dict[str, Any] = {}
+
         # Use provided LLM or create one using factory (provider-agnostic)
         if llm_instance is not None:
             self.llm = llm_instance
-            print("Using provided LLM instance for this request")
+            self._request_llm_explicit = True
+            logger.info("Using provided LLM instance for this request")
         else:
             callbacks = [StreamingStdOutCallbackHandler()] if streaming else None
             self.llm = create_llm(streaming=streaming, callbacks=callbacks)
-            
+            self._request_llm_explicit = False
+
             # Log provider info
             provider_info = get_provider_info()
-            print(f"Initialized LLM: {provider_info['provider']} / {provider_info['model']}")
-        
+            logger.info(
+                "Initialized LLM: %s / %s", provider_info["provider"], provider_info["model"]
+            )
+
         # Initialize search tool
         self.search_tool = DuckDuckGoSearchRun()
-        
+
         # Initialize tools list
         self.tools = [
             Tool(
                 name="web_search",
-                description="Search the web for recent news and information about prediction markets.",
-                func=self.search_tool.run
+                description=(
+                    "Search the web for recent news and information about prediction markets."
+                ),
+                func=self.search_tool.run,
             ),
         ]
         self.research_mcp = ResearchMCPClient()
-    
+
     def _get_llm(self, llm_override=None):
         """Get the LLM to use - either override or default."""
         return llm_override if llm_override is not None else self.llm
-    
+
+    def _get_task_llm(self, task: str, llm_override=None):
+        """Resolve the LLM for a task with the documented precedence.
+
+        A per-call ``llm_override`` wins. Otherwise an LLM supplied
+        when this chain was created (a request-level override) wins.
+        Otherwise the task's tier-resolved LLM is created and cached.
+        """
+        if llm_override is not None:
+            return llm_override
+        if self._request_llm_explicit:
+            return self.llm
+        if task not in self._task_llm_cache:
+            callbacks = [StreamingStdOutCallbackHandler()] if self._streaming else None
+            self._task_llm_cache[task] = create_llm_for_task(
+                task, streaming=self._streaming, callbacks=callbacks
+            )
+        return self._task_llm_cache[task]
+
     async def analyze_market(
         self,
         market_title: str,
@@ -169,15 +264,15 @@ class TradingAnalysisChain:
         volume_24h: float,
         end_date: str,
         include_research: bool = True,
-        llm_override=None
-    ) -> Dict[str, Any]:
+        llm_override=None,
+    ) -> dict[str, Any]:
         """Perform comprehensive market analysis with optional web research."""
-        llm = self._get_llm(llm_override)
+        llm = self._get_task_llm("market_assessment", llm_override)
         news_context = ""
-        
+
         if include_research:
             news_context = await self._research_market(market_title, market_description)
-        
+
         prompt_template = self.prompts.get("market_analysis", "market_assessment")
         analysis_prompt = prompt_template.format(
             market_title=market_title,
@@ -186,24 +281,21 @@ class TradingAnalysisChain:
             no_price=no_price,
             volume_24h=volume_24h,
             end_date=end_date,
-            news_context=news_context or "No additional research performed."
+            news_context=news_context or "No additional research performed.",
         )
-        
+
         system_prompt = self.prompts.get("market_analysis", "system_prompt")
-        
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=analysis_prompt)
-        ]
-        
+
+        messages = [SystemMessage(content=system_prompt), HumanMessage(content=analysis_prompt)]
+
         response = await llm.ainvoke(messages)
-        
+
         return {
             "analysis": response.content,
             "research_context": news_context,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat(),
         }
-    
+
     async def analyze_market_stream(
         self,
         market_title: str,
@@ -212,20 +304,25 @@ class TradingAnalysisChain:
         no_price: float,
         volume_24h: float,
         end_date: str,
-        include_research: bool = True
-    ) -> AsyncIterator[Dict[str, Any]]:
+        include_research: bool = True,
+        llm_override=None,
+    ) -> AsyncIterator[dict[str, Any]]:
         """Stream market analysis for real-time updates."""
         # First yield research phase
         if include_research:
             yield {"chunk": "Researching market...", "chunk_type": "research", "is_final": False}
             news_context = await self._research_market(market_title, market_description)
-            yield {"chunk": f"Research complete.\n\n{news_context[:500]}...", "chunk_type": "research", "is_final": False}
+            yield {
+                "chunk": f"Research complete.\n\n{news_context[:500]}...",
+                "chunk_type": "research",
+                "is_final": False,
+            }
         else:
             news_context = ""
-        
+
         # Then stream analysis
         yield {"chunk": "\n\nAnalyzing market...\n", "chunk_type": "analysis", "is_final": False}
-        
+
         prompt_template = self.prompts.get("market_analysis", "market_assessment")
         analysis_prompt = prompt_template.format(
             market_title=market_title,
@@ -234,21 +331,19 @@ class TradingAnalysisChain:
             no_price=no_price,
             volume_24h=volume_24h,
             end_date=end_date,
-            news_context=news_context or "No research."
+            news_context=news_context or "No research.",
         )
-        
+
         system_prompt = self.prompts.get("market_analysis", "system_prompt")
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=analysis_prompt)
-        ]
-        
+        messages = [SystemMessage(content=system_prompt), HumanMessage(content=analysis_prompt)]
+
+        llm = self._get_task_llm("market_assessment", llm_override)
         # Stream the response
-        async for chunk in self.llm.astream(messages):
+        async for chunk in llm.astream(messages):
             yield {"chunk": chunk.content, "chunk_type": "analysis", "is_final": False}
-        
+
         yield {"chunk": "", "chunk_type": "recommendation", "is_final": True}
-    
+
     async def _research_market(self, market_title: str, description: str) -> str:
         """
         Use multi-source search to gather current information.
@@ -264,11 +359,11 @@ class TradingAnalysisChain:
 
         # 2. DuckDuckGo fallback / supplement
         try:
-            queries = [
-                f"{market_title} latest news",
-                f"{market_title} prediction analysis"
-            ]
-            
+            # The market description carries the specifics (dates, entities,
+            # resolution criteria) that the title alone does not.
+            topic = f"{market_title} {description}".strip() if description else market_title
+            queries = [f"{topic} latest news", f"{topic} prediction analysis"]
+
             results = []
             for query in queries[:2]:
                 try:
@@ -276,9 +371,9 @@ class TradingAnalysisChain:
                     results.append(f"Query: {query}\nResults: {result}\n")
                 except Exception as e:
                     logger.debug(f"DuckDuckGo search error for '{query}': {e}")
-            
+
             if results:
-                all_results.append(f"== Web Search ==\n" + "\n---\n".join(results))
+                all_results.append("== Web Search ==\n" + "\n---\n".join(results))
         except Exception as e:
             logger.debug(f"DuckDuckGo research error: {e}")
 
@@ -298,6 +393,7 @@ class TradingAnalysisChain:
         """Fetch Binance smart money signals and market data for crypto-related markets."""
         try:
             from binance_skills_client import BinanceSkillsClient
+
             client = BinanceSkillsClient()
             return await client.get_research_context(market_title)
         except ImportError:
@@ -360,42 +456,41 @@ class TradingAnalysisChain:
         except Exception as e:
             logger.warning(f"NewsAPI fetch failed: {e}")
             return ""
-    
+
     async def quick_analysis(self, question: str, current_price: float) -> str:
         """Quick 2-3 sentence analysis."""
         prompt_template = self.prompts.get("market_analysis", "quick_analysis")
         prompt = prompt_template.format(question=question, current_price=current_price)
-        
+
         messages = [HumanMessage(content=prompt)]
-        response = await self.llm.ainvoke(messages)
+        llm = self._get_task_llm("quick_analysis")
+        response = await llm.ainvoke(messages)
         return response.content
-    
-    async def scan_markets(self, markets: List[Dict]) -> Dict[str, Any]:
+
+    async def scan_markets(self, markets: list[dict]) -> dict[str, Any]:
         """Scan multiple markets for opportunities."""
         prompt_template = self.prompts.get("market_analysis", "multi_market_scan")
         prompt = prompt_template.format(markets_json=json.dumps(markets, indent=2))
-        
+
         system_prompt = self.prompts.get("market_analysis", "system_prompt")
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=prompt)
-        ]
-        
-        response = await self.llm.ainvoke(messages)
+        messages = [SystemMessage(content=system_prompt), HumanMessage(content=prompt)]
+
+        llm = self._get_task_llm("multi_market_scan")
+        response = await llm.ainvoke(messages)
         return {
             "analysis": response.content,
             "markets_scanned": len(markets),
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat(),
         }
-    
+
     async def assess_risk(
         self,
         market_title: str,
         position_size: float,
         entry_price: float,
         days_to_expiry: int,
-        correlation_info: str = "No correlation data"
-    ) -> Dict[str, Any]:
+        correlation_info: str = "No correlation data",
+    ) -> dict[str, Any]:
         """Assess risk for a potential trade."""
         prompt_template = self.prompts.get("risk_management", "risk_assessment")
         prompt = prompt_template.format(
@@ -403,25 +498,23 @@ class TradingAnalysisChain:
             position_size=position_size,
             entry_price=entry_price,
             days_to_expiry=days_to_expiry,
-            correlation_info=correlation_info
+            correlation_info=correlation_info,
         )
-        
+
         messages = [HumanMessage(content=prompt)]
-        response = await self.llm.ainvoke(messages)
-        
-        return {
-            "analysis": response.content,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    
+        llm = self._get_task_llm("risk_assessment")
+        response = await llm.ainvoke(messages)
+
+        return {"analysis": response.content, "timestamp": datetime.utcnow().isoformat()}
+
     async def generate_trade_plan(
         self,
         action: str,
         market_title: str,
         target_size: float,
         current_price: float,
-        order_book: Dict = None
-    ) -> Dict[str, Any]:
+        order_book: dict = None,
+    ) -> dict[str, Any]:
         """Generate a trade execution plan."""
         prompt_template = self.prompts.get("trading", "trade_execution_plan")
         prompt = prompt_template.format(
@@ -429,16 +522,14 @@ class TradingAnalysisChain:
             market_title=market_title,
             target_size=target_size,
             current_price=current_price,
-            order_book=json.dumps(order_book) if order_book else "N/A"
+            order_book=json.dumps(order_book) if order_book else "N/A",
         )
-        
+
         messages = [HumanMessage(content=prompt)]
-        response = await self.llm.ainvoke(messages)
-        
-        return {
-            "analysis": response.content,
-            "timestamp": datetime.utcnow().isoformat()
-        }
+        llm = self._get_task_llm("trade_execution_plan")
+        response = await llm.ainvoke(messages)
+
+        return {"analysis": response.content, "timestamp": datetime.utcnow().isoformat()}
 
     # ── NEW: Trader Analysis & Copy-Trade Evaluation ─────────
 
@@ -454,7 +545,7 @@ class TradingAnalysisChain:
         pnl_potential: float,
         smart_money_context: str,
         condition_id: str = "",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Score a single market opportunity: web-research for credibility,
         analyse smart money positioning, return structured JSON scoring.
@@ -473,7 +564,7 @@ class TradingAnalysisChain:
                     result = self.search_tool.run(q)
                     results.append(f"Query: {q}\nResults: {result}\n")
                 except Exception as e:
-                    print(f"Opportunity search error for '{q}': {e}")
+                    logger.warning("Opportunity search error for %r: %s", q, e)
             search_findings = "\n---\n".join(results) if results else "No search results available."
         except Exception as e:
             search_findings = f"Search unavailable: {e}"
@@ -526,12 +617,14 @@ class TradingAnalysisChain:
             HumanMessage(content=prompt),
         ]
 
-        response = await self.llm.ainvoke(messages)
+        llm = self._get_task_llm("scan_opportunity")
+        response = await llm.ainvoke(messages)
         raw = response.content.strip()
 
         # Parse JSON from LLM response
         import re
-        json_match = re.search(r'\{[\s\S]*\}', raw)
+
+        json_match = re.search(r"\{[\s\S]*\}", raw)
         if json_match:
             try:
                 scored = json.loads(json_match.group())
@@ -551,7 +644,9 @@ class TradingAnalysisChain:
             "smart_money_signal": scored.get("smart_money_signal", "neutral"),
             "smart_money_summary": scored.get("smart_money_summary", "No smart money data"),
             "recommendation": scored.get("recommendation", "hold"),
-            "recommended_side": scored.get("recommended_side", "YES" if yes_price < no_price else "NO"),
+            "recommended_side": scored.get(
+                "recommended_side", "YES" if yes_price < no_price else "NO"
+            ),
             "reasoning": scored.get("reasoning", raw[:300]),
             "search_summary": scored.get("search_summary", search_findings[:200]),
             "key_risks": scored.get("key_risks", []),
@@ -562,11 +657,11 @@ class TradingAnalysisChain:
     async def scan_event_opportunity(
         self,
         event_title: str,
-        sub_markets: List[Dict[str, Any]],
+        sub_markets: list[dict[str, Any]],
         event_volume: str = "0",
         event_liquidity: str = "0",
         smart_money_context: str = "",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Score an entire event group (multiple related sub-markets) with ONE
         LLM call instead of scoring each sub-market independently.
@@ -585,7 +680,7 @@ class TradingAnalysisChain:
                     result = self.search_tool.run(q)
                     results.append(f"Query: {q}\nResults: {result}\n")
                 except Exception as e:
-                    print(f"Event search error for '{q}': {e}")
+                    logger.warning("Event search error for %r: %s", q, e)
             search_findings = "\n---\n".join(results) if results else "No search results available."
         except Exception as e:
             search_findings = f"Search unavailable: {e}"
@@ -602,8 +697,10 @@ class TradingAnalysisChain:
             combined_smart_money += f"\n\n--- Binance Smart Money Data ---\n{binance_context}"
 
         # 2. Build sub-markets table (markdown-style)
-        table_lines = ["| Option | YES Price | NO Price | 24h Volume | Liquidity |",
-                       "|--------|-----------|----------|------------|-----------|"]
+        table_lines = [
+            "| Option | YES Price | NO Price | 24h Volume | Liquidity |",
+            "|--------|-----------|----------|------------|-----------|",
+        ]
         for sm in sub_markets:
             label = sm.get("label", sm.get("question", "Unknown"))
             yes_p = sm.get("yes_price", 0)
@@ -646,12 +743,14 @@ class TradingAnalysisChain:
             HumanMessage(content=prompt),
         ]
 
-        response = await self.llm.ainvoke(messages)
+        llm = self._get_task_llm("event_quick_analysis")
+        response = await llm.ainvoke(messages)
         raw = response.content.strip()
 
         # Parse JSON
         import re
-        json_match = re.search(r'\{[\s\S]*\}', raw)
+
+        json_match = re.search(r"\{[\s\S]*\}", raw)
         if json_match:
             try:
                 scored = json.loads(json_match.group())
@@ -687,7 +786,7 @@ class TradingAnalysisChain:
         trade_count: int = 0,
         markets_traded: int = 0,
         recent_trades_json: str = "[]",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Full trader profile analysis with internet research."""
         # Web research on the trader
         research_context = ""
@@ -702,7 +801,7 @@ class TradingAnalysisChain:
                     result = self.search_tool.run(q)
                     results.append(f"Query: {q}\n{result}")
                 except Exception as e:
-                    print(f"Trader search error for '{q}': {e}")
+                    logger.warning("Trader search error for %r: %s", q, e)
             research_context = "\n---\n".join(results) if results else "No search results."
         except Exception as e:
             research_context = f"Research unavailable: {e}"
@@ -723,7 +822,8 @@ class TradingAnalysisChain:
             SystemMessage(content=system_prompt),
             HumanMessage(content=f"{prompt}\n\nInternet Research:\n{research_context}"),
         ]
-        response = await self.llm.ainvoke(messages)
+        llm = self._get_task_llm("trader_profile")
+        response = await llm.ainvoke(messages)
 
         return {
             "analysis": response.content,
@@ -741,7 +841,7 @@ class TradingAnalysisChain:
         trade_size: float = 0.0,
         current_price: float = 0.0,
         user_risk_profile: str = "max_position_daily_loss",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate whether to copy a specific trade – returns recommendation."""
         # Quick web search on the market
         market_research = ""
@@ -775,26 +875,24 @@ class TradingAnalysisChain:
         if binance_context:
             extra_context += f"\n\nBinance Smart Money & Market Data:\n{binance_context}"
 
-        system_prompt = self.prompts.get("trader_analysis", "system_prompt")
+        # The copy-trade evaluation is a prose task: use the
+        # copy_trading system prompt, not the trader_analysis one
+        # (which demands JSON-only output and contradicts the
+        # prose trade_evaluation task prompt).
+        system_prompt = self.prompts.get("copy_trading", "system_prompt")
         messages = [
             SystemMessage(content=system_prompt),
             HumanMessage(content=f"{prompt}{extra_context}"),
         ]
-        response = await self.llm.ainvoke(messages)
+        llm = self._get_task_llm("copy_trade_eval")
+        response = await llm.ainvoke(messages)
 
         # Parse recommendation from LLM output
-        content = response.content.upper()
-        if "SKIP" in content or "AVOID" in content:
-            recommendation = "avoid"
-        elif "REDUCE" in content:
-            recommendation = "reduce_size"
-        else:
-            recommendation = "copy"
+        recommendation = _parse_copy_recommendation(response.content)
 
         # Try to extract confidence
         confidence = 50.0
-        import re
-        conf_match = re.search(r'confidence[:\s]*(\d+)', content, re.IGNORECASE)
+        conf_match = re.search(r"confidence[:\s]*(\d+)", response.content, re.IGNORECASE)
         if conf_match:
             confidence = min(100, max(0, float(conf_match.group(1))))
 
@@ -820,7 +918,7 @@ class TradingAnalysisChain:
         delta_pct: float,
         alternatives_json: str = "[]",
         include_research: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate whether an open position should be reversed."""
         try:
             alternatives = json.loads(alternatives_json or "[]")
@@ -859,47 +957,33 @@ class TradingAnalysisChain:
                 "Web: {web_summary}\n"
                 "X: {x_summary}\n"
                 "Binance Smart Money: {binance_summary}\n"
-                "Return JSON with: recommendation, confidence, reasoning, key_risks, alt_outcome, alt_token_id, web_summary, x_summary."
+                "Return JSON with: recommendation, confidence, reasoning, key_risks, "
+                "alt_outcome, alt_token_id, web_summary, x_summary."
             )
 
         system_prompt = self.prompts.get("inverse_position_bot", "system_prompt")
         if not system_prompt:
             system_prompt = (
-                "You are a conservative Polymarket risk engine. "
-                "Respond with only valid JSON."
+                "You are a conservative Polymarket risk engine. Respond with only valid JSON."
             )
 
-        # Include binance_summary in the prompt if template supports it, otherwise append
-        try:
-            prompt = prompt_template.format(
-                market_title=market_title,
-                held_outcome=held_outcome,
-                held_pct=held_pct,
-                best_alt_outcome=best_alt_outcome,
-                best_alt_pct=best_alt_pct,
-                delta_pct=delta_pct,
-                alternatives_json=json.dumps(alternatives, ensure_ascii=True),
-                web_summary=web_summary or "No web evidence found in last 24h.",
-                x_summary=x_summary or "No X evidence found in last 24h.",
-                binance_summary=binance_summary or "No Binance smart money data available.",
-            )
-        except KeyError:
-            # Template doesn't have {binance_summary} placeholder yet — append manually
-            prompt = prompt_template.format(
-                market_title=market_title,
-                held_outcome=held_outcome,
-                held_pct=held_pct,
-                best_alt_outcome=best_alt_outcome,
-                best_alt_pct=best_alt_pct,
-                delta_pct=delta_pct,
-                alternatives_json=json.dumps(alternatives, ensure_ascii=True),
-                web_summary=web_summary or "No web evidence found in last 24h.",
-                x_summary=x_summary or "No X evidence found in last 24h.",
-            )
-            if binance_summary:
-                prompt += f"\n\nBinance Smart Money & Market Data:\n{binance_summary}"
+        # Both the packaged template and the inline fallback above declare every
+        # placeholder, so this render cannot raise KeyError.
+        prompt = prompt_template.format(
+            market_title=market_title,
+            held_outcome=held_outcome,
+            held_pct=held_pct,
+            best_alt_outcome=best_alt_outcome,
+            best_alt_pct=best_alt_pct,
+            delta_pct=delta_pct,
+            alternatives_json=json.dumps(alternatives, ensure_ascii=True),
+            web_summary=web_summary or "No web evidence found in last 24h.",
+            x_summary=x_summary or "No X evidence found in last 24h.",
+            binance_summary=binance_summary or "No Binance smart money data available.",
+        )
 
-        response = await self.llm.ainvoke(
+        llm = self._get_task_llm("inverse_position_eval")
+        response = await llm.ainvoke(
             [
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=prompt),
@@ -950,16 +1034,21 @@ class TradingAnalysisChain:
         query: str,
         include_news: bool = True,
         include_social: bool = True,
+        outcome: str = "",
         llm_override=None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Analyse the public sentiment around a market / topic.
         Gathers web + news + social signals, then asks the LLM to produce
         a structured sentiment score and breakdown.
 
+        ``outcome`` names the specific outcome the sentiment is scored *for*
+        (e.g. "YES"); the score is directional with respect to it. When empty,
+        sentiment is scored against the market question as a whole.
+
         Returns dict with: sentiment_score (0-1), label, summary, sources, etc.
         """
-        llm = self._get_llm(llm_override)
+        llm = self._get_task_llm("sentiment_analysis", llm_override)
         evidence_parts: list[str] = []
 
         # 1. Web search (always)
@@ -983,18 +1072,23 @@ class TradingAnalysisChain:
         # 4. X / Twitter signals
         if include_social:
             try:
-                x_results = self.research_mcp._call_tool(
+                # Must be awaited: without it this bound a coroutine, which is
+                # always truthy, so the subscript below raised TypeError and the
+                # social evidence block was silently dead in every request.
+                x_results = await self.research_mcp._call_tool(
                     "x_posts_search",
                     {"query": query, "recency_hours": 48, "max_results": 10},
                 )
                 if x_results:
                     x_text = "\n".join(
-                        f"• {r.get('title', '')} — {r.get('snippet', '')}"
-                        for r in x_results[:10]
+                        f"• {r.get('title', '')} — {r.get('snippet', '')}" for r in x_results[:10]
                     )
                     evidence_parts.append(f"== Social/X Posts ==\n{x_text}")
-            except Exception as e:
-                logger.debug(f"X posts search failed: {e}")
+            except Exception:
+                logger.warning(
+                    "X posts search failed; continuing without social evidence",
+                    exc_info=True,
+                )
 
         # 5. Binance social hype & smart money signals for crypto markets
         try:
@@ -1008,7 +1102,11 @@ class TradingAnalysisChain:
 
         # 5. LLM sentiment analysis
         prompt_template = self.prompts.get("research", "sentiment_analysis")
-        prompt = prompt_template.format(query=query, evidence=evidence)
+        prompt = prompt_template.format(
+            question=query,
+            outcome=outcome or "the market as a whole",
+            content=evidence,
+        )
         messages = [HumanMessage(content=prompt)]
         response = await llm.ainvoke(messages)
         raw = response.content.strip()
@@ -1043,11 +1141,11 @@ class TradingAnalysisChain:
 
     async def discover_best_trade(
         self,
-        markets: List[Dict[str, Any]],
+        markets: list[dict[str, Any]],
         budget: float = 100.0,
         risk_tolerance: str = "medium",
         llm_override=None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Autonomous trade discovery pipeline inspired by Polymarket/agents.
         Steps:
@@ -1065,14 +1163,13 @@ class TradingAnalysisChain:
         Returns:
             Dict with best_trade recommendation, reasoning, all_candidates, etc.
         """
-        llm = self._get_llm(llm_override)
-        settings = get_settings()
+        llm = self._get_task_llm("discover_best_trade", llm_override)
 
         # ── Step 1: Group into events and filter ──
         logger.info(f"Auto-discovery: starting with {len(markets)} markets, budget=${budget}")
 
         # Group markets by event/slug prefix
-        events: Dict[str, List[Dict]] = {}
+        events: dict[str, list[dict]] = {}
         for m in markets:
             slug = str(m.get("slug", "") or m.get("event_slug", "") or "other")
             event_key = slug.split("-")[0] if "-" in slug else slug
@@ -1093,34 +1190,41 @@ class TradingAnalysisChain:
         filter_events_prompt = self.prompts.get("auto_discovery", "filter_events")
         prompt = filter_events_prompt.format(
             events_json=events_summary,
-            budget=budget,
-            risk_tolerance=risk_tolerance,
+            top_n=EVENTS_TO_SCREEN,
         )
         filter_sys = self.prompts.get("auto_discovery", "system_prompt")
-        response = await llm.ainvoke([
-            SystemMessage(content=filter_sys),
-            HumanMessage(content=prompt),
-        ])
+        response = await llm.ainvoke(
+            [
+                SystemMessage(content=filter_sys),
+                HumanMessage(content=prompt),
+            ]
+        )
 
         # Parse selected event keys from LLM response
         selected_event_keys: list[str] = []
-        try:
+        # A malformed model response simply means "no explicit selection".
+        with contextlib.suppress(Exception):
             arr_match = re.search(r"\[[\s\S]*?\]", response.content)
             if arr_match:
                 selected_event_keys = json.loads(arr_match.group())
-        except Exception:
-            pass
         if not selected_event_keys:
             # Fallback: keep top 5 by volume
-            sorted_events = sorted(events.items(), key=lambda kv: sum(float(m.get("volume_24h", 0) or 0) for m in kv[1]), reverse=True)
-            selected_event_keys = [k for k, _ in sorted_events[:5]]
+            sorted_events = sorted(
+                events.items(),
+                key=lambda kv: sum(float(m.get("volume_24h", 0) or 0) for m in kv[1]),
+                reverse=True,
+            )
+            selected_event_keys = [k for k, _ in sorted_events[:EVENTS_TO_SCREEN]]
 
         # Gather markets from selected events
         candidate_markets = []
         for key in selected_event_keys:
             candidate_markets.extend(events.get(key, []))
 
-        logger.info(f"Auto-discovery: {len(selected_event_keys)} events, {len(candidate_markets)} candidate markets")
+        logger.info(
+            f"Auto-discovery: {len(selected_event_keys)} events, "
+            f"{len(candidate_markets)} candidate markets"
+        )
 
         # ── Step 2: Filter to top N markets ──
         if len(candidate_markets) > 20:
@@ -1128,39 +1232,86 @@ class TradingAnalysisChain:
                 [
                     {
                         "question": m.get("question", "")[:100],
-                        "yes_price": float(m.get("outcomePrices", [0.5])[0]) if m.get("outcomePrices") else 0.5,
+                        "yes_price": float(m.get("outcomePrices", [0.5])[0])
+                        if m.get("outcomePrices")
+                        else 0.5,
                         "volume_24h": float(m.get("volume_24h", 0) or 0),
                         "liquidity": float(m.get("liquidity", 0) or 0),
                     }
-                    for m in candidate_markets[:40]
+                    for m in candidate_markets[:MARKETS_TO_CONSIDER]
                 ],
                 indent=2,
             )
             filter_markets_prompt = self.prompts.get("auto_discovery", "filter_markets")
             prompt = filter_markets_prompt.format(
                 markets_json=markets_summary,
-                budget=budget,
+                top_n=MARKETS_TO_SELECT,
             )
-            response = await llm.ainvoke([
-                SystemMessage(content=filter_sys),
-                HumanMessage(content=prompt),
-            ])
-            try:
+            response = await llm.ainvoke(
+                [
+                    SystemMessage(content=filter_sys),
+                    HumanMessage(content=prompt),
+                ]
+            )
+            # A malformed selection just falls through to the volume ordering.
+            with contextlib.suppress(Exception):
                 arr_match = re.search(r"\[[\s\S]*?\]", response.content)
                 if arr_match:
-                    selected_indices = json.loads(arr_match.group())
-                    if selected_indices and isinstance(selected_indices[0], int):
-                        candidate_markets = [candidate_markets[i] for i in selected_indices if i < len(candidate_markets)]
-                    elif selected_indices and isinstance(selected_indices[0], str):
-                        selected_set = set(s.lower() for s in selected_indices)
-                        candidate_markets = [m for m in candidate_markets if m.get("question", "").lower() in selected_set]
-            except Exception:
-                pass
-            candidate_markets = candidate_markets[:10]
+                    selected = json.loads(arr_match.group())
+                    if selected and isinstance(selected[0], dict):
+                        # Object array as requested by the template:
+                        # [{"id": ..., "question": ..., "edge_estimate": ...}]
+                        # Match candidates by question (the only field the
+                        # upstream summary actually exposes) and by id when
+                        # the model echoes a condition id.
+                        selected_questions = {
+                            str(item.get("question", "")).strip().lower()
+                            for item in selected
+                            if isinstance(item, dict)
+                        }
+                        selected_questions.discard("")
+                        selected_ids = {
+                            str(item.get("id", "")).strip().lower()
+                            for item in selected
+                            if isinstance(item, dict)
+                        }
+                        selected_ids.discard("")
+                        if selected_questions or selected_ids:
+                            matched = []
+                            for m in candidate_markets:
+                                question = str(m.get("question", "")).strip().lower()
+                                condition_id = (
+                                    str(m.get("condition_id") or m.get("conditionId") or "")
+                                    .strip()
+                                    .lower()
+                                )
+                                if (
+                                    question in selected_questions
+                                    or (condition_id and condition_id in selected_ids)
+                                    or any(
+                                        q and len(q) >= 10 and (q in question or question in q)
+                                        for q in selected_questions
+                                    )
+                                ):
+                                    matched.append(m)
+                            if matched:
+                                candidate_markets = matched
+                    elif selected and isinstance(selected[0], int):
+                        candidate_markets = [
+                            candidate_markets[i] for i in selected if i < len(candidate_markets)
+                        ]
+                    elif selected and isinstance(selected[0], str):
+                        selected_set = {s.lower() for s in selected}
+                        candidate_markets = [
+                            m
+                            for m in candidate_markets
+                            if m.get("question", "").lower() in selected_set
+                        ]
+            candidate_markets = candidate_markets[:MARKETS_TO_SELECT]
 
         # ── Step 3: Superforecast each candidate ──
         forecasts = []
-        for m in candidate_markets[:10]:
+        for m in candidate_markets[:MARKETS_TO_FORECAST]:
             question = m.get("question", "")
             prices = m.get("outcomePrices", [])
             try:
@@ -1170,29 +1321,33 @@ class TradingAnalysisChain:
 
             # Quick web research for each
             research_text = ""
-            try:
+            # Web research is best-effort; the forecast proceeds without it.
+            with contextlib.suppress(Exception):
                 research_text = self.search_tool.run(f"{question} latest news")[:500]
-            except Exception:
-                pass
 
             sf_prompt = self.prompts.get("auto_discovery", "superforecast")
             prompt = sf_prompt.format(
                 question=question,
-                market_price=market_price,
+                description=str(m.get("description", "") or "No description available."),
+                outcome_prices=(
+                    ", ".join(f"{float(p):.2f}" for p in prices if p is not None) or "unavailable"
+                ),
+                outcomes=(", ".join(str(o) for o in (m.get("outcomes") or [])) or "YES / NO"),
                 research_context=research_text or "No research available.",
+                sentiment_context="No sentiment analysis was run for this market.",
             )
-            response = await llm.ainvoke([
-                SystemMessage(content=filter_sys),
-                HumanMessage(content=prompt),
-            ])
+            response = await llm.ainvoke(
+                [
+                    SystemMessage(content=filter_sys),
+                    HumanMessage(content=prompt),
+                ]
+            )
 
             parsed: dict = {}
             json_match = re.search(r"\{[\s\S]*?\}", response.content)
             if json_match:
-                try:
+                with contextlib.suppress(json.JSONDecodeError):
                     parsed = json.loads(json_match.group())
-                except json.JSONDecodeError:
-                    pass
 
             try:
                 p_yes = float(parsed.get("p_yes", market_price))
@@ -1206,39 +1361,49 @@ class TradingAnalysisChain:
             edge = abs(p_yes - market_price)
             side = "YES" if p_yes > market_price else "NO"
 
-            forecasts.append({
-                "question": question,
-                "market_price": round(market_price, 4),
-                "p_yes": round(p_yes, 4),
-                "edge": round(edge, 4),
-                "side": side,
-                "confidence": confidence,
-                "reasoning": str(parsed.get("reasoning", response.content[:200])),
-                "condition_id": str(m.get("condition_id", "") or m.get("conditionId", "")),
-            })
+            forecasts.append(
+                {
+                    "question": question,
+                    "market_price": round(market_price, 4),
+                    "liquidity": round(float(m.get("liquidity", 0) or 0), 2),
+                    "spread": m.get("spread"),
+                    "p_yes": round(p_yes, 4),
+                    "edge": round(edge, 4),
+                    "side": side,
+                    "confidence": confidence,
+                    "reasoning": str(parsed.get("reasoning", response.content[:200])),
+                    "condition_id": str(m.get("condition_id", "") or m.get("conditionId", "")),
+                }
+            )
 
         # ── Step 4: Pick the single best trade ──
         forecasts.sort(key=lambda f: f["edge"] * (f["confidence"] / 100), reverse=True)
 
         best_trade_prompt = self.prompts.get("auto_discovery", "best_trade")
+        best_forecast = forecasts[0] if forecasts else {}
+        best_price = float(best_forecast.get("market_price", 0.5))
         prompt = best_trade_prompt.format(
-            candidates_json=json.dumps(forecasts[:5], indent=2),
-            budget=budget,
-            risk_tolerance=risk_tolerance,
+            prediction_json=json.dumps(forecasts[:MARKETS_TO_FORECAST], indent=2),
+            question=str(best_forecast.get("question", "")),
+            yes_price=f"{best_price:.2f}",
+            no_price=f"{1.0 - best_price:.2f}",
+            available_balance=f"{float(budget):.2f}",
+            spread=str(best_forecast.get("spread") or "unavailable"),
+            liquidity=f"{float(best_forecast.get('liquidity', 0) or 0):.2f}",
         )
-        response = await llm.ainvoke([
-            SystemMessage(content=filter_sys),
-            HumanMessage(content=prompt),
-        ])
+        response = await llm.ainvoke(
+            [
+                SystemMessage(content=filter_sys),
+                HumanMessage(content=prompt),
+            ]
+        )
 
         # Parse final recommendation
         final: dict = {}
         json_match = re.search(r"\{[\s\S]*?\}", response.content)
         if json_match:
-            try:
+            with contextlib.suppress(json.JSONDecodeError):
                 final = json.loads(json_match.group())
-            except json.JSONDecodeError:
-                pass
 
         best = forecasts[0] if forecasts else {}
 
@@ -1253,7 +1418,7 @@ class TradingAnalysisChain:
                 "condition_id": str(final.get("condition_id", best.get("condition_id", ""))),
                 "reasoning": str(final.get("reasoning", response.content[:500])),
             },
-            "all_candidates": forecasts[:5],
+            "all_candidates": forecasts[:MARKETS_TO_FORECAST],
             "events_evaluated": len(selected_event_keys),
             "markets_evaluated": len(candidate_markets),
             "budget": budget,
@@ -1275,7 +1440,7 @@ class TradingAnalysisChain:
         trader_stats_json: str = "{}",
         smart_money_json: str = "{}",
         llm_override=None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Generate an AI-powered news article for a prediction market.
 
@@ -1283,7 +1448,7 @@ class TradingAnalysisChain:
         X/Twitter), combines with trader positioning data and smart money
         analysis, then prompts the LLM to produce a structured news article.
         """
-        llm = self._get_llm(llm_override)
+        llm = self._get_task_llm("news_article", llm_override)
 
         # 1. Multi-source research (web + news + Binance)
         news_context = await self._research_market(market_question, market_description)
@@ -1359,7 +1524,7 @@ class TradingAnalysisChain:
         return article
 
     @staticmethod
-    def _parse_news_json(raw_text: str) -> Dict[str, Any]:
+    def _parse_news_json(raw_text: str) -> dict[str, Any]:
         """Best-effort extraction of JSON from the LLM response."""
         # Strip markdown fences
         cleaned = raw_text.strip()
@@ -1393,7 +1558,7 @@ class TradingAnalysisChain:
 
 
 # Singleton instance
-_chain_instance: Optional[TradingAnalysisChain] = None
+_chain_instance: TradingAnalysisChain | None = None
 
 
 def get_trading_chain() -> TradingAnalysisChain:
@@ -1404,32 +1569,34 @@ def get_trading_chain() -> TradingAnalysisChain:
     return _chain_instance
 
 
-def get_chain_for_request(request_config: Optional[LLMRequestConfig]) -> TradingAnalysisChain:
+def get_chain_for_request(request_config: LLMRequestConfig | None) -> TradingAnalysisChain:
     """
     Get a trading chain configured for a specific request.
-    
+
     If request_config specifies a custom provider/model, creates a new chain
     with that configuration. Otherwise returns the default singleton chain.
-    
+
     Args:
         request_config: Per-request LLM configuration (can be None)
-    
+
     Returns:
         Configured TradingAnalysisChain
     """
     # If no custom config, use default singleton
     if request_config is None:
         return get_trading_chain()
-    
+
     # Check if any override is specified
-    if (request_config.provider is None and 
-        request_config.model is None and 
-        request_config.temperature is None and 
-        request_config.max_tokens is None):
+    if (
+        request_config.provider is None
+        and request_config.model is None
+        and request_config.temperature is None
+        and request_config.max_tokens is None
+    ):
         return get_trading_chain()
-    
+
     # Create a custom LLM for this request
     llm = create_llm_for_request(request_config)
-    
+
     # Return a new chain with the custom LLM
     return TradingAnalysisChain(llm_instance=llm)

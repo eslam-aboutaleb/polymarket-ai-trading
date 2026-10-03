@@ -1,17 +1,17 @@
 """Markets browsing & AI trader-analysis API routes."""
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
-from typing import Optional
-from datetime import datetime
-from sqlalchemy.orm import Session
+
 import json
 import logging
 
-from app.api.routes.auth import get_current_user_from_token, get_optional_user_from_token
-from app.config import get_settings, AIBackend
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from app.api.routes.auth import get_optional_user_from_token
+from app.config import AIBackend, get_settings
 from app.grpc_clients.analysis_client import AnalysisClient
-from app.models.user_settings import UserSettings, AIBackendType
+from app.models.user_settings import AIBackendType, UserSettings
 from app.services.polymarket_service import get_polymarket_service
 from app.utils.database import get_db
 from app.utils.time import utc_now
@@ -23,8 +23,10 @@ logger = logging.getLogger(__name__)
 
 # ── Request / Response schemas ───────────────────────────────────────
 
+
 class TraderAnalysisRequest(BaseModel):
     """Request body for streaming trader analysis."""
+
     condition_id: str = Field(..., description="Market condition ID (hex)")
     question: str = Field(..., description="Market question text")
     yes_price: float = Field(default=0.5, ge=0, le=1)
@@ -35,19 +37,23 @@ class TraderAnalysisRequest(BaseModel):
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
-async def _get_analysis_client(user_id: Optional[int], db: Session) -> AnalysisClient:
+
+async def _get_analysis_client(user_id: int | None, db: Session) -> AnalysisClient:
     """Return an AnalysisClient configured for the user's preferred backend."""
     if user_id is not None:
         record = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
-        backend = AIBackend.CLI_AGENT if (
-            record and record.ai_backend == AIBackendType.CLI_AGENT.value
-        ) else AIBackend.LLM_CHAIN
+        backend = (
+            AIBackend.CLI_AGENT
+            if (record and record.ai_backend == AIBackendType.CLI_AGENT.value)
+            else AIBackend.LLM_CHAIN
+        )
     else:
         backend = AIBackend.LLM_CHAIN
     return AnalysisClient(backend=backend)
 
 
 # ── Endpoints ────────────────────────────────────────────────────────
+
 
 @router.get("/categories")
 async def get_categories():
@@ -67,7 +73,11 @@ async def search_markets(
     """Search / browse all active Polymarket markets (public)."""
     service = get_polymarket_service()
     return await service.search_all_markets(
-        query=q, tag=tag, limit=limit, offset=offset, sort=sort,
+        query=q,
+        tag=tag,
+        limit=limit,
+        offset=offset,
+        sort=sort,
     )
 
 
@@ -85,7 +95,7 @@ async def browse_markets(
 @router.post("/trader-analysis/stream")
 async def stream_trader_analysis(
     request: TraderAnalysisRequest,
-    current_user: Optional[dict] = Depends(get_optional_user_from_token),
+    current_user: dict | None = Depends(get_optional_user_from_token),
     db: Session = Depends(get_db),
 ):
     """
@@ -114,14 +124,17 @@ async def stream_trader_analysis(
 
     stats_context = (
         f"MARKET: {request.question}\n"
-        f"Current prices — YES: {request.yes_price*100:.1f}¢  NO: {request.no_price*100:.1f}¢\n"
+        f"Current prices — YES: {request.yes_price * 100:.1f}¢  NO: {request.no_price * 100:.1f}¢\n"
         f"24h volume: ${request.volume_24h:,.0f}\n"
         f"End date: {request.end_date}\n\n"
         f"TRADER POSITIONING DATA (from Polymarket CLOB):\n"
         f"  Total trades recorded: {trader_stats['total_trades']}\n"
-        f"  YES-side traders: {trader_stats['yes_traders']}  |  volume: ${trader_stats['yes_volume']:,.2f}\n"
-        f"  NO-side  traders: {trader_stats['no_traders']}  |  volume: ${trader_stats['no_volume']:,.2f}\n"
-        f"  Volume split — YES {trader_stats['side_ratio']['yes']:.1f}%  /  NO {trader_stats['side_ratio']['no']:.1f}%\n\n"
+        f"  YES-side traders: {trader_stats['yes_traders']}"
+        f"  |  volume: ${trader_stats['yes_volume']:,.2f}\n"
+        f"  NO-side  traders: {trader_stats['no_traders']}"
+        f"  |  volume: ${trader_stats['no_volume']:,.2f}\n"
+        f"  Volume split — YES {trader_stats['side_ratio']['yes']:.1f}%"
+        f"  /  NO {trader_stats['side_ratio']['no']:.1f}%\n\n"
         f"TOP TRADERS (by volume on this market):\n{top_traders_text}\n"
     )
 
@@ -133,33 +146,37 @@ async def stream_trader_analysis(
         f"Search the web for current news about this topic to enhance your analysis.\n\n"
         f"IMPORTANT: You MUST respond with a valid JSON object and NOTHING ELSE — no markdown, "
         f"no explanation before or after the JSON. Use this exact schema:\n"
-        f'{{\n'
+        f"{{\n"
         f'  "market_summary": "Brief overview of the market and what is being predicted",\n'
-        f'  "probability_assessment": "Your assessed probability (e.g. 65%) with brief reasoning",\n'
+        f'  "probability_assessment": "Your assessed probability (e.g. 65%) '
+        f'with brief reasoning",\n'
         f'  "confidence_level": "Low / Medium / High — with brief justification",\n'
         f'  "trader_positioning": "Which side has more volume/traders and what it means",\n'
-        f'  "smart_money_analysis": "What top/winning traders are doing and which side they lean",\n'
+        f'  "smart_money_analysis": "What top/winning traders are doing '
+        f'and which side they lean",\n'
         f'  "key_factors": ["Factor 1", "Factor 2", "Factor 3"],\n'
         f'  "recommendation": "BUY YES / BUY NO / HOLD — with reasoning",\n'
         f'  "risk_factors": ["Risk 1", "Risk 2", "Risk 3"],\n'
         f'  "conclusion": "Final summary tying everything together"\n'
-        f'}}\n'
+        f"}}\n"
     )
 
     # ── 3. Stream the analysis via SSE ───────────────────────────
     async def event_generator():
         # First emit the raw trader stats as a structured event
-        stats_payload = json.dumps({
-            "trader_stats": {
-                "yes_traders": trader_stats["yes_traders"],
-                "no_traders": trader_stats["no_traders"],
-                "yes_volume": trader_stats["yes_volume"],
-                "no_volume": trader_stats["no_volume"],
-                "total_trades": trader_stats["total_trades"],
-                "side_ratio": trader_stats["side_ratio"],
-                "top_traders": trader_stats["top_traders"][:6],
+        stats_payload = json.dumps(
+            {
+                "trader_stats": {
+                    "yes_traders": trader_stats["yes_traders"],
+                    "no_traders": trader_stats["no_traders"],
+                    "yes_volume": trader_stats["yes_volume"],
+                    "no_volume": trader_stats["no_volume"],
+                    "total_trades": trader_stats["total_trades"],
+                    "side_ratio": trader_stats["side_ratio"],
+                    "top_traders": trader_stats["top_traders"][:6],
+                }
             }
-        })
+        )
         yield f"data: {stats_payload}\n\n"
 
         try:
