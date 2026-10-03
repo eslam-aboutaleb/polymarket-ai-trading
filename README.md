@@ -14,6 +14,7 @@ stop-loss/take-profit strategies on a user's Polygon wallet.
 ## Table of contents
 
 - [Architecture](#architecture)
+- [Features](#features)
 - [Repository layout](#repository-layout)
 - [Technology stack](#technology-stack)
 - [Prerequisites](#prerequisites)
@@ -94,6 +95,101 @@ RPCs include `AnalyzeMarket`, `QuickAnalysis`, `ScanMarkets`, `AssessRisk`,
 
 The backend keeps a **pooled, shared gRPC channel** per address
 (`app/grpc_clients/analysis_client.py`) rather than opening a channel per request.
+
+---
+
+## Features
+
+### Trading & execution
+
+- **Manual execution** — explicit limit orders, cash-out, trade history, P&L
+- **Copy trading** — mirror followed traders with risk modes, daily-loss limits
+  and safety caps; per-trader quality scoring and evaluation
+- **Market making** — band and AMM strategies with configurable spread,
+  collateral and sync interval
+- **Inverse (contrarian) bot** — contrarian positions sized by configured mode,
+  evaluated by the AI backend
+- **Latency arbitrage** — exploits price lag between venues, with paper-trading
+  mode and pre-trade safety gates
+- **Stop loss / take profit** — per-position resting orders evaluated on a
+  price-order cycle
+- **Cross-market arbitrage** — opportunity scanning across related markets
+- **Redemption** — conditional-token (CTF) redemption with per-attempt tracking
+
+### AI-powered analysis
+
+- **Market analysis** — deep single-market analysis, streamed over SSE
+- **Quick analysis** — single-market and grouped-event (multi-option) analysis
+- **Market scan** — multi-market opportunity scanning
+- **Risk assessment** and **trade plan** generation
+- **Trader analysis** — evaluate any trader's track record, streamed
+- **Copy-trade evaluation** — should-you-copy verdicts for a wallet
+- **RAG market discovery** — vector search over indexed markets
+- **Per-task model tiering** — CHEAP / STANDARD / STRONG / WRITER model
+  routing with a kill switch
+
+### Risk management
+
+- **Pre-trade gate** — re-checks halt, cooldown and loss limits immediately
+  before an order is signed
+- **Kelly criterion sizing** — scale position size to the modelled edge
+- **Paper trading** — full decision and order-construction path against live
+  prices, never signing or submitting an order
+- **Global trading halt**, per-user cooldown, monthly/daily loss limits,
+  maximum drawdown, total-loss halt, maximum position size
+- **Consecutive-loss circuit breaker** per strategy
+- **Emergency stop** — halt trading and market-close all positions
+- **Realized P&L reconciliation** — FIFO lot matching writes `UserTrade.pnl`,
+  the basis for every loss limit
+
+### Monitoring & signals
+
+- **Whale monitoring** — large-wallet movement tracking with configurable alerts
+- **Trade monitor**, **stop-loss monitor**, **inverse-bot monitor**,
+  **position-lifecycle** and **trade-aggregation** background workers
+- **Binance signals** — smart-money, active buys, social-hype rankings,
+  trending, P&L leaderboard, token search/data
+- **Live price stream** — SSE price feed for positions and markets
+- **Execution analytics** — fill quality: slippage, fill latency, price impact
+
+### Notifications
+
+- **Multi-channel alerts** — webhook, email and in-app channels with
+  per-channel rate limiting and Fernet-encrypted config
+- **Preference routing**, digest mode and storm protection
+- **Notification center** — feed events with read-state tracking
+
+### Market data & portfolio
+
+- **Markets** — browse, search, categories, newest, combined view, event groups
+- **CTF events** and **crypto markets** services
+- **Portfolio** — balance, positions, mark prices, dashboard summary
+- **Leaderboard** — top traders and followed-trader feed
+
+### Backtesting & news
+
+- **Backtesting** — replay copy-trade and indicator strategies over historical
+  data; run management and strategy catalog
+- **News generation** — LLM-generated news items and feeds, streamed over SSE
+
+### Authentication & security
+
+- **Wallet-signature login** (EIP-191 `personal_sign`) and **private-key login**
+- **JWT access + refresh tokens** — refresh tokens HMAC-hashed at rest, rotated,
+  single-use, revocable; delivered as httpOnly SameSite cookies
+- **Fernet credential vault** with key rotation (optional GCP KMS envelope)
+- **Rate limiting** (global + per-endpoint), SSRF guard on webhooks
+- **Admin** — wallet-gated admin, user LLM overrides, debug endpoints
+
+### Frontend
+
+- Dashboard, Markets, Opportunities, Copy Trading, Market Making, Inverse Bot,
+  Backtesting, News, Leaderboard, Whale Feed, Latency Arb, Execution Analytics,
+  Notification Center, Stop Loss / Take Profit, Trade History, Settings,
+  Ops Center (admin), Debug Dashboard, Tutorial Overlay and User Guide
+- WalletConnect and injected-wallet (MetaMask/Rabby/Coinbase) support
+- React 18 + TypeScript, TanStack Query, Zustand, React Hook Form, Recharts,
+  React Virtuoso, Tailwind CSS
 
 ---
 
@@ -323,39 +419,51 @@ market-close all positions; `POST /api/trades/resume-trading` reverses it.
 Interactive documentation is served at `/docs` (Swagger UI) and `/redoc`.
 
 ### Authentication — `/api/auth`
-`POST /login` · `POST /login-with-key` · `POST /refresh` · `POST /logout` ·
-`GET /me`
+`POST /login` · `POST /verify` · `POST /login-with-key` ·
+`POST /refresh` · `POST /logout` · `GET /me`
 
 ### Analysis — `/api/analysis`
-`POST /market` · `POST /market/stream` · `GET /market/{condition_id}` ·
-`POST /quick` · `POST /quick-group` · `POST /scan` · `POST /opportunities/stream` ·
-`POST /opportunities/analyze-markets` · `POST /trader-analysis/stream` ·
-`POST /trade-plan` · `GET /health`
+`POST /market` · `POST /market/stream` · `POST /quick` ·
+`POST /quick-group` · `POST /scan` · `POST /risk` · `POST /trade-plan` ·
+`POST /trader` · `POST /trader/stream` · `POST /copy-trade-eval` ·
+`POST /opportunities/analyze-markets` · `POST /opportunities/stream` ·
+`GET /health`
 
 ### Markets — `/api/markets`
-`GET /markets` · `GET /markets/combined` · `GET /markets/newest` · `GET /search` ·
-`GET /categories` · `GET /browse`
+`GET /search` · `GET /categories` · `GET /browse` ·
+`POST /trader-analysis/stream`
 
 ### Trades — `/api/trades`
-`POST /execute` · `POST /cash-out` · `GET /history` · `POST /trader` ·
-`POST /follow/{wallet}` · `DELETE /follow/{wallet}` · `GET /following` ·
-`GET /following-feed` · `GET /feed` · `GET /copy-trades` · `GET /copy-trades/pnl` ·
-`GET /copy-trading` · `PUT /copy-trading` · `GET /copy-evaluation/{wallet}` ·
-`POST /copy-trade-eval` · `GET/POST /stop-loss` · `DELETE /stop-loss/{id}` ·
-`GET/POST /take-profit` · `DELETE /take-profit/{id}` · `POST /emergency-stop` ·
-`POST /resume-trading` · `GET /risk`
+`POST /execute` · `POST /cash-out` · `GET /history` ·
+`GET /leaderboard` · `GET /trader/{wallet}` ·
+`GET /trader/{wallet}/quality` · `POST /traders/rescore` ·
+`POST /follow/{wallet}` · `DELETE /follow/{wallet}` ·
+`DELETE /notification-follow/{wallet}` · `GET /following` ·
+`GET /following-feed` · `GET /copy-trades` · `GET /copy-trades/pnl` ·
+`GET /copy-evaluation/{wallet}` · `POST /copy-trade-eval` ·
+`GET/POST /stop-loss` · `DELETE /stop-loss/{stop_loss_id}` ·
+`GET/POST /take-profit` · `DELETE /take-profit/{take_profit_id}` ·
+`GET /arbitrage/opportunities` · `POST /arbitrage/scan` ·
+`GET /analytics/summary` · `GET /analytics/edge-score` ·
+`GET /analytics/trades` · `GET /size-suggestion` ·
+`POST /emergency-stop` · `POST /resume-trading`
 
 ### Portfolio — `/api/portfolio`
 `GET /balance` · `GET /positions` · `GET /positions/prices` ·
-`GET /markets/prices` · `GET /dashboard` · `GET /summary`
+`GET /summary` · `GET /markets` · `GET /markets/newest` ·
+`GET /markets/combined` · `GET /markets/prices` · `GET /prices/stream` ·
+`POST /redeem` · `GET /redemptions`
 
 ### Settings — `/api/settings`
-`GET/PUT /` · `GET /llm/current` · `PATCH /llm` · `GET /llm/providers` ·
-`GET /backends/status` · admin-only: `GET /admin/providers`,
-`GET /admin/users`, `PATCH /admin/users/{user_id}/llm`, `PATCH /admin/defaults`
+`GET/PUT /` · `GET/PUT /copy-trading` · `GET /paper-summary` ·
+`GET/PUT /profile` · `GET /llm/current` · `PATCH /llm` ·
+`GET /llm/providers` · `GET /backends/status` · admin-only:
+`GET /admin/providers`, `GET /admin/users`,
+`PATCH /admin/users/{user_id}/llm`, `PATCH /admin/defaults`
 
 ### News — `/api/news`
-`POST /generate` · `POST /generate/stream` · `POST /refresh-feed`
+`GET /feed` · `GET /market/{condition_id}` · `POST /generate` ·
+`POST /generate/stream` · `POST /refresh-feed`
 
 ### Backtesting — `/api/backtesting`
 `GET /strategies` · `GET/POST /runs` · `GET /runs/{run_id}` ·
@@ -363,11 +471,12 @@ Interactive documentation is served at `/docs` (Swagger UI) and `/redoc`.
 
 ### Market maker — `/api/market-maker`
 `GET/POST /configs` · `DELETE /configs/{config_id}` ·
-`POST /configs/{config_id}/start` · `/stop` · `/sync`
+`POST /configs/{config_id}/start` · `/stop` · `/sync` ·
+`GET /metrics`
 
 ### Inverse bot — `/api/inverse-bot`
 `GET/POST /positions` · `DELETE /positions/{position_id}` ·
-`POST /positions/{position_id}/evaluate`
+`POST /positions/{position_id}/evaluate` · `GET /metrics`
 
 ### Binance signals — `/api/binance`
 `GET /dashboard` · `GET /signals/smart-money` · `GET /signals/active-buys` ·
@@ -392,7 +501,7 @@ Interactive documentation is served at `/docs` (Swagger UI) and `/redoc`.
 `POST /trading-key` · `GET /trading-key` · `DELETE /trading-key`
 
 ### Debug (admin only, disabled unless `DEBUG_ENDPOINTS_ENABLED=true`)
-`GET /health` · `GET /metrics` · `GET/DELETE /logs`
+`GET /health` · `GET /stats` · `GET/DELETE /logs`
 
 ---
 
