@@ -7,16 +7,18 @@ from app.utils.cache import InMemoryCache, get_cache
 
 class CacheSecurityTests(unittest.TestCase):
     def test_credentials_cache_can_require_redis(self):
-        with patch.dict(
-            os.environ,
-            {
-                "ENVIRONMENT": "production",
-                "REDIS_URL": "",
-            },
-            clear=False,
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "ENVIRONMENT": "production",
+                    "REDIS_URL": "",
+                },
+                clear=False,
+            ),
+            self.assertRaises(RuntimeError),
         ):
-            with self.assertRaises(RuntimeError):
-                get_cache("credentials", require_redis=True)
+            get_cache("credentials", require_redis=True)
 
     def test_non_sensitive_cache_can_fallback_to_memory(self):
         with patch.dict(

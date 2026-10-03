@@ -13,7 +13,10 @@ RUN npm ci --ignore-scripts
 
 # Copy source & build
 COPY . .
-ARG VITE_API_URL=/api
+# Default to same-origin: service methods already call "/api/...", and nginx
+# proxies /api/ to the backend. Setting this to a path (e.g. "/api") would
+# produce "/api/api/..." requests.
+ARG VITE_API_URL=
 ENV VITE_API_URL=${VITE_API_URL}
 RUN npm run build
 

@@ -1,3 +1,12 @@
+/**
+ * Browsable all-markets board with search, category rail, watchlist filter and infinite scroll.
+ *
+ * Markets are paged through marketsService.searchMarkets and grouped by event into
+ * MarketBoardCardViewModels. Trading opens TradeModal behind useRequireAuth; the event drawer
+ * exposes a streamed AI trader analysis popup.
+ *
+ * @module components/Markets
+ */
 import {
   useCallback,
   useEffect,
@@ -15,17 +24,10 @@ import {
 } from "../services/marketsService";
 import { getApiErrorMessage } from "../utils/apiError";
 import TradeModal, { TradeModalMarket } from "./TradeModal";
-import {
-  groupMarketsByEvent,
-  EventGroup,
-  getSubMarketLabel,
-} from "../utils/groupMarkets";
+import { groupMarketsByEvent, EventGroup, getSubMarketLabel } from "../utils/groupMarkets";
 import EventGroupDetailDrawer from "./EventGroupDetailDrawer";
 import MarketBoardCard from "./MarketBoardCard";
-import {
-  buildPolymarketEventUrl,
-  buildPolygonscanAddressUrl,
-} from "../utils/urlSafety";
+import { buildPolymarketEventUrl, buildPolygonscanAddressUrl } from "../utils/urlSafety";
 import { useRafBufferedText } from "../hooks/useRafBufferedText";
 import {
   FOCUS_MARKET_SEARCH_EVENT,
@@ -49,17 +51,14 @@ function parseOutcomePrices(market: BrowseMarket): { yes: number; no: number } {
   try {
     const bestAsk = market.bestAsk != null ? Number(market.bestAsk) : NaN;
     const bestBid = market.bestBid != null ? Number(market.bestBid) : NaN;
-    const lastTrade =
-      market.lastTradePrice != null ? Number(market.lastTradePrice) : NaN;
+    const lastTrade = market.lastTradePrice != null ? Number(market.lastTradePrice) : NaN;
 
     let yesPrice = NaN;
     if (!isNaN(bestAsk) && bestAsk > 0 && bestAsk < 1) yesPrice = bestAsk;
     else if (!isNaN(bestBid) && bestBid > 0 && bestBid < 1) yesPrice = bestBid;
-    else if (!isNaN(lastTrade) && lastTrade > 0 && lastTrade < 1)
-      yesPrice = lastTrade;
+    else if (!isNaN(lastTrade) && lastTrade > 0 && lastTrade < 1) yesPrice = lastTrade;
 
-    if (!isNaN(yesPrice))
-      return { yes: yesPrice, no: Math.round((1 - yesPrice) * 10000) / 10000 };
+    if (!isNaN(yesPrice)) return { yes: yesPrice, no: Math.round((1 - yesPrice) * 10000) / 10000 };
 
     const raw = market.outcomePrices;
     if (!raw) return { yes: 0.5, no: 0.5 };
@@ -111,9 +110,7 @@ const getCadenceLabel = (endDate?: string) => {
 };
 
 function isPriceDirectionMarket(market: BrowseMarket): boolean {
-  const question = String(
-    market.question || market._event_title || "",
-  ).toLowerCase();
+  const question = String(market.question || market._event_title || "").toLowerCase();
   return question.includes("up or down") || question.includes("minute");
 }
 
@@ -137,23 +134,17 @@ export default function Markets() {
   const [selectedTag, setSelectedTag] = useState("");
   const [sort, setSort] = useState("volume24hr");
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
-  const [watchlistKeys, setWatchlistKeys] = useState<string[]>(
-    loadMarketWatchlist(),
-  );
-  const [recentTrades, setRecentTrades] = useState<RecentTradeMarket[]>(
-    loadRecentTradeMarkets(8),
-  );
+  const [watchlistKeys, setWatchlistKeys] = useState<string[]>(loadMarketWatchlist());
+  const [recentTrades, setRecentTrades] = useState<RecentTradeMarket[]>(loadRecentTradeMarkets(8));
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const categoryRailRef = useRef<HTMLDivElement | null>(null);
   const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
-  const [tradeDefaultOutcome, setTradeDefaultOutcome] = useState<
-    TradeTicketOutcome | undefined
-  >(undefined);
+  const [tradeDefaultOutcome, setTradeDefaultOutcome] = useState<TradeTicketOutcome | undefined>(
+    undefined,
+  );
 
   // AI Trader Analysis popup
-  const [analysisMarket, setAnalysisMarket] = useState<BrowseMarket | null>(
-    null,
-  );
+  const [analysisMarket, setAnalysisMarket] = useState<BrowseMarket | null>(null);
   const [traderStats, setTraderStats] = useState<TraderStats | null>(null);
   const {
     text: streamText,
@@ -168,19 +159,14 @@ export default function Markets() {
 
   // Trade modal
   const [tradeMarket, setTradeMarket] = useState<TradeModalMarket | null>(null);
-  const [selectedGroup, setSelectedGroup] =
-    useState<EventGroup<BrowseMarket> | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<EventGroup<BrowseMarket> | null>(null);
 
-  const openTradeModal = (
-    market: BrowseMarket,
-    preferredOutcome?: TradeTicketOutcome,
-  ) => {
+  const openTradeModal = (market: BrowseMarket, preferredOutcome?: TradeTicketOutcome) => {
     const prices = parseOutcomePrices(market);
     const watchKey = getMarketWatchKey(market);
 
     // Build outcome tokens – Polymarket markets always have Yes/No tokens
-    const yesTokenId =
-      market.tokens?.[0]?.token_id || market.condition_id || "";
+    const yesTokenId = market.tokens?.[0]?.token_id || market.condition_id || "";
     const noTokenId = market.tokens?.[1]?.token_id || "";
 
     setTradeMarket({
@@ -219,11 +205,7 @@ export default function Markets() {
   }, [searchInput]);
 
   useEffect(() => subscribeMarketWatchlist(setWatchlistKeys), []);
-  useEffect(
-    () =>
-      subscribeRecentTradeMarkets((rows) => setRecentTrades(rows.slice(0, 8))),
-    [],
-  );
+  useEffect(() => subscribeRecentTradeMarkets((rows) => setRecentTrades(rows.slice(0, 8))), []);
 
   useEffect(() => {
     const onFocusSearch = () => {
@@ -231,8 +213,7 @@ export default function Markets() {
       searchInputRef.current?.select();
     };
     window.addEventListener(FOCUS_MARKET_SEARCH_EVENT, onFocusSearch);
-    return () =>
-      window.removeEventListener(FOCUS_MARKET_SEARCH_EVENT, onFocusSearch);
+    return () => window.removeEventListener(FOCUS_MARKET_SEARCH_EVENT, onFocusSearch);
   }, []);
 
   // ── Fetch markets when filters change ────────────────────────
@@ -356,8 +337,7 @@ export default function Markets() {
         yes_price: prices.yes,
         no_price: prices.no,
         volume_24h: market.volume24hr || market.volume || 0,
-        end_date:
-          market.endDate || market.end_date_iso || new Date().toISOString(),
+        end_date: market.endDate || market.end_date_iso || new Date().toISOString(),
       };
 
       const controller = marketsService.streamTraderAnalysis(request, {
@@ -392,9 +372,7 @@ export default function Markets() {
   const watchlistSet = useMemo(() => new Set(watchlistKeys), [watchlistKeys]);
   const filteredGroups = useMemo(() => {
     if (!showFavoritesOnly) return eventGroups;
-    return eventGroups.filter((group) =>
-      watchlistSet.has(group.eventSlug.toLowerCase()),
-    );
+    return eventGroups.filter((group) => watchlistSet.has(group.eventSlug.toLowerCase()));
   }, [eventGroups, showFavoritesOnly, watchlistSet]);
   const totalOptions = useMemo(
     () => filteredGroups.reduce((sum, g) => sum + g.markets.length, 0),
@@ -413,21 +391,16 @@ export default function Markets() {
   const refreshCategoryScrollHint = useCallback(() => {
     const rail = categoryRailRef.current;
     if (!rail) return;
-    setShowCategoryScrollHint(
-      rail.scrollWidth - rail.clientWidth - rail.scrollLeft > 8,
-    );
+    setShowCategoryScrollHint(rail.scrollWidth - rail.clientWidth - rail.scrollLeft > 8);
   }, []);
 
   useEffect(() => {
     refreshCategoryScrollHint();
     window.addEventListener("resize", refreshCategoryScrollHint);
-    return () =>
-      window.removeEventListener("resize", refreshCategoryScrollHint);
+    return () => window.removeEventListener("resize", refreshCategoryScrollHint);
   }, [refreshCategoryScrollHint, categoriesWithAll.length, selectedTag]);
 
-  const handleCategoryRailKeyDown = (
-    event: ReactKeyboardEvent<HTMLDivElement>,
-  ) => {
+  const handleCategoryRailKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (!categoryRailRef.current) return;
     if (event.key === "ArrowRight") {
       event.preventDefault();
@@ -454,11 +427,7 @@ export default function Markets() {
         const prices = parseOutcomePrices(market);
         const endDate = market.endDate || market.end_date_iso;
         const volume = Number(
-          market.volume24hr ||
-            market.volumeNum ||
-            market.volume ||
-            group.eventVolume24hr ||
-            0,
+          market.volume24hr || market.volumeNum || market.volume || group.eventVolume24hr || 0,
         );
         const isDirection = isPriceDirectionMarket(market);
         const card: MarketBoardCardVM = {
@@ -504,11 +473,8 @@ export default function Markets() {
       });
 
       const primaryPrices = parseOutcomePrices(primaryMarket);
-      const eventVolume = Number(
-        group.eventVolume || group.eventVolume24hr || 0,
-      );
-      const primaryEndDate =
-        primaryMarket.endDate || primaryMarket.end_date_iso;
+      const eventVolume = Number(group.eventVolume || group.eventVolume24hr || 0);
+      const primaryEndDate = primaryMarket.endDate || primaryMarket.end_date_iso;
       const card: MarketBoardCardVM = {
         id: group.eventSlug,
         source: "markets",
@@ -592,19 +558,13 @@ export default function Markets() {
                 stroke="currentColor"
                 strokeWidth="1.8"
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M4 6h16M7 12h10M10 18h4"
-                />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M7 12h10M10 18h4" />
               </svg>
             </button>
             <button
               type="button"
               className="pm-board-icon-btn"
-              aria-label={
-                showFavoritesOnly ? "Show all markets" : "Show watchlist only"
-              }
+              aria-label={showFavoritesOnly ? "Show all markets" : "Show watchlist only"}
               onClick={() => setShowFavoritesOnly((prev) => !prev)}
             >
               <svg
@@ -663,11 +623,7 @@ export default function Markets() {
                 stroke="currentColor"
                 strokeWidth="1.8"
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="m7 4 6 6-6 6"
-                />
+                <path strokeLinecap="round" strokeLinejoin="round" d="m7 4 6 6-6 6" />
               </svg>
             </button>
           )}
@@ -731,12 +687,8 @@ export default function Markets() {
         {recentTrades.length > 0 && (
           <div className="rounded-xl border border-[var(--pm-border)] bg-[var(--pm-card)] p-3">
             <div className="mb-2 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-[var(--pm-text)]">
-                Recent traded markets
-              </h2>
-              <span className="text-xs text-[var(--pm-text-soft)]">
-                Quick re-entry
-              </span>
+              <h2 className="text-sm font-semibold text-[var(--pm-text)]">Recent traded markets</h2>
+              <span className="text-xs text-[var(--pm-text-soft)]">Quick re-entry</span>
             </div>
             <div className="flex gap-2 overflow-x-auto pb-1">
               {recentTrades.slice(0, 8).map((row) => (
@@ -777,9 +729,7 @@ export default function Markets() {
           </div>
         ) : markets.length === 0 ? (
           <div className="rounded-xl border border-[var(--pm-border)] bg-[var(--pm-card)] px-6 py-14 text-center">
-            <p className="text-lg font-semibold text-[var(--pm-text)]">
-              No markets found
-            </p>
+            <p className="text-lg font-semibold text-[var(--pm-text)]">No markets found</p>
             <p className="mt-1 text-sm text-[var(--pm-text-soft)]">
               {debouncedQuery
                 ? `No results for "${debouncedQuery}". Try a different search term.`
@@ -803,20 +753,15 @@ export default function Markets() {
                   key={item.card.id}
                   card={item.card}
                   onTrade={(outcome) =>
-                    requireAuth(() =>
-                      openTradeModal(item.primaryMarket, outcome),
-                    )
+                    requireAuth(() => openTradeModal(item.primaryMarket, outcome))
                   }
                   onRowTrade={(rowId, outcome) => {
                     const market = item.rowMarketMap.get(rowId);
-                    if (market)
-                      requireAuth(() => openTradeModal(market, outcome));
+                    if (market) requireAuth(() => openTradeModal(market, outcome));
                   }}
                   onOpenDetail={() => setSelectedGroup(item.group)}
                   onToggleFavorite={() =>
-                    requireAuth(() =>
-                      toggleMarketWatchlist(item.group.eventSlug),
-                    )
+                    requireAuth(() => toggleMarketWatchlist(item.group.eventSlug))
                   }
                 />
               ))}
@@ -824,15 +769,9 @@ export default function Markets() {
 
             {hasMore && (
               <div className="pt-1 text-center">
-                <div
-                  ref={loadMoreSentinelRef}
-                  aria-hidden="true"
-                  className="h-1 w-full"
-                />
+                <div ref={loadMoreSentinelRef} aria-hidden="true" className="h-1 w-full" />
                 {loadingMore && (
-                  <p className="text-xs text-[var(--pm-text-soft)]">
-                    Loading more markets...
-                  </p>
+                  <p className="text-xs text-[var(--pm-text-soft)]">Loading more markets...</p>
                 )}
               </div>
             )}
@@ -857,15 +796,12 @@ export default function Markets() {
           onClose={() => setSelectedGroup(null)}
           renderSubMarket={(market, subLabel) => {
             const prices = parseOutcomePrices(market);
-            const vol =
-              market.volume24hr || market.volumeNum || market.volume || 0;
+            const vol = market.volume24hr || market.volumeNum || market.volume || 0;
             const endDate = market.endDate || market.end_date_iso;
             return (
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium text-white truncate">
-                    {subLabel}
-                  </span>
+                  <span className="text-sm font-medium text-white truncate">{subLabel}</span>
                   <div className="flex gap-2 flex-shrink-0">
                     <span className="chip chip-success px-2 py-0.5 text-xs">
                       Yes {(prices.yes * 100).toFixed(0)}c
@@ -878,11 +814,7 @@ export default function Markets() {
                 <div className="flex items-center justify-between">
                   <div className="flex gap-3 text-xs text-muted">
                     {vol > 0 && <span>Vol: {fmtCompactUSD(vol)}</span>}
-                    {endDate && (
-                      <span>
-                        Ends: {new Date(endDate).toLocaleDateString()}
-                      </span>
-                    )}
+                    {endDate && <span>Ends: {new Date(endDate).toLocaleDateString()}</span>}
                   </div>
                   <div className="flex gap-2">
                     <button
@@ -921,9 +853,7 @@ export default function Markets() {
             {/* Popup header */}
             <div className="flex justify-between items-start gap-3 mb-4">
               <h2 className="text-lg font-bold pr-3 leading-snug">
-                {analysisMarket.question ||
-                  analysisMarket._event_title ||
-                  "Market"}
+                {analysisMarket.question || analysisMarket._event_title || "Market"}
               </h2>
               <button
                 onClick={closeAnalysis}
@@ -941,21 +871,13 @@ export default function Markets() {
                   value={String(traderStats.yes_traders)}
                   accent="emerald"
                 />
-                <StatsCard
-                  label="NO Traders"
-                  value={String(traderStats.no_traders)}
-                  accent="red"
-                />
+                <StatsCard label="NO Traders" value={String(traderStats.no_traders)} accent="red" />
                 <StatsCard
                   label="YES Volume"
                   value={fmtUSD2(traderStats.yes_volume)}
                   accent="emerald"
                 />
-                <StatsCard
-                  label="NO Volume"
-                  value={fmtUSD2(traderStats.no_volume)}
-                  accent="red"
-                />
+                <StatsCard label="NO Volume" value={fmtUSD2(traderStats.no_volume)} accent="red" />
               </div>
             )}
 
@@ -964,9 +886,7 @@ export default function Markets() {
               <div className="mb-4">
                 <div className="flex items-center justify-between text-xs text-soft mb-1.5">
                   <span>YES {traderStats.side_ratio.yes.toFixed(1)}%</span>
-                  <span className="text-muted">
-                    {traderStats.total_trades} trades
-                  </span>
+                  <span className="text-muted">{traderStats.total_trades} trades</span>
                   <span>NO {traderStats.side_ratio.no.toFixed(1)}%</span>
                 </div>
                 <div className="h-2.5 rounded-full overflow-hidden flex bg-[var(--bg-soft)]">
@@ -1001,9 +921,7 @@ export default function Markets() {
                         <td className="p-2 mono">
                           {buildPolygonscanAddressUrl(t.address) ? (
                             <a
-                              href={
-                                buildPolygonscanAddressUrl(t.address) || "#"
-                              }
+                              href={buildPolygonscanAddressUrl(t.address) || "#"}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="text-soft hover:text-white"
@@ -1017,9 +935,7 @@ export default function Markets() {
                         <td className="p-2 text-right mono text-emerald-400">
                           {fmtUSD2(t.yes_volume)}
                         </td>
-                        <td className="p-2 text-right mono text-red-400">
-                          {fmtUSD2(t.no_volume)}
-                        </td>
+                        <td className="p-2 text-right mono text-red-400">{fmtUSD2(t.no_volume)}</td>
                         <td className="p-2 text-right mono text-white font-medium">
                           {fmtUSD2(t.total_volume)}
                         </td>
@@ -1057,9 +973,7 @@ export default function Markets() {
 
             {/* Analysis content */}
             {streamError ? (
-              <div className="p-4 alert-error rounded text-sm">
-                {streamError}
-              </div>
+              <div className="p-4 alert-error rounded text-sm">{streamError}</div>
             ) : streamDone && streamText ? (
               <AnalysisTable text={streamText} />
             ) : streamText ? (
@@ -1072,9 +986,7 @@ export default function Markets() {
                   Receiving analysis data…
                 </div>
                 <pre className="text-xs text-muted whitespace-pre-wrap leading-relaxed opacity-50">
-                  {streamText.length > 300
-                    ? "…" + streamText.slice(-300)
-                    : streamText}
+                  {streamText.length > 300 ? "…" + streamText.slice(-300) : streamText}
                   <span className="animate-pulse">&#9612;</span>
                 </pre>
               </div>
@@ -1164,26 +1076,20 @@ function extractJSON(raw: string): Record<string, unknown> | null {
 /** Determine a recommendation badge color */
 function recBadge(text: string): { label: string; cls: string } | null {
   const t = text.toUpperCase();
-  if (t.includes("BUY YES"))
-    return { label: "BUY YES", cls: "bg-emerald-500/15 text-emerald-400" };
-  if (t.includes("BUY NO"))
-    return { label: "BUY NO", cls: "bg-red-500/15 text-red-400" };
-  if (t.includes("HOLD"))
-    return { label: "HOLD", cls: "bg-yellow-500/15 text-yellow-400" };
-  if (t.includes("SELL"))
-    return { label: "SELL", cls: "bg-red-500/15 text-red-400" };
+  if (t.includes("BUY YES")) return { label: "BUY YES", cls: "bg-emerald-500/15 text-emerald-400" };
+  if (t.includes("BUY NO")) return { label: "BUY NO", cls: "bg-red-500/15 text-red-400" };
+  if (t.includes("HOLD")) return { label: "HOLD", cls: "bg-yellow-500/15 text-yellow-400" };
+  if (t.includes("SELL")) return { label: "SELL", cls: "bg-red-500/15 text-red-400" };
   return null;
 }
 
 /** Determine confidence badge color */
 function confBadge(text: string): { label: string; cls: string } | null {
   const t = text.toLowerCase();
-  if (t.startsWith("high"))
-    return { label: "High", cls: "bg-emerald-500/15 text-emerald-400" };
+  if (t.startsWith("high")) return { label: "High", cls: "bg-emerald-500/15 text-emerald-400" };
   if (t.startsWith("medium") || t.startsWith("moderate"))
     return { label: "Medium", cls: "bg-yellow-500/15 text-yellow-400" };
-  if (t.startsWith("low"))
-    return { label: "Low", cls: "bg-red-500/15 text-red-400" };
+  if (t.startsWith("low")) return { label: "Low", cls: "bg-red-500/15 text-red-400" };
   return null;
 }
 
@@ -1230,15 +1136,10 @@ function AnalysisTable({ text }: { text: string }) {
               {isArray ? (
                 <ul className="space-y-1.5">
                   {(value as string[]).map((item, i) => (
-                    <li
-                      key={i}
-                      className="flex items-start gap-2 text-sm text-soft"
-                    >
+                    <li key={i} className="flex items-start gap-2 text-sm text-soft">
                       <span
                         className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                          field.key === "risk_factors"
-                            ? "bg-red-400"
-                            : "bg-[var(--accent)]"
+                          field.key === "risk_factors" ? "bg-red-400" : "bg-[var(--accent)]"
                         }`}
                       />
                       <span>{item}</span>
@@ -1261,9 +1162,7 @@ function AnalysisTable({ text }: { text: string }) {
                       {conf.label}
                     </span>
                   )}
-                  <p
-                    className={`text-sm leading-relaxed ${field.accent || "text-soft"}`}
-                  >
+                  <p className={`text-sm leading-relaxed ${field.accent || "text-soft"}`}>
                     {String(value)}
                   </p>
                 </div>
@@ -1292,9 +1191,7 @@ function StatsCard({
   const textColor = accent === "emerald" ? "text-emerald-400" : "text-red-400";
   return (
     <div className={`rounded-lg border p-3 ${colors}`}>
-      <p className="text-muted text-[10px] uppercase tracking-wider mb-1">
-        {label}
-      </p>
+      <p className="text-muted text-[10px] uppercase tracking-wider mb-1">{label}</p>
       <p className={`text-lg font-bold ${textColor}`}>{value}</p>
     </div>
   );

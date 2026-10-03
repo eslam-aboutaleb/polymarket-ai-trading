@@ -1,22 +1,24 @@
 """FollowedTrader model – tracks which top traders a user is copy-trading."""
+
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Column,
-    String,
-    Boolean,
     DateTime,
-    Integer,
-    ForeignKey,
     Float,
+    ForeignKey,
+    Integer,
+    String,
     UniqueConstraint,
 )
-from datetime import datetime
-from app.utils.time import utc_now
+
 from app.models.base import Base
+from app.utils.time import utc_now
 
 
 class FollowedTrader(Base):
     """A user's subscription to copy-trade a specific top trader."""
+
     __tablename__ = "followed_traders"
     __table_args__ = (
         UniqueConstraint("user_id", "trader_wallet", name="uq_user_trader"),
@@ -60,4 +62,7 @@ class FollowedTrader(Base):
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
     def __repr__(self):
-        return f"<FollowedTrader(user={self.user_id}, trader={self.trader_wallet}, active={self.is_active})>"
+        return (
+            f"<FollowedTrader(user={self.user_id}, "
+            f"trader={self.trader_wallet}, active={self.is_active})>"
+        )

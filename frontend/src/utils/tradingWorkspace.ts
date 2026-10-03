@@ -1,3 +1,15 @@
+/**
+ * localStorage helpers for the trading workspace: the starred market watchlist and recent markets.
+ *
+ * The watchlist is a de-duplicated array of lowercased watch keys; recent markets are capped at 12
+ * most-recently-traded `RecentTradeMarket` snapshots, sorted by `last_traded_at` and re-validated
+ * on every load and save. Both stores dispatch a custom change event and subscribe helpers also
+ * listen for cross-tab `storage` events, returning an unsubscribe function. `FOCUS_MARKET_SEARCH_EVENT`
+ * is the signal other components use to focus the market search input.
+ *
+ * @module utils/tradingWorkspace
+ */
+
 import { RecentTradeMarket } from "../types/trading";
 
 export const FOCUS_MARKET_SEARCH_EVENT = "pm:focus-market-search";
@@ -6,8 +18,7 @@ export const MARKET_WATCHLIST_STORAGE_KEY = "pm:market-watchlist:v1";
 export const MARKET_WATCHLIST_CHANGED_EVENT = "pm:market-watchlist:changed";
 
 export const RECENT_TRADE_MARKETS_STORAGE_KEY = "pm:recent-trade-markets:v1";
-export const RECENT_TRADE_MARKETS_CHANGED_EVENT =
-  "pm:recent-trade-markets:changed";
+export const RECENT_TRADE_MARKETS_CHANGED_EVENT = "pm:recent-trade-markets:changed";
 
 const MAX_RECENT_MARKETS = 12;
 
@@ -44,19 +55,11 @@ const normalizeRecentTrade = (value: unknown): RecentTradeMarket | null => {
     tokens,
     bestAsk: row.bestAsk,
     bestBid: row.bestBid,
-    liquidity: Number.isFinite(Number(row.liquidity))
-      ? Number(row.liquidity)
-      : undefined,
-    quote_timestamp:
-      typeof row.quote_timestamp === "string" ? row.quote_timestamp : undefined,
-    source:
-      row.source === "opportunities" || row.source === "dashboard"
-        ? row.source
-        : "markets",
+    liquidity: Number.isFinite(Number(row.liquidity)) ? Number(row.liquidity) : undefined,
+    quote_timestamp: typeof row.quote_timestamp === "string" ? row.quote_timestamp : undefined,
+    source: row.source === "opportunities" || row.source === "dashboard" ? row.source : "markets",
     last_traded_at:
-      typeof row.last_traded_at === "string"
-        ? row.last_traded_at
-        : new Date().toISOString(),
+      typeof row.last_traded_at === "string" ? row.last_traded_at : new Date().toISOString(),
   };
 };
 
@@ -100,9 +103,7 @@ export function toggleMarketWatchlist(key: string): string[] {
     : saveMarketWatchlist([normalized, ...current]);
 }
 
-export function subscribeMarketWatchlist(
-  onChange: (keys: string[]) => void,
-): () => void {
+export function subscribeMarketWatchlist(onChange: (keys: string[]) => void): () => void {
   if (typeof window === "undefined") return () => {};
 
   const onCustom = () => onChange(loadMarketWatchlist());
@@ -132,11 +133,7 @@ export function loadRecentTradeMarkets(limit: number = MAX_RECENT_MARKETS): Rece
     const normalized = parsed
       .map(normalizeRecentTrade)
       .filter((row): row is RecentTradeMarket => !!row)
-      .sort(
-        (a, b) =>
-          new Date(b.last_traded_at).getTime() -
-          new Date(a.last_traded_at).getTime(),
-      );
+      .sort((a, b) => new Date(b.last_traded_at).getTime() - new Date(a.last_traded_at).getTime());
 
     return normalized.slice(0, Math.max(1, limit));
   } catch {
@@ -148,10 +145,7 @@ export function saveRecentTradeMarkets(rows: RecentTradeMarket[]): RecentTradeMa
   const normalized = rows
     .map(normalizeRecentTrade)
     .filter((row): row is RecentTradeMarket => !!row)
-    .sort(
-      (a, b) =>
-        new Date(b.last_traded_at).getTime() - new Date(a.last_traded_at).getTime(),
-    )
+    .sort((a, b) => new Date(b.last_traded_at).getTime() - new Date(a.last_traded_at).getTime())
     .slice(0, MAX_RECENT_MARKETS);
 
   if (typeof window !== "undefined") {

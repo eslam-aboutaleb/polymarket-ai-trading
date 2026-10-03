@@ -1,49 +1,54 @@
 """User settings model for preferences like AI backend selection"""
-from sqlalchemy import CheckConstraint, Column, String, DateTime, Integer, ForeignKey, Boolean, Float
-from datetime import datetime
-from app.utils.time import utc_now
-from enum import Enum as PyEnum
+
+from enum import StrEnum
+
+from polymarket_settings import LLMProvider
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+)
 
 from app.models.base import Base
+from app.utils.time import utc_now
 
 
-class AIBackendType(str, PyEnum):
+class AIBackendType(StrEnum):
     """Available AI backend options (legacy - maps to service)"""
+
     LLM_CHAIN = "llm_chain"
     CLI_AGENT = "cli_agent"
 
 
-class LLMProviderType(str, PyEnum):
-    """
-    Available LLM providers (new - specific provider selection).
-    
-    These map to:
-    - LLM-chain service (port 50051): OPENAI, ANTHROPIC, GOOGLE, GROQ, OLLAMA
-    - CLI-agent service (port 50052): GITHUB_MODELS
-    """
-    OPENAI = "openai"
-    ANTHROPIC = "anthropic"
-    GOOGLE = "google"
-    GROQ = "groq"
-    OLLAMA = "ollama"
-    GITHUB_MODELS = "github_models"
+# Canonical provider enum, shared with the AI services via the
+# polymarket_settings package. Aliased so existing call sites
+# (``LLMProviderType.OPENAI``) keep working.
+LLMProviderType = LLMProvider
 
 
-class RiskMode(str, PyEnum):
+class RiskMode(StrEnum):
     """Copy-trading risk management mode"""
+
     MAX_POSITION_DAILY_LOSS = "max_position_daily_loss"
     PERCENTAGE_MIRROR = "percentage_mirror"
     FIXED_AMOUNT = "fixed_amount"
 
 
-class InverseBotSizeMode(str, PyEnum):
+class InverseBotSizeMode(StrEnum):
     """Inverse-bot sizing mode."""
+
     FULL_NOTIONAL = "full_notional"
     FIXED_AMOUNT = "fixed_amount"
 
 
 class UserSettings(Base):
     """User settings for preferences"""
+
     __tablename__ = "user_settings"
     __table_args__ = (
         CheckConstraint(
@@ -78,18 +83,18 @@ class UserSettings(Base):
             "(inverse_bot_max_reversals_per_day >= 0)",
             name="ck_user_settings_inverse_max_reversals_non_negative",
         ),
+        CheckConstraint(
+            "(kelly_fraction >= 0 AND kelly_fraction <= 1)",
+            name="ck_user_settings_kelly_fraction_range",
+        ),
     )
-    
+
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False, index=True)
-    
+
     # AI Backend preference (legacy - service-level selection)
-    ai_backend = Column(
-        String(20),
-        default=AIBackendType.LLM_CHAIN.value,
-        nullable=False
-    )
-    
+    ai_backend = Column(String(20), default=AIBackendType.LLM_CHAIN.value, nullable=False)
+
     # LLM Provider preference (new - specific provider selection)
     # When set, this takes precedence over ai_backend for provider selection
     preferred_llm_provider = Column(
@@ -97,14 +102,14 @@ class UserSettings(Base):
         nullable=True,  # NULL = use ai_backend for backwards compatibility
         default=None,
     )
-    
+
     # Preferred model for the selected provider (optional)
     preferred_llm_model = Column(
         String(100),
         nullable=True,  # NULL = use provider default
         default=None,
     )
-    
+
     # ── Copy-Trading Settings ──────────────────────────────────
     copy_trading_enabled = Column(Boolean, default=False, nullable=False)
     risk_mode = Column(
@@ -113,12 +118,14 @@ class UserSettings(Base):
         nullable=False,
     )
     # Max-position + daily-loss mode
-    max_position_size = Column(Float, default=100.0)   # USDC cap per trade
-    daily_loss_limit = Column(Float, default=500.0)     # USDC daily stop
+    max_position_size = Column(Float, default=100.0)  # USDC cap per trade
+    daily_loss_limit = Column(Float, default=500.0)  # USDC daily stop
     # Percentage-mirror mode
-    mirror_percentage = Column(Float, default=10.0)     # 0-100
+    mirror_percentage = Column(Float, default=10.0)  # 0-100
     # Fixed-amount mode
-    fixed_trade_amount = Column(Float, default=50.0)    # USDC per copied trade
+    fixed_trade_amount = Column(Float, default=50.0)  # USDC per copied trade
+    # Fractional-Kelly multiplier for the "kelly" sizing mode (0-1)
+    kelly_fraction = Column(Float, default=0.25, nullable=False)
     # AI gate
     require_ai_approval = Column(Boolean, default=True, nullable=False)
     follow_email_notifications_enabled = Column(
@@ -128,13 +135,15 @@ class UserSettings(Base):
     )
 
     # ── Multi-Layer Risk Protection ─────────────────────
-    monthly_loss_limit = Column(Float, nullable=True)            # USDC rolling-30-day loss cap
+    monthly_loss_limit = Column(Float, nullable=True)  # USDC rolling-30-day loss cap
     max_drawdown_pct = Column(Float, default=25.0, nullable=False)  # % drawdown from peak
-    total_loss_halt_pct = Column(Float, default=40.0, nullable=False)  # % total loss → permanent halt
-    peak_capital = Column(Float, nullable=True)                  # High-water mark in USDC
-    initial_capital = Column(Float, nullable=True)               # Baseline capital for total-loss calc
+    total_loss_halt_pct = Column(
+        Float, default=40.0, nullable=False
+    )  # % total loss → permanent halt
+    peak_capital = Column(Float, nullable=True)  # High-water mark in USDC
+    initial_capital = Column(Float, nullable=True)  # Baseline capital for total-loss calc
     trading_halted = Column(Boolean, default=False, nullable=False)  # Permanent halt flag
-    halt_reason = Column(String(200), nullable=True)             # Why trading was halted
+    halt_reason = Column(String(200), nullable=True)  # Why trading was halted
     cooldown_until = Column(DateTime(timezone=True), nullable=True)  # Timed pause expiry
 
     # ── Dynamic Streak-Based Sizing ───────────────────
@@ -144,6 +153,9 @@ class UserSettings(Base):
 
     # ── Simulation / Dry-Run Mode ─────────────────────
     simulation_mode = Column(Boolean, default=False, nullable=False)
+    # Paper account balance (USDC) — paper PnL is tracked
+    # against this, separate from real equity.
+    paper_balance = Column(Float, default=1000.0, nullable=False)
 
     # ── Inverse Position Bot Settings ───────────────────────
     inverse_bot_enabled = Column(Boolean, default=False, nullable=False)
@@ -156,9 +168,9 @@ class UserSettings(Base):
     inverse_bot_confidence_threshold = Column(Integer, default=75, nullable=False)
     inverse_bot_cooldown_minutes = Column(Integer, default=30, nullable=False)
     inverse_bot_max_reversals_per_day = Column(Integer, default=3, nullable=False)
-    
+
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
-    
+
     def __repr__(self):
         return f"<UserSettings(user_id={self.user_id}, ai_backend={self.ai_backend})>"

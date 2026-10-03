@@ -1,3 +1,13 @@
+/**
+ * Per-tab persistence for trade-ticket preferences (last side, outcome, amount, preset mode).
+ *
+ * Stored in `sessionStorage` rather than localStorage so preferences do not follow the user across
+ * sessions. Every read is defensive: unknown values fall back to the defaults, and
+ * `highNotionalConfirmThreshold` is coerced to a finite number >= 1 rounded to two decimals.
+ *
+ * @module utils/tradePreferences
+ */
+
 import {
   TradePreferences,
   TradePresetMode,
@@ -15,11 +25,9 @@ const DEFAULT_PREFERENCES: TradePreferences = {
   preferredPresetMode: "fixed",
 };
 
-const normalizeSide = (value: unknown): TradeTicketSide =>
-  value === "SELL" ? "SELL" : "BUY";
+const normalizeSide = (value: unknown): TradeTicketSide => (value === "SELL" ? "SELL" : "BUY");
 
-const normalizeOutcome = (value: unknown): TradeTicketOutcome =>
-  value === "No" ? "No" : "Yes";
+const normalizeOutcome = (value: unknown): TradeTicketOutcome => (value === "No" ? "No" : "Yes");
 
 const normalizePresetMode = (value: unknown): TradePresetMode =>
   value === "percentage" ? "percentage" : "fixed";
@@ -40,12 +48,8 @@ export function loadTradePreferences(): TradePreferences {
       lastSide: normalizeSide(parsed.lastSide),
       lastOutcome: normalizeOutcome(parsed.lastOutcome),
       lastAmount:
-        typeof parsed.lastAmount === "string"
-          ? parsed.lastAmount
-          : DEFAULT_PREFERENCES.lastAmount,
-      highNotionalConfirmThreshold: normalizeThreshold(
-        parsed.highNotionalConfirmThreshold,
-      ),
+        typeof parsed.lastAmount === "string" ? parsed.lastAmount : DEFAULT_PREFERENCES.lastAmount,
+      highNotionalConfirmThreshold: normalizeThreshold(parsed.highNotionalConfirmThreshold),
       preferredPresetMode: normalizePresetMode(parsed.preferredPresetMode),
     };
   } catch {
@@ -53,9 +57,7 @@ export function loadTradePreferences(): TradePreferences {
   }
 }
 
-export function saveTradePreferences(
-  update: Partial<TradePreferences>,
-): TradePreferences {
+export function saveTradePreferences(update: Partial<TradePreferences>): TradePreferences {
   const next = {
     ...loadTradePreferences(),
     ...update,

@@ -1,5 +1,18 @@
+/**
+ * Typed client for the news generation API.
+ *
+ * Non-streaming calls go through the shared axios instance. `streamGenerate`
+ * instead opens a raw `fetch` because the endpoint speaks the *named* SSE
+ * dialect (`event: status|article|done|error` followed by a `data:` line), not
+ * the JSON envelope the analysis endpoints use; it shares the line-buffering
+ * primitive from `sseStream` and returns both an AbortController and a promise
+ * so callers can cancel and can await completion.
+ *
+ * @module services/newsService
+ */
 import { apiClient } from "./apiClient";
 import { API_BASE_URL } from "../config/api";
+import { streamLines } from "./sseStream";
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -41,17 +54,11 @@ export interface GenerateNewsPayload {
 // ── API Methods ────────────────────────────────────────────
 
 export async function getNewsFeed(limit = 20): Promise<NewsFeedResponse> {
-  return apiClient.get<NewsFeedResponse>(
-    `/api/news/feed?limit=${limit}`,
-  );
+  return apiClient.get<NewsFeedResponse>(`/api/news/feed?limit=${limit}`);
 }
 
-export async function getMarketNews(
-  conditionId: string,
-): Promise<MarketNewsResponse> {
-  return apiClient.get<MarketNewsResponse>(
-    `/api/news/market/${conditionId}`,
-  );
+export async function getMarketNews(conditionId: string): Promise<MarketNewsResponse> {
+  return apiClient.get<MarketNewsResponse>(`/api/news/market/${conditionId}`);
 }
 
 export async function generateForMarket(
@@ -60,9 +67,7 @@ export async function generateForMarket(
   return apiClient.post(`/api/news/generate`, payload);
 }
 
-export async function refreshFeed(
-  maxMarkets = 5,
-): Promise<NewsFeedResponse> {
+export async function refreshFeed(maxMarkets = 5): Promise<NewsFeedResponse> {
   return apiClient.post(`/api/news/refresh-feed`, {
     max_markets: maxMarkets,
   });
@@ -84,50 +89,72 @@ export function streamGenerate(
   const abort = new AbortController();
 
   const done = (async () => {
-    const resp = await fetch(`${API_BASE_URL}/api/news/generate/stream`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify(payload),
-      signal: abort.signal,
-    });
-
-    if (!resp.ok || !resp.body) {
-      callbacks.onError?.(`HTTP ${resp.status}`);
+    let resp: Response;
+    try {
+      resp = await fetch(`${API_BASE_URL}/api/news/generate/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload),
+        signal: abort.signal,
+      });
+    } catch (err) {
+      // A network failure must surface through onError, not an
+      // unhandled rejection of `done`.
+      if ((err as Error)?.name !== "AbortError") {
+        callbacks.onError?.(err instanceof Error ? err.message : String(err));
+      }
+      // onDone must still fire so callers can clear their busy state.
+      callbacks.onDone?.();
       return;
     }
 
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const { done: streamDone, value } = await reader.read();
-      if (streamDone) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-
-      let eventType = "";
-      for (const line of lines) {
-        if (line.startsWith("event: ")) {
-          eventType = line.slice(7).trim();
-        } else if (line.startsWith("data: ") && eventType) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (eventType === "status") callbacks.onStatus?.(data.message);
-            else if (eventType === "article") callbacks.onArticle?.(data);
-            else if (eventType === "error") callbacks.onError?.(data.message);
-            else if (eventType === "done") callbacks.onDone?.();
-          } catch {
-            /* skip unparseable lines */
-          }
-          eventType = "";
-        }
-      }
+    if (!resp.ok || !resp.body) {
+      callbacks.onError?.(`HTTP ${resp.status}`);
+      // onDone must still fire so callers can clear their busy state.
+      callbacks.onDone?.();
+      return;
     }
+
+    // This endpoint uses the named SSE dialect (`event: <name>` followed by a
+    // `data:` line) rather than the JSON envelope the analysis endpoints use,
+    // so payloads are dispatched here while line buffering is shared.
+    let eventType = "";
+    try {
+      await streamLines(resp, (lines) => {
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            eventType = line.slice(7).trim();
+          } else if (line.startsWith("data: ") && eventType) {
+            let data: ({ message?: string } & Partial<NewsArticle>) | null = null;
+            try {
+              data = JSON.parse(line.slice(6));
+            } catch {
+              eventType = "";
+              continue;
+            }
+
+            if (eventType === "status") callbacks.onStatus?.(data?.message ?? "");
+            else if (eventType === "article") callbacks.onArticle?.(data as NewsArticle);
+            else if (eventType === "error") callbacks.onError?.(data?.message ?? "");
+            else if (eventType === "done") {
+              callbacks.onDone?.();
+              return true;
+            }
+            eventType = "";
+          }
+        }
+        return false;
+      });
+    } catch (err) {
+      if ((err as Error)?.name !== "AbortError") {
+        callbacks.onError?.(err instanceof Error ? err.message : String(err));
+      }
+      callbacks.onDone?.();
+      return;
+    }
+
+    callbacks.onDone?.();
   })();
 
   return { abort, done };

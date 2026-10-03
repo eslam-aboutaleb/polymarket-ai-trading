@@ -1,6 +1,6 @@
 """Inverse Position Bot API routes."""
-from datetime import date
-from typing import Optional, List, Any
+
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 from app.api.routes.auth import get_current_user_from_token
 from app.models.inverse_bot_position import InverseBotPosition
 from app.services.inverse_bot_monitor import (
-    manual_evaluate_inverse_position,
     get_inverse_bot_metrics,
+    manual_evaluate_inverse_position,
 )
 from app.utils.database import get_db
 
@@ -27,7 +27,7 @@ class InverseBotPositionRequest(BaseModel):
         default="inherit",
         pattern="^(inherit|full_notional|fixed_amount)$",
     )
-    fixed_amount_override: Optional[float] = Field(default=None, gt=0)
+    fixed_amount_override: float | None = Field(default=None, gt=0)
 
 
 class InverseBotPositionResponse(BaseModel):
@@ -38,30 +38,30 @@ class InverseBotPositionResponse(BaseModel):
     outcome: str
     enabled: bool
     size_mode_override: str
-    fixed_amount_override: Optional[float]
+    fixed_amount_override: float | None
     status: str
-    last_signal: Optional[str]
-    last_confidence: Optional[float]
-    last_reasoning: Optional[str]
-    last_web_summary: Optional[str]
-    last_x_summary: Optional[str]
-    last_error: Optional[str]
-    last_recommendation: Optional[str]
-    last_alt_outcome: Optional[str]
-    last_alt_token_id: Optional[str]
-    last_evaluated_at: Optional[str]
-    last_reversed_at: Optional[str]
+    last_signal: str | None
+    last_confidence: float | None
+    last_reasoning: str | None
+    last_web_summary: str | None
+    last_x_summary: str | None
+    last_error: str | None
+    last_recommendation: str | None
+    last_alt_outcome: str | None
+    last_alt_token_id: str | None
+    last_evaluated_at: str | None
+    last_reversed_at: str | None
     reversals_today: int
-    reversals_day: Optional[str]
+    reversals_day: str | None
     persistence_count: int
     created_at: str
-    updated_at: Optional[str]
+    updated_at: str | None
 
 
 class ManualEvaluateResponse(BaseModel):
     success: bool
     result: dict[str, Any] | None = None
-    detail: Optional[str] = None
+    detail: str | None = None
 
 
 def _to_response(row: InverseBotPosition) -> InverseBotPositionResponse:
@@ -94,7 +94,7 @@ def _to_response(row: InverseBotPosition) -> InverseBotPositionResponse:
     )
 
 
-@router.get("/positions", response_model=List[InverseBotPositionResponse])
+@router.get("/positions", response_model=list[InverseBotPositionResponse])
 async def list_inverse_bot_positions(
     current_user: dict = Depends(get_current_user_from_token),
     db: Session = Depends(get_db),

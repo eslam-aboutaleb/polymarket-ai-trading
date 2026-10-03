@@ -1,3 +1,9 @@
+/**
+ * Browser entry point that mounts <App /> into #root and loads the global stylesheet.
+ *
+ * @module main
+ */
+
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App.tsx";

@@ -1,3 +1,12 @@
+/**
+ * Renders streamed AI trader-analysis JSON as a styled vertical label/value table.
+ *
+ * Strips code fences and extracts the JSON object from the raw text, mapping known keys to icons
+ * and labels, rendering "x/10" ratings as bars and array fields as bullet lists. While streaming
+ * it shows the trailing text with a cursor, and unparseable output falls back to raw text.
+ *
+ * @module components/TraderAnalysisTable
+ */
 import { useMemo } from "react";
 
 /* ───────── Types ───────── */
@@ -74,9 +83,7 @@ function tryParseJSON(raw: string): TraderAnalysisJSON | null {
   // Strip markdown code fences if present
   let cleaned = raw.trim();
   if (cleaned.startsWith("```")) {
-    cleaned = cleaned
-      .replace(/^```(?:json)?\s*\n?/, "")
-      .replace(/\n?```\s*$/, "");
+    cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
   }
   // Find the first { and last }
   const start = cleaned.indexOf("{");
@@ -97,17 +104,10 @@ function extractRatingNumber(rating: string): number | null {
 /* ───────── Sub-components ───────── */
 
 function RatingBar({ rating }: { rating: number }) {
-  const color =
-    rating >= 7
-      ? "bg-green-500"
-      : rating >= 4
-        ? "bg-[var(--accent)]"
-        : "bg-red-500";
+  const color = rating >= 7 ? "bg-green-500" : rating >= 4 ? "bg-[var(--accent)]" : "bg-red-500";
   return (
     <div className="flex items-center gap-3 w-full">
-      <span className="text-2xl font-extrabold text-[var(--accent)]">
-        {rating}/10
-      </span>
+      <span className="text-2xl font-extrabold text-[var(--accent)]">{rating}/10</span>
       <div className="flex-1 bg-[var(--bg-soft)] rounded-full h-2.5">
         <div
           className={`h-2.5 rounded-full transition-all duration-500 ${color}`}
@@ -137,10 +137,7 @@ function ArrayValue({ items, isRisk }: { items: string[]; isRisk?: boolean }) {
 
 /* ───────── Main component ───────── */
 
-export default function TraderAnalysisTable({
-  text,
-  streaming,
-}: TraderAnalysisTableProps) {
+export default function TraderAnalysisTable({ text, streaming }: TraderAnalysisTableProps) {
   const parsed = useMemo(() => tryParseJSON(text), [text]);
 
   // While streaming, show raw text with a cursor
@@ -149,9 +146,7 @@ export default function TraderAnalysisTable({
       <div className="rounded-xl border border-[var(--line)] bg-[var(--bg-soft)] p-4 min-h-[120px]">
         <div className="flex items-center gap-2 mb-3">
           <span className="animate-spin h-4 w-4 border-2 border-[var(--accent)] border-t-transparent rounded-full" />
-          <span className="text-sm text-muted font-medium">
-            Analyzing trader profile…
-          </span>
+          <span className="text-sm text-muted font-medium">Analyzing trader profile…</span>
         </div>
         <pre className="text-xs text-soft whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto scroll-soft opacity-50">
           {text.slice(-500)}
@@ -165,9 +160,7 @@ export default function TraderAnalysisTable({
   if (!parsed) {
     return (
       <div className="rounded-xl border border-[var(--line)] bg-[var(--bg-soft)] p-4">
-        <p className="text-sm text-soft whitespace-pre-wrap leading-relaxed">
-          {text}
-        </p>
+        <p className="text-sm text-soft whitespace-pre-wrap leading-relaxed">{text}</p>
       </div>
     );
   }
@@ -183,11 +176,7 @@ export default function TraderAnalysisTable({
   }[] = [];
 
   for (const key of FIELD_ORDER) {
-    if (
-      parsed[key] !== undefined &&
-      parsed[key] !== null &&
-      parsed[key] !== ""
-    ) {
+    if (parsed[key] !== undefined && parsed[key] !== null && parsed[key] !== "") {
       const config = FIELD_CONFIG[key] || {
         label: key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
         icon: "📄",
@@ -234,9 +223,7 @@ export default function TraderAnalysisTable({
       <div className="divide-y divide-[var(--line)]">
         {rows.map((row) => {
           const ratingNum =
-            row.isRating && typeof row.value === "string"
-              ? extractRatingNumber(row.value)
-              : null;
+            row.isRating && typeof row.value === "string" ? extractRatingNumber(row.value) : null;
 
           return (
             <div
@@ -256,14 +243,9 @@ export default function TraderAnalysisTable({
                 {ratingNum !== null ? (
                   <RatingBar rating={ratingNum} />
                 ) : row.isArray && Array.isArray(row.value) ? (
-                  <ArrayValue
-                    items={row.value as string[]}
-                    isRisk={row.key === "specific_risks"}
-                  />
+                  <ArrayValue items={row.value as string[]} isRisk={row.key === "specific_risks"} />
                 ) : (
-                  <p className="text-sm text-soft leading-relaxed">
-                    {String(row.value)}
-                  </p>
+                  <p className="text-sm text-soft leading-relaxed">{String(row.value)}</p>
                 )}
               </div>
             </div>

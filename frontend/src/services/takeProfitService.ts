@@ -1,3 +1,13 @@
+/**
+ * Take-profit order endpoints under `/api/trades/take-profit`.
+ *
+ * Creating a take profit upserts for the position token, listing defaults to `active` orders but
+ * accepts `triggered`/`cancelled`/`failed`/`all`, and cancelling deletes the record. Orders are
+ * filled by a backend watcher rather than the browser.
+ *
+ * @module services/takeProfitService
+ */
+
 import { apiClient } from "./apiClient";
 
 // --- Types ---
@@ -39,9 +49,7 @@ export const takeProfitService = {
   async getTakeProfits(
     status: "active" | "triggered" | "cancelled" | "failed" | "all" = "active",
   ): Promise<TakeProfitOrder[]> {
-    return apiClient.get<TakeProfitOrder[]>(
-      `/api/trades/take-profit?status=${status}`,
-    );
+    return apiClient.get<TakeProfitOrder[]>(`/api/trades/take-profit?status=${status}`);
   },
 
   /** Cancel an active take-profit order. */

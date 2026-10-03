@@ -6,11 +6,12 @@ for use in AI assessments, backtesting, and trading strategies.
 
 Ported/inspired by 0xrsydn/polymarket-crypto-toolkit indicators package.
 """
+
 import math
-from typing import List, Optional, Dict, Any, Tuple
+from typing import Any
 
 
-def sma(prices: List[float], period: int) -> List[Optional[float]]:
+def sma(prices: list[float], period: int) -> list[float | None]:
     """Simple Moving Average.
 
     Returns a list of the same length as *prices* where the first
@@ -18,7 +19,7 @@ def sma(prices: List[float], period: int) -> List[Optional[float]]:
     """
     if period < 1:
         raise ValueError("SMA period must be >= 1")
-    result: List[Optional[float]] = [None] * len(prices)
+    result: list[float | None] = [None] * len(prices)
     if len(prices) < period:
         return result
     window_sum = sum(prices[:period])
@@ -29,7 +30,7 @@ def sma(prices: List[float], period: int) -> List[Optional[float]]:
     return result
 
 
-def ema(prices: List[float], period: int) -> List[Optional[float]]:
+def ema(prices: list[float], period: int) -> list[float | None]:
     """Exponential Moving Average.
 
     Uses the standard multiplier ``2 / (period + 1)`` and seeds the first
@@ -37,7 +38,7 @@ def ema(prices: List[float], period: int) -> List[Optional[float]]:
     """
     if period < 1:
         raise ValueError("EMA period must be >= 1")
-    result: List[Optional[float]] = [None] * len(prices)
+    result: list[float | None] = [None] * len(prices)
     if len(prices) < period:
         return result
     k = 2.0 / (period + 1)
@@ -52,7 +53,7 @@ def ema(prices: List[float], period: int) -> List[Optional[float]]:
     return result
 
 
-def rsi(prices: List[float], period: int = 14) -> List[Optional[float]]:
+def rsi(prices: list[float], period: int = 14) -> list[float | None]:
     """Relative Strength Index (Wilder smoothing).
 
     Returns values in ``[0, 100]``.  The first ``period`` entries are
@@ -60,13 +61,13 @@ def rsi(prices: List[float], period: int = 14) -> List[Optional[float]]:
     """
     if period < 1:
         raise ValueError("RSI period must be >= 1")
-    result: List[Optional[float]] = [None] * len(prices)
+    result: list[float | None] = [None] * len(prices)
     if len(prices) < period + 1:
         return result
 
     # Calculate initial gains/losses
-    gains: List[float] = []
-    losses: List[float] = []
+    gains: list[float] = []
+    losses: list[float] = []
     for i in range(1, period + 1):
         delta = prices[i] - prices[i - 1]
         gains.append(max(delta, 0.0))
@@ -98,11 +99,11 @@ def rsi(prices: List[float], period: int = 14) -> List[Optional[float]]:
 
 
 def macd(
-    prices: List[float],
+    prices: list[float],
     fast_period: int = 12,
     slow_period: int = 26,
     signal_period: int = 9,
-) -> Dict[str, List[Optional[float]]]:
+) -> dict[str, list[float | None]]:
     """MACD (Moving Average Convergence Divergence).
 
     Returns a dict with keys ``"macd"``, ``"signal"``, ``"histogram"``.
@@ -111,17 +112,21 @@ def macd(
     slow_ema = ema(prices, slow_period)
 
     n = len(prices)
-    macd_line: List[Optional[float]] = [None] * n
+    macd_line: list[float | None] = [None] * n
     for i in range(n):
         if fast_ema[i] is not None and slow_ema[i] is not None:
             macd_line[i] = fast_ema[i] - slow_ema[i]
 
     # Signal line = EMA of the MACD line
     macd_values = [v for v in macd_line if v is not None]
-    signal_ema = ema(macd_values, signal_period) if len(macd_values) >= signal_period else [None] * len(macd_values)
+    signal_ema = (
+        ema(macd_values, signal_period)
+        if len(macd_values) >= signal_period
+        else [None] * len(macd_values)
+    )
 
-    signal_line: List[Optional[float]] = [None] * n
-    histogram: List[Optional[float]] = [None] * n
+    signal_line: list[float | None] = [None] * n
+    histogram: list[float | None] = [None] * n
 
     # Map signal EMA back to original indices
     macd_idx = 0
@@ -137,17 +142,17 @@ def macd(
 
 
 def bollinger_bands(
-    prices: List[float],
+    prices: list[float],
     period: int = 20,
     num_std: float = 2.0,
-) -> Dict[str, List[Optional[float]]]:
+) -> dict[str, list[float | None]]:
     """Bollinger Bands.
 
     Returns ``{"upper": [...], "middle": [...], "lower": [...]}``.
     """
     middle = sma(prices, period)
-    upper: List[Optional[float]] = [None] * len(prices)
-    lower: List[Optional[float]] = [None] * len(prices)
+    upper: list[float | None] = [None] * len(prices)
+    lower: list[float | None] = [None] * len(prices)
 
     for i in range(period - 1, len(prices)):
         window = prices[i - period + 1 : i + 1]
@@ -163,19 +168,20 @@ def bollinger_bands(
 
 
 def compute_all_indicators(
-    prices: List[float],
+    prices: list[float],
     rsi_period: int = 14,
     sma_period: int = 20,
     ema_period: int = 12,
     bb_period: int = 20,
     bb_std: float = 2.0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Compute all indicators at once and return a summary dict.
 
     Returns the latest value for each indicator plus the full series.
     Useful for feeding into LLM prompts or backtesting engines.
     """
-    def _last_value(series: List[Optional[float]]) -> Optional[float]:
+
+    def _last_value(series: list[float | None]) -> float | None:
         for v in reversed(series):
             if v is not None:
                 return round(v, 6)
@@ -222,9 +228,9 @@ def compute_all_indicators(
     }
 
 
-def generate_indicator_summary(indicators: Dict[str, Any]) -> str:
+def generate_indicator_summary(indicators: dict[str, Any]) -> str:
     """Generate a human-readable summary for LLM prompts."""
-    lines: List[str] = []
+    lines: list[str] = []
     price = indicators.get("latest_price")
     lines.append(f"Current Price: {price}")
 

@@ -1,9 +1,18 @@
+/**
+ * User settings, profile, and LLM administration endpoints under `/api/settings`.
+ *
+ * Three groups: core settings (`/api/settings`, `/copy-trading`) covering copy-trading risk modes,
+ * multi-layer loss limits, and inverse-bot defaults; profile read/update including avatar, contact
+ * details, and personal LLM provider/model preferences; and LLM preferences, which include personal provider/model selection plus admin
+ * endpoints for system defaults and per-user overrides. Every function is also re-exported on the
+ * `settingsService` object.
+ *
+ * @module services/settingsService
+ */
+
 import { apiClient } from "./apiClient";
 
-export type RiskMode =
-  | "max_position_daily_loss"
-  | "percentage_mirror"
-  | "fixed_amount";
+export type RiskMode = "max_position_daily_loss" | "percentage_mirror" | "fixed_amount";
 export type InverseBotSizeMode = "full_notional" | "fixed_amount";
 
 export interface UserSettings {
@@ -33,6 +42,7 @@ export interface UserSettings {
   consecutive_losses: number;
   // Simulation mode
   simulation_mode: boolean;
+  paper_balance: number;
   // Inverse bot
   inverse_bot_enabled: boolean;
   inverse_bot_default_size_mode: InverseBotSizeMode;
@@ -52,6 +62,8 @@ export interface CopyTradingSettingsUpdate {
   fixed_trade_amount?: number;
   require_ai_approval?: boolean;
   follow_email_notifications_enabled?: boolean;
+  simulation_mode?: boolean;
+  paper_balance?: number;
   inverse_bot_enabled?: boolean;
   inverse_bot_default_size_mode?: InverseBotSizeMode;
   inverse_bot_fixed_amount?: number;
@@ -66,7 +78,6 @@ export interface UserProfile {
   email: string | null;
   phone: string | null;
   profile_picture_url: string | null;
-  two_fa_enabled: boolean;
 }
 
 export interface UpdateProfileRequest {
@@ -74,7 +85,6 @@ export interface UpdateProfileRequest {
   email?: string | null;
   phone?: string | null;
   profile_picture_url?: string | null;
-  two_fa_enabled?: boolean;
 }
 
 export interface AIBackendStatus {
@@ -91,13 +101,7 @@ export interface BackendsStatus {
 
 // ── LLM Provider Types ──
 
-export type LLMProvider =
-  | "openai"
-  | "anthropic"
-  | "google"
-  | "groq"
-  | "ollama"
-  | "github_models";
+export type LLMProvider = "openai" | "anthropic" | "google" | "groq" | "ollama" | "github_models";
 
 export interface LLMProviderInfo {
   id: string;
@@ -170,6 +174,23 @@ export interface AdminUpdateUserLLMRequest {
   preferred_llm_model?: string | null;
 }
 
+// ── Paper Trading ──
+
+export interface PaperSummary {
+  simulation_mode: boolean;
+  paper_balance: number;
+  paper_pnl: number;
+  simulated_trades: number;
+}
+
+/**
+ * Get the paper-trading summary (balance + realized paper PnL,
+ * tracked separately from real equity).
+ */
+export async function getPaperSummary(): Promise<PaperSummary> {
+  return apiClient.get<PaperSummary>("/api/settings/paper-summary");
+}
+
 /**
  * Get current user settings
  */
@@ -180,9 +201,7 @@ export async function getUserSettings(): Promise<UserSettings> {
 /**
  * Update user settings
  */
-export async function updateUserSettings(
-  settings: Partial<UserSettings>,
-): Promise<UserSettings> {
+export async function updateUserSettings(settings: Partial<UserSettings>): Promise<UserSettings> {
   return apiClient.put<UserSettings>("/api/settings", settings);
 }
 
@@ -212,9 +231,7 @@ export async function getUserProfile(): Promise<UserProfile> {
 /**
  * Update user profile
  */
-export async function updateUserProfile(
-  profile: UpdateProfileRequest,
-): Promise<UserProfile> {
+export async function updateUserProfile(profile: UpdateProfileRequest): Promise<UserProfile> {
   return apiClient.put<UserProfile>("/api/settings/profile", profile);
 }
 
@@ -258,10 +275,7 @@ export async function getAdminProviders(): Promise<AdminProvidersResponse> {
 export async function updateAdminDefaults(
   request: AdminDefaultsRequest,
 ): Promise<AdminDefaultsResponse> {
-  return apiClient.patch<AdminDefaultsResponse>(
-    "/api/settings/admin/defaults",
-    request,
-  );
+  return apiClient.patch<AdminDefaultsResponse>("/api/settings/admin/defaults", request);
 }
 
 /**
@@ -283,10 +297,7 @@ export async function updateAdminUserLLM(
   userId: number,
   request: AdminUpdateUserLLMRequest,
 ): Promise<AdminUserLLMSettings> {
-  return apiClient.patch<AdminUserLLMSettings>(
-    `/api/settings/admin/users/${userId}/llm`,
-    request,
-  );
+  return apiClient.patch<AdminUserLLMSettings>(`/api/settings/admin/users/${userId}/llm`, request);
 }
 
 export const settingsService = {
@@ -296,6 +307,7 @@ export const settingsService = {
   updateCopyTradingSettings,
   getUserProfile,
   updateUserProfile,
+  getPaperSummary,
   // LLM Settings
   getLLMProviders,
   getCurrentLLMSettings,

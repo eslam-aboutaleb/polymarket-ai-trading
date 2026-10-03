@@ -12,8 +12,9 @@ class CopyTradeProxyCacheTests(unittest.TestCase):
         copy_trade_service._proxy_address_cache.clear()
 
     def test_proxy_cache_applies_ttl_expiration(self):
-        with patch.object(copy_trade_service, "_PROXY_CACHE_TTL_SECONDS", 1), patch.object(
-            copy_trade_service, "_PROXY_CACHE_MAX_ENTRIES", 10
+        with (
+            patch.object(copy_trade_service, "_PROXY_CACHE_TTL_SECONDS", 1),
+            patch.object(copy_trade_service, "_PROXY_CACHE_MAX_ENTRIES", 10),
         ):
             copy_trade_service._set_cached_proxy("0xabc", "0xproxy", now_ts=10.0)
             self.assertEqual(
@@ -25,8 +26,9 @@ class CopyTradeProxyCacheTests(unittest.TestCase):
             )
 
     def test_proxy_cache_enforces_max_entries_with_lru_eviction(self):
-        with patch.object(copy_trade_service, "_PROXY_CACHE_TTL_SECONDS", 9999), patch.object(
-            copy_trade_service, "_PROXY_CACHE_MAX_ENTRIES", 2
+        with (
+            patch.object(copy_trade_service, "_PROXY_CACHE_TTL_SECONDS", 9999),
+            patch.object(copy_trade_service, "_PROXY_CACHE_MAX_ENTRIES", 2),
         ):
             copy_trade_service._set_cached_proxy("0x1", "0xp1", now_ts=1.0)
             copy_trade_service._set_cached_proxy("0x2", "0xp2", now_ts=1.0)

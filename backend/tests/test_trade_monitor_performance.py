@@ -27,6 +27,7 @@ class TradeMonitorPerformanceTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         trade_monitor._watched_wallets = set()
         trade_monitor._last_seen_trades = {}
+        trade_monitor._processed_trade_ids = {}
         trade_monitor._poll_http_client = None
         trade_monitor._poll_semaphore = asyncio.Semaphore(50)
 
@@ -45,9 +46,11 @@ class TradeMonitorPerformanceTests(unittest.IsolatedAsyncioTestCase):
         trade_monitor._watched_wallets = {f"wallet-{i}" for i in range(15)}
         trade_monitor._poll_semaphore = asyncio.Semaphore(3)
 
-        with patch.object(trade_monitor, "_poll_trader_trades", side_effect=fake_poll), patch.object(
-            trade_monitor, "_detect_new_trades", new=AsyncMock(return_value=[])
-        ), patch.object(trade_monitor, "_process_new_trade", new=AsyncMock()):
+        with (
+            patch.object(trade_monitor, "_poll_trader_trades", side_effect=fake_poll),
+            patch.object(trade_monitor, "_detect_new_trades", new=AsyncMock(return_value=[])),
+            patch.object(trade_monitor, "_process_new_trade", new=AsyncMock()),
+        ):
             await trade_monitor._http_poll_cycle()
 
         self.assertLessEqual(max_parallel, 3)
@@ -56,7 +59,10 @@ class TradeMonitorPerformanceTests(unittest.IsolatedAsyncioTestCase):
         fake_client = _FakeClient()
         trade_monitor._poll_http_client = fake_client
 
-        with patch("app.services.trade_monitor.httpx.AsyncClient", side_effect=AssertionError("unexpected new client")):
+        with patch(
+            "app.services.trade_monitor.httpx.AsyncClient",
+            side_effect=AssertionError("unexpected new client"),
+        ):
             result_one = await trade_monitor._poll_trader_trades("0xabc")
             result_two = await trade_monitor._poll_trader_trades("0xdef")
 

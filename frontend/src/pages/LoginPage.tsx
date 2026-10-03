@@ -1,3 +1,14 @@
+/**
+ * Wallet sign-in page.
+ *
+ * Each successful login is followed by a `GET /api/auth/me` call to populate the auth store;
+ * failures are rendered through `getApiErrorMessage` with an "Authentication failed" fallback.
+ * Login is signature-only — private-key entry moved to the "enable auto-trading" step in
+ * Settings.
+ *
+ * @module pages/LoginPage
+ */
+
 import { useState } from "react";
 import { useAuthStore } from "../store/authStore";
 import { authService } from "../services/authService";
@@ -21,6 +32,7 @@ export default function LoginPage() {
     walletAddress: string,
     signature: string,
     keepLoggedIn: boolean,
+    challengeId: string | null,
   ) => {
     setLoading(true);
     setError(null);
@@ -30,26 +42,7 @@ export default function LoginPage() {
         walletAddress,
         signature,
         keepLoggedIn,
-      );
-      await restoreSession();
-    } catch (err: unknown) {
-      setError(getApiErrorMessage(err, "Authentication failed"));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handlePrivateKeyLogin = async (
-    privateKey: string,
-    keepLoggedIn: boolean,
-  ) => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      await authService.loginWithPrivateKey(
-        privateKey,
-        keepLoggedIn,
+        challengeId ?? undefined,
       );
       await restoreSession();
     } catch (err: unknown) {
@@ -62,28 +55,14 @@ export default function LoginPage() {
   return (
     <div className="app-shell min-h-screen flex items-center justify-center px-4">
       <div className="w-full max-w-md p-8 surface-panel page-enter">
-        <h1 className="text-3xl font-extrabold text-center mb-2 theme-brand">
-          Polymarket AI
-        </h1>
-        <p className="text-center theme-subtitle mb-8">
-          AI-Powered Trading Automation
-        </p>
+        <h1 className="text-3xl font-extrabold text-center mb-2 theme-brand">Polymarket AI</h1>
+        <p className="text-center theme-subtitle mb-8">AI-Powered Trading Automation</p>
 
-        {error && (
-          <div className="mb-4 p-4 alert-error rounded">
-            {error}
-          </div>
-        )}
+        {error && <div className="mb-4 p-4 alert-error rounded">{error}</div>}
 
-        <LoginForm
-          onLogin={handleLogin}
-          onPrivateKeyLogin={handlePrivateKeyLogin}
-          loading={loading}
-        />
+        <LoginForm onLogin={handleLogin} loading={loading} />
 
-        <p className="mt-6 text-center text-muted text-sm">
-          Sign in with your Ethereum wallet or private key
-        </p>
+        <p className="mt-6 text-center text-muted text-sm">Sign in with your Ethereum wallet</p>
       </div>
     </div>
   );

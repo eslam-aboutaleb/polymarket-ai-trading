@@ -1,8 +1,16 @@
+/**
+ * Compact event-group card used by market boards; also exports helpers shared with the drawer.
+ *
+ * Resolves the group's primary option (an AI-recommended label when provided, otherwise the
+ * most-popular Yes price) and shows its Yes/No prices with quick-analyze, analyze and trade
+ * callbacks. Clicking the card calls `onSelect`, which parents use to open
+ * `EventGroupDetailDrawer`. `findLeadingOption`, `formatVolume` and the `GroupableMarket` type are
+ * consumed by that drawer and by grouping utilities.
+ *
+ * @module components/EventGroupPanel
+ */
 import React, { ReactNode } from "react";
-import {
-  EventGroup,
-  resolvePrimaryGroupOption,
-} from "../utils/groupMarkets";
+import { EventGroup, resolvePrimaryGroupOption } from "../utils/groupMarkets";
 import { AnalysisDisplayInline } from "./AnalysisDisplay";
 
 /**
@@ -163,16 +171,10 @@ export default function EventGroupPanel<T extends GroupableMarket>({
             {primary && (volStr || group.markets.length > 1) && (
               <span className="text-xs text-muted">·</span>
             )}
-            {volStr && (
-              <span className="text-xs text-muted">{volStr} Vol.</span>
-            )}
-            {volStr && group.markets.length > 1 && (
-              <span className="text-xs text-muted">·</span>
-            )}
+            {volStr && <span className="text-xs text-muted">{volStr} Vol.</span>}
+            {volStr && group.markets.length > 1 && <span className="text-xs text-muted">·</span>}
             {group.markets.length > 1 && (
-              <span className="text-xs text-muted">
-                {group.markets.length} options
-              </span>
+              <span className="text-xs text-muted">{group.markets.length} options</span>
             )}
           </div>
         </div>
@@ -276,9 +278,7 @@ export default function EventGroupPanel<T extends GroupableMarket>({
               </div>
             </div>
             {quickAnalyzeError && (
-              <div className="p-2 alert-error rounded text-xs">
-                {quickAnalyzeError}
-              </div>
+              <div className="p-2 alert-error rounded text-xs">{quickAnalyzeError}</div>
             )}
             {quickAnalyzeText && (
               <div className="p-2 bg-[var(--accent-soft)] border border-[#f0b74166] rounded text-xs max-h-24 overflow-y-auto">

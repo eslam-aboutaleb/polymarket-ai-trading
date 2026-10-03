@@ -1,3 +1,13 @@
+/**
+ * Hook returning a `requireAuth` guard that wraps protected actions on public pages.
+ *
+ * The wrapped callback runs immediately when a session exists; otherwise the login modal opens and
+ * the action is dropped. Reads auth state from `store/authStore` and opens the modal via
+ * `context/LoginModalContext`.
+ *
+ * @module hooks/useRequireAuth
+ */
+
 import { useCallback } from "react";
 import { useAuthStore } from "../store/authStore";
 import { useLoginModal } from "../context/LoginModalContext";

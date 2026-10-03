@@ -1,0 +1,70 @@
+# Pre-commit hooks for the Polymarket trading backend + frontend.
+#
+# Install once:  pre-commit install
+# Run manually:   pre-commit run --all-files
+#
+# ruff and prettier are invoked from the tools the project itself installs, so a
+# hook can never disagree with `uv run ruff` or `npm run format`. That keeps the
+# gate hermetic: the pinned versions in backend/uv.lock and
+# frontend/package.json are the single source of truth.
+
+repos:
+  # ── Python ──────────────────────────────────────────────────────────────
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff (lint)
+        entry: bash -c 'uv run --project backend --frozen ruff check --config ruff.toml --fix --exit-non-zero-on-fix backend services'
+        language: system
+        types: [python]
+        pass_filenames: false
+        require_serial: true
+
+      - id: ruff-format
+        name: ruff (format)
+        entry: bash -c 'uv run --project backend --frozen ruff format --config ruff.toml backend services'
+        language: system
+        types: [python]
+        pass_filenames: false
+        require_serial: true
+
+  # ── JavaScript / TypeScript / CSS / JSON / YAML ──────────────────────────
+  - repo: local
+    hooks:
+      - id: prettier
+        name: prettier
+        entry: bash -c 'cd frontend && ./node_modules/.bin/prettier --write "**/*.{js,jsx,ts,tsx,css,json,html,yml,yaml}"'
+        language: system
+        types_or: [javascript, tsx, css, json, html, yaml]
+        pass_filenames: false
+        require_serial: true
+
+  # ── Repository hygiene ──────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: \.(md|svg)$
+      - id: end-of-file-fixer
+        exclude: \.(svg|tsbuildinfo)$
+      - id: check-merge-conflict
+      - id: check-yaml
+        exclude: ^backend/alembic\.ini$
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: detect-private-key
+
+  # ── Duplication budget ──────────────────────────────────────────────────
+  # Fails when copy-paste blocks push overall duplication above the 3% budget
+  # agreed with the SonarQube quality gate. The script scans the whole tree
+  # (pass_filenames: false), so no `types` filter is applied — a file-type
+  # filter would skip the check on commits that touch no Python.
+  - repo: local
+    hooks:
+      - id: jscpd-duplication
+        name: jscpd (duplication < 3%)
+        entry: bash scripts/check-duplication.sh
+        language: system
+        files: \.(py|ts|tsx|js|jsx)$
+        pass_filenames: false
+        require_serial: true

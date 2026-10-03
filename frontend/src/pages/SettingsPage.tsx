@@ -1,3 +1,14 @@
+/**
+ * Settings screen with Profile, Trading, and (admin-only) Admin Settings tabs.
+ *
+ * Profile covers avatar, contact details, and personal LLM provider/model preferences; Trading
+ * edits copy-trading risk controls and inverse-bot sizing; Admin manages system-wide LLM defaults
+ * and per-user overrides. Initial loads use `Promise.allSettled` so one failing endpoint (backend
+ * status, LLM providers) does not blank the whole page.
+ *
+ * @module pages/SettingsPage
+ */
+
 import React, { useState, useEffect, useRef } from "react";
 import { useAuthStore } from "../store/authStore";
 import {
@@ -14,17 +25,30 @@ import {
   LLMProvidersResponse,
   LLMCurrentSettings,
 } from "../services/settingsService";
+import {
+  CreateChannelRequest,
+  NotificationChannel,
+  NotificationChannelType,
+  NotificationPreference,
+  createNotificationChannel,
+  deleteNotificationChannel,
+  getNotificationPreferences,
+  listNotificationChannels,
+  sendTestAlert,
+  updateNotificationPreferences,
+} from "../services/notificationsService";
 import { getApiErrorMessage } from "../utils/apiError";
+import { tradingKeyService } from "../services/tradingKeyService";
+import { useTradingKeyStatus } from "../hooks/useTradingKeyStatus";
 
 type AIBackend = "llm_chain" | "cli_agent";
-type SettingsTab = "profile" | "trading" | "admin";
+type SettingsTab = "profile" | "trading" | "notifications" | "admin";
 
 const RISK_MODES: { value: RiskMode; label: string; description: string }[] = [
   {
     value: "max_position_daily_loss",
     label: "Max Position + Daily Loss",
-    description:
-      "Cap each trade size and stop copying if daily loss limit is hit",
+    description: "Cap each trade size and stop copying if daily loss limit is hit",
   },
   {
     value: "percentage_mirror",
@@ -59,9 +83,7 @@ export default function SettingsPage() {
   const { walletAddress, isAdmin } = useAuthStore();
   const [activeTab, setActiveTab] = useState<SettingsTab>("profile");
   const [settings, setSettings] = useState<UserSettings | null>(null);
-  const [backendsStatus, setBackendsStatus] = useState<BackendsStatus | null>(
-    null,
-  );
+  const [backendsStatus, setBackendsStatus] = useState<BackendsStatus | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -69,17 +91,11 @@ export default function SettingsPage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // Admin-specific state
-  const [adminProviders, setAdminProviders] =
-    useState<AdminProvidersResponse | null>(null);
-  const [adminUsers, setAdminUsers] = useState<AdminUsersLLMResponse | null>(
-    null,
-  );
+  const [adminProviders, setAdminProviders] = useState<AdminProvidersResponse | null>(null);
+  const [adminUsers, setAdminUsers] = useState<AdminUsersLLMResponse | null>(null);
   const [adminLoading, setAdminLoading] = useState(false);
-  const [llmProviders, setLlmProviders] = useState<LLMProvidersResponse | null>(
-    null,
-  );
-  const [currentLlmSettings, setCurrentLlmSettings] =
-    useState<LLMCurrentSettings | null>(null);
+  const [llmProviders, setLlmProviders] = useState<LLMProvidersResponse | null>(null);
+  const [currentLlmSettings, setCurrentLlmSettings] = useState<LLMCurrentSettings | null>(null);
   const [llmProviderChoice, setLlmProviderChoice] = useState("");
   const [llmModelChoice, setLlmModelChoice] = useState("");
   const [llmDirty, setLlmDirty] = useState(false);
@@ -88,9 +104,29 @@ export default function SettingsPage() {
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
-  const [twoFaEnabled, setTwoFaEnabled] = useState(false);
   const [profileDirty, setProfileDirty] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Notification channel / preference state
+  const [notifChannels, setNotifChannels] = useState<NotificationChannel[]>([]);
+  const [notifPreferences, setNotifPreferences] = useState<NotificationPreference[]>([]);
+  const [notifLoading, setNotifLoading] = useState(false);
+  const [notifSaving, setNotifSaving] = useState(false);
+  const [channelType, setChannelType] = useState<NotificationChannelType>("telegram");
+  const [channelName, setChannelName] = useState("");
+  const [chatId, setChatId] = useState("");
+  const [discordUrl, setDiscordUrl] = useState("");
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [webhookSecret, setWebhookSecret] = useState("");
+  const [testingChannelId, setTestingChannelId] = useState<number | null>(null);
+  const [prefsDirty, setPrefsDirty] = useState(false);
+
+  // Trading key (auto-trading) state
+  const { hasTradingKey, refresh: refreshTradingKeyStatus } = useTradingKeyStatus();
+  const [tradingPrivateKey, setTradingPrivateKey] = useState("");
+  const [clobCredentialsJson, setClobCredentialsJson] = useState("");
+  const [tradingKeySaving, setTradingKeySaving] = useState(false);
+  const [tradingKeyError, setTradingKeyError] = useState<string | null>(null);
 
   useEffect(() => {
     loadSettings();
@@ -103,13 +139,159 @@ export default function SettingsPage() {
     }
   }, [activeTab, isAdmin]);
 
+  // Load notification channels/preferences when switching to the tab
+  useEffect(() => {
+    if (activeTab === "notifications" && notifChannels.length === 0) {
+      loadNotificationData();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
+
+  const loadNotificationData = async () => {
+    try {
+      setNotifLoading(true);
+      const [channelsResult, preferencesResult] = await Promise.allSettled([
+        listNotificationChannels(),
+        getNotificationPreferences(),
+      ]);
+      if (channelsResult.status === "fulfilled") {
+        setNotifChannels(channelsResult.value);
+      } else {
+        setError(getApiErrorMessage(channelsResult.reason, "Failed to load channels"));
+      }
+      if (preferencesResult.status === "fulfilled") {
+        setNotifPreferences(preferencesResult.value);
+      }
+    } catch (err: unknown) {
+      setError(getApiErrorMessage(err, "Failed to load notification settings"));
+    } finally {
+      setNotifLoading(false);
+    }
+  };
+
+  const handleCreateChannel = async () => {
+    try {
+      setNotifSaving(true);
+      setError(null);
+      const request: CreateChannelRequest = {
+        channel_type: channelType,
+        name: channelName,
+      };
+      if (channelType === "telegram") request.chat_id = chatId;
+      if (channelType === "discord") request.webhook_url = discordUrl;
+      if (channelType === "webhook") {
+        request.url = webhookUrl;
+        request.secret = webhookSecret;
+      }
+      const created = await createNotificationChannel(request);
+      setNotifChannels((prev) => [...prev, created]);
+      setChannelName("");
+      setChatId("");
+      setDiscordUrl("");
+      setWebhookUrl("");
+      setWebhookSecret("");
+      setSuccessMessage("Notification channel created!");
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (err: unknown) {
+      setError(getApiErrorMessage(err, "Failed to create notification channel"));
+    } finally {
+      setNotifSaving(false);
+    }
+  };
+
+  const handleDeleteChannel = async (id: number) => {
+    try {
+      setNotifSaving(true);
+      setError(null);
+      await deleteNotificationChannel(id);
+      setNotifChannels((prev) => prev.filter((c) => c.id !== id));
+      setNotifPreferences((prev) =>
+        prev.map((p) => ({
+          ...p,
+          channel_ids: p.channel_ids.filter((cid) => cid !== id),
+        })),
+      );
+      setSuccessMessage("Notification channel deleted!");
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (err: unknown) {
+      setError(getApiErrorMessage(err, "Failed to delete notification channel"));
+    } finally {
+      setNotifSaving(false);
+    }
+  };
+
+  const handleTestChannel = async (id: number) => {
+    try {
+      setTestingChannelId(id);
+      setError(null);
+      const result = await sendTestAlert({ channel_id: id });
+      if (result.status === "dispatched") {
+        setSuccessMessage("Test alert sent — check your channel.");
+      } else {
+        setError(`Test alert not delivered (${result.reason || result.status}).`);
+      }
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (err: unknown) {
+      setError(getApiErrorMessage(err, "Failed to send test alert"));
+    } finally {
+      setTestingChannelId(null);
+    }
+  };
+
+  const handleTogglePreferenceChannel = (eventType: string, channelId: number) => {
+    setNotifPreferences((prev) =>
+      prev.map((p) => {
+        if (p.event_type !== eventType) return p;
+        const has = p.channel_ids.includes(channelId);
+        return {
+          ...p,
+          channel_ids: has
+            ? p.channel_ids.filter((cid) => cid !== channelId)
+            : [...p.channel_ids, channelId],
+          is_default: false,
+        };
+      }),
+    );
+    setPrefsDirty(true);
+  };
+
+  const handleTogglePreferenceEnabled = (eventType: string) => {
+    setNotifPreferences((prev) =>
+      prev.map((p) =>
+        p.event_type === eventType ? { ...p, enabled: !p.enabled, is_default: false } : p,
+      ),
+    );
+    setPrefsDirty(true);
+  };
+
+  const handleSavePreferences = async () => {
+    try {
+      setNotifSaving(true);
+      setError(null);
+      // Untouched defaults (no channels selected, enabled) must not be
+      // persisted — an empty channel_ids row would silence the event type,
+      // whereas the absence of a row means "all active channels".
+      const toSave = notifPreferences.filter(
+        (p) => !p.is_default || p.channel_ids.length > 0 || !p.enabled,
+      );
+      const updated = await updateNotificationPreferences(toSave);
+      setNotifPreferences(updated);
+      setPrefsDirty(false);
+      setSuccessMessage("Notification preferences saved!");
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (err: unknown) {
+      setError(getApiErrorMessage(err, "Failed to save notification preferences"));
+    } finally {
+      setNotifSaving(false);
+    }
+  };
+
   // Sync local profile form when profile loads
   useEffect(() => {
     if (profile) {
       setDisplayName(profile.display_name || "");
       setEmail(profile.email || "");
       setPhone(profile.phone || "");
-      setTwoFaEnabled(profile.two_fa_enabled);
       setProfileDirty(false);
     }
   }, [profile]);
@@ -126,13 +308,7 @@ export default function SettingsPage() {
       setLoading(true);
       setError(null);
       // Use allSettled so a single failure doesn't block the rest
-      const [
-        settingsResult,
-        statusResult,
-        profileResult,
-        llmProvidersResult,
-        llmCurrentResult,
-      ] =
+      const [settingsResult, statusResult, profileResult, llmProvidersResult, llmCurrentResult] =
         await Promise.allSettled([
           settingsService.getUserSettings(),
           settingsService.getBackendsStatus(),
@@ -144,12 +320,7 @@ export default function SettingsPage() {
         setSettings(settingsResult.value);
       } else {
         console.error("Failed to load user settings:", settingsResult.reason);
-        setError(
-          getApiErrorMessage(
-            settingsResult.reason,
-            "Failed to load user settings",
-          ),
-        );
+        setError(getApiErrorMessage(settingsResult.reason, "Failed to load user settings"));
       }
       if (statusResult.status === "fulfilled") {
         setBackendsStatus(statusResult.value);
@@ -190,20 +361,13 @@ export default function SettingsPage() {
         setAdminProviders(providersResult.value);
       } else {
         console.error("Failed to load providers:", providersResult.reason);
-        setError(
-          getApiErrorMessage(
-            providersResult.reason,
-            "Failed to load LLM providers",
-          ),
-        );
+        setError(getApiErrorMessage(providersResult.reason, "Failed to load LLM providers"));
       }
       if (usersResult.status === "fulfilled") {
         setAdminUsers(usersResult.value);
       } else {
         console.error("Failed to load admin users:", usersResult.reason);
-        setError(
-          getApiErrorMessage(usersResult.reason, "Failed to load admin users"),
-        );
+        setError(getApiErrorMessage(usersResult.reason, "Failed to load admin users"));
       }
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to load admin data"));
@@ -251,9 +415,7 @@ export default function SettingsPage() {
       if (adminUsers) {
         setAdminUsers({
           ...adminUsers,
-          users: adminUsers.users.map((u) =>
-            u.user_id === userId ? updated : u,
-          ),
+          users: adminUsers.users.map((u) => (u.user_id === userId ? updated : u)),
         });
       }
       setSuccessMessage("User settings updated!");
@@ -293,7 +455,6 @@ export default function SettingsPage() {
         display_name: displayName,
         email: email || null,
         phone: phone || null,
-        two_fa_enabled: twoFaEnabled,
       });
       setProfile(updated);
       setSuccessMessage("Profile saved!");
@@ -369,10 +530,7 @@ export default function SettingsPage() {
     }
   };
 
-  const handleCopyTradingUpdate = async (
-    field: string,
-    value: boolean | string | number,
-  ) => {
+  const handleCopyTradingUpdate = async (field: string, value: boolean | string | number) => {
     if (!settings) return;
     try {
       setSaving(true);
@@ -391,6 +549,56 @@ export default function SettingsPage() {
     }
   };
 
+  const handleConnectTradingKey = async () => {
+    try {
+      setTradingKeySaving(true);
+      setTradingKeyError(null);
+      let clobCredentials: Record<string, string> | undefined;
+      if (clobCredentialsJson.trim()) {
+        const parsed: unknown = JSON.parse(clobCredentialsJson);
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          throw new Error("CLOB credentials must be a JSON object");
+        }
+        clobCredentials = parsed as Record<string, string>;
+      }
+      await tradingKeyService.connectTradingKey(tradingPrivateKey, clobCredentials);
+      setTradingPrivateKey("");
+      setClobCredentialsJson("");
+      await refreshTradingKeyStatus();
+      setSuccessMessage("Trading key connected!");
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (err: unknown) {
+      setTradingKeyError(getApiErrorMessage(err, "Failed to connect trading key"));
+    } finally {
+      setTradingKeySaving(false);
+    }
+  };
+
+  const handleDisconnectTradingKey = async () => {
+    try {
+      setTradingKeySaving(true);
+      setTradingKeyError(null);
+      await tradingKeyService.disconnectTradingKey();
+      await refreshTradingKeyStatus();
+      setSuccessMessage("Trading key disconnected!");
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (err: unknown) {
+      setTradingKeyError(getApiErrorMessage(err, "Failed to disconnect trading key"));
+    } finally {
+      setTradingKeySaving(false);
+    }
+  };
+
+  const handleInverseBotToggle = async (enabled: boolean) => {
+    if (enabled && hasTradingKey === false) {
+      setError(
+        "The inverse position bot requires a trading key. Connect one in the Trading key section above.",
+      );
+      return;
+    }
+    await handleCopyTradingUpdate("inverse_bot_enabled", enabled);
+  };
+
   const selectedLlmProviderInfo = llmProviders?.providers.find(
     (p) => p.id === (llmProviderChoice || currentLlmSettings?.effective_provider),
   );
@@ -399,10 +607,7 @@ export default function SettingsPage() {
 
   if (loading) {
     return (
-      <div
-        className="flex items-center justify-center"
-        style={{ minHeight: "calc(100vh - 8rem)" }}
-      >
+      <div className="flex items-center justify-center" style={{ minHeight: "calc(100vh - 8rem)" }}>
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[var(--accent)]"></div>
       </div>
     );
@@ -413,9 +618,7 @@ export default function SettingsPage() {
       <h1 className="text-3xl font-bold">Settings</h1>
 
       {error && <div className="alert-error px-4 py-3 rounded">{error}</div>}
-      {successMessage && (
-        <div className="alert-success px-4 py-3 rounded">{successMessage}</div>
-      )}
+      {successMessage && <div className="alert-success px-4 py-3 rounded">{successMessage}</div>}
 
       {/* Tab Navigation */}
       <div className="flex gap-1 border-b border-[var(--line)]">
@@ -438,6 +641,16 @@ export default function SettingsPage() {
           }`}
         >
           Trading
+        </button>
+        <button
+          onClick={() => setActiveTab("notifications")}
+          className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
+            activeTab === "notifications"
+              ? "border-[var(--accent)] text-[var(--accent)]"
+              : "border-transparent text-muted hover:text-white"
+          }`}
+        >
+          Notifications
         </button>
         {isAdmin && (
           <button
@@ -476,9 +689,7 @@ export default function SettingsPage() {
                     />
                   ) : (
                     <div className="w-full h-full bg-[var(--accent-soft)] flex items-center justify-center text-2xl font-bold text-[var(--accent)]">
-                      {(profile?.display_name ||
-                        walletAddress ||
-                        "?")[0].toUpperCase()}
+                      {(profile?.display_name || walletAddress || "?")[0].toUpperCase()}
                     </div>
                   )}
                   <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
@@ -526,9 +737,7 @@ export default function SettingsPage() {
               {/* Name / Contact Fields */}
               <div className="flex-1 space-y-4">
                 <div>
-                  <label className="block text-sm font-medium mb-1">
-                    Display Name
-                  </label>
+                  <label className="block text-sm font-medium mb-1">Display Name</label>
                   <input
                     type="text"
                     value={displayName}
@@ -543,10 +752,7 @@ export default function SettingsPage() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-1">
-                    Email{" "}
-                    <span className="text-muted font-normal">
-                      (optional — for 2FA)
-                    </span>
+                    Email <span className="text-muted font-normal">(optional)</span>
                   </label>
                   <input
                     type="email"
@@ -562,10 +768,7 @@ export default function SettingsPage() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-1">
-                    Phone{" "}
-                    <span className="text-muted font-normal">
-                      (optional — for 2FA)
-                    </span>
+                    Phone <span className="text-muted font-normal">(optional)</span>
                   </label>
                   <input
                     type="tel"
@@ -578,33 +781,6 @@ export default function SettingsPage() {
                     disabled={saving}
                     className="w-full px-3 py-2 rounded-md bg-[var(--bg-soft)] border border-[var(--line)] text-white text-sm focus:border-[var(--accent)] focus:outline-none"
                   />
-                </div>
-
-                {/* 2FA Toggle */}
-                <div className="flex items-center justify-between pt-2">
-                  <div>
-                    <p className="text-sm font-medium">
-                      Two-Factor Authentication
-                    </p>
-                    <p className="text-xs text-muted">
-                      {email || phone
-                        ? "Secure your account with a verification code"
-                        : "Add an email or phone first to enable 2FA"}
-                    </p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={twoFaEnabled}
-                      onChange={(e) => {
-                        setTwoFaEnabled(e.target.checked);
-                        setProfileDirty(true);
-                      }}
-                      disabled={saving || (!email && !phone)}
-                      className="sr-only peer"
-                    />
-                    <div className="w-9 h-5 rounded-full bg-[var(--bg-soft)] border border-[var(--line)] peer-checked:bg-[var(--accent)] peer-disabled:opacity-40 transition-colors after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
-                  </label>
                 </div>
 
                 {/* Save Button */}
@@ -625,7 +801,8 @@ export default function SettingsPage() {
           <div className="surface-panel p-6">
             <h2 className="text-xl font-semibold mb-4">Personal AI Model</h2>
             <p className="text-soft text-sm mb-4">
-              Choose your preferred provider/model for personal analyses. Leave empty to use the system default.
+              Choose your preferred provider/model for personal analyses. Leave empty to use the
+              system default.
             </p>
 
             <div className="grid gap-4 md:grid-cols-2">
@@ -641,7 +818,9 @@ export default function SettingsPage() {
                   disabled={saving}
                   className="w-full px-3 py-2 rounded-md bg-[var(--bg-soft)] border border-[var(--line)] text-white text-sm focus:border-[var(--accent)] focus:outline-none"
                 >
-                  <option value="">System default ({currentLlmSettings?.effective_provider || "openai"})</option>
+                  <option value="">
+                    System default ({currentLlmSettings?.effective_provider || "openai"})
+                  </option>
                   {(llmProviders?.providers || []).map((provider) => (
                     <option key={provider.id} value={provider.id}>
                       {provider.name}
@@ -702,6 +881,89 @@ export default function SettingsPage() {
       {/* Trading Tab */}
       {activeTab === "trading" && (
         <>
+          {/* Trading Key */}
+          <div className="surface-panel p-6" id="trading-key">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-semibold">Trading Key</h2>
+              <span
+                className={
+                  hasTradingKey
+                    ? "chip chip-success text-xs"
+                    : "chip bg-[var(--bg-soft)] text-muted border border-[var(--line)] text-xs"
+                }
+              >
+                {hasTradingKey ? "Connected" : "Not connected"}
+              </span>
+            </div>
+
+            <p className="text-soft mb-6 text-sm">
+              Enable auto-trading by storing your wallet private key. Required for stop-loss orders,
+              the inverse position bot, and latency arbitrage. The key is encrypted at rest and is
+              never used for login.
+            </p>
+
+            {hasTradingKey ? (
+              <div className="space-y-4">
+                <p className="text-sm text-soft">
+                  A trading key is stored for your wallet. Automated strategies can sign orders on
+                  your behalf.
+                </p>
+                <button
+                  onClick={handleDisconnectTradingKey}
+                  disabled={tradingKeySaving || saving}
+                  className="px-4 py-2 rounded-md bg-red-500/10 border border-red-500/30 text-red-400 text-sm font-medium hover:bg-red-500/20 disabled:opacity-50 transition-opacity"
+                >
+                  {tradingKeySaving ? "Disconnecting…" : "Disconnect Trading Key"}
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Private Key</label>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={tradingPrivateKey}
+                    onChange={(e) => setTradingPrivateKey(e.target.value)}
+                    placeholder="0x…"
+                    disabled={tradingKeySaving || saving}
+                    className="w-full px-3 py-2 rounded-md bg-[var(--bg-soft)] border border-[var(--line)] text-white text-sm mono focus:border-[var(--accent)] focus:outline-none"
+                  />
+                  <p className="text-xs text-muted mt-1">
+                    Only enter your key on trusted devices. It is transmitted over HTTPS and
+                    encrypted at rest.
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    CLOB Credentials <span className="text-muted font-normal">(optional JSON)</span>
+                  </label>
+                  <textarea
+                    value={clobCredentialsJson}
+                    onChange={(e) => setClobCredentialsJson(e.target.value)}
+                    placeholder='{"api_key": "…", "api_secret": "…", "api_passphrase": "…"}'
+                    rows={3}
+                    disabled={tradingKeySaving || saving}
+                    className="w-full px-3 py-2 rounded-md bg-[var(--bg-soft)] border border-[var(--line)] text-white text-sm mono focus:border-[var(--accent)] focus:outline-none"
+                  />
+                  <p className="text-xs text-muted mt-1">
+                    Leave empty to let the platform derive CLOB API credentials from your key.
+                  </p>
+                </div>
+                {tradingKeyError && (
+                  <div className="p-3 alert-error rounded text-sm">{tradingKeyError}</div>
+                )}
+                <button
+                  onClick={handleConnectTradingKey}
+                  disabled={tradingKeySaving || saving || !tradingPrivateKey.trim()}
+                  className="px-4 py-2 rounded-md bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity"
+                >
+                  {tradingKeySaving ? "Connecting…" : "Connect Trading Key"}
+                </button>
+              </div>
+            )}
+          </div>
+
           {/* Copy Trading Settings */}
           <div className="surface-panel p-6">
             <div className="flex items-center justify-between mb-4">
@@ -714,10 +976,7 @@ export default function SettingsPage() {
                   type="checkbox"
                   checked={settings?.copy_trading_enabled ?? false}
                   onChange={(e) =>
-                    handleCopyTradingUpdate(
-                      "copy_trading_enabled",
-                      e.target.checked,
-                    )
+                    handleCopyTradingUpdate("copy_trading_enabled", e.target.checked)
                   }
                   disabled={saving}
                   className="w-5 h-5 accent-[var(--accent)]"
@@ -726,8 +985,7 @@ export default function SettingsPage() {
             </div>
 
             <p className="text-soft mb-6 text-sm">
-              Automatically mirror trades from followed traders. Configure risk
-              controls below.
+              Automatically mirror trades from followed traders. Configure risk controls below.
             </p>
 
             {/* AI Gate */}
@@ -735,20 +993,15 @@ export default function SettingsPage() {
               <input
                 type="checkbox"
                 checked={settings?.require_ai_approval ?? true}
-                onChange={(e) =>
-                  handleCopyTradingUpdate(
-                    "require_ai_approval",
-                    e.target.checked,
-                  )
-                }
+                onChange={(e) => handleCopyTradingUpdate("require_ai_approval", e.target.checked)}
                 disabled={saving}
                 className="w-4 h-4 accent-[var(--accent)]"
               />
               <div>
                 <p className="text-sm font-medium">Require AI Approval</p>
                 <p className="text-xs text-muted">
-                  Run LLM analysis on each trade before copying. Trades rated
-                  "avoid" will be skipped.
+                  Run LLM analysis on each trade before copying. Trades rated "avoid" will be
+                  skipped.
                 </p>
               </div>
             </label>
@@ -758,18 +1011,13 @@ export default function SettingsPage() {
                 type="checkbox"
                 checked={settings?.follow_email_notifications_enabled ?? false}
                 onChange={(e) =>
-                  handleCopyTradingUpdate(
-                    "follow_email_notifications_enabled",
-                    e.target.checked,
-                  )
+                  handleCopyTradingUpdate("follow_email_notifications_enabled", e.target.checked)
                 }
                 disabled={saving || !email}
                 className="w-4 h-4 accent-[var(--accent)]"
               />
               <div>
-                <p className="text-sm font-medium">
-                  Email Notifications for Followed Traders
-                </p>
+                <p className="text-sm font-medium">Email Notifications for Followed Traders</p>
                 <p className="text-xs text-muted">
                   {email
                     ? "Enables immediate email alerts when followed traders open/close positions."
@@ -797,9 +1045,7 @@ export default function SettingsPage() {
                         name="risk_mode"
                         value={mode.value}
                         checked={settings?.risk_mode === mode.value}
-                        onChange={() =>
-                          handleCopyTradingUpdate("risk_mode", mode.value)
-                        }
+                        onChange={() => handleCopyTradingUpdate("risk_mode", mode.value)}
                         disabled={saving}
                         className="mt-0.5 mr-3"
                       />
@@ -815,23 +1061,18 @@ export default function SettingsPage() {
 
             {/* Mode-specific parameters */}
             <div className="space-y-4">
-              {(settings?.risk_mode === "max_position_daily_loss" ||
-                !settings?.risk_mode) && (
+              {(settings?.risk_mode === "max_position_daily_loss" || !settings?.risk_mode) && (
                 <>
                   <NumberInput
                     label="Max Position Size ($)"
                     value={settings?.max_position_size ?? 100}
-                    onChange={(v) =>
-                      handleCopyTradingUpdate("max_position_size", v)
-                    }
+                    onChange={(v) => handleCopyTradingUpdate("max_position_size", v)}
                     disabled={saving}
                   />
                   <NumberInput
                     label="Daily Loss Limit ($)"
                     value={settings?.daily_loss_limit ?? 500}
-                    onChange={(v) =>
-                      handleCopyTradingUpdate("daily_loss_limit", v)
-                    }
+                    onChange={(v) => handleCopyTradingUpdate("daily_loss_limit", v)}
                     disabled={saving}
                   />
                 </>
@@ -840,9 +1081,7 @@ export default function SettingsPage() {
                 <NumberInput
                   label="Mirror Percentage (%)"
                   value={settings?.mirror_percentage ?? 10}
-                  onChange={(v) =>
-                    handleCopyTradingUpdate("mirror_percentage", v)
-                  }
+                  onChange={(v) => handleCopyTradingUpdate("mirror_percentage", v)}
                   disabled={saving}
                   max={100}
                 />
@@ -851,9 +1090,7 @@ export default function SettingsPage() {
                 <NumberInput
                   label="Fixed Trade Amount ($)"
                   value={settings?.fixed_trade_amount ?? 50}
-                  onChange={(v) =>
-                    handleCopyTradingUpdate("fixed_trade_amount", v)
-                  }
+                  onChange={(v) => handleCopyTradingUpdate("fixed_trade_amount", v)}
                   disabled={saving}
                 />
               )}
@@ -871,12 +1108,7 @@ export default function SettingsPage() {
                 <input
                   type="checkbox"
                   checked={settings?.inverse_bot_enabled ?? false}
-                  onChange={(e) =>
-                    handleCopyTradingUpdate(
-                      "inverse_bot_enabled",
-                      e.target.checked,
-                    )
-                  }
+                  onChange={(e) => void handleInverseBotToggle(e.target.checked)}
                   disabled={saving}
                   className="w-5 h-5 accent-[var(--accent)]"
                 />
@@ -884,9 +1116,19 @@ export default function SettingsPage() {
             </div>
 
             <p className="text-soft mb-6 text-sm">
-              Auto-reverses tracked positions when market distribution and 24h
-              web/X evidence strongly favor an alternative outcome.
+              Auto-reverses tracked positions when market distribution and 24h web/X evidence
+              strongly favor an alternative outcome.
             </p>
+
+            {hasTradingKey === false && (
+              <div className="mb-6 p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-sm text-amber-400">
+                The inverse position bot requires a trading key.{" "}
+                <a href="#trading-key" className="underline font-medium">
+                  Connect your trading key above
+                </a>{" "}
+                to enable it.
+              </div>
+            )}
 
             <div className="mb-6">
               <h3 className="text-sm font-semibold mb-3">Default Buy Sizing</h3>
@@ -905,14 +1147,9 @@ export default function SettingsPage() {
                         type="radio"
                         name="inverse_size_mode"
                         value={mode.value}
-                        checked={
-                          settings?.inverse_bot_default_size_mode === mode.value
-                        }
+                        checked={settings?.inverse_bot_default_size_mode === mode.value}
                         onChange={() =>
-                          handleCopyTradingUpdate(
-                            "inverse_bot_default_size_mode",
-                            mode.value,
-                          )
+                          handleCopyTradingUpdate("inverse_bot_default_size_mode", mode.value)
                         }
                         disabled={saving}
                         className="mt-0.5 mr-3"
@@ -932,9 +1169,7 @@ export default function SettingsPage() {
                 <NumberInput
                   label="Fixed Buy Amount ($)"
                   value={settings?.inverse_bot_fixed_amount ?? 50}
-                  onChange={(v) =>
-                    handleCopyTradingUpdate("inverse_bot_fixed_amount", v)
-                  }
+                  onChange={(v) => handleCopyTradingUpdate("inverse_bot_fixed_amount", v)}
                   disabled={saving}
                 />
               )}
@@ -981,6 +1216,248 @@ export default function SettingsPage() {
               Last updated: {new Date(settings.updated_at).toLocaleString()}
             </p>
           )}
+        </>
+      )}
+
+      {/* Notifications Tab */}
+      {activeTab === "notifications" && (
+        <>
+          {/* Channel management */}
+          <div className="surface-panel p-6">
+            <h2 className="text-xl font-semibold mb-4">Notification Channels</h2>
+            <p className="text-soft mb-6 text-sm">
+              Configure where alerts are delivered: Telegram chats, Discord webhooks, or any HTTPS
+              webhook. Channel credentials are encrypted at rest.
+            </p>
+
+            {notifLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-[var(--accent)]"></div>
+              </div>
+            ) : (
+              <>
+                {notifChannels.length === 0 ? (
+                  <p className="text-muted text-sm mb-4">No channels configured yet.</p>
+                ) : (
+                  <ul className="space-y-3 mb-6">
+                    {notifChannels.map((channel) => (
+                      <li
+                        key={channel.id}
+                        className="flex items-center justify-between gap-3 p-3 rounded-lg border border-[var(--line)] bg-[var(--bg-soft)]"
+                      >
+                        <div className="min-w-0">
+                          <span className="font-medium text-sm">
+                            {channel.name || channel.channel_type}
+                          </span>
+                          <span className="chip bg-[var(--bg)] text-muted border border-[var(--line)] ml-2 text-xs">
+                            {channel.channel_type}
+                          </span>
+                          {!channel.is_active && (
+                            <span className="chip chip-danger ml-2 text-xs">Inactive</span>
+                          )}
+                          {channel.created_at && (
+                            <p className="text-xs text-muted mt-1">
+                              Added {new Date(channel.created_at).toLocaleString()}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex gap-3 flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleTestChannel(channel.id)}
+                            disabled={notifSaving || testingChannelId !== null}
+                            className="text-xs text-[var(--accent)] hover:underline disabled:opacity-50"
+                          >
+                            {testingChannelId === channel.id ? "Sending…" : "Test"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteChannel(channel.id)}
+                            disabled={notifSaving}
+                            className="text-xs text-red-400 hover:underline disabled:opacity-50"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {/* Add channel form */}
+                <div className="border-t border-[var(--line)] pt-4">
+                  <h3 className="text-sm font-semibold mb-3">Add Channel</h3>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Type</label>
+                      <select
+                        value={channelType}
+                        onChange={(e) => setChannelType(e.target.value as NotificationChannelType)}
+                        disabled={notifSaving}
+                        className="w-full px-3 py-2 rounded-md bg-[var(--bg-soft)] border border-[var(--line)] text-white text-sm focus:border-[var(--accent)] focus:outline-none"
+                      >
+                        <option value="telegram">Telegram</option>
+                        <option value="discord">Discord</option>
+                        <option value="webhook">Webhook (HTTPS)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Name</label>
+                      <input
+                        type="text"
+                        value={channelName}
+                        onChange={(e) => setChannelName(e.target.value)}
+                        placeholder="e.g. Phone alerts"
+                        disabled={notifSaving}
+                        className="w-full px-3 py-2 rounded-md bg-[var(--bg-soft)] border border-[var(--line)] text-white text-sm focus:border-[var(--accent)] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  {channelType === "telegram" && (
+                    <div className="mt-4">
+                      <label className="block text-sm font-medium mb-1">Telegram Chat ID</label>
+                      <input
+                        type="text"
+                        value={chatId}
+                        onChange={(e) => setChatId(e.target.value)}
+                        placeholder="123456789"
+                        disabled={notifSaving}
+                        className="w-full px-3 py-2 rounded-md bg-[var(--bg-soft)] border border-[var(--line)] text-white text-sm focus:border-[var(--accent)] focus:outline-none"
+                      />
+                      <p className="text-xs text-muted mt-1">
+                        Your Telegram chat ID (see @userinfobot). Messages are sent by the platform
+                        bot.
+                      </p>
+                    </div>
+                  )}
+                  {channelType === "discord" && (
+                    <div className="mt-4">
+                      <label className="block text-sm font-medium mb-1">Discord Webhook URL</label>
+                      <input
+                        type="text"
+                        value={discordUrl}
+                        onChange={(e) => setDiscordUrl(e.target.value)}
+                        placeholder="https://discord.com/api/webhooks/…"
+                        disabled={notifSaving}
+                        className="w-full px-3 py-2 rounded-md bg-[var(--bg-soft)] border border-[var(--line)] text-white text-sm focus:border-[var(--accent)] focus:outline-none"
+                      />
+                    </div>
+                  )}
+                  {channelType === "webhook" && (
+                    <>
+                      <div className="mt-4">
+                        <label className="block text-sm font-medium mb-1">
+                          Webhook URL (https only)
+                        </label>
+                        <input
+                          type="text"
+                          value={webhookUrl}
+                          onChange={(e) => setWebhookUrl(e.target.value)}
+                          placeholder="https://example.com/alerts"
+                          disabled={notifSaving}
+                          className="w-full px-3 py-2 rounded-md bg-[var(--bg-soft)] border border-[var(--line)] text-white text-sm focus:border-[var(--accent)] focus:outline-none"
+                        />
+                      </div>
+                      <div className="mt-4">
+                        <label className="block text-sm font-medium mb-1">
+                          Signing Secret <span className="text-muted font-normal">(optional)</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={webhookSecret}
+                          onChange={(e) => setWebhookSecret(e.target.value)}
+                          placeholder="HMAC-SHA256 secret"
+                          disabled={notifSaving}
+                          className="w-full px-3 py-2 rounded-md bg-[var(--bg-soft)] border border-[var(--line)] text-white text-sm focus:border-[var(--accent)] focus:outline-none"
+                        />
+                        <p className="text-xs text-muted mt-1">
+                          When set, every POST includes an <code>X-Signature</code> header
+                          containing an HMAC-SHA256 signature of the JSON body.
+                        </p>
+                      </div>
+                    </>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={handleCreateChannel}
+                    disabled={notifSaving}
+                    className="mt-4 px-4 py-2 rounded-md bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity"
+                  >
+                    {notifSaving ? "Saving…" : "Create Channel"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Alert routing preferences */}
+          <div className="surface-panel p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-semibold">Alert Routing</h2>
+              <button
+                type="button"
+                onClick={handleSavePreferences}
+                disabled={notifSaving || !prefsDirty}
+                className="px-4 py-2 rounded-md bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity"
+              >
+                {notifSaving ? "Saving…" : "Save Preferences"}
+              </button>
+            </div>
+            <p className="text-soft mb-6 text-sm">
+              Choose which channels fire for each event type. With no channels selected, every
+              active channel is used.
+            </p>
+            {notifChannels.length === 0 ? (
+              <p className="text-muted text-sm">
+                Create a channel above to configure per-event routing.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-[var(--line)]">
+                      <th className="text-left py-2 px-2 font-medium text-muted">Event</th>
+                      <th className="text-left py-2 px-2 font-medium text-muted">Enabled</th>
+                      {notifChannels.map((c) => (
+                        <th key={c.id} className="text-left py-2 px-2 font-medium text-muted">
+                          {c.name || c.channel_type}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {notifPreferences.map((pref) => (
+                      <tr key={pref.event_type} className="border-b border-[var(--line)]">
+                        <td className="py-2 px-2">{pref.event_type.replace(/_/g, " ")}</td>
+                        <td className="py-2 px-2">
+                          <input
+                            type="checkbox"
+                            checked={pref.enabled}
+                            onChange={() => handleTogglePreferenceEnabled(pref.event_type)}
+                            disabled={notifSaving}
+                            className="w-4 h-4 accent-[var(--accent)]"
+                          />
+                        </td>
+                        {notifChannels.map((c) => (
+                          <td key={c.id} className="py-2 px-2">
+                            <input
+                              type="checkbox"
+                              checked={pref.channel_ids.includes(c.id)}
+                              onChange={() => handleTogglePreferenceChannel(pref.event_type, c.id)}
+                              disabled={notifSaving || !pref.enabled}
+                              className="w-4 h-4 accent-[var(--accent)]"
+                            />
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </>
       )}
 
@@ -1067,11 +1544,7 @@ interface AdminSettingsTabProps {
   loading: boolean;
   saving: boolean;
   onUpdateDefaults: (provider?: string, model?: string) => void;
-  onUpdateUserLLM: (
-    userId: number,
-    provider: string | null,
-    model: string | null,
-  ) => void;
+  onUpdateUserLLM: (userId: number, provider: string | null, model: string | null) => void;
   onRefresh: () => void;
 }
 
@@ -1123,8 +1596,7 @@ function AdminSettingsTab({
           </button>
         </div>
         <p className="text-soft mb-6 text-sm">
-          Status of all available LLM providers. Configure API keys in
-          environment variables.
+          Status of all available LLM providers. Configure API keys in environment variables.
         </p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {providers?.providers.map((provider) => (
@@ -1169,9 +1641,7 @@ function AdminSettingsTab({
         </p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
           <div>
-            <label className="block text-sm font-medium mb-1">
-              Default Provider
-            </label>
+            <label className="block text-sm font-medium mb-1">Default Provider</label>
             <select
               value={selectedProvider}
               onChange={(e) => {
@@ -1189,9 +1659,7 @@ function AdminSettingsTab({
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">
-              Default Model
-            </label>
+            <label className="block text-sm font-medium mb-1">Default Model</label>
             <select
               value={selectedModel}
               onChange={(e) => setSelectedModel(e.target.value)}
@@ -1226,31 +1694,19 @@ function AdminSettingsTab({
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[var(--line)]">
-                <th className="text-left py-2 px-2 font-medium text-muted">
-                  User
-                </th>
-                <th className="text-left py-2 px-2 font-medium text-muted">
-                  Provider
-                </th>
-                <th className="text-left py-2 px-2 font-medium text-muted">
-                  Model
-                </th>
-                <th className="text-left py-2 px-2 font-medium text-muted">
-                  Actions
-                </th>
+                <th className="text-left py-2 px-2 font-medium text-muted">User</th>
+                <th className="text-left py-2 px-2 font-medium text-muted">Provider</th>
+                <th className="text-left py-2 px-2 font-medium text-muted">Model</th>
+                <th className="text-left py-2 px-2 font-medium text-muted">Actions</th>
               </tr>
             </thead>
             <tbody>
               {users?.users.map((user) => (
-                <tr
-                  key={user.user_id}
-                  className="border-b border-[var(--line)]"
-                >
+                <tr key={user.user_id} className="border-b border-[var(--line)]">
                   <td className="py-2 px-2">
                     <div>
                       <span className="font-medium">
-                        {user.display_name ||
-                          user.wallet_address.slice(0, 10) + "..."}
+                        {user.display_name || user.wallet_address.slice(0, 10) + "..."}
                       </span>
                       <p className="text-xs text-muted truncate max-w-[150px]">
                         {user.wallet_address}
@@ -1287,9 +1743,7 @@ function AdminSettingsTab({
                         className="px-2 py-1 rounded bg-[var(--bg-soft)] border border-[var(--line)] text-sm w-32"
                       />
                     ) : (
-                      <span className="text-muted">
-                        {user.preferred_llm_model || "—"}
-                      </span>
+                      <span className="text-muted">{user.preferred_llm_model || "—"}</span>
                     )}
                   </td>
                   <td className="py-2 px-2">
@@ -1297,11 +1751,7 @@ function AdminSettingsTab({
                       <div className="flex gap-2">
                         <button
                           onClick={() => {
-                            onUpdateUserLLM(
-                              user.user_id,
-                              userProvider || null,
-                              userModel || null,
-                            );
+                            onUpdateUserLLM(user.user_id, userProvider || null, userModel || null);
                             setEditingUser(null);
                           }}
                           disabled={saving}

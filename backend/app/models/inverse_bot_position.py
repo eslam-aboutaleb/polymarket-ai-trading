@@ -1,15 +1,14 @@
 """Inverse bot position configuration per user-held token."""
-from datetime import datetime, date
 
 from sqlalchemy import (
-    Column,
-    String,
-    Float,
-    DateTime,
-    Integer,
-    ForeignKey,
     Boolean,
+    Column,
     Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
     Text,
 )
 

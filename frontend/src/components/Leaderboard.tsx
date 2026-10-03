@@ -1,3 +1,13 @@
+/**
+ * Ranks Polymarket traders with a sortable virtualised table, a top-3 podium and a profile popup.
+ *
+ * Period (24h/7d/30d/all-time) and trader-limit changes refetch the leaderboard with retries.
+ * Follow, notification-follow (with email toggle) and mock-copy actions all require auth via
+ * `useRequireAuth`; opening a trader loads their profile and can stream an AI trade-pattern
+ * analysis into `TraderAnalysisTable`, abortable on close.
+ *
+ * @module components/Leaderboard
+ */
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { TableVirtuoso } from "react-virtuoso";
 import {
@@ -39,23 +49,15 @@ export default function Leaderboard() {
   const [updatedAt, setUpdatedAt] = useState<string>("");
   const [period, setPeriod] = useState<Period>("all_time");
   const [traderLimit, setTraderLimit] = useState<number>(100);
-  const [selectedTrader, setSelectedTrader] = useState<TraderProfile | null>(
-    null,
-  );
+  const [selectedTrader, setSelectedTrader] = useState<TraderProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [followingSet, setFollowingSet] = useState<Set<string>>(new Set());
-  const [notificationFollowingSet, setNotificationFollowingSet] = useState<
-    Set<string>
-  >(new Set());
+  const [notificationFollowingSet, setNotificationFollowingSet] = useState<Set<string>>(new Set());
   const [notificationEmailByWallet, setNotificationEmailByWallet] = useState<
     Record<string, boolean>
   >({});
-  const [mockTraders, setMockTraders] = useState<MockCopyTrader[]>(() =>
-    loadMockCopyTraders(),
-  );
-  const [popupActionMessage, setPopupActionMessage] = useState<string | null>(
-    null,
-  );
+  const [mockTraders, setMockTraders] = useState<MockCopyTrader[]>(() => loadMockCopyTraders());
+  const [popupActionMessage, setPopupActionMessage] = useState<string | null>(null);
   const [popupActionError, setPopupActionError] = useState<string | null>(null);
   const {
     text: analysisText,
@@ -71,12 +73,7 @@ export default function Leaderboard() {
 
   // ── Column sorting ──
   type SortKey =
-    | "rank"
-    | "profit_loss"
-    | "volume"
-    | "markets_traded"
-    | "win_rate"
-    | "positions_value";
+    "rank" | "profit_loss" | "volume" | "markets_traded" | "win_rate" | "positions_value";
   const [sortKey, setSortKey] = useState<SortKey>("rank");
   const [sortAsc, setSortAsc] = useState(true);
 
@@ -124,9 +121,7 @@ export default function Leaderboard() {
 
   const SortIcon = ({ col }: { col: SortKey }) => {
     if (sortKey !== col) return <span className="ml-1 text-muted/40">↕</span>;
-    return (
-      <span className="ml-1 text-[var(--accent)]">{sortAsc ? "↑" : "↓"}</span>
-    );
+    return <span className="ml-1 text-[var(--accent)]">{sortAsc ? "↑" : "↓"}</span>;
   };
 
   const fetchLeaderboard = useCallback(
@@ -135,11 +130,10 @@ export default function Leaderboard() {
       setError(null);
       for (let attempt = 0; attempt <= retries; attempt++) {
         try {
-          const [leaderboardResult, notificationFollowingResult] =
-            await Promise.allSettled([
-              tradesService.getLeaderboard(traderLimit, period),
-              tradesService.getNotificationFollowing(),
-            ]);
+          const [leaderboardResult, notificationFollowingResult] = await Promise.allSettled([
+            tradesService.getLeaderboard(traderLimit, period),
+            tradesService.getNotificationFollowing(),
+          ]);
           if (leaderboardResult.status !== "fulfilled") {
             throw leaderboardResult.reason;
           }
@@ -148,9 +142,7 @@ export default function Leaderboard() {
           setUpdatedAt(result.updated_at);
           setFollowingSet(
             new Set(
-              result.entries
-                .filter((e) => e.is_followed)
-                .map((e) => e.address.toLowerCase()),
+              result.entries.filter((e) => e.is_followed).map((e) => e.address.toLowerCase()),
             ),
           );
           setNotificationFollowingSet(
@@ -162,12 +154,9 @@ export default function Leaderboard() {
           );
           if (notificationFollowingResult.status === "fulfilled") {
             const emailByWallet: Record<string, boolean> = {};
-            notificationFollowingResult.value.forEach(
-              (row: NotificationFollowedTrader) => {
-                emailByWallet[row.trader_wallet.toLowerCase()] =
-                  !!row.email_enabled;
-              },
-            );
+            notificationFollowingResult.value.forEach((row: NotificationFollowedTrader) => {
+              emailByWallet[row.trader_wallet.toLowerCase()] = !!row.email_enabled;
+            });
             setNotificationEmailByWallet(emailByWallet);
           }
           setLoading(false);
@@ -204,9 +193,7 @@ export default function Leaderboard() {
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to follow trader"));
       setPopupActionMessage(null);
-      setPopupActionError(
-        getApiErrorMessage(err, "Failed to enable copy trade"),
-      );
+      setPopupActionError(getApiErrorMessage(err, "Failed to enable copy trade"));
     }
   };
 
@@ -223,9 +210,7 @@ export default function Leaderboard() {
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to unfollow trader"));
       setPopupActionMessage(null);
-      setPopupActionError(
-        getApiErrorMessage(err, "Failed to disable copy trade"),
-      );
+      setPopupActionError(getApiErrorMessage(err, "Failed to disable copy trade"));
     }
   };
 
@@ -246,9 +231,7 @@ export default function Leaderboard() {
       );
     } catch (err: unknown) {
       setPopupActionMessage(null);
-      setPopupActionError(
-        getApiErrorMessage(err, "Failed to follow trader notifications"),
-      );
+      setPopupActionError(getApiErrorMessage(err, "Failed to follow trader notifications"));
     }
   };
 
@@ -267,21 +250,14 @@ export default function Leaderboard() {
         return next;
       });
       setPopupActionError(null);
-      setPopupActionMessage(
-        `Stopped notification follow for ${shortAddress(normalized)}.`,
-      );
+      setPopupActionMessage(`Stopped notification follow for ${shortAddress(normalized)}.`);
     } catch (err: unknown) {
       setPopupActionMessage(null);
-      setPopupActionError(
-        getApiErrorMessage(err, "Failed to unfollow trader notifications"),
-      );
+      setPopupActionError(getApiErrorMessage(err, "Failed to unfollow trader notifications"));
     }
   };
 
-  const handleNotificationEmailToggle = async (
-    wallet: string,
-    emailEnabled: boolean,
-  ) => {
+  const handleNotificationEmailToggle = async (wallet: string, emailEnabled: boolean) => {
     try {
       const row = await tradesService.followNotifications(wallet, {
         feed_enabled: true,
@@ -301,9 +277,7 @@ export default function Leaderboard() {
       );
     } catch (err: unknown) {
       setPopupActionMessage(null);
-      setPopupActionError(
-        getApiErrorMessage(err, "Failed to update email notification setting"),
-      );
+      setPopupActionError(getApiErrorMessage(err, "Failed to update email notification setting"));
     }
   };
 
@@ -366,8 +340,7 @@ export default function Leaderboard() {
 
     // Find matching leaderboard entry for stats
     const entry = entries.find(
-      (e) =>
-        e.address.toLowerCase() === selectedTrader.wallet_address.toLowerCase(),
+      (e) => e.address.toLowerCase() === selectedTrader.wallet_address.toLowerCase(),
     );
 
     // Use real trade_stats from backend if available
@@ -381,13 +354,9 @@ export default function Leaderboard() {
         // Backend will fetch real trades and compute real win rate
         // (these are just hints; the backend overrides them with real data)
         win_rate: ts?.win_rate ?? selectedTrader.win_rate ?? 0,
-        trade_count:
-          ts?.total_trades ?? selectedTrader.recent_trades?.length ?? 0,
+        trade_count: ts?.total_trades ?? selectedTrader.recent_trades?.length ?? 0,
         markets_traded:
-          ts?.unique_markets ??
-          selectedTrader.markets_traded ??
-          entry?.markets_traded ??
-          0,
+          ts?.unique_markets ?? selectedTrader.markets_traded ?? entry?.markets_traded ?? 0,
         // No need to send recent_trades_json — backend fetches all trades itself
         recent_trades_json: "[]",
       },
@@ -426,8 +395,7 @@ export default function Leaderboard() {
     const estimatedHeaderHeight = 48;
     const minHeight = 220;
     const maxHeight = 560;
-    const estimated =
-      sortedEntries.length * estimatedRowHeight + estimatedHeaderHeight;
+    const estimated = sortedEntries.length * estimatedRowHeight + estimatedHeaderHeight;
     return Math.max(minHeight, Math.min(maxHeight, estimated));
   }, [sortedEntries.length]);
 
@@ -454,9 +422,7 @@ export default function Leaderboard() {
           <p className="text-soft">
             Top {entries.length} traders on Polymarket
             {loading && entries.length === 0 && (
-              <span className="text-muted ml-1">
-                (loading up to {traderLimit}…)
-              </span>
+              <span className="text-muted ml-1">(loading up to {traderLimit}…)</span>
             )}
             {updatedAt && (
               <span className="text-muted ml-2">
@@ -516,19 +482,10 @@ export default function Leaderboard() {
             const pnl = pnlForPeriod(e);
             const isFollowed = followingSet.has(e.address.toLowerCase());
             return (
-              <div
-                key={e.rank}
-                className={`${heights[i]} flex flex-col items-center`}
-              >
-                <div
-                  className={`w-full border-2 ${colors[i]} rounded-lg p-4 text-center`}
-                >
+              <div key={e.rank} className={`${heights[i]} flex flex-col items-center`}>
+                <div className={`w-full border-2 ${colors[i]} rounded-lg p-4 text-center`}>
                   <div className="text-2xl font-bold mb-1">
-                    {podiumOrder[i] === 1
-                      ? "🥇"
-                      : podiumOrder[i] === 2
-                        ? "🥈"
-                        : "🥉"}
+                    {podiumOrder[i] === 1 ? "🥇" : podiumOrder[i] === 2 ? "🥈" : "🥉"}
                   </div>
                   <button
                     onClick={(ev) => openProfile(e.address, ev)}
@@ -542,15 +499,11 @@ export default function Leaderboard() {
                     {pnl >= 0 ? "+" : ""}
                     {formatUSD(pnl)}
                   </p>
-                  <p className="text-soft text-xs mt-1">
-                    Vol: {formatUSD(e.volume)}
-                  </p>
+                  <p className="text-soft text-xs mt-1">Vol: {formatUSD(e.volume)}</p>
                   <button
                     onClick={() =>
                       requireAuth(() =>
-                        isFollowed
-                          ? handleUnfollow(e.address)
-                          : handleFollow(e.address),
+                        isFollowed ? handleUnfollow(e.address) : handleFollow(e.address),
                       )
                     }
                     className={`mt-2 px-3 py-1 rounded text-xs font-semibold transition ${
@@ -578,9 +531,7 @@ export default function Leaderboard() {
             increaseViewportBy={{ top: 240, bottom: 360 }}
             computeItemKey={(_, entry) => entry.address.toLowerCase()}
             components={{
-              Table: (props) => (
-                <table {...props} className="table-theme text-sm w-full" />
-              ),
+              Table: (props) => <table {...props} className="table-theme text-sm w-full" />,
               TableRow: (props) => <tr {...props} className="transition" />,
             }}
             fixedHeaderContent={() => (
@@ -638,11 +589,7 @@ export default function Leaderboard() {
                   <td className="p-3 text-center text-soft font-medium">
                     {entry.rank <= 3 ? (
                       <span className="text-base">
-                        {entry.rank === 1
-                          ? "🥇"
-                          : entry.rank === 2
-                            ? "🥈"
-                            : "🥉"}
+                        {entry.rank === 1 ? "🥇" : entry.rank === 2 ? "🥈" : "🥉"}
                       </span>
                     ) : (
                       entry.rank
@@ -657,9 +604,7 @@ export default function Leaderboard() {
                         {entry.display_name || shortAddress(entry.address)}
                       </p>
                       {entry.display_name && (
-                        <p className="text-muted text-xs mono">
-                          {shortAddress(entry.address)}
-                        </p>
+                        <p className="text-muted text-xs mono">{shortAddress(entry.address)}</p>
                       )}
                     </button>
                   </td>
@@ -669,12 +614,8 @@ export default function Leaderboard() {
                       {formatUSD(pnl)}
                     </span>
                   </td>
-                  <td className="p-3 text-right text-soft mono">
-                    {formatUSD(entry.volume)}
-                  </td>
-                  <td className="p-3 text-right text-soft">
-                    {entry.markets_traded || "—"}
-                  </td>
+                  <td className="p-3 text-right text-soft mono">{formatUSD(entry.volume)}</td>
+                  <td className="p-3 text-right text-soft">{entry.markets_traded || "—"}</td>
                   <td className="p-3 text-right">
                     {entry.win_rate != null && entry.win_rate > 0 ? (
                       <span
@@ -693,17 +634,13 @@ export default function Leaderboard() {
                     )}
                   </td>
                   <td className="p-3 text-right text-soft mono">
-                    {entry.positions_value > 0
-                      ? formatUSD(entry.positions_value)
-                      : "—"}
+                    {entry.positions_value > 0 ? formatUSD(entry.positions_value) : "—"}
                   </td>
                   <td className="p-3 text-center">
                     <button
                       onClick={() =>
                         requireAuth(() =>
-                          isFollowed
-                            ? handleUnfollow(entry.address)
-                            : handleFollow(entry.address),
+                          isFollowed ? handleUnfollow(entry.address) : handleFollow(entry.address),
                         )
                       }
                       className={`px-2 py-1 rounded text-xs font-semibold transition ${
@@ -722,9 +659,7 @@ export default function Leaderboard() {
         </div>
       ) : (
         <div className="text-center py-12 surface-panel">
-          <p className="text-soft text-lg mb-2">
-            No leaderboard data available
-          </p>
+          <p className="text-soft text-lg mb-2">No leaderboard data available</p>
           <p className="text-muted text-sm">
             Check back later — leaderboard data is fetched from Polymarket.
           </p>
@@ -733,10 +668,7 @@ export default function Leaderboard() {
 
       {/* Trader Profile Modal */}
       {(selectedTrader || profileLoading) && (
-        <div
-          className="fixed inset-0 bg-black/60 z-50 overflow-y-auto"
-          onClick={closeProfile}
-        >
+        <div className="fixed inset-0 bg-black/60 z-50 overflow-y-auto" onClick={closeProfile}>
           <div
             className="surface-panel max-w-3xl w-full p-0 rounded-2xl mx-auto shadow-2xl shadow-black/40 border border-[var(--line-strong)]"
             style={{
@@ -770,11 +702,7 @@ export default function Leaderboard() {
                       stroke="currentColor"
                       strokeWidth={2}
                     >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M6 18L18 6M6 6l12 12"
-                      />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                     </svg>
                   </button>
                   <div className="flex items-center gap-4">
@@ -784,8 +712,7 @@ export default function Leaderboard() {
                     </div>
                     <div>
                       <h2 className="text-xl font-bold text-white">
-                        {selectedTrader.display_name ||
-                          shortAddress(selectedTrader.wallet_address)}
+                        {selectedTrader.display_name || shortAddress(selectedTrader.wallet_address)}
                       </h2>
                       <p className="text-muted text-xs mono mt-0.5">
                         {selectedTrader.wallet_address}
@@ -801,9 +728,7 @@ export default function Leaderboard() {
                         <span className="w-6 h-6 rounded-md bg-[var(--accent-soft)] flex items-center justify-center text-[var(--accent)] text-xs">
                           $
                         </span>
-                        <span className="text-muted text-xs font-medium">
-                          Total P&L
-                        </span>
+                        <span className="text-muted text-xs font-medium">Total P&L</span>
                       </div>
                       <p
                         className={`text-lg font-bold ${selectedTrader.profit_loss >= 0 ? "status-good" : "status-bad"}`}
@@ -828,9 +753,7 @@ export default function Leaderboard() {
                             />
                           </svg>
                         </span>
-                        <span className="text-muted text-xs font-medium">
-                          Volume
-                        </span>
+                        <span className="text-muted text-xs font-medium">Volume</span>
                       </div>
                       <p className="text-lg font-bold text-white">
                         {formatUSD(selectedTrader.volume)}
@@ -853,9 +776,7 @@ export default function Leaderboard() {
                             />
                           </svg>
                         </span>
-                        <span className="text-muted text-xs font-medium">
-                          Markets
-                        </span>
+                        <span className="text-muted text-xs font-medium">Markets</span>
                       </div>
                       <p className="text-lg font-bold text-white">
                         {selectedTrader.trade_stats?.unique_markets ||
@@ -880,18 +801,13 @@ export default function Leaderboard() {
                             />
                           </svg>
                         </span>
-                        <span className="text-muted text-xs font-medium">
-                          Win Rate
-                        </span>
+                        <span className="text-muted text-xs font-medium">Win Rate</span>
                       </div>
                       <p className="text-lg font-bold text-white">
                         {(() => {
                           const wr =
-                            selectedTrader.trade_stats?.win_rate ??
-                            selectedTrader.win_rate;
-                          return wr != null && wr > 0
-                            ? `${wr.toFixed(1)}%`
-                            : "—";
+                            selectedTrader.trade_stats?.win_rate ?? selectedTrader.win_rate;
+                          return wr != null && wr > 0 ? `${wr.toFixed(1)}%` : "—";
                         })()}
                       </p>
                     </div>
@@ -930,9 +846,7 @@ export default function Leaderboard() {
                         <div>
                           <p className="text-muted">Avg Trade</p>
                           <p className="font-bold text-white">
-                            {formatUSD(
-                              selectedTrader.trade_stats.avg_trade_size,
-                            )}
+                            {formatUSD(selectedTrader.trade_stats.avg_trade_size)}
                           </p>
                         </div>
                         {selectedTrader.trade_stats.trade_frequency && (
@@ -952,9 +866,7 @@ export default function Leaderboard() {
                         <div>
                           <p className="text-muted">Largest Trade</p>
                           <p className="font-bold text-white">
-                            {formatUSD(
-                              selectedTrader.trade_stats.largest_trade,
-                            )}
+                            {formatUSD(selectedTrader.trade_stats.largest_trade)}
                           </p>
                         </div>
                       </div>
@@ -984,10 +896,7 @@ export default function Leaderboard() {
                     )}
                     {analysisText && (
                       <div className="mt-4">
-                        <TraderAnalysisTable
-                          text={analysisText}
-                          streaming={analysisLoading}
-                        />
+                        <TraderAnalysisTable text={analysisText} streaming={analysisLoading} />
                       </div>
                     )}
                   </div>
@@ -999,21 +908,13 @@ export default function Leaderboard() {
                       </h3>
                       <div className="space-y-2 max-h-48 overflow-y-auto scroll-soft">
                         {selectedTrader.positions.slice(0, 10).map((pos, i) => (
-                          <div
-                            key={i}
-                            className="surface-soft p-2 rounded text-xs"
-                          >
+                          <div key={i} className="surface-soft p-2 rounded text-xs">
                             <p className="text-white truncate">
-                              {String(
-                                pos.title || pos.market || `Position ${i + 1}`,
-                              )}
+                              {String(pos.title || pos.market || `Position ${i + 1}`)}
                             </p>
                             <p className="text-muted">
-                              Size: {formatUSD(Number(pos.size || 0))} · Price:
-                              $
-                              {Number(pos.avgPrice || pos.price || 0).toFixed(
-                                2,
-                              )}
+                              Size: {formatUSD(Number(pos.size || 0))} · Price: $
+                              {Number(pos.avgPrice || pos.price || 0).toFixed(2)}
                             </p>
                           </div>
                         ))}
@@ -1025,8 +926,7 @@ export default function Leaderboard() {
                   {(() => {
                     const wallet = selectedTrader.wallet_address.toLowerCase();
                     const isCopyFollowed = followingSet.has(wallet);
-                    const isNotificationFollowed =
-                      notificationFollowingSet.has(wallet);
+                    const isNotificationFollowed = notificationFollowingSet.has(wallet);
                     const isMockCopied = hasMockCopyTrader(mockTraders, wallet);
                     const emailEnabled = !!notificationEmailByWallet[wallet];
 
@@ -1055,9 +955,7 @@ export default function Leaderboard() {
                           <button
                             onClick={() =>
                               requireAuth(() =>
-                                isCopyFollowed
-                                  ? handleUnfollow(wallet)
-                                  : handleFollow(wallet),
+                                isCopyFollowed ? handleUnfollow(wallet) : handleFollow(wallet),
                               )
                             }
                             className={`py-2.5 rounded-xl font-semibold text-sm transition border ${
@@ -1066,24 +964,18 @@ export default function Leaderboard() {
                                 : "bg-[var(--bg-soft)] text-soft border-[var(--line)] hover:border-[var(--line-strong)]"
                             }`}
                           >
-                            {isCopyFollowed
-                              ? "Copy Trade Enabled"
-                              : "Copy Trade"}
+                            {isCopyFollowed ? "Copy Trade Enabled" : "Copy Trade"}
                           </button>
 
                           <button
-                            onClick={() =>
-                              requireAuth(() => handleToggleMockCopy(wallet))
-                            }
+                            onClick={() => requireAuth(() => handleToggleMockCopy(wallet))}
                             className={`py-2.5 rounded-xl font-semibold text-sm transition border ${
                               isMockCopied
                                 ? "bg-sky-500/15 text-sky-300 border-sky-500/30 hover:bg-sky-500/25"
                                 : "bg-[var(--bg-soft)] text-soft border-[var(--line)] hover:border-[var(--line-strong)]"
                             }`}
                           >
-                            {isMockCopied
-                              ? "Mock Copy Enabled"
-                              : "Mock Copy Trade"}
+                            {isMockCopied ? "Mock Copy Enabled" : "Mock Copy Trade"}
                           </button>
                         </div>
 
@@ -1092,16 +984,12 @@ export default function Leaderboard() {
                             type="checkbox"
                             checked={emailEnabled}
                             onChange={(e) =>
-                              handleNotificationEmailToggle(
-                                wallet,
-                                e.target.checked,
-                              )
+                              handleNotificationEmailToggle(wallet, e.target.checked)
                             }
                             disabled={!isNotificationFollowed}
                             className="w-4 h-4 accent-[var(--accent)]"
                           />
-                          Enable email for this trader's open/close
-                          notifications
+                          Enable email for this trader's open/close notifications
                         </label>
 
                         {popupActionError && (
@@ -1116,15 +1004,9 @@ export default function Leaderboard() {
                         )}
 
                         <div className="flex gap-2">
-                          {buildPolymarketProfileUrl(
-                            selectedTrader.wallet_address,
-                          ) ? (
+                          {buildPolymarketProfileUrl(selectedTrader.wallet_address) ? (
                             <a
-                              href={
-                                buildPolymarketProfileUrl(
-                                  selectedTrader.wallet_address,
-                                ) || "#"
-                              }
+                              href={buildPolymarketProfileUrl(selectedTrader.wallet_address) || "#"}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl font-semibold text-sm transition bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)]/25 border border-[var(--accent)]/30"
@@ -1149,10 +1031,7 @@ export default function Leaderboard() {
                               Profile link unavailable
                             </span>
                           )}
-                          <button
-                            onClick={closeProfile}
-                            className="btn-muted px-5 rounded-xl"
-                          >
+                          <button onClick={closeProfile} className="btn-muted px-5 rounded-xl">
                             Close
                           </button>
                         </div>

@@ -10,9 +10,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install UV
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:$PATH"
+# Install UV into a system path so the non-root appuser
+# (created below) can execute it — /root is not traversable
+# by appuser, so the default ~/.local/bin install location
+# would break every `uv run ...` in the CMD.
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh -s -- --install-dir /usr/local/bin
+ENV PATH="/usr/local/bin:$PATH"
 
 # ── Deps layer (cached until pyproject.toml changes) ──────────
 COPY pyproject.toml .
@@ -39,13 +42,17 @@ RUN useradd -m -u 1000 -s /bin/bash appuser \
     && chown -R appuser:appuser /app
 USER appuser
 
-# UV was installed for root — symlink so appuser can use it too
-ENV PATH="/root/.local/bin:$PATH"
-
-EXPOSE 8000
+EXPOSE 8002
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-  CMD curl -f http://localhost:8000/health || exit 1
+  CMD curl -f http://localhost:8002/health || exit 1
 
-# Production: no --reload, 2 workers (tune via $WEB_CONCURRENCY)
-CMD ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${WEB_CONCURRENCY:-2} --log-level info"]
+# Production: no --reload. Default to a SINGLE worker.
+#
+# Every scheduled background job (stop-loss monitor, inverse bot, market maker,
+# trade monitor, aggregation, lifecycle) starts from the FastAPI lifespan, and
+# every one of them de-duplicates through process-local in-memory state. With
+# more than one worker, each process runs its own copy, so a single stop-loss
+# trigger placed two independent sell orders. Raising WEB_CONCURRENCY requires
+# moving the schedulers behind a Postgres advisory lock first.
+CMD ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port 8002 --workers ${WEB_CONCURRENCY:-1} --log-level info"]

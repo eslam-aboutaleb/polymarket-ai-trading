@@ -4,14 +4,15 @@ Revision ID: 20260228_0002
 Revises: 20260228_0001
 Create Date: 2026-02-28 20:45:00
 """
+
 from __future__ import annotations
 
 import hashlib
 import hmac
 import os
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy import inspect, text
 
 revision = "20260228_0002"
@@ -80,12 +81,16 @@ def upgrade() -> None:
             )
 
         if "token" in columns:
-            legacy_rows = bind.execute(
-                text(
-                    "SELECT id, token FROM refresh_tokens "
-                    "WHERE token_hash IS NULL AND token IS NOT NULL"
+            legacy_rows = (
+                bind.execute(
+                    text(
+                        "SELECT id, token FROM refresh_tokens "
+                        "WHERE token_hash IS NULL AND token IS NOT NULL"
+                    )
                 )
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
             for row in legacy_rows:
                 bind.execute(
                     text("UPDATE refresh_tokens SET token_hash = :token_hash WHERE id = :id"),
@@ -127,7 +132,8 @@ def upgrade() -> None:
 
         inspector = inspect(bind)
         existing_indexes = {
-            tuple(index.get("column_names") or []) for index in inspector.get_indexes("refresh_tokens")
+            tuple(index.get("column_names") or [])
+            for index in inspector.get_indexes("refresh_tokens")
         }
         if ("token_hash",) not in existing_indexes:
             op.create_index(

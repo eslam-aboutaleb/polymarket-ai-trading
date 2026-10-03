@@ -1,3 +1,13 @@
+/**
+ * Zustand store holding the client-side auth session (wallet address, admin flag, ready flag).
+ *
+ * Intentionally in-memory only and not persisted: `App.tsx` re-validates the session on every load
+ * with `GET /api/auth/me` and sets `sessionReady` once that settles, which is what `ProtectedRoute`
+ * waits on. `services/apiClient.ts` also calls `clearSession` when a token refresh fails.
+ *
+ * @module store/authStore
+ */
+
 import { create } from "zustand";
 
 interface AuthState {

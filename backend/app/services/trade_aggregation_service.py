@@ -7,11 +7,13 @@ improve fill rates.
 
 Inspired by PolymarketTrading/Polymarket-Trading's volume aggregation.
 """
+
 import asyncio
+import contextlib
 import logging
 from collections import defaultdict
-from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, List, Optional, Tuple
+from datetime import datetime
+from typing import Any
 
 from app.config import get_settings
 from app.utils.time import utc_now
@@ -24,9 +26,9 @@ DEFAULT_MIN_TRADES = 2  # Minimum trades to trigger aggregation
 DEFAULT_MAX_WINDOW_SECONDS = 120  # Maximum wait time even if trades keep flowing
 
 # In-memory buffer of pending trades keyed by (user_id, token_id, side)
-_pending_buffer: Dict[Tuple[int, str, str], List[Dict[str, Any]]] = defaultdict(list)
-_buffer_timers: Dict[Tuple[int, str, str], datetime] = {}
-_aggregation_task: Optional[asyncio.Task] = None
+_pending_buffer: dict[tuple[int, str, str], list[dict[str, Any]]] = defaultdict(list)
+_buffer_timers: dict[tuple[int, str, str], datetime] = {}
+_aggregation_task: asyncio.Task | None = None
 
 
 def add_trade_to_buffer(
@@ -35,7 +37,7 @@ def add_trade_to_buffer(
     side: str,
     price: float,
     size: float,
-    metadata: Optional[Dict[str, Any]] = None,
+    metadata: dict[str, Any] | None = None,
 ) -> bool:
     """Add a trade to the aggregation buffer.
 
@@ -65,7 +67,11 @@ def add_trade_to_buffer(
 
     logger.debug(
         "Buffered trade for aggregation: user=%d token=%s side=%s size=%.2f (buffer_count=%d)",
-        user_id, token_id[:20], side, size, len(_pending_buffer[key]),
+        user_id,
+        token_id[:20],
+        side,
+        size,
+        len(_pending_buffer[key]),
     )
 
     return True
@@ -75,7 +81,7 @@ def get_aggregated_trade(
     user_id: int,
     token_id: str,
     side: str,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Check if we have a ready aggregated trade.
 
     Returns the aggregated trade info if the window has elapsed,
@@ -129,7 +135,7 @@ def get_aggregated_trade(
     return result
 
 
-def flush_buffer(user_id: int, token_id: str, side: str) -> Optional[Dict[str, Any]]:
+def flush_buffer(user_id: int, token_id: str, side: str) -> dict[str, Any] | None:
     """Force-flush the buffer for a specific key, regardless of window."""
     key = (user_id, token_id, side.upper())
     trades = _pending_buffer.get(key, [])
@@ -157,7 +163,7 @@ def flush_buffer(user_id: int, token_id: str, side: str) -> Optional[Dict[str, A
     return result
 
 
-def get_pending_buffers() -> Dict[str, Any]:
+def get_pending_buffers() -> dict[str, Any]:
     """Get a summary of all pending aggregation buffers."""
     summary = {}
     for key, trades in _pending_buffer.items():
@@ -197,6 +203,7 @@ async def _aggregation_loop():
                     # Execute the aggregated trade via copy_trade_service
                     try:
                         from app.services.copy_trade_service import execute_aggregated_trade
+
                         await execute_aggregated_trade(aggregated)
                     except ImportError:
                         logger.debug(
@@ -236,8 +243,6 @@ async def stop_aggregation_service():
     global _aggregation_task
     if _aggregation_task and not _aggregation_task.done():
         _aggregation_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await _aggregation_task
-        except asyncio.CancelledError:
-            pass
     _aggregation_task = None

@@ -27,27 +27,27 @@ message LLMConfig {
 service AnalysisService {
   // Comprehensive market analysis with optional research
   rpc AnalyzeMarket(MarketAnalysisRequest) returns (AnalysisResponse);
-  
+
   // Quick 2-3 sentence analysis
   rpc QuickAnalysis(QuickAnalysisRequest) returns (AnalysisResponse);
-  
+
   // Scan multiple markets for opportunities
   rpc ScanMarkets(MarketScanRequest) returns (AnalysisResponse);
-  
+
   // Assess risk for a potential trade
   rpc AssessRisk(RiskAssessmentRequest) returns (AnalysisResponse);
-  
+
   // Generate trade execution plan
   rpc GenerateTradePlan(TradePlanRequest) returns (AnalysisResponse);
-  
+
   // Streaming analysis for long-running tasks
   rpc AnalyzeMarketStream(MarketAnalysisRequest) returns (stream AnalysisChunk);
 
   // ── NEW: Trader / Copy-Trading RPCs ──────────────────────
-  
+
   // Full trader profile analysis with internet research
   rpc AnalyzeTrader(TraderAnalysisRequest) returns (AnalysisResponse);
-  
+
   // Evaluate whether to copy a specific trade
   rpc EvaluateCopyTrade(CopyTradeEvaluationRequest) returns (AnalysisResponse);
 
@@ -64,7 +64,15 @@ service AnalysisService {
 
   // Index markets into RAG vector store
   rpc IndexMarketsRAG(IndexMarketsRAGRequest) returns (AnalysisResponse);
-  
+
+  // ── NEW: News Generation RPCs ────────────────────────────
+
+  // Generate AI news article for a market
+  rpc GenerateNews(GenerateNewsRequest) returns (GenerateNewsResponse);
+
+  // Generate news articles for multiple markets (batch)
+  rpc GenerateNewsBatch(GenerateNewsBatchRequest) returns (GenerateNewsBatchResponse);
+
   // Health check
   rpc HealthCheck(HealthRequest) returns (HealthResponse);
 }
@@ -221,4 +229,49 @@ message IndexMarketsRAGRequest {
   string markets_json = 1;        // JSON array of market dicts to index
   bool force_reindex = 2;         // Force re-index even if TTL not expired
   string user_id = 3;
+}
+
+// ── NEW: News Generation ─────────────────────────────────
+
+message GenerateNewsRequest {
+  string market_question = 1;     // Market question / title
+  string market_description = 2;  // Full market description
+  string condition_id = 3;        // Polymarket condition ID
+  double yes_price = 4;           // Current YES price (0-1)
+  double no_price = 5;            // Current NO price (0-1)
+  double volume_24h = 6;          // 24h trading volume
+  string end_date = 7;            // Market resolution date
+  string trader_stats_json = 8;   // JSON of trader positioning data
+  string smart_money_json = 9;    // JSON of smart money analysis
+  string user_id = 10;
+  LLMConfig llm_config = 11;
+}
+
+message GenerateNewsResponse {
+  bool success = 1;
+  string headline = 2;
+  string summary = 3;
+  string body = 4;
+  string sentiment = 5;           // bullish, bearish, neutral, mixed
+  float confidence = 6;
+  repeated string key_insights = 7;
+  string trader_behavior_summary = 8;
+  string market_outlook = 9;
+  repeated string tags = 10;
+  string market_question = 11;
+  string condition_id = 12;
+  string generated_at = 13;
+  string error = 14;
+  map<string, string> metadata = 15;
+}
+
+message GenerateNewsBatchRequest {
+  repeated GenerateNewsRequest markets = 1;
+  LLMConfig llm_config = 2;
+}
+
+message GenerateNewsBatchResponse {
+  bool success = 1;
+  repeated GenerateNewsResponse articles = 2;
+  string error = 3;
 }

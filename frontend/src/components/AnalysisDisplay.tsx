@@ -1,3 +1,14 @@
+/**
+ * Renders LLM-produced market analysis markdown as a grid of styled section cards.
+ *
+ * `parseAnalysis` splits the raw text on markdown headings (falling back to numbered bold lines),
+ * classifies each section by title, and picks a specialised card (probability, confidence, action,
+ * position size, conclusion, copy-worthiness, or bullets). During streaming the component shows raw
+ * text until enough content arrives to parse. `AnalysisDisplayInline` is a compact variant for
+ * quick-analysis summaries.
+ *
+ * @module components/AnalysisDisplay
+ */
 import { useMemo } from "react";
 
 /* ───────── Types ───────── */
@@ -157,13 +168,10 @@ function extractBoldValue(text: string): string | null {
 }
 
 /** Extract recommendation keyword from action section */
-function extractRecommendation(
-  text: string,
-): { label: string; color: string } | null {
+function extractRecommendation(text: string): { label: string; color: string } | null {
   const lower = text.toLowerCase();
   if (/buy\s*no/i.test(lower)) return { label: "BUY NO", color: "chip-danger" };
-  if (/buy\s*yes/i.test(lower))
-    return { label: "BUY YES", color: "chip-success" };
+  if (/buy\s*yes/i.test(lower)) return { label: "BUY YES", color: "chip-success" };
   if (/hold/i.test(lower)) return { label: "HOLD", color: "chip-warning" };
   if (/sell/i.test(lower)) return { label: "SELL", color: "chip-danger" };
   return null;
@@ -194,12 +202,8 @@ function ProbabilityCard({ section }: { section: ParsedSection }) {
       </div>
       {displayPct && (
         <div className="flex items-center gap-3 mb-3">
-          <span className="text-3xl font-extrabold text-[var(--accent)]">
-            {displayPct}
-          </span>
-          <span className="text-xs text-muted uppercase tracking-wider">
-            Assessed probability
-          </span>
+          <span className="text-3xl font-extrabold text-[var(--accent)]">{displayPct}</span>
+          <span className="text-xs text-muted uppercase tracking-wider">Assessed probability</span>
         </div>
       )}
       <p className="text-sm text-soft leading-relaxed">{cleanText}</p>
@@ -223,9 +227,7 @@ function ConfidenceCard({ section }: { section: ParsedSection }) {
       <div className="flex items-center gap-3 mb-3">
         <SectionIcon type="confidence" />
         <h4 className="analysis-card__title">{section.title}</h4>
-        {level && (
-          <span className={`chip ${color} ml-auto text-xs`}>{level}</span>
-        )}
+        {level && <span className={`chip ${color} ml-auto text-xs`}>{level}</span>}
       </div>
       <p className="text-sm text-soft leading-relaxed">{cleanText}</p>
     </div>
@@ -241,11 +243,7 @@ function ActionCard({ section }: { section: ParsedSection }) {
       <div className="flex items-center gap-3 mb-3">
         <SectionIcon type="action" />
         <h4 className="analysis-card__title">{section.title}</h4>
-        {rec && (
-          <span className={`chip ${rec.color} ml-auto text-sm font-bold`}>
-            {rec.label}
-          </span>
-        )}
+        {rec && <span className={`chip ${rec.color} ml-auto text-sm font-bold`}>{rec.label}</span>}
       </div>
       <p className="text-sm text-soft leading-relaxed">{cleanText}</p>
     </div>
@@ -263,9 +261,7 @@ function PositionCard({ section }: { section: ParsedSection }) {
         <SectionIcon type="position" />
         <h4 className="analysis-card__title">{section.title}</h4>
         {(boldVal || pct) && (
-          <span className="chip chip-accent ml-auto text-sm font-bold">
-            {boldVal || pct}
-          </span>
+          <span className="chip chip-accent ml-auto text-sm font-bold">{boldVal || pct}</span>
         )}
       </div>
       <p className="text-sm text-soft leading-relaxed">{cleanText}</p>
@@ -275,14 +271,9 @@ function PositionCard({ section }: { section: ParsedSection }) {
 
 function BulletCard({ section }: { section: ParsedSection }) {
   const isRisk = section.type === "risks";
-  const isStrategy =
-    section.type === "strategy" || section.type === "trading_pattern";
+  const isStrategy = section.type === "strategy" || section.type === "trading_pattern";
 
-  const variantClass = isRisk
-    ? "analysis-card--risk"
-    : isStrategy
-      ? "analysis-card--strategy"
-      : "";
+  const variantClass = isRisk ? "analysis-card--risk" : isStrategy ? "analysis-card--strategy" : "";
 
   return (
     <div className={`analysis-card ${variantClass}`}>
@@ -298,8 +289,7 @@ function BulletCard({ section }: { section: ParsedSection }) {
             // Split on first colon for label:detail
             const colonIdx = clean.indexOf(":");
             const label = colonIdx > 0 ? clean.slice(0, colonIdx) : null;
-            const detail =
-              colonIdx > 0 ? clean.slice(colonIdx + 1).trim() : clean;
+            const detail = colonIdx > 0 ? clean.slice(colonIdx + 1).trim() : clean;
 
             return (
               <li key={i} className="flex items-start gap-2 text-sm text-soft">
@@ -308,9 +298,7 @@ function BulletCard({ section }: { section: ParsedSection }) {
                 />
                 <span>
                   {label && (
-                    <span className="font-semibold text-[var(--text-primary)]">
-                      {label}:
-                    </span>
+                    <span className="font-semibold text-[var(--text-primary)]">{label}:</span>
                   )}{" "}
                   {detail}
                 </span>
@@ -319,9 +307,7 @@ function BulletCard({ section }: { section: ParsedSection }) {
           })}
         </ul>
       ) : (
-        <p className="text-sm text-soft leading-relaxed">
-          {section.content.replace(/\*\*/g, "")}
-        </p>
+        <p className="text-sm text-soft leading-relaxed">{section.content.replace(/\*\*/g, "")}</p>
       )}
     </div>
   );
@@ -336,11 +322,7 @@ function ConclusionCard({ section }: { section: ParsedSection }) {
       <div className="flex items-center gap-3 mb-3">
         <SectionIcon type="conclusion" />
         <h4 className="analysis-card__title">{section.title}</h4>
-        {rec && (
-          <span className={`chip ${rec.color} ml-auto text-sm font-bold`}>
-            {rec.label}
-          </span>
-        )}
+        {rec && <span className={`chip ${rec.color} ml-auto text-sm font-bold`}>{rec.label}</span>}
       </div>
       <p className="text-sm text-soft leading-relaxed">{cleanText}</p>
     </div>
@@ -367,20 +349,14 @@ function CopyWorthyCard({ section }: { section: ParsedSection }) {
         <SectionIcon type="copy_worthy" />
         <h4 className="analysis-card__title">{section.title}</h4>
         {rating !== null && (
-          <span className={`chip ${ratingColor} ml-auto text-sm font-bold`}>
-            {rating}/10
-          </span>
+          <span className={`chip ${ratingColor} ml-auto text-sm font-bold`}>{rating}/10</span>
         )}
       </div>
       {rating !== null && (
         <div className="w-full bg-[var(--bg-soft)] rounded-full h-2 mb-3">
           <div
             className={`h-2 rounded-full transition-all ${
-              rating >= 7
-                ? "bg-green-500"
-                : rating >= 4
-                  ? "bg-yellow-500"
-                  : "bg-red-500"
+              rating >= 7 ? "bg-green-500" : rating >= 4 ? "bg-yellow-500" : "bg-red-500"
             }`}
             style={{ width: `${rating * 10}%` }}
           />
@@ -418,10 +394,7 @@ function SectionCard({ section }: { section: ParsedSection }) {
 
 /* ───────── Main export ───────── */
 
-export default function AnalysisDisplay({
-  text,
-  streaming,
-}: AnalysisDisplayProps) {
+export default function AnalysisDisplay({ text, streaming }: AnalysisDisplayProps) {
   const { sections } = useMemo(() => parseAnalysis(text), [text]);
 
   // While streaming and we haven't accumulated enough for a real parse,
@@ -471,14 +444,8 @@ export function AnalysisDisplayInline({ text }: { text: string }) {
     <div className="space-y-2">
       {(rec || pct) && (
         <div className="flex gap-2 items-center flex-wrap">
-          {rec && (
-            <span className={`chip ${rec.color} text-xs font-bold`}>
-              {rec.label}
-            </span>
-          )}
-          {pct && (
-            <span className="chip chip-accent text-xs">Probability: {pct}</span>
-          )}
+          {rec && <span className={`chip ${rec.color} text-xs font-bold`}>{rec.label}</span>}
+          {pct && <span className="chip chip-accent text-xs">Probability: {pct}</span>}
         </div>
       )}
       <p className="text-xs text-soft leading-relaxed">

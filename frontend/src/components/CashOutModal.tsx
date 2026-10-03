@@ -1,3 +1,13 @@
+/**
+ * Confirmation dialog that sells an entire open position at the current market price.
+ *
+ * Previews size, entry/current price, estimated proceeds and P&L from the `position` prop, then
+ * calls `tradesService.cashOut` (side `SELL`, falling back to price 0.5) on confirm. A token id is
+ * resolved from several possible position fields; the confirm button stays disabled without one.
+ * `onSuccess` fires 1.5s after a successful sell so the success state is visible first.
+ *
+ * @module components/CashOutModal
+ */
 import { useState } from "react";
 import { tradesService, ExecuteTradeResponse } from "../services/tradesService";
 import { getApiErrorMessage } from "../utils/apiError";
@@ -20,11 +30,7 @@ export interface CashOutModalProps {
   onSuccess?: () => void;
 }
 
-export default function CashOutModal({
-  position,
-  onClose,
-  onSuccess,
-}: CashOutModalProps) {
+export default function CashOutModal({ position, onClose, onSuccess }: CashOutModalProps) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ExecuteTradeResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -36,15 +42,10 @@ export default function CashOutModal({
   const invested = size * avgPrice;
   const pnl = proceeds - invested;
   const pnlPct = invested > 0 ? (pnl / invested) * 100 : 0;
-  const title =
-    position.title || position.market || position.asset || "this position";
+  const title = position.title || position.market || position.asset || "this position";
 
   const tokenId =
-    position.asset_id ||
-    position.token_id ||
-    position.condition_id ||
-    position.conditionId ||
-    "";
+    position.asset_id || position.token_id || position.condition_id || position.conditionId || "";
 
   const handleConfirm = async () => {
     if (!tokenId) {
@@ -121,9 +122,7 @@ export default function CashOutModal({
             {position.outcome && (
               <div className="flex justify-between items-center">
                 <span className="text-muted text-sm">Outcome</span>
-                <span className="chip chip-accent text-xs">
-                  {position.outcome}
-                </span>
+                <span className="chip chip-accent text-xs">{position.outcome}</span>
               </div>
             )}
             <div className="flex justify-between">
@@ -134,27 +133,19 @@ export default function CashOutModal({
             </div>
             <div className="flex justify-between">
               <span className="text-muted text-sm">Entry Price</span>
-              <span className="text-soft mono text-sm">
-                {(avgPrice * 100).toFixed(1)}¢
-              </span>
+              <span className="text-soft mono text-sm">{(avgPrice * 100).toFixed(1)}¢</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted text-sm">Current Price</span>
-              <span className="text-white mono text-sm">
-                {(curPrice * 100).toFixed(1)}¢
-              </span>
+              <span className="text-white mono text-sm">{(curPrice * 100).toFixed(1)}¢</span>
             </div>
             <div className="border-t border-[var(--line)] pt-3 flex justify-between">
               <span className="text-muted text-sm">Est. Proceeds</span>
-              <span className="text-white font-semibold mono">
-                ${proceeds.toFixed(2)}
-              </span>
+              <span className="text-white font-semibold mono">${proceeds.toFixed(2)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted text-sm">P&L</span>
-              <span
-                className={`font-semibold mono ${pnl >= 0 ? "status-good" : "status-bad"}`}
-              >
+              <span className={`font-semibold mono ${pnl >= 0 ? "status-good" : "status-bad"}`}>
                 {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)} ({pnlPct >= 0 ? "+" : ""}
                 {pnlPct.toFixed(1)}%)
               </span>
@@ -181,9 +172,7 @@ export default function CashOutModal({
                 Sold {size} shares @ {(curPrice * 100).toFixed(1)}¢
               </p>
               {result.order_hash && (
-                <p className="text-xs mt-1 text-muted truncate">
-                  Hash: {result.order_hash}
-                </p>
+                <p className="text-xs mt-1 text-muted truncate">Hash: {result.order_hash}</p>
               )}
             </div>
           )}
@@ -191,10 +180,7 @@ export default function CashOutModal({
           {/* Buttons */}
           {!result?.success ? (
             <div className="flex gap-3">
-              <button
-                onClick={onClose}
-                className="flex-1 btn-muted py-3 text-sm"
-              >
+              <button onClick={onClose} className="flex-1 btn-muted py-3 text-sm">
                 Cancel
               </button>
               <button
@@ -209,10 +195,7 @@ export default function CashOutModal({
               </button>
             </div>
           ) : (
-            <button
-              onClick={onClose}
-              className="w-full btn-muted py-3 text-sm font-bold"
-            >
+            <button onClick={onClose} className="w-full btn-muted py-3 text-sm font-bold">
               Done
             </button>
           )}

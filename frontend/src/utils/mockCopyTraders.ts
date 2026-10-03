@@ -1,3 +1,14 @@
+/**
+ * Local (simulation-only) copy-trader list backed by localStorage.
+ *
+ * Stores wallet, creation time, starting capital, and optional alias. `saveMockCopyTraders` emits a
+ * custom event and `subscribeMockCopyTraders` also listens for cross-tab `storage` events, so
+ * multiple open tabs stay in sync. All list helpers take and return a fresh array; callers own the
+ * state. Wallets are always normalized to trimmed lowercase.
+ *
+ * @module utils/mockCopyTraders
+ */
+
 export const MOCK_COPY_STORAGE_KEY = "pm:mock-copy-traders:v1";
 export const MOCK_COPY_DEFAULT_CAPITAL = 10_000;
 export const MOCK_COPY_TRADERS_CHANGED_EVENT = "pm:mock-copy-traders:changed";
@@ -23,10 +34,7 @@ export function loadMockCopyTraders(): MockCopyTrader[] {
         wallet: normalizeWallet(t.wallet),
         created_at: t.created_at || new Date().toISOString(),
         initial_capital: t.initial_capital || MOCK_COPY_DEFAULT_CAPITAL,
-        alias:
-          typeof t.alias === "string" && t.alias.trim()
-            ? t.alias.trim()
-            : undefined,
+        alias: typeof t.alias === "string" && t.alias.trim() ? t.alias.trim() : undefined,
       }));
   } catch {
     return [];
@@ -61,10 +69,7 @@ export function subscribeMockCopyTraders(
   };
 }
 
-export function hasMockCopyTrader(
-  traders: MockCopyTrader[],
-  wallet: string,
-): boolean {
+export function hasMockCopyTrader(traders: MockCopyTrader[], wallet: string): boolean {
   const normalized = normalizeWallet(wallet);
   return traders.some((t) => normalizeWallet(t.wallet) === normalized);
 }
@@ -87,10 +92,7 @@ export function upsertMockCopyTrader(
   ];
 }
 
-export function removeMockCopyTrader(
-  traders: MockCopyTrader[],
-  wallet: string,
-): MockCopyTrader[] {
+export function removeMockCopyTrader(traders: MockCopyTrader[], wallet: string): MockCopyTrader[] {
   const normalized = normalizeWallet(wallet);
   return traders.filter((t) => normalizeWallet(t.wallet) !== normalized);
 }

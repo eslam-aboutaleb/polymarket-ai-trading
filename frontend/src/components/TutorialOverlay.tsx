@@ -1,3 +1,12 @@
+/**
+ * Modal onboarding tour driven by defaultTutorialSteps, plus its localStorage-backed state hook.
+ *
+ * Renders through a portal (so transformed ancestors cannot break fixed positioning) with arrow,
+ * Enter and Escape navigation and clickable step dots; onComplete fires only on the last step.
+ * Step targetSelector/position metadata is currently unused beyond the plain dimming backdrop.
+ *
+ * @module components/TutorialOverlay
+ */
 import { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 
@@ -224,12 +233,7 @@ export default function TutorialOverlay({
               className="text-muted hover:text-[var(--danger)] transition p-1"
               aria-label="Close tutorial"
             >
-              <svg
-                className="w-5 h-5"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -247,16 +251,12 @@ export default function TutorialOverlay({
 
           {/* Content */}
           <div className="px-5 py-3 space-y-3">
-            <p className="text-sm text-soft leading-relaxed">
-              {step.description}
-            </p>
+            <p className="text-sm text-soft leading-relaxed">{step.description}</p>
 
             {step.tip && (
               <div className="flex items-start gap-2 bg-[var(--accent-soft)] border border-[rgba(247,166,0,0.3)] rounded-lg px-3 py-2">
                 <span className="text-sm mt-0.5">💡</span>
-                <p className="text-xs text-[#ffcc66] leading-relaxed">
-                  {step.tip}
-                </p>
+                <p className="text-xs text-[#ffcc66] leading-relaxed">{step.tip}</p>
               </div>
             )}
           </div>
@@ -295,11 +295,7 @@ export default function TutorialOverlay({
                 </button>
               )}
               <button onClick={handleNext} className="btn-accent text-sm">
-                {isFirst
-                  ? "Start Tutorial →"
-                  : isLast
-                    ? "Finish Tutorial ✓"
-                    : "Next →"}
+                {isFirst ? "Start Tutorial →" : isLast ? "Finish Tutorial ✓" : "Next →"}
               </button>
             </div>
           </div>

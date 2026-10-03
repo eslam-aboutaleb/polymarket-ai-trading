@@ -1,9 +1,16 @@
+/**
+ * View-model types for market board cards, shared by the markets, opportunities, and dashboard grids.
+ *
+ * These describe already-formatted display strings rather than raw API data, so one card component
+ * can render binary, multi-option, and price-direction markets uniformly. Build them in the feature
+ * components; the trade ticket consumes `source` plus `positiveOutcome`/`negativeOutcome`.
+ *
+ * @module types/marketBoard
+ */
+
 import { TradeTicketOutcome, TradeTicketSource } from "./trading";
 
-export type MarketBoardVariant =
-  | "binary_single"
-  | "multi_option"
-  | "price_direction";
+export type MarketBoardVariant = "binary_single" | "multi_option" | "price_direction";
 
 export interface MarketBoardAiSummary {
   score: number;

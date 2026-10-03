@@ -1,8 +1,9 @@
 """Refresh-token hashing and persistence helpers."""
+
 from __future__ import annotations
 
-import hmac
 import hashlib
+import hmac
 from datetime import datetime
 
 from sqlalchemy.orm import Session
@@ -25,12 +26,11 @@ def hash_refresh_token(raw_token: str) -> str:
     token = (raw_token or "").strip()
     if not token:
         raise ValueError("Refresh token cannot be empty.")
-    digest = hmac.new(
+    return hmac.new(
         _refresh_token_hash_secret().encode("utf-8"),
         token.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
-    return digest
 
 
 def create_refresh_token_record(
@@ -56,7 +56,11 @@ def find_active_refresh_token_record(
     raw_refresh_token: str,
 ) -> RefreshToken | None:
     """Find active refresh-token row by hash."""
-    return db.query(RefreshToken).filter(
-        RefreshToken.token_hash == hash_refresh_token(raw_refresh_token),
-        RefreshToken.is_revoked == False,  # noqa: E712
-    ).first()
+    return (
+        db.query(RefreshToken)
+        .filter(
+            RefreshToken.token_hash == hash_refresh_token(raw_refresh_token),
+            RefreshToken.is_revoked == False,  # noqa: E712
+        )
+        .first()
+    )

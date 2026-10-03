@@ -9,19 +9,16 @@ Supports:
 
 Inspired by 0xrsydn/polymarket-crypto-toolkit back-testing approach.
 """
-import asyncio
+
 import logging
 import math
-from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
+from datetime import datetime
+from typing import Any
 
-from sqlalchemy.orm import Session
-
-from app.config import get_settings
 from app.models.backtest_run import BacktestRun
 from app.utils.database import SessionLocal
-from app.utils.time import utc_now
 from app.utils.indicators import compute_all_indicators, generate_indicator_summary
+from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
 BACKTEST_DATE_FORMAT = "%Y-%m-%d"
@@ -43,7 +40,8 @@ def _validate_backtest_date_range(start_date: str, end_date: str) -> None:
 
 # ── Metric calculators ──
 
-def _calculate_metrics(trade_log: List[Dict[str, Any]]) -> Dict[str, Any]:
+
+def _calculate_metrics(trade_log: list[dict[str, Any]]) -> dict[str, Any]:
     """Calculate performance metrics from a trade log."""
     if not trade_log:
         return {
@@ -128,11 +126,11 @@ async def _fetch_historical_prices(
     condition_id: str,
     start_date: str,
     end_date: str,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Fetch historical price data from Polymarket data API."""
     import httpx
 
-    prices: List[Dict[str, Any]] = []
+    prices: list[dict[str, Any]] = []
     try:
         from app.services.polymarket_service import POLYMARKET_DATA_API
 
@@ -160,8 +158,8 @@ async def _fetch_historical_prices(
 
 async def run_copy_trade_backtest(
     user_id: int,
-    params: Dict[str, Any],
-) -> Dict[str, Any]:
+    params: dict[str, Any],
+) -> dict[str, Any]:
     """Backtest a copy-trade strategy.
 
     Replays historical trades from a followed trader and simulates
@@ -193,7 +191,7 @@ async def run_copy_trade_backtest(
             .all()
         )
 
-        trade_log: List[Dict[str, Any]] = []
+        trade_log: list[dict[str, Any]] = []
         daily_loss = 0.0
         current_day = None
 
@@ -218,14 +216,16 @@ async def run_copy_trade_backtest(
             if pnl < 0:
                 daily_loss += abs(pnl)
 
-            trade_log.append({
-                "timestamp": trade.executed_at.isoformat() if trade.executed_at else "",
-                "market_id": trade.market_id or "",
-                "side": trade.action or "",
-                "size": size,
-                "price": price,
-                "pnl": pnl,
-            })
+            trade_log.append(
+                {
+                    "timestamp": trade.executed_at.isoformat() if trade.executed_at else "",
+                    "market_id": trade.market_id or "",
+                    "side": trade.action or "",
+                    "size": size,
+                    "price": price,
+                    "pnl": pnl,
+                }
+            )
 
         return {
             "trade_log": trade_log,
@@ -237,8 +237,8 @@ async def run_copy_trade_backtest(
 
 async def run_indicator_backtest(
     user_id: int,
-    params: Dict[str, Any],
-) -> Dict[str, Any]:
+    params: dict[str, Any],
+) -> dict[str, Any]:
     """Backtest an indicator-based strategy.
 
     Uses technical indicators (RSI, MACD, Bollinger Bands) to generate
@@ -284,10 +284,12 @@ async def run_indicator_backtest(
     # Compute indicators
     indicators = compute_all_indicators(prices)
 
-    trade_log: List[Dict[str, Any]] = []
+    trade_log: list[dict[str, Any]] = []
     position = None  # {"side": "BUY", "entry_price": float, "entry_idx": int}
 
-    from app.utils.indicators import rsi as calc_rsi, macd as calc_macd, bollinger_bands as calc_bb
+    from app.utils.indicators import bollinger_bands as calc_bb
+    from app.utils.indicators import macd as calc_macd
+    from app.utils.indicators import rsi as calc_rsi
 
     rsi_series = calc_rsi(prices)
     macd_data = calc_macd(prices)
@@ -311,9 +313,17 @@ async def run_indicator_backtest(
                 prev_macd = macd_line[i - 1]
                 prev_signal = signal_line[i - 1]
                 if prev_macd is not None and prev_signal is not None:
-                    if prev_macd <= prev_signal and macd_line[i] > signal_line[i] and position is None:
+                    if (
+                        prev_macd <= prev_signal
+                        and macd_line[i] > signal_line[i]
+                        and position is None
+                    ):
                         signal = "BUY"
-                    elif prev_macd >= prev_signal and macd_line[i] < signal_line[i] and position is not None:
+                    elif (
+                        prev_macd >= prev_signal
+                        and macd_line[i] < signal_line[i]
+                        and position is not None
+                    ):
                         signal = "SELL"
 
         elif strategy == "bollinger_bounce":
@@ -330,31 +340,35 @@ async def run_indicator_backtest(
             position = {"entry_price": prices[i], "entry_idx": i}
         elif signal == "SELL" and position is not None:
             pnl = (prices[i] - position["entry_price"]) * (position_size / position["entry_price"])
-            trade_log.append({
-                "timestamp": timestamps[i] if i < len(timestamps) else "",
-                "side": "SELL",
-                "entry_price": position["entry_price"],
-                "exit_price": prices[i],
-                "size": position_size,
-                "price": prices[i],
-                "pnl": round(pnl, 4),
-                "strategy": strategy,
-            })
+            trade_log.append(
+                {
+                    "timestamp": timestamps[i] if i < len(timestamps) else "",
+                    "side": "SELL",
+                    "entry_price": position["entry_price"],
+                    "exit_price": prices[i],
+                    "size": position_size,
+                    "price": prices[i],
+                    "pnl": round(pnl, 4),
+                    "strategy": strategy,
+                }
+            )
             position = None
 
     # Close open position at last price
     if position is not None:
         pnl = (prices[-1] - position["entry_price"]) * (position_size / position["entry_price"])
-        trade_log.append({
-            "timestamp": timestamps[-1] if timestamps else "",
-            "side": "SELL",
-            "entry_price": position["entry_price"],
-            "exit_price": prices[-1],
-            "size": position_size,
-            "price": prices[-1],
-            "pnl": round(pnl, 4),
-            "strategy": strategy,
-        })
+        trade_log.append(
+            {
+                "timestamp": timestamps[-1] if timestamps else "",
+                "side": "SELL",
+                "entry_price": position["entry_price"],
+                "exit_price": prices[-1],
+                "size": position_size,
+                "price": prices[-1],
+                "pnl": round(pnl, 4),
+                "strategy": strategy,
+            }
+        )
 
     return {
         "trade_log": trade_log,
@@ -374,7 +388,7 @@ async def create_and_run_backtest(
     strategy_name: str,
     start_date: str,
     end_date: str,
-    parameters: Dict[str, Any],
+    parameters: dict[str, Any],
 ) -> BacktestRun:
     """Create a BacktestRun record and execute the backtest."""
     _validate_backtest_date_range(start_date=start_date, end_date=end_date)
@@ -400,17 +414,23 @@ async def create_and_run_backtest(
     try:
         # Route to the right engine
         if strategy_type == "copy_trade":
-            result = await run_copy_trade_backtest(user_id, {
-                **parameters,
-                "start_date": start_date,
-                "end_date": end_date,
-            })
+            result = await run_copy_trade_backtest(
+                user_id,
+                {
+                    **parameters,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                },
+            )
         elif strategy_type in ("indicator", "custom"):
-            result = await run_indicator_backtest(user_id, {
-                **parameters,
-                "start_date": start_date,
-                "end_date": end_date,
-            })
+            result = await run_indicator_backtest(
+                user_id,
+                {
+                    **parameters,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                },
+            )
         else:
             result = {
                 "trade_log": [],
@@ -471,7 +491,7 @@ async def create_and_run_backtest(
         db.close()
 
 
-def get_backtest_runs(user_id: int, limit: int = 20) -> List[BacktestRun]:
+def get_backtest_runs(user_id: int, limit: int = 20) -> list[BacktestRun]:
     """Get recent backtest runs for a user."""
     db = SessionLocal()
     try:
@@ -486,7 +506,7 @@ def get_backtest_runs(user_id: int, limit: int = 20) -> List[BacktestRun]:
         db.close()
 
 
-def get_backtest_run(run_id: int, user_id: int) -> Optional[BacktestRun]:
+def get_backtest_run(run_id: int, user_id: int) -> BacktestRun | None:
     """Get a specific backtest run."""
     db = SessionLocal()
     try:

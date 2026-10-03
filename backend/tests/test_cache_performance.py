@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from app.utils.cache import InMemoryCache
 import app.utils.cache as cache_module
+from app.utils.cache import InMemoryCache
 
 
 class CachePerformanceTests(unittest.TestCase):
@@ -26,8 +26,9 @@ class CachePerformanceTests(unittest.TestCase):
 
     def test_json_serializer_fallback_without_orjson(self):
         payload = {"alpha": 1, "beta": [1, 2, 3]}
-        with patch.object(cache_module, "ORJSON_AVAILABLE", False), patch.object(
-            cache_module, "_orjson", None
+        with (
+            patch.object(cache_module, "ORJSON_AVAILABLE", False),
+            patch.object(cache_module, "_orjson", None),
         ):
             dumped = cache_module._json_dumps(payload)
             self.assertIsInstance(dumped, str)
@@ -38,8 +39,9 @@ class CachePerformanceTests(unittest.TestCase):
         fake_orjson.dumps.return_value = b'{"ok":true}'
         fake_orjson.loads.return_value = {"ok": True}
 
-        with patch.object(cache_module, "ORJSON_AVAILABLE", True), patch.object(
-            cache_module, "_orjson", fake_orjson
+        with (
+            patch.object(cache_module, "ORJSON_AVAILABLE", True),
+            patch.object(cache_module, "_orjson", fake_orjson),
         ):
             dumped = cache_module._json_dumps({"ok": True})
             self.assertEqual(dumped, '{"ok":true}')

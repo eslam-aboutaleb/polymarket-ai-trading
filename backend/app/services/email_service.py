@@ -1,4 +1,5 @@
 """SMTP email delivery utilities."""
+
 import asyncio
 import logging
 import smtplib
@@ -11,11 +12,7 @@ logger = logging.getLogger(__name__)
 
 def _resolve_sender() -> str:
     settings = get_settings()
-    return (
-        settings.smtp_from_email
-        or settings.smtp_user
-        or "no-reply@polymarket.local"
-    )
+    return settings.smtp_from_email or settings.smtp_user or "no-reply@polymarket.local"
 
 
 def is_smtp_configured() -> bool:

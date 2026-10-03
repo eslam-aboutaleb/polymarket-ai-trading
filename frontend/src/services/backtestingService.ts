@@ -1,3 +1,13 @@
+/**
+ * Strategy backtesting endpoints under `/api/backtesting`.
+ *
+ * Lists, creates, fetches, and deletes runs, plus a `GET /api/backtesting/strategies` catalogue used
+ * to populate the strategy picker. Runs execute asynchronously server-side (`pending` → `running` →
+ * `completed`/`failed`) and carry metrics such as win rate, PnL, drawdown, and Sharpe ratio.
+ *
+ * @module services/backtestingService
+ */
+
 import { apiClient } from "./apiClient";
 
 // ── Types ──
@@ -57,9 +67,7 @@ export interface StrategiesResponse {
 
 // ── API Functions ──
 
-export async function listBacktestRuns(
-  limit?: number,
-): Promise<BacktestListResponse> {
+export async function listBacktestRuns(limit?: number): Promise<BacktestListResponse> {
   const params = limit ? `?limit=${limit}` : "";
   return apiClient.get<BacktestListResponse>(`/api/backtesting/runs${params}`);
 }
@@ -68,9 +76,7 @@ export async function getBacktestRun(runId: number): Promise<BacktestRun> {
   return apiClient.get<BacktestRun>(`/api/backtesting/runs/${runId}`);
 }
 
-export async function createBacktestRun(
-  body: CreateBacktestRequest,
-): Promise<BacktestRun> {
+export async function createBacktestRun(body: CreateBacktestRequest): Promise<BacktestRun> {
   return apiClient.post<BacktestRun>("/api/backtesting/runs", body);
 }
 

@@ -1,3 +1,11 @@
+/**
+ * AI market news feed page: loads recent articles, refreshes them, and generates one on demand.
+ *
+ * Articles come from newsService (getNewsFeed/refreshFeed); manual generation streams via
+ * streamGenerate and prepends the finished article to the grid. Cards open a full ArticleModal.
+ *
+ * @module components/News
+ */
 import { useEffect, useState, useCallback } from "react";
 import {
   getNewsFeed,
@@ -18,11 +26,7 @@ function SentimentBadge({ sentiment }: { sentiment: string }) {
     mixed: "bg-yellow-500/20 text-yellow-400",
   };
   const cls = colors[sentiment?.toLowerCase()] ?? colors.neutral;
-  return (
-    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${cls}`}>
-      {sentiment}
-    </span>
-  );
+  return <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${cls}`}>{sentiment}</span>;
 }
 
 function ConfidenceMeter({ value }: { value: number }) {
@@ -40,13 +44,7 @@ function ConfidenceMeter({ value }: { value: number }) {
 
 // ── News Card ──────────────────────────────────────────────
 
-function NewsCard({
-  article,
-  onExpand,
-}: {
-  article: NewsArticle;
-  onExpand: () => void;
-}) {
+function NewsCard({ article, onExpand }: { article: NewsArticle; onExpand: () => void }) {
   return (
     <div
       onClick={onExpand}
@@ -83,13 +81,7 @@ function NewsCard({
 
 // ── Article Modal ──────────────────────────────────────────
 
-function ArticleModal({
-  article,
-  onClose,
-}: {
-  article: NewsArticle;
-  onClose: () => void;
-}) {
+function ArticleModal({ article, onClose }: { article: NewsArticle; onClose: () => void }) {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4"
@@ -111,9 +103,7 @@ function ArticleModal({
           <ConfidenceMeter value={article.confidence} />
         </div>
 
-        <h2 className="text-lg font-bold text-heading mt-2 mb-1">
-          {article.headline}
-        </h2>
+        <h2 className="text-lg font-bold text-heading mt-2 mb-1">{article.headline}</h2>
         <p className="text-xs text-muted mb-4">
           {article.question} • {new Date(article.generated_at).toLocaleString()}
         </p>
@@ -168,6 +158,7 @@ function ArticleModal({
 export default function News() {
   const [feed, setFeed] = useState<NewsArticle[]>([]);
   const [loading, setLoading] = useState(true);
+  const [feedError, setFeedError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedArticle, setSelectedArticle] = useState<NewsArticle | null>(null);
 
@@ -181,8 +172,10 @@ export default function News() {
     try {
       const res = await getNewsFeed(20);
       setFeed(res.articles);
+      setFeedError(null);
     } catch (err) {
       console.error("Failed to load news feed", err);
+      setFeedError("Failed to load the news feed.");
     } finally {
       setLoading(false);
     }
@@ -195,10 +188,16 @@ export default function News() {
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      const res = await refreshFeed(5);
+      await refreshFeed(5);
+      // The refresh response only contains the newly generated
+      // articles; re-fetch the full feed so the rest of the
+      // cached feed stays visible.
+      const res = await getNewsFeed(20);
       setFeed(res.articles);
+      setFeedError(null);
     } catch (err) {
       console.error("Feed refresh failed", err);
+      setFeedError("Feed refresh failed.");
     } finally {
       setRefreshing(false);
     }
@@ -218,7 +217,10 @@ export default function News() {
     const { done } = streamGenerate(payload, {
       onStatus: (msg) => setGenStatus(msg),
       onArticle: (article) => {
-        setFeed((prev) => [article, ...prev.filter((a) => a.condition_id !== article.condition_id)]);
+        setFeed((prev) => [
+          article,
+          ...prev.filter((a) => a.condition_id !== article.condition_id),
+        ]);
         setGenStatus("Article generated!");
       },
       onError: (msg) => setGenStatus(`Error: ${msg}`),
@@ -278,14 +280,22 @@ export default function News() {
             {generating ? "Generating…" : "Generate"}
           </button>
         </div>
-        {genStatus && (
-          <p className="text-xs text-muted mt-2">{genStatus}</p>
-        )}
+        {genStatus && <p className="text-xs text-muted mt-2">{genStatus}</p>}
       </div>
 
       {/* Feed grid */}
       {loading ? (
         <div className="text-center py-12 text-muted text-sm">Loading news feed…</div>
+      ) : feedError ? (
+        <div className="text-center py-12">
+          <p className="text-red-400 text-sm">{feedError}</p>
+          <button
+            onClick={loadFeed}
+            className="btn-primary text-xs px-3 py-1.5 mt-3 disabled:opacity-50"
+          >
+            Retry
+          </button>
+        </div>
       ) : feed.length === 0 ? (
         <div className="text-center py-12">
           <p className="text-muted text-sm">No articles yet.</p>
@@ -307,10 +317,7 @@ export default function News() {
 
       {/* Modal */}
       {selectedArticle && (
-        <ArticleModal
-          article={selectedArticle}
-          onClose={() => setSelectedArticle(null)}
-        />
+        <ArticleModal article={selectedArticle} onClose={() => setSelectedArticle(null)} />
       )}
     </div>
   );

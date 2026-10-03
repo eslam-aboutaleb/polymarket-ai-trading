@@ -9,10 +9,10 @@ Computes a composite quality score (0-100) for each trader based on:
 
 Inspired by dexorynlabs/polymarket-agents and MrFadiAi scoring concepts.
 """
+
 import logging
-import math
-from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, List, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -85,21 +85,22 @@ def _risk_adjusted_score(total_pnl: float, volume: float) -> float:
         return max(0, 20 + efficiency * 200)
     if efficiency >= 0.15:
         return 100.0
-    elif efficiency >= 0.10:
+    if efficiency >= 0.10:
         return 85.0 + (efficiency - 0.10) * 300
-    elif efficiency >= 0.05:
+    if efficiency >= 0.05:
         return 70.0 + (efficiency - 0.05) * 300
-    elif efficiency >= 0.02:
+    if efficiency >= 0.02:
         return 50.0 + (efficiency - 0.02) * 666
-    elif efficiency >= 0.01:
+    if efficiency >= 0.01:
         return 35.0 + (efficiency - 0.01) * 1500
-    else:
-        return efficiency * 3500
+    return efficiency * 3500
 
 
 def _activity_score(
-    trade_count: int, markets_traded: int, volume_24h: float,
-    last_trade_time: Optional[datetime],
+    trade_count: int,
+    markets_traded: int,
+    volume_24h: float,
+    last_trade_time: datetime | None,
 ) -> float:
     """Activity & freshness score."""
     score = 0.0
@@ -138,7 +139,7 @@ def _activity_score(
             score += 5
 
     if last_trade_time:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         age = now - last_trade_time
         if age < timedelta(days=1):
             score += 25
@@ -156,19 +157,23 @@ def _activity_score(
     return min(100.0, score)
 
 
-def compute_quality_score(winner: Winner) -> Dict[str, Any]:
+def compute_quality_score(winner: Winner) -> dict[str, Any]:
     """Compute composite quality score for a trader."""
     wr_score = _win_rate_score(winner.win_rate or 0)
     cons_score = _consistency_score(
-        winner.pnl_24h or 0, winner.pnl_7d or 0,
-        winner.pnl_30d or 0, winner.total_pnl or 0,
+        winner.pnl_24h or 0,
+        winner.pnl_7d or 0,
+        winner.pnl_30d or 0,
+        winner.total_pnl or 0,
     )
     ra_score = _risk_adjusted_score(winner.total_pnl or 0, winner.volume or 0)
     act_score = _activity_score(
-        winner.trade_count or 0, winner.markets_traded or 0,
-        winner.volume_24h or 0, winner.last_trade_time,
+        winner.trade_count or 0,
+        winner.markets_traded or 0,
+        winner.volume_24h or 0,
+        winner.last_trade_time,
     )
-    composite = (wr_score * 0.25 + cons_score * 0.25 + ra_score * 0.25 + act_score * 0.25)
+    composite = wr_score * 0.25 + cons_score * 0.25 + ra_score * 0.25 + act_score * 0.25
     composite = round(min(100.0, max(0.0, composite)), 1)
 
     tier = "D"
@@ -206,11 +211,9 @@ def score_all_traders(db: Session, min_trades: int = 5) -> int:
     return count
 
 
-def get_trader_quality(db: Session, wallet_address: str) -> Optional[Dict[str, Any]]:
+def get_trader_quality(db: Session, wallet_address: str) -> dict[str, Any] | None:
     """Get quality score for a specific trader. Computes on-the-fly if stale."""
-    winner = db.query(Winner).filter(
-        Winner.wallet_address == wallet_address.lower()
-    ).first()
+    winner = db.query(Winner).filter(Winner.wallet_address == wallet_address.lower()).first()
     if not winner:
         return None
     if (

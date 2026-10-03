@@ -1,3 +1,13 @@
+/**
+ * Login modal shell that overlays public pages, driven by `LoginModalContext`.
+ *
+ * Wraps `LoginForm` and performs the same signature-only authentication flow as the
+ * standalone login page: verify the wallet signature, reload the current user into
+ * `authStore`, then close the modal. Renders `null` while closed. Errors from any
+ * auth attempt surface above the form.
+ *
+ * @module components/LoginModal
+ */
 import { useState } from "react";
 import { useAuthStore } from "../store/authStore";
 import { authService } from "../services/authService";
@@ -30,30 +40,18 @@ export default function LoginModal() {
     walletAddress: string,
     signature: string,
     keepLoggedIn: boolean,
+    challengeId: string | null,
   ) => {
     setLoading(true);
     setError(null);
 
     try {
-      await authService.verifySignature(walletAddress, signature, keepLoggedIn);
-      await restoreSession();
-      closeLoginModal();
-    } catch (err: unknown) {
-      setError(getApiErrorMessage(err, "Authentication failed"));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handlePrivateKeyLogin = async (
-    privateKey: string,
-    keepLoggedIn: boolean,
-  ) => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      await authService.loginWithPrivateKey(privateKey, keepLoggedIn);
+      await authService.verifySignature(
+        walletAddress,
+        signature,
+        keepLoggedIn,
+        challengeId ?? undefined,
+      );
       await restoreSession();
       closeLoginModal();
     } catch (err: unknown) {
@@ -76,21 +74,14 @@ export default function LoginModal() {
         <div className="flex items-center justify-between px-6 pt-5 pb-2">
           <div>
             <h2 className="text-xl font-bold text-white">Connect Wallet</h2>
-            <p className="text-sm text-soft mt-0.5">
-              Sign in to access trading features
-            </p>
+            <p className="text-sm text-soft mt-0.5">Sign in to access trading features</p>
           </div>
           <button
             onClick={closeLoginModal}
             className="p-1.5 rounded-lg text-soft hover:bg-[var(--bg-soft)] transition"
             aria-label="Close login modal"
           >
-            <svg
-              className="w-5 h-5"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -102,19 +93,11 @@ export default function LoginModal() {
         </div>
 
         {/* Error */}
-        {error && (
-          <div className="mx-6 mt-2 p-3 alert-error rounded text-sm">
-            {error}
-          </div>
-        )}
+        {error && <div className="mx-6 mt-2 p-3 alert-error rounded text-sm">{error}</div>}
 
         {/* Login Form */}
         <div className="px-6 pb-6 pt-2">
-          <LoginForm
-            onLogin={handleLogin}
-            onPrivateKeyLogin={handlePrivateKeyLogin}
-            loading={loading}
-          />
+          <LoginForm onLogin={handleLogin} loading={loading} />
         </div>
       </div>
     </div>

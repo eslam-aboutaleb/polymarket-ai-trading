@@ -1,13 +1,14 @@
 """Backtesting models for strategy simulation results."""
+
 from sqlalchemy import (
-    Column,
-    String,
-    Float,
-    DateTime,
-    Integer,
-    ForeignKey,
-    Text,
     JSON,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
 )
 
 from app.models.base import Base

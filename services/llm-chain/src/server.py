@@ -2,22 +2,23 @@
 gRPC server for LLM Chain Analysis Service.
 Supports per-request LLM provider selection via the factory/gateway pattern.
 """
+
 import asyncio
+import contextlib
 import json
 import logging
 from concurrent import futures
 from datetime import datetime
 
-import grpc
-from grpc_reflection.v1alpha import reflection
-
-from src.config import get_settings
-from src.analysis_chain import get_trading_chain, get_chain_for_request
-from src.llm_factory import parse_llm_config_from_proto, get_available_providers
-
 # Import generated protobuf modules (will be generated from proto file)
 import analysis_pb2
 import analysis_pb2_grpc
+import grpc
+from grpc_reflection.v1alpha import reflection
+
+from src.analysis_chain import get_chain_for_request, get_trading_chain
+from src.config import get_settings
+from src.llm_factory import get_available_providers, parse_llm_config_from_proto
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -26,19 +27,19 @@ logger = logging.getLogger(__name__)
 def _get_chain_for_request(request):
     """
     Get the appropriate chain for a request, considering llm_config override.
-    
+
     This implements the gateway pattern - routing to the right LLM provider
     based on per-request configuration.
     """
     # Check if request has llm_config field
-    llm_config = getattr(request, 'llm_config', None)
+    llm_config = getattr(request, "llm_config", None)
     request_config = parse_llm_config_from_proto(llm_config)
     return get_chain_for_request(request_config)
 
 
 def _get_provider_metadata(request) -> dict:
     """Extract provider info for response metadata."""
-    llm_config = getattr(request, 'llm_config', None)
+    llm_config = getattr(request, "llm_config", None)
     if llm_config and llm_config.provider:
         # Map proto enum to string
         PROVIDER_NAMES = {
@@ -58,22 +59,22 @@ def _get_provider_metadata(request) -> dict:
 
 class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
     """Implementation of AnalysisService for LLM Chain."""
-    
+
     def __init__(self):
         self.settings = get_settings()
         self.default_chain = get_trading_chain()
         logger.info(f"Initialized {self.settings.service_name} v{self.settings.service_version}")
         logger.info(f"Available providers: {list(get_available_providers().keys())}")
-    
+
     async def AnalyzeMarket(self, request, context):
         """Comprehensive market analysis with optional research."""
         try:
             logger.info(f"AnalyzeMarket request for: {request.market_title}")
-            
+
             # Get chain for this request (may use custom provider)
             chain = _get_chain_for_request(request)
             provider_meta = _get_provider_metadata(request)
-            
+
             result = await chain.analyze_market(
                 market_title=request.market_title,
                 market_description=request.market_description,
@@ -81,63 +82,58 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 no_price=request.no_price,
                 volume_24h=request.volume_24h,
                 end_date=request.end_date,
-                include_research=request.include_research
+                include_research=request.include_research,
             )
-            
+
             metadata = {"backend": "llm-chain", "model": self.settings.llm_model}
             metadata.update(provider_meta)
-            
+
             return analysis_pb2.AnalysisResponse(
                 success=True,
                 analysis=result["analysis"],
                 research_context=result.get("research_context", ""),
                 timestamp=result["timestamp"],
-                metadata=metadata
+                metadata=metadata,
             )
         except Exception as e:
             logger.error(f"AnalyzeMarket error: {e}")
             return analysis_pb2.AnalysisResponse(
-                success=False,
-                error=str(e),
-                timestamp=datetime.utcnow().isoformat()
+                success=False, error=str(e), timestamp=datetime.utcnow().isoformat()
             )
-    
+
     async def QuickAnalysis(self, request, context):
         """Quick 2-3 sentence analysis."""
         try:
             logger.info(f"QuickAnalysis request: {request.question}")
-            
+
             chain = _get_chain_for_request(request)
             provider_meta = _get_provider_metadata(request)
-            
+
             result = await chain.quick_analysis(
-                question=request.question,
-                current_price=request.current_price
+                question=request.question, current_price=request.current_price
             )
-            
+
             metadata = {"backend": "llm-chain"}
             metadata.update(provider_meta)
-            
+
             return analysis_pb2.AnalysisResponse(
                 success=True,
                 analysis=result,
                 timestamp=datetime.utcnow().isoformat(),
-                metadata=metadata
+                metadata=metadata,
             )
         except Exception as e:
             logger.error(f"QuickAnalysis error: {e}")
             return analysis_pb2.AnalysisResponse(
-                success=False,
-                error=str(e),
-                timestamp=datetime.utcnow().isoformat()
+                success=False, error=str(e), timestamp=datetime.utcnow().isoformat()
             )
-    
+
     async def ScanMarkets(self, request, context):
         """Scan multiple markets for opportunities."""
         try:
             chain = _get_chain_for_request(request)
             provider_meta = _get_provider_metadata(request)
-            
+
             markets = [
                 {
                     "title": m.title,
@@ -146,112 +142,104 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                     "no_price": m.no_price,
                     "volume_24h": m.volume_24h,
                     "end_date": m.end_date,
-                    "market_id": m.market_id
+                    "market_id": m.market_id,
                 }
                 for m in request.markets
             ]
-            
+
             logger.info(f"ScanMarkets request for {len(markets)} markets")
-            
+
             result = await chain.scan_markets(markets)
-            
+
             metadata = {"backend": "llm-chain", "markets_scanned": str(result["markets_scanned"])}
             metadata.update(provider_meta)
-            
+
             return analysis_pb2.AnalysisResponse(
                 success=True,
                 analysis=result["analysis"],
                 timestamp=result["timestamp"],
-                metadata=metadata
+                metadata=metadata,
             )
         except Exception as e:
             logger.error(f"ScanMarkets error: {e}")
             return analysis_pb2.AnalysisResponse(
-                success=False,
-                error=str(e),
-                timestamp=datetime.utcnow().isoformat()
+                success=False, error=str(e), timestamp=datetime.utcnow().isoformat()
             )
-    
+
     async def AssessRisk(self, request, context):
         """Assess risk for a potential trade."""
         try:
             logger.info(f"AssessRisk request for: {request.market_title}")
-            
+
             chain = _get_chain_for_request(request)
             provider_meta = _get_provider_metadata(request)
-            
+
             result = await chain.assess_risk(
                 market_title=request.market_title,
                 position_size=request.position_size,
                 entry_price=request.entry_price,
                 days_to_expiry=request.days_to_expiry,
-                correlation_info=request.correlation_info or "No correlation data"
+                correlation_info=request.correlation_info or "No correlation data",
             )
-            
+
             metadata = {"backend": "llm-chain"}
             metadata.update(provider_meta)
-            
+
             return analysis_pb2.AnalysisResponse(
                 success=True,
                 analysis=result["analysis"],
                 timestamp=result["timestamp"],
-                metadata=metadata
+                metadata=metadata,
             )
         except Exception as e:
             logger.error(f"AssessRisk error: {e}")
             return analysis_pb2.AnalysisResponse(
-                success=False,
-                error=str(e),
-                timestamp=datetime.utcnow().isoformat()
+                success=False, error=str(e), timestamp=datetime.utcnow().isoformat()
             )
-    
+
     async def GenerateTradePlan(self, request, context):
         """Generate trade execution plan."""
         try:
             logger.info(f"GenerateTradePlan request: {request.action} on {request.market_title}")
-            
+
             chain = _get_chain_for_request(request)
             provider_meta = _get_provider_metadata(request)
-            
+
             order_book = None
             if request.order_book_json:
-                try:
+                with contextlib.suppress(json.JSONDecodeError):
                     order_book = json.loads(request.order_book_json)
-                except json.JSONDecodeError:
-                    pass
-            
+
             result = await chain.generate_trade_plan(
                 action=request.action,
                 market_title=request.market_title,
                 target_size=request.target_size,
                 current_price=request.current_price,
-                order_book=order_book
+                order_book=order_book,
             )
-            
+
             metadata = {"backend": "llm-chain"}
             metadata.update(provider_meta)
-            
+
             return analysis_pb2.AnalysisResponse(
                 success=True,
                 analysis=result["analysis"],
                 timestamp=result["timestamp"],
-                metadata=metadata
+                metadata=metadata,
             )
         except Exception as e:
             logger.error(f"GenerateTradePlan error: {e}")
             return analysis_pb2.AnalysisResponse(
-                success=False,
-                error=str(e),
-                timestamp=datetime.utcnow().isoformat()
+                success=False, error=str(e), timestamp=datetime.utcnow().isoformat()
             )
-    
+
     async def AnalyzeMarketStream(self, request, context):
         """Stream market analysis for real-time updates."""
         try:
             logger.info(f"AnalyzeMarketStream request for: {request.market_title}")
-            
+
             chain = _get_chain_for_request(request)
-            
+
             async for chunk in chain.analyze_market_stream(
                 market_title=request.market_title,
                 market_description=request.market_description,
@@ -259,21 +247,17 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 no_price=request.no_price,
                 volume_24h=request.volume_24h,
                 end_date=request.end_date,
-                include_research=request.include_research
+                include_research=request.include_research,
             ):
                 yield analysis_pb2.AnalysisChunk(
-                    chunk=chunk["chunk"],
-                    is_final=chunk["is_final"],
-                    chunk_type=chunk["chunk_type"]
+                    chunk=chunk["chunk"], is_final=chunk["is_final"], chunk_type=chunk["chunk_type"]
                 )
         except Exception as e:
             logger.error(f"AnalyzeMarketStream error: {e}")
             yield analysis_pb2.AnalysisChunk(
-                chunk=f"Error: {str(e)}",
-                is_final=True,
-                chunk_type="error"
+                chunk=f"Error: {str(e)}", is_final=True, chunk_type="error"
             )
-    
+
     async def AnalyzeTrader(self, request, context):
         """Full trader profile analysis with internet research."""
         try:
@@ -313,7 +297,9 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
     async def EvaluateCopyTrade(self, request, context):
         """Evaluate whether to copy a specific trade."""
         try:
-            logger.info(f"EvaluateCopyTrade for trader {request.trader_wallet} on {request.market_title}")
+            logger.info(
+                f"EvaluateCopyTrade for trader {request.trader_wallet} on {request.market_title}"
+            )
 
             chain = _get_chain_for_request(request)
             provider_meta = _get_provider_metadata(request)
@@ -360,10 +346,10 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 "EvaluateInversePosition request: condition_id=%s",
                 request.condition_id,
             )
-            
+
             chain = _get_chain_for_request(request)
             provider_meta = _get_provider_metadata(request)
-            
+
             result = await chain.evaluate_inverse_position(
                 condition_id=request.condition_id,
                 market_title=request.market_title,
@@ -418,7 +404,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 "newsapi": str(bool(self.settings.newsapi_enabled)).lower(),
                 "rag": str(bool(self.settings.rag_enabled)).lower(),
                 "model": self.settings.llm_model,
-            }
+            },
         )
 
     async def AnalyzeSentiment(self, request, context):
@@ -525,6 +511,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
         """Index markets into ChromaDB RAG vector store."""
         try:
             from src.market_rag import MarketRAGService
+
             rag = MarketRAGService.get_instance()
 
             markets = json.loads(request.markets_json or "[]")
@@ -634,22 +621,22 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
 async def serve():
     """Start the gRPC server."""
     settings = get_settings()
-    
+
     server = grpc.aio.server(futures.ThreadPoolExecutor(max_workers=10))
     analysis_pb2_grpc.add_AnalysisServiceServicer_to_server(AnalysisServicer(), server)
-    
+
     # Enable reflection for debugging
     SERVICE_NAMES = (
-        analysis_pb2.DESCRIPTOR.services_by_name['AnalysisService'].full_name,
+        analysis_pb2.DESCRIPTOR.services_by_name["AnalysisService"].full_name,
         reflection.SERVICE_NAME,
     )
     reflection.enable_server_reflection(SERVICE_NAMES, server)
-    
+
     listen_addr = f"0.0.0.0:{settings.grpc_port}"
     server.add_insecure_port(listen_addr)
-    
+
     logger.info(f"Starting {settings.service_name} on {listen_addr}")
-    
+
     await server.start()
     await server.wait_for_termination()
 

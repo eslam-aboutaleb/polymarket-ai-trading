@@ -1,10 +1,9 @@
 """Audit models for privileged admin state transitions."""
-from datetime import datetime
-from app.utils.time import utc_now
 
 from sqlalchemy import Boolean, Column, DateTime, Integer, String
 
 from app.models.base import Base
+from app.utils.time import utc_now
 
 
 class AdminAuditLog(Base):

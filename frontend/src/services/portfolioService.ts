@@ -1,3 +1,14 @@
+/**
+ * Wallet portfolio endpoints under `/api/portfolio`.
+ *
+ * Reports USDC/MATIC balances, open positions, and an aggregate PnL summary, and serves the market
+ * lists the UI browses or trades (active, newest, and a combined offset-paginated feed) plus
+ * lightweight price-refresh calls for markets and positions. Market types are deliberately loose
+ * because fields arrive in both snake_case and camelCase shapes.
+ *
+ * @module services/portfolioService
+ */
+
 import { apiClient } from "./apiClient";
 
 export interface WalletBalance {
@@ -119,15 +130,11 @@ export const portfolioService = {
   },
 
   async getActiveMarkets(limit: number = 10): Promise<MarketsResponse> {
-    return apiClient.get<MarketsResponse>(
-      `/api/portfolio/markets?limit=${limit}`,
-    );
+    return apiClient.get<MarketsResponse>(`/api/portfolio/markets?limit=${limit}`);
   },
 
   async getNewestMarkets(limit: number = 60): Promise<MarketsResponse> {
-    return apiClient.get<MarketsResponse>(
-      `/api/portfolio/markets/newest?limit=${limit}`,
-    );
+    return apiClient.get<MarketsResponse>(`/api/portfolio/markets/newest?limit=${limit}`);
   },
 
   async getCombinedMarkets(
@@ -140,9 +147,7 @@ export const portfolioService = {
   },
 
   async refreshPrices(limit: number = 20): Promise<PriceRefreshResponse> {
-    return apiClient.get<PriceRefreshResponse>(
-      `/api/portfolio/markets/prices?limit=${limit}`,
-    );
+    return apiClient.get<PriceRefreshResponse>(`/api/portfolio/markets/prices?limit=${limit}`);
   },
 
   async refreshPositionPrices(): Promise<{

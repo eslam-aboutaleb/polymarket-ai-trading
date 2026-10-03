@@ -1,3 +1,14 @@
+/**
+ * Standalone page that streams AI analysis for a single market passed in via query params.
+ *
+ * Reads `market_title`, `market_description`, `yes_price`, `no_price`, `volume_24h`, `end_date`,
+ * and `include_research` from the URL, then opens an SSE market-analysis stream on mount and aborts
+ * it on unmount. Text is appended chunk-by-chunk into `AnalysisDisplay`; stream errors pass through
+ * `sanitizeAIError`.
+ *
+ * @module pages/AnalysisPage
+ */
+
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import AnalysisDisplay from "../components/AnalysisDisplay";
@@ -14,8 +25,7 @@ export default function AnalysisPage() {
 
   // Extract market params from URL
   const marketTitle = searchParams.get("market_title") || "AI Analysis";
-  const marketDescription =
-    searchParams.get("market_description") || marketTitle;
+  const marketDescription = searchParams.get("market_description") || marketTitle;
   const yesPrice = parseFloat(searchParams.get("yes_price") || "0.5");
   const noPrice = parseFloat(searchParams.get("no_price") || "0.5");
   const volume24h = parseFloat(searchParams.get("volume_24h") || "0");
@@ -60,19 +70,14 @@ export default function AnalysisPage() {
     <div className="max-w-4xl mx-auto">
       {/* Market Header */}
       <div className="surface-panel p-6 mb-6">
-        <h1
-          className="text-xl font-bold mb-3"
-          style={{ color: "var(--text-primary)" }}
-        >
+        <h1 className="text-xl font-bold mb-3" style={{ color: "var(--text-primary)" }}>
           {marketTitle}
         </h1>
         <div className="flex flex-wrap gap-3 items-center text-sm">
           <span className="chip chip-success">YES {yesCents}¢</span>
           <span className="chip chip-danger">NO {noCents}¢</span>
           {volume24h > 0 && (
-            <span className="chip chip-accent">
-              Vol ${volume24h.toLocaleString()}
-            </span>
+            <span className="chip chip-accent">Vol ${volume24h.toLocaleString()}</span>
           )}
         </div>
       </div>
@@ -95,24 +100,16 @@ export default function AnalysisPage() {
         {!streamedText && !streamDone && !streamError && (
           <div className="flex items-center gap-3 py-8 justify-center">
             <div className="analysis-spinner" />
-            <span
-              className="text-sm font-medium"
-              style={{ color: "var(--text-secondary)" }}
-            >
+            <span className="text-sm font-medium" style={{ color: "var(--text-secondary)" }}>
               Running independent analysis…
             </span>
           </div>
         )}
 
-        {streamedText && (
-          <AnalysisDisplay text={streamedText} streaming={!streamDone} />
-        )}
+        {streamedText && <AnalysisDisplay text={streamedText} streaming={!streamDone} />}
 
         {streamDone && !streamError && streamedText && (
-          <div
-            className="mt-4 text-center text-xs"
-            style={{ color: "var(--text-muted)" }}
-          >
+          <div className="mt-4 text-center text-xs" style={{ color: "var(--text-muted)" }}>
             Analysis complete
           </div>
         )}

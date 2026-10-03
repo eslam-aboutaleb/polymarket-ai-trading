@@ -1,3 +1,11 @@
+/**
+ * Router layout for public pages: navigation, the routed outlet and the login modal.
+ *
+ * Passes isPublic={!isAuthenticated} to Navigation so visitors see the Connect Wallet CTA, and
+ * binds a global "/" shortcut that dispatches FOCUS_MARKET_SEARCH_EVENT outside form fields.
+ *
+ * @module components/PublicAppLayout
+ */
 import { useEffect } from "react";
 import { Outlet } from "react-router-dom";
 import { useAuthStore } from "../store/authStore";

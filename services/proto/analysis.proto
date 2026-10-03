@@ -27,27 +27,27 @@ message LLMConfig {
 service AnalysisService {
   // Comprehensive market analysis with optional research
   rpc AnalyzeMarket(MarketAnalysisRequest) returns (AnalysisResponse);
-  
+
   // Quick 2-3 sentence analysis
   rpc QuickAnalysis(QuickAnalysisRequest) returns (AnalysisResponse);
-  
+
   // Scan multiple markets for opportunities
   rpc ScanMarkets(MarketScanRequest) returns (AnalysisResponse);
-  
+
   // Assess risk for a potential trade
   rpc AssessRisk(RiskAssessmentRequest) returns (AnalysisResponse);
-  
+
   // Generate trade execution plan
   rpc GenerateTradePlan(TradePlanRequest) returns (AnalysisResponse);
-  
+
   // Streaming analysis for long-running tasks
   rpc AnalyzeMarketStream(MarketAnalysisRequest) returns (stream AnalysisChunk);
 
   // ── NEW: Trader / Copy-Trading RPCs ──────────────────────
-  
+
   // Full trader profile analysis with internet research
   rpc AnalyzeTrader(TraderAnalysisRequest) returns (AnalysisResponse);
-  
+
   // Evaluate whether to copy a specific trade
   rpc EvaluateCopyTrade(CopyTradeEvaluationRequest) returns (AnalysisResponse);
 
@@ -72,7 +72,7 @@ service AnalysisService {
 
   // Generate news articles for multiple markets (batch)
   rpc GenerateNewsBatch(GenerateNewsBatchRequest) returns (GenerateNewsBatchResponse);
-  
+
   // Health check
   rpc HealthCheck(HealthRequest) returns (HealthResponse);
 }

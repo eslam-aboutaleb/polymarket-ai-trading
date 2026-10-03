@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import sys
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
+
+# Alembic runs outside pytest, so the shared settings package must be
+# importable directly from the repository layout (backend/../services/shared).
+_SHARED_PATH = Path(__file__).resolve().parents[2] / "services" / "shared"
+if str(_SHARED_PATH) not in sys.path:
+    sys.path.insert(0, str(_SHARED_PATH))
 
 from app.config import get_settings
 from app.models import Base  # noqa: F401 - imported for metadata side-effects

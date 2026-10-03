@@ -1,10 +1,16 @@
+/**
+ * Detail overlay for a multi-outcome event group, listing every sub-market of the group.
+ *
+ * Renders a centered modal on mobile and a right-side slide-in drawer from `md` up, sharing the
+ * same header (image, leading option, volume/liquidity) and sub-market list. Sub-market rows are
+ * delegated to the `renderSubMarket` prop and prices to `parsePrices`, so this component stays
+ * generic over any `GroupableMarket`. Escape closes it and body scroll is locked while open.
+ *
+ * @module components/EventGroupDetailDrawer
+ */
 import React, { useEffect, useCallback, ReactNode } from "react";
 import { EventGroup, getSubMarketLabel } from "../utils/groupMarkets";
-import {
-  findLeadingOption,
-  formatVolume,
-  GroupableMarket,
-} from "./EventGroupPanel";
+import { findLeadingOption, formatVolume, GroupableMarket } from "./EventGroupPanel";
 
 interface EventGroupDetailDrawerProps<T extends GroupableMarket> {
   group: EventGroup<T>;
@@ -49,11 +55,8 @@ export default function EventGroupDetailDrawer<T extends GroupableMarket>({
   }, [handleKey]);
 
   const imgUrl = group.eventImage;
-  const leader = findLeadingOption(
-    group.markets,
-    parsePrices,
-    group.eventTitle,
-    (m, title) => getSubMarketLabel(m, title),
+  const leader = findLeadingOption(group.markets, parsePrices, group.eventTitle, (m, title) =>
+    getSubMarketLabel(m, title),
   );
   const volStr = formatVolume(group.eventVolume);
   const liqStr = formatVolume(group.eventLiquidity);
@@ -73,21 +76,15 @@ export default function EventGroupDetailDrawer<T extends GroupableMarket>({
           />
         )}
         <div className="flex-1 min-w-0">
-          <h2 className="text-base font-bold text-white leading-snug">
-            {group.eventTitle}
-          </h2>
+          <h2 className="text-base font-bold text-white leading-snug">{group.eventTitle}</h2>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
             {leader && (
               <span className="text-xs font-medium text-[var(--accent)]">
                 {leader.pct}% {leader.label}
               </span>
             )}
-            {leader && (volStr || liqStr) && (
-              <span className="text-xs text-muted">·</span>
-            )}
-            {volStr && (
-              <span className="text-xs text-muted">{volStr} Vol.</span>
-            )}
+            {leader && (volStr || liqStr) && <span className="text-xs text-muted">·</span>}
+            {volStr && <span className="text-xs text-muted">{volStr} Vol.</span>}
             {liqStr && (
               <>
                 <span className="text-xs text-muted">·</span>
@@ -95,19 +92,13 @@ export default function EventGroupDetailDrawer<T extends GroupableMarket>({
               </>
             )}
             <span className="text-xs text-muted">·</span>
-            <span className="text-xs text-muted">
-              {group.markets.length} options
-            </span>
+            <span className="text-xs text-muted">{group.markets.length} options</span>
           </div>
           {group.markets.length > 1 && (
-            <p className="text-[11px] text-muted mt-1">
-              Other options available below
-            </p>
+            <p className="text-[11px] text-muted mt-1">Other options available below</p>
           )}
         </div>
-        {headerBadge && (
-          <div className="flex-shrink-0 mt-0.5">{headerBadge}</div>
-        )}
+        {headerBadge && <div className="flex-shrink-0 mt-0.5">{headerBadge}</div>}
       </div>
     </div>
   );
@@ -156,11 +147,7 @@ export default function EventGroupDetailDrawer<T extends GroupableMarket>({
                 stroke="currentColor"
                 strokeWidth={2}
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M6 18L18 6M6 6l12 12"
-                />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
 
@@ -195,11 +182,7 @@ export default function EventGroupDetailDrawer<T extends GroupableMarket>({
               stroke="currentColor"
               strokeWidth={2}
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M6 18L18 6M6 6l12 12"
-              />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
 

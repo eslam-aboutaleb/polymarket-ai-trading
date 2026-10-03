@@ -95,6 +95,16 @@ class AnalysisServiceStub(object):
                 request_serializer=analysis__pb2.IndexMarketsRAGRequest.SerializeToString,
                 response_deserializer=analysis__pb2.AnalysisResponse.FromString,
                 _registered_method=True)
+        self.GenerateNews = channel.unary_unary(
+                '/polymarket.analysis.AnalysisService/GenerateNews',
+                request_serializer=analysis__pb2.GenerateNewsRequest.SerializeToString,
+                response_deserializer=analysis__pb2.GenerateNewsResponse.FromString,
+                _registered_method=True)
+        self.GenerateNewsBatch = channel.unary_unary(
+                '/polymarket.analysis.AnalysisService/GenerateNewsBatch',
+                request_serializer=analysis__pb2.GenerateNewsBatchRequest.SerializeToString,
+                response_deserializer=analysis__pb2.GenerateNewsBatchResponse.FromString,
+                _registered_method=True)
         self.HealthCheck = channel.unary_unary(
                 '/polymarket.analysis.AnalysisService/HealthCheck',
                 request_serializer=analysis__pb2.HealthRequest.SerializeToString,
@@ -194,6 +204,22 @@ class AnalysisServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GenerateNews(self, request, context):
+        """── NEW: News Generation RPCs ────────────────────────────
+
+        Generate AI news article for a market
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GenerateNewsBatch(self, request, context):
+        """Generate news articles for multiple markets (batch)
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def HealthCheck(self, request, context):
         """Health check
         """
@@ -263,6 +289,16 @@ def add_AnalysisServiceServicer_to_server(servicer, server):
                     servicer.IndexMarketsRAG,
                     request_deserializer=analysis__pb2.IndexMarketsRAGRequest.FromString,
                     response_serializer=analysis__pb2.AnalysisResponse.SerializeToString,
+            ),
+            'GenerateNews': grpc.unary_unary_rpc_method_handler(
+                    servicer.GenerateNews,
+                    request_deserializer=analysis__pb2.GenerateNewsRequest.FromString,
+                    response_serializer=analysis__pb2.GenerateNewsResponse.SerializeToString,
+            ),
+            'GenerateNewsBatch': grpc.unary_unary_rpc_method_handler(
+                    servicer.GenerateNewsBatch,
+                    request_deserializer=analysis__pb2.GenerateNewsBatchRequest.FromString,
+                    response_serializer=analysis__pb2.GenerateNewsBatchResponse.SerializeToString,
             ),
             'HealthCheck': grpc.unary_unary_rpc_method_handler(
                     servicer.HealthCheck,
@@ -595,6 +631,60 @@ class AnalysisService(object):
             '/polymarket.analysis.AnalysisService/IndexMarketsRAG',
             analysis__pb2.IndexMarketsRAGRequest.SerializeToString,
             analysis__pb2.AnalysisResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GenerateNews(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/polymarket.analysis.AnalysisService/GenerateNews',
+            analysis__pb2.GenerateNewsRequest.SerializeToString,
+            analysis__pb2.GenerateNewsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GenerateNewsBatch(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/polymarket.analysis.AnalysisService/GenerateNewsBatch',
+            analysis__pb2.GenerateNewsBatchRequest.SerializeToString,
+            analysis__pb2.GenerateNewsBatchResponse.FromString,
             options,
             channel_credentials,
             insecure,

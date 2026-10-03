@@ -1,21 +1,21 @@
 """User Settings API routes"""
+
+from contextlib import suppress
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List
-from datetime import datetime
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.api.routes.auth import get_current_user_from_token
-from app.config import AIBackend
 from app.models.user import User, validate_profile_picture_url
 from app.models.user_settings import (
-    UserSettings,
     AIBackendType,
-    LLMProviderType,
-    RiskMode,
     InverseBotSizeMode,
+    RiskMode,
+    UserSettings,
 )
-from app.services.llm_gateway import get_llm_gateway, LLMProviderType as GatewayProviderType
+from app.services.llm_gateway import LLMProviderType as GatewayProviderType
+from app.services.llm_gateway import get_llm_gateway
 from app.utils.database import get_db
 from app.utils.time import utc_now
 
@@ -25,32 +25,44 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 # Request/Response schemas
 class UserSettingsResponse(BaseModel):
     """User settings response"""
+
     ai_backend: str = Field(..., description="Selected AI backend (legacy)")
-    preferred_llm_provider: Optional[str] = Field(None, description="Preferred LLM provider")
-    preferred_llm_model: Optional[str] = Field(None, description="Preferred model for the provider")
+    preferred_llm_provider: str | None = Field(None, description="Preferred LLM provider")
+    preferred_llm_model: str | None = Field(None, description="Preferred model for the provider")
     copy_trading_enabled: bool = False
     risk_mode: str = "max_position_daily_loss"
     max_position_size: float = 100.0
     daily_loss_limit: float = 500.0
     mirror_percentage: float = 10.0
     fixed_trade_amount: float = 50.0
+    kelly_fraction: float = Field(
+        0.25,
+        ge=0,
+        le=1,
+        description="Fractional-Kelly multiplier for the kelly sizing mode",
+    )
     require_ai_approval: bool = True
     follow_email_notifications_enabled: bool = False
     # Multi-layer risk protection
-    monthly_loss_limit: Optional[float] = None
+    monthly_loss_limit: float | None = None
     max_drawdown_pct: float = 25.0
     total_loss_halt_pct: float = 40.0
-    peak_capital: Optional[float] = None
-    initial_capital: Optional[float] = None
+    peak_capital: float | None = None
+    initial_capital: float | None = None
     trading_halted: bool = False
-    halt_reason: Optional[str] = None
-    cooldown_until: Optional[str] = None
+    halt_reason: str | None = None
+    cooldown_until: str | None = None
     # Dynamic sizing
     dynamic_sizing_enabled: bool = False
     consecutive_wins: int = 0
     consecutive_losses: int = 0
     # Simulation mode
     simulation_mode: bool = False
+    paper_balance: float = Field(
+        1000.0,
+        ge=0,
+        description="Paper account balance (USDC) — paper PnL is tracked against this",
+    )
     # Inverse bot
     inverse_bot_enabled: bool = False
     inverse_bot_default_size_mode: str = InverseBotSizeMode.FULL_NOTIONAL.value
@@ -58,88 +70,108 @@ class UserSettingsResponse(BaseModel):
     inverse_bot_confidence_threshold: int = 75
     inverse_bot_cooldown_minutes: int = 30
     inverse_bot_max_reversals_per_day: int = 3
-    updated_at: Optional[str] = None
-    
-    class Config:
-        from_attributes = True
+    updated_at: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class LLMProviderInfo(BaseModel):
     """Information about an LLM provider"""
+
     id: str = Field(..., description="Provider identifier")
     name: str = Field(..., description="Display name")
     backend: str = Field(..., description="Backend service (llm_chain or cli_agent)")
-    models: List[str] = Field(default_factory=list, description="Available models")
+    models: list[str] = Field(default_factory=list, description="Available models")
     description: str = Field("", description="Provider description")
     requires_api_key: bool = Field(True, description="Whether API key is required")
 
 
 class LLMProvidersResponse(BaseModel):
     """Response listing available LLM providers"""
-    providers: List[LLMProviderInfo]
+
+    providers: list[LLMProviderInfo]
     default_provider: str = Field(..., description="System default provider")
 
 
 class LLMCurrentSettingsResponse(BaseModel):
     """Current user's LLM settings"""
-    provider: Optional[str] = Field(None, description="Currently configured provider")
-    model: Optional[str] = Field(None, description="Currently configured model")
-    effective_provider: str = Field(..., description="Provider that will be used (considering defaults)")
-    available_models: List[str] = Field(default_factory=list)
+
+    provider: str | None = Field(None, description="Currently configured provider")
+    model: str | None = Field(None, description="Currently configured model")
+    effective_provider: str = Field(
+        ..., description="Provider that will be used (considering defaults)"
+    )
+    available_models: list[str] = Field(default_factory=list)
 
 
 class UpdateLLMSettingsRequest(BaseModel):
     """Request to update LLM provider settings"""
-    provider: Optional[str] = Field(
-        None,
-        description="LLM provider: openai, anthropic, google, groq, ollama, github_models"
+
+    provider: str | None = Field(
+        None, description="LLM provider: openai, anthropic, google, groq, ollama, github_models"
     )
-    model: Optional[str] = Field(
-        None,
-        description="Model name (leave empty for provider default)"
-    )
+    model: str | None = Field(None, description="Model name (leave empty for provider default)")
 
 
 class UpdateSettingsRequest(BaseModel):
     """Request to update user settings"""
-    ai_backend: Optional[str] = Field(
-        None, 
-        description="AI backend: llm_chain or cli_agent"
+
+    ai_backend: str | None = Field(None, description="AI backend: llm_chain or cli_agent")
+    kelly_fraction: float | None = Field(
+        None,
+        ge=0,
+        le=1,
+        description="Fractional-Kelly multiplier (0-1) for the kelly sizing mode",
     )
 
 
 class CopyTradingSettingsRequest(BaseModel):
     """Request to update copy-trading settings."""
-    copy_trading_enabled: Optional[bool] = None
-    risk_mode: Optional[str] = Field(None, pattern="^(max_position_daily_loss|percentage_mirror|fixed_amount)$")
-    max_position_size: Optional[float] = Field(None, gt=0)
-    daily_loss_limit: Optional[float] = Field(None, gt=0)
-    mirror_percentage: Optional[float] = Field(None, gt=0, le=100)
-    fixed_trade_amount: Optional[float] = Field(None, gt=0)
-    require_ai_approval: Optional[bool] = None
-    follow_email_notifications_enabled: Optional[bool] = None
+
+    copy_trading_enabled: bool | None = None
+    risk_mode: str | None = Field(
+        None, pattern="^(max_position_daily_loss|percentage_mirror|fixed_amount)$"
+    )
+    max_position_size: float | None = Field(None, gt=0)
+    daily_loss_limit: float | None = Field(None, gt=0)
+    mirror_percentage: float | None = Field(None, gt=0, le=100)
+    fixed_trade_amount: float | None = Field(None, gt=0)
+    kelly_fraction: float | None = Field(
+        None,
+        ge=0,
+        le=1,
+        description="Fractional-Kelly multiplier (0-1) for the kelly sizing mode",
+    )
+    require_ai_approval: bool | None = None
+    follow_email_notifications_enabled: bool | None = None
     # Multi-layer risk protection
-    monthly_loss_limit: Optional[float] = Field(None, ge=0)
-    max_drawdown_pct: Optional[float] = Field(None, gt=0, le=100)
-    total_loss_halt_pct: Optional[float] = Field(None, gt=0, le=100)
-    initial_capital: Optional[float] = Field(None, gt=0)
+    monthly_loss_limit: float | None = Field(None, ge=0)
+    max_drawdown_pct: float | None = Field(None, gt=0, le=100)
+    total_loss_halt_pct: float | None = Field(None, gt=0, le=100)
+    initial_capital: float | None = Field(None, gt=0)
     # Dynamic sizing
-    dynamic_sizing_enabled: Optional[bool] = None
+    dynamic_sizing_enabled: bool | None = None
     # Simulation mode
-    simulation_mode: Optional[bool] = None
+    simulation_mode: bool | None = None
+    paper_balance: float | None = Field(
+        None,
+        ge=0,
+        description="Paper account balance (USDC) — paper PnL is tracked against this",
+    )
     # Inverse bot
-    inverse_bot_enabled: Optional[bool] = None
-    inverse_bot_default_size_mode: Optional[str] = Field(
+    inverse_bot_enabled: bool | None = None
+    inverse_bot_default_size_mode: str | None = Field(
         None, pattern="^(full_notional|fixed_amount)$"
     )
-    inverse_bot_fixed_amount: Optional[float] = Field(None, gt=0)
-    inverse_bot_confidence_threshold: Optional[int] = Field(None, ge=0, le=100)
-    inverse_bot_cooldown_minutes: Optional[int] = Field(None, ge=0, le=1440)
-    inverse_bot_max_reversals_per_day: Optional[int] = Field(None, ge=0, le=100)
+    inverse_bot_fixed_amount: float | None = Field(None, gt=0)
+    inverse_bot_confidence_threshold: int | None = Field(None, ge=0, le=100)
+    inverse_bot_cooldown_minutes: int | None = Field(None, ge=0, le=1440)
+    inverse_bot_max_reversals_per_day: int | None = Field(None, ge=0, le=100)
 
 
 class AIBackendStatusResponse(BaseModel):
     """Status of AI backends"""
+
     llm_chain: dict
     cli_agent: dict
 
@@ -147,28 +179,27 @@ class AIBackendStatusResponse(BaseModel):
 # ── Profile Schemas ────────────────────────────────────────────
 class UserProfileResponse(BaseModel):
     """User profile response"""
+
     wallet_address: str
     display_name: str
-    email: Optional[str] = None
-    phone: Optional[str] = None
-    profile_picture_url: Optional[str] = None
-    two_fa_enabled: bool = False
+    email: str | None = None
+    phone: str | None = None
+    profile_picture_url: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UpdateProfileRequest(BaseModel):
     """Request to update user profile"""
-    display_name: Optional[str] = Field(None, max_length=100)
-    email: Optional[str] = Field(None, max_length=255)
-    phone: Optional[str] = Field(None, max_length=30)
-    profile_picture_url: Optional[str] = None
-    two_fa_enabled: Optional[bool] = None
+
+    display_name: str | None = Field(None, max_length=100)
+    email: str | None = Field(None, max_length=255)
+    phone: str | None = Field(None, max_length=30)
+    profile_picture_url: str | None = None
 
     @field_validator("profile_picture_url")
     @classmethod
-    def _validate_profile_picture_url(cls, value: Optional[str]) -> Optional[str]:
+    def _validate_profile_picture_url(cls, value: str | None) -> str | None:
         return validate_profile_picture_url(value)
 
 
@@ -184,15 +215,22 @@ def _build_settings_response(settings: UserSettings) -> UserSettingsResponse:
         daily_loss_limit=settings.daily_loss_limit or 500.0,
         mirror_percentage=settings.mirror_percentage or 10.0,
         fixed_trade_amount=settings.fixed_trade_amount or 50.0,
-        require_ai_approval=settings.require_ai_approval if settings.require_ai_approval is not None else True,
+        kelly_fraction=(settings.kelly_fraction if settings.kelly_fraction is not None else 0.25),
+        require_ai_approval=settings.require_ai_approval
+        if settings.require_ai_approval is not None
+        else True,
         follow_email_notifications_enabled=(
             settings.follow_email_notifications_enabled
             if settings.follow_email_notifications_enabled is not None
             else False
         ),
         monthly_loss_limit=settings.monthly_loss_limit,
-        max_drawdown_pct=settings.max_drawdown_pct if settings.max_drawdown_pct is not None else 25.0,
-        total_loss_halt_pct=settings.total_loss_halt_pct if settings.total_loss_halt_pct is not None else 40.0,
+        max_drawdown_pct=settings.max_drawdown_pct
+        if settings.max_drawdown_pct is not None
+        else 25.0,
+        total_loss_halt_pct=settings.total_loss_halt_pct
+        if settings.total_loss_halt_pct is not None
+        else 40.0,
         peak_capital=settings.peak_capital,
         initial_capital=settings.initial_capital,
         trading_halted=settings.trading_halted or False,
@@ -202,10 +240,10 @@ def _build_settings_response(settings: UserSettings) -> UserSettingsResponse:
         consecutive_wins=settings.consecutive_wins or 0,
         consecutive_losses=settings.consecutive_losses or 0,
         simulation_mode=settings.simulation_mode or False,
+        paper_balance=(settings.paper_balance if settings.paper_balance is not None else 1000.0),
         inverse_bot_enabled=settings.inverse_bot_enabled or False,
         inverse_bot_default_size_mode=(
-            settings.inverse_bot_default_size_mode
-            or InverseBotSizeMode.FULL_NOTIONAL.value
+            settings.inverse_bot_default_size_mode or InverseBotSizeMode.FULL_NOTIONAL.value
         ),
         inverse_bot_fixed_amount=settings.inverse_bot_fixed_amount or 50.0,
         inverse_bot_confidence_threshold=settings.inverse_bot_confidence_threshold or 75,
@@ -217,24 +255,21 @@ def _build_settings_response(settings: UserSettings) -> UserSettingsResponse:
 
 @router.get("", response_model=UserSettingsResponse)
 async def get_user_settings(
-    current_user: dict = Depends(get_current_user_from_token),
-    db: Session = Depends(get_db)
+    current_user: dict = Depends(get_current_user_from_token), db: Session = Depends(get_db)
 ):
     """Get current user settings including copy-trading config."""
     user_id = current_user.get("user_id")
-    
-    settings = db.query(UserSettings).filter(
-        UserSettings.user_id == user_id
-    ).first()
-    
+
+    settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+
     if not settings:
         return UserSettingsResponse(
             ai_backend=AIBackendType.LLM_CHAIN.value,
             preferred_llm_provider=None,
             preferred_llm_model=None,
-            updated_at=None
+            updated_at=None,
         )
-    
+
     return _build_settings_response(settings)
 
 
@@ -242,37 +277,38 @@ async def get_user_settings(
 async def update_user_settings(
     request: UpdateSettingsRequest,
     current_user: dict = Depends(get_current_user_from_token),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """Update user settings (AI backend)."""
     user_id = current_user.get("user_id")
-    
+
     if request.ai_backend:
         valid_backends = [b.value for b in AIBackendType]
         if request.ai_backend not in valid_backends:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid ai_backend. Must be one of: {valid_backends}"
+                detail=f"Invalid ai_backend. Must be one of: {valid_backends}",
             )
-    
-    settings = db.query(UserSettings).filter(
-        UserSettings.user_id == user_id
-    ).first()
-    
+
+    settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+
     if not settings:
         settings = UserSettings(
             user_id=user_id,
-            ai_backend=request.ai_backend or AIBackendType.LLM_CHAIN.value
+            ai_backend=request.ai_backend or AIBackendType.LLM_CHAIN.value,
+            kelly_fraction=request.kelly_fraction,
         )
         db.add(settings)
     else:
         if request.ai_backend:
             settings.ai_backend = request.ai_backend
+        if request.kelly_fraction is not None:
+            settings.kelly_fraction = request.kelly_fraction
         settings.updated_at = utc_now()
-    
+
     db.commit()
     db.refresh(settings)
-    
+
     return _build_settings_response(settings)
 
 
@@ -294,9 +330,7 @@ async def update_copy_trading_settings(
     """Update copy-trading configuration."""
     user_id = current_user.get("user_id")
 
-    settings = db.query(UserSettings).filter(
-        UserSettings.user_id == user_id
-    ).first()
+    settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
 
     if not settings:
         settings = UserSettings(
@@ -318,12 +352,12 @@ async def update_copy_trading_settings(
         settings.mirror_percentage = request.mirror_percentage
     if request.fixed_trade_amount is not None:
         settings.fixed_trade_amount = request.fixed_trade_amount
+    if request.kelly_fraction is not None:
+        settings.kelly_fraction = request.kelly_fraction
     if request.require_ai_approval is not None:
         settings.require_ai_approval = request.require_ai_approval
     if request.follow_email_notifications_enabled is not None:
-        settings.follow_email_notifications_enabled = (
-            request.follow_email_notifications_enabled
-        )
+        settings.follow_email_notifications_enabled = request.follow_email_notifications_enabled
     # Multi-layer risk protection
     if request.monthly_loss_limit is not None:
         settings.monthly_loss_limit = request.monthly_loss_limit
@@ -342,6 +376,8 @@ async def update_copy_trading_settings(
     # Simulation mode
     if request.simulation_mode is not None:
         settings.simulation_mode = request.simulation_mode
+    if request.paper_balance is not None:
+        settings.paper_balance = request.paper_balance
     # Inverse bot
     if request.inverse_bot_enabled is not None:
         settings.inverse_bot_enabled = request.inverse_bot_enabled
@@ -363,40 +399,63 @@ async def update_copy_trading_settings(
     return _build_settings_response(settings)
 
 
-@router.get("/backends/status", response_model=AIBackendStatusResponse)
-async def get_backends_status(
-    current_user: dict = Depends(get_current_user_from_token)
+class PaperSummaryResponse(BaseModel):
+    """Paper-trading summary, tracked separately from real equity."""
+
+    simulation_mode: bool = False
+    paper_balance: float = 1000.0
+    paper_pnl: float = 0.0
+    simulated_trades: int = 0
+
+
+@router.get("/paper-summary", response_model=PaperSummaryResponse)
+async def get_paper_summary(
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
 ):
+    """Paper-trading summary: balance and realized paper PnL.
+
+    Paper PnL is computed from the user's simulated trades and is
+    tracked against ``paper_balance``, separate from real equity.
+    """
+    from app.services.simulation import get_paper_summary as _paper_summary
+
+    user_id = current_user.get("user_id")
+    return PaperSummaryResponse(**_paper_summary(db, user_id))
+
+
+@router.get("/backends/status", response_model=AIBackendStatusResponse)
+async def get_backends_status(current_user: dict = Depends(get_current_user_from_token)):
     """
     Get health status of AI backends.
     Useful for frontend to show service availability.
     """
-    from app.grpc_clients.analysis_client import AnalysisClient
     from app.config import AIBackend as ConfigAIBackend
-    
+    from app.grpc_clients.analysis_client import AnalysisClient
+
     # Check LLM Chain service
     llm_client = AnalysisClient(backend=ConfigAIBackend.LLM_CHAIN)
     llm_healthy = await llm_client.health_check()
     await llm_client.close()
-    
+
     # Check CLI Agent service
     cli_client = AnalysisClient(backend=ConfigAIBackend.CLI_AGENT)
     cli_healthy = await cli_client.health_check()
     await cli_client.close()
-    
+
     return AIBackendStatusResponse(
         llm_chain={
             "name": "LLM Chain (OpenAI)",
             "description": "LangChain with OpenAI GPT-4 and web search",
             "healthy": llm_healthy,
-            "status": "online" if llm_healthy else "offline"
+            "status": "online" if llm_healthy else "offline",
         },
         cli_agent={
             "name": "CLI Agent (GitHub Copilot)",
             "description": "GitHub Copilot CLI with MCP tools",
             "healthy": cli_healthy,
-            "status": "online" if cli_healthy else "offline"
-        }
+            "status": "online" if cli_healthy else "offline",
+        },
     )
 
 
@@ -419,7 +478,6 @@ async def get_user_profile(
         email=user.email,
         phone=user.phone,
         profile_picture_url=user.profile_picture_url,
-        two_fa_enabled=user.two_fa_enabled or False,
     )
 
 
@@ -444,14 +502,6 @@ async def update_user_profile(
         user.phone = request.phone or None
     if request.profile_picture_url is not None:
         user.profile_picture_url = request.profile_picture_url or None
-    if request.two_fa_enabled is not None:
-        # Only allow enabling 2FA if email or phone is set
-        if request.two_fa_enabled and not (user.email or user.phone or request.email or request.phone):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email or phone is required to enable 2FA",
-            )
-        user.two_fa_enabled = request.two_fa_enabled
 
     db.commit()
     db.refresh(user)
@@ -462,7 +512,6 @@ async def update_user_profile(
         email=user.email,
         phone=user.phone,
         profile_picture_url=user.profile_picture_url,
-        two_fa_enabled=user.two_fa_enabled or False,
     )
 
 
@@ -475,7 +524,7 @@ async def get_llm_providers(
 ):
     """
     List all available LLM providers.
-    
+
     Returns information about each provider including:
     - Available models
     - Whether API key is required
@@ -483,7 +532,7 @@ async def get_llm_providers(
     """
     gateway = get_llm_gateway()
     providers_list = gateway.list_providers()
-    
+
     providers = [
         LLMProviderInfo(
             id=p["id"],
@@ -495,7 +544,7 @@ async def get_llm_providers(
         )
         for p in providers_list
     ]
-    
+
     return LLMProvidersResponse(
         providers=providers,
         default_provider=GatewayProviderType.OPENAI.value,
@@ -509,26 +558,24 @@ async def get_current_llm_settings(
 ):
     """
     Get the current user's LLM provider settings.
-    
+
     Returns:
     - User's configured provider and model
     - The effective provider (what will actually be used)
     - Available models for the effective provider
     """
     user_id = current_user.get("user_id")
-    gateway = get_llm_gateway()
-    
-    settings = db.query(UserSettings).filter(
-        UserSettings.user_id == user_id
-    ).first()
-    
+    get_llm_gateway()
+
+    settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+
     user_provider = None
     user_model = None
-    
+
     if settings:
         user_provider = settings.preferred_llm_provider
         user_model = settings.preferred_llm_model
-    
+
     # Determine effective provider
     if user_provider:
         effective_provider = user_provider
@@ -536,15 +583,16 @@ async def get_current_llm_settings(
         effective_provider = GatewayProviderType.GITHUB_MODELS.value
     else:
         effective_provider = GatewayProviderType.OPENAI.value
-    
+
     # Get available models for effective provider
     try:
         provider_enum = GatewayProviderType(effective_provider)
         from app.services.llm_gateway import MODEL_SUGGESTIONS
+
         available_models = MODEL_SUGGESTIONS.get(provider_enum, [])
     except ValueError:
         available_models = []
-    
+
     return LLMCurrentSettingsResponse(
         provider=user_provider,
         model=user_model,
@@ -561,25 +609,23 @@ async def update_llm_settings(
 ):
     """
     Update user's preferred LLM provider and model.
-    
+
     Set provider to null/empty to clear and use system default.
     Set model to null/empty to use the provider's default model.
     """
     user_id = current_user.get("user_id")
-    
+
     # Validate provider if specified
     if request.provider:
         valid_providers = [p.value for p in GatewayProviderType]
         if request.provider.lower() not in valid_providers:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid provider. Must be one of: {valid_providers}"
+                detail=f"Invalid provider. Must be one of: {valid_providers}",
             )
-    
-    settings = db.query(UserSettings).filter(
-        UserSettings.user_id == user_id
-    ).first()
-    
+
+    settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+
     if not settings:
         settings = UserSettings(
             user_id=user_id,
@@ -592,11 +638,11 @@ async def update_llm_settings(
         # Update provider (None clears it)
         if request.provider is not None:
             settings.preferred_llm_provider = request.provider.lower() if request.provider else None
-        
+
         # Update model (None clears it)
         if request.model is not None:
             settings.preferred_llm_model = request.model if request.model else None
-        
+
         # Also update legacy ai_backend for backwards compatibility
         if request.provider:
             provider_lower = request.provider.lower()
@@ -604,30 +650,31 @@ async def update_llm_settings(
                 settings.ai_backend = AIBackendType.CLI_AGENT.value
             else:
                 settings.ai_backend = AIBackendType.LLM_CHAIN.value
-        
+
         settings.updated_at = utc_now()
-    
+
     db.commit()
     db.refresh(settings)
-    
+
     # Return current state
     user_provider = settings.preferred_llm_provider
     user_model = settings.preferred_llm_model
-    
+
     if user_provider:
         effective_provider = user_provider
     elif settings.ai_backend == AIBackendType.CLI_AGENT.value:
         effective_provider = GatewayProviderType.GITHUB_MODELS.value
     else:
         effective_provider = GatewayProviderType.OPENAI.value
-    
+
     try:
         provider_enum = GatewayProviderType(effective_provider)
         from app.services.llm_gateway import MODEL_SUGGESTIONS
+
         available_models = MODEL_SUGGESTIONS.get(provider_enum, [])
     except ValueError:
         available_models = []
-    
+
     return LLMCurrentSettingsResponse(
         provider=user_provider,
         model=user_model,
@@ -663,10 +710,11 @@ def require_admin(
 
 class AdminProviderStatus(BaseModel):
     """Provider status for admin view"""
+
     id: str
     name: str
     backend: str
-    models: List[str]
+    models: list[str]
     description: str
     requires_api_key: bool
     is_configured: bool = Field(..., description="Whether API key is set")
@@ -675,38 +723,43 @@ class AdminProviderStatus(BaseModel):
 
 class AdminProvidersResponse(BaseModel):
     """Admin view of all providers with status"""
-    providers: List[AdminProviderStatus]
+
+    providers: list[AdminProviderStatus]
     default_provider: str
     default_model: str
 
 
 class AdminDefaultsRequest(BaseModel):
     """Request to update system defaults"""
-    default_provider: Optional[str] = None
-    default_model: Optional[str] = None
+
+    default_provider: str | None = None
+    default_model: str | None = None
 
 
 class AdminUserLLMSettings(BaseModel):
     """User's LLM settings for admin view"""
+
     user_id: int
     wallet_address: str
-    display_name: Optional[str]
-    preferred_llm_provider: Optional[str]
-    preferred_llm_model: Optional[str]
+    display_name: str | None
+    preferred_llm_provider: str | None
+    preferred_llm_model: str | None
     ai_backend: str
-    updated_at: Optional[str]
+    updated_at: str | None
 
 
 class AdminUsersLLMResponse(BaseModel):
     """List of users with their LLM settings"""
-    users: List[AdminUserLLMSettings]
+
+    users: list[AdminUserLLMSettings]
     total: int
 
 
 class AdminUpdateUserLLMRequest(BaseModel):
     """Request to update a user's LLM settings (admin override)"""
-    preferred_llm_provider: Optional[str] = None
-    preferred_llm_model: Optional[str] = None
+
+    preferred_llm_provider: str | None = None
+    preferred_llm_model: str | None = None
 
 
 # ── Admin Endpoints ──
@@ -722,31 +775,27 @@ async def get_admin_providers(
     Admin only.
     """
     import os
+
+    from app.config import AIBackend as ConfigAIBackend
     from app.config import get_settings
     from app.grpc_clients.analysis_client import AnalysisClient
-    
-    settings = get_settings()
+
+    get_settings()
     gateway = get_llm_gateway()
     providers_list = gateway.list_providers()
-    
+
     # Check service health
     llm_chain_healthy = False
     cli_agent_healthy = False
-    
-    try:
-        from app.config import AIBackend as ConfigAIBackend
+
+    with suppress(Exception):
         client = AnalysisClient(backend=ConfigAIBackend.LLM_CHAIN)
         llm_chain_healthy = await client.health_check()
-    except Exception:
-        pass
-    
-    try:
-        from app.config import AIBackend as ConfigAIBackend
+
+    with suppress(Exception):
         client = AnalysisClient(backend=ConfigAIBackend.CLI_AGENT)
         cli_agent_healthy = await client.health_check()
-    except Exception:
-        pass
-    
+
     # Check which providers have API keys configured
     configured_keys = {
         "openai": bool(os.environ.get("OPENAI_API_KEY")),
@@ -756,27 +805,29 @@ async def get_admin_providers(
         "ollama": True,  # Ollama doesn't need an API key
         "github_models": bool(os.environ.get("GITHUB_TOKEN")),
     }
-    
+
     providers = []
     for p in providers_list:
         backend = p["backend"]
         is_healthy = llm_chain_healthy if backend == "llm_chain" else cli_agent_healthy
-        
-        providers.append(AdminProviderStatus(
-            id=p["id"],
-            name=p["name"],
-            backend=backend,
-            models=p["models"],
-            description=p.get("description", ""),
-            requires_api_key=p.get("requires_api_key", True),
-            is_configured=configured_keys.get(p["id"], False),
-            is_healthy=is_healthy,
-        ))
-    
+
+        providers.append(
+            AdminProviderStatus(
+                id=p["id"],
+                name=p["name"],
+                backend=backend,
+                models=p["models"],
+                description=p.get("description", ""),
+                requires_api_key=p.get("requires_api_key", True),
+                is_configured=configured_keys.get(p["id"], False),
+                is_healthy=is_healthy,
+            )
+        )
+
     return AdminProvidersResponse(
         providers=providers,
         default_provider=os.environ.get("LLM_PROVIDER", "openai"),
-        default_model=os.environ.get("LLM_MODEL", "gpt-4-turbo-preview"),
+        default_model=os.environ.get("LLM_MODEL", "gpt-4o-mini"),
     )
 
 
@@ -791,24 +842,26 @@ async def update_admin_defaults(
     Admin only.
     """
     import os
-    
+
     if request.default_provider:
         valid_providers = [p.value for p in GatewayProviderType]
         if request.default_provider.lower() not in valid_providers:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid provider. Must be one of: {valid_providers}"
+                detail=f"Invalid provider. Must be one of: {valid_providers}",
             )
         os.environ["LLM_PROVIDER"] = request.default_provider.lower()
-    
+
     if request.default_model:
         os.environ["LLM_MODEL"] = request.default_model
-    
+
     return {
         "success": True,
         "default_provider": os.environ.get("LLM_PROVIDER", "openai"),
-        "default_model": os.environ.get("LLM_MODEL", "gpt-4-turbo-preview"),
-        "note": "Changes applied to current process. For persistence, update environment configuration.",
+        "default_model": os.environ.get("LLM_MODEL", "gpt-4o-mini"),
+        "note": (
+            "Changes applied to current process. For persistence, update environment configuration."
+        ),
     }
 
 
@@ -824,25 +877,33 @@ async def get_admin_users_llm(
     Admin only.
     """
     from sqlalchemy import func
-    
+
     total = db.query(func.count(User.id)).scalar()
-    
-    users_with_settings = db.query(User, UserSettings).outerjoin(
-        UserSettings, User.id == UserSettings.user_id
-    ).offset(skip).limit(limit).all()
-    
+
+    users_with_settings = (
+        db.query(User, UserSettings)
+        .outerjoin(UserSettings, User.id == UserSettings.user_id)
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+
     users = []
     for user, settings in users_with_settings:
-        users.append(AdminUserLLMSettings(
-            user_id=user.id,
-            wallet_address=user.wallet_address,
-            display_name=user.display_name,
-            preferred_llm_provider=settings.preferred_llm_provider if settings else None,
-            preferred_llm_model=settings.preferred_llm_model if settings else None,
-            ai_backend=settings.ai_backend if settings else AIBackendType.LLM_CHAIN.value,
-            updated_at=settings.updated_at.isoformat() if settings and settings.updated_at else None,
-        ))
-    
+        users.append(
+            AdminUserLLMSettings(
+                user_id=user.id,
+                wallet_address=user.wallet_address,
+                display_name=user.display_name,
+                preferred_llm_provider=settings.preferred_llm_provider if settings else None,
+                preferred_llm_model=settings.preferred_llm_model if settings else None,
+                ai_backend=settings.ai_backend if settings else AIBackendType.LLM_CHAIN.value,
+                updated_at=settings.updated_at.isoformat()
+                if settings and settings.updated_at
+                else None,
+            )
+        )
+
     return AdminUsersLLMResponse(users=users, total=total)
 
 
@@ -860,48 +921,51 @@ async def update_admin_user_llm(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"User {user_id} not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"User {user_id} not found"
         )
-    
+
     if request.preferred_llm_provider:
         valid_providers = [p.value for p in GatewayProviderType]
         if request.preferred_llm_provider.lower() not in valid_providers:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid provider. Must be one of: {valid_providers}"
+                detail=f"Invalid provider. Must be one of: {valid_providers}",
             )
-    
-    settings = db.query(UserSettings).filter(
-        UserSettings.user_id == user_id
-    ).first()
-    
+
+    settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+
     if not settings:
         settings = UserSettings(
             user_id=user_id,
             ai_backend=AIBackendType.LLM_CHAIN.value,
-            preferred_llm_provider=request.preferred_llm_provider.lower() if request.preferred_llm_provider else None,
+            preferred_llm_provider=request.preferred_llm_provider.lower()
+            if request.preferred_llm_provider
+            else None,
             preferred_llm_model=request.preferred_llm_model,
         )
         db.add(settings)
     else:
         if request.preferred_llm_provider is not None:
-            settings.preferred_llm_provider = request.preferred_llm_provider.lower() if request.preferred_llm_provider else None
+            settings.preferred_llm_provider = (
+                request.preferred_llm_provider.lower() if request.preferred_llm_provider else None
+            )
         if request.preferred_llm_model is not None:
-            settings.preferred_llm_model = request.preferred_llm_model if request.preferred_llm_model else None
-        
+            settings.preferred_llm_model = (
+                request.preferred_llm_model if request.preferred_llm_model else None
+            )
+
         if request.preferred_llm_provider:
             provider_lower = request.preferred_llm_provider.lower()
             if provider_lower == GatewayProviderType.GITHUB_MODELS.value:
                 settings.ai_backend = AIBackendType.CLI_AGENT.value
             else:
                 settings.ai_backend = AIBackendType.LLM_CHAIN.value
-        
+
         settings.updated_at = utc_now()
-    
+
     db.commit()
     db.refresh(settings)
-    
+
     return AdminUserLLMSettings(
         user_id=user.id,
         wallet_address=user.wallet_address,

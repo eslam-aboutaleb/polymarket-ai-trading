@@ -1,3 +1,14 @@
+/**
+ * Shared types for the trade ticket, its validation, and recently-traded markets.
+ *
+ * `TradePreferences` is persisted per tab by `utils/tradePreferences.ts`; `TradeValidationResult` is
+ * the shape the ticket's validate step returns (errors, warnings, and whether a high-notional
+ * confirmation is required); `RecentTradeMarket` is the snapshot stored by
+ * `utils/tradingWorkspace.ts`.
+ *
+ * @module types/trading
+ */
+
 export type TradeTicketSide = "BUY" | "SELL";
 export type TradeTicketOutcome = "Yes" | "No";
 export type TradeTicketSource = "markets" | "opportunities" | "dashboard";

@@ -7,28 +7,34 @@ Scans Polymarket markets for simple arbitrage opportunities:
 
 Runs as a background task, logging opportunities for user review.
 """
-import asyncio
-import logging
-from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
 
+import asyncio
+import contextlib
+import logging
+from typing import Any
+
+from app.utils.scheduler_lock import (
+    acquire_scheduler_lock,
+    release_scheduler_lock,
+    scheduler_heartbeat,
+)
 from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
 
-_arb_task: Optional[asyncio.Task] = None
-_arb_opportunities: List[Dict[str, Any]] = []
+_arb_task: asyncio.Task | None = None
+_arb_opportunities: list[dict[str, Any]] = []
 ARB_CHECK_INTERVAL = 120  # 2 minutes
 ARB_API_CONCURRENCY = 10
 _arb_semaphore = asyncio.Semaphore(ARB_API_CONCURRENCY)
 
 
-async def _fetch_markets_with_rate_limit(service: Any) -> List[Dict[str, Any]]:
+async def _fetch_markets_with_rate_limit(service: Any) -> list[dict[str, Any]]:
     async with _arb_semaphore:
         return await service.get_active_markets(limit=100)
 
 
-def _check_complement_arbitrage(market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _check_complement_arbitrage(market: dict[str, Any]) -> dict[str, Any] | None:
     """
     Check if Yes + No < 1.00 -> guaranteed profit opportunity.
     Uses outcomePrices from get_active_markets (list of 2 price strings).
@@ -61,7 +67,7 @@ def _check_complement_arbitrage(market: Dict[str, Any]) -> Optional[Dict[str, An
     return None
 
 
-def _check_spread_arbitrage(market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _check_spread_arbitrage(market: dict[str, Any]) -> dict[str, Any] | None:
     """
     Check for unusually large bid-ask spreads (>5%) that represent
     market-making opportunities.  Uses bestBid/bestAsk from get_active_markets.
@@ -87,19 +93,19 @@ def _check_spread_arbitrage(market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "market_title": market.get("question", market.get("_event_title", "Unknown")),
                 "token_id": "",
                 "outcome": "Yes",
-                    "bid": bid,
-                    "ask": ask,
-                    "spread_pct": round(spread_pct, 2),
-                    "detected_at": utc_now().isoformat(),
-                }
+                "bid": bid,
+                "ask": ask,
+                "spread_pct": round(spread_pct, 2),
+                "detected_at": utc_now().isoformat(),
+            }
     return None
 
 
-async def scan_for_arbitrage() -> List[Dict[str, Any]]:
+async def scan_for_arbitrage() -> list[dict[str, Any]]:
     """Scan active markets for arbitrage opportunities."""
     from app.services.polymarket_service import get_polymarket_service
 
-    opportunities: List[Dict[str, Any]] = []
+    opportunities: list[dict[str, Any]] = []
     service = get_polymarket_service()
 
     try:
@@ -114,7 +120,9 @@ async def scan_for_arbitrage() -> List[Dict[str, Any]]:
             opportunities.append(comp)
             logger.info(
                 "ARBITRAGE [complement]: %s — cost=%.4f profit=%.2f%%",
-                comp["market_title"][:50], comp["total_cost"], comp["profit_pct"],
+                comp["market_title"][:50],
+                comp["total_cost"],
+                comp["profit_pct"],
             )
 
         spread = _check_spread_arbitrage(market)
@@ -122,8 +130,11 @@ async def scan_for_arbitrage() -> List[Dict[str, Any]]:
             opportunities.append(spread)
             logger.info(
                 "ARBITRAGE [spread]: %s %s — bid=%.4f ask=%.4f spread=%.2f%%",
-                spread["market_title"][:50], spread["outcome"],
-                spread["bid"], spread["ask"], spread["spread_pct"],
+                spread["market_title"][:50],
+                spread["outcome"],
+                spread["bid"],
+                spread["ask"],
+                spread["spread_pct"],
             )
 
     return opportunities
@@ -132,17 +143,23 @@ async def scan_for_arbitrage() -> List[Dict[str, Any]]:
 async def _arb_monitor_loop():
     """Background loop that periodically scans for arbitrage."""
     global _arb_opportunities
+    if not acquire_scheduler_lock("arbitrage_monitor"):
+        return
     logger.info("Arbitrage monitor started (interval=%ds)", ARB_CHECK_INTERVAL)
-    while True:
-        try:
-            opps = await scan_for_arbitrage()
-            # Keep last 100 opportunities
-            _arb_opportunities = (opps + _arb_opportunities)[:100]
-            if opps:
-                logger.info("Found %d arbitrage opportunities", len(opps))
-        except Exception as e:
-            logger.error("Arbitrage scan error: %s", e)
-        await asyncio.sleep(ARB_CHECK_INTERVAL)
+    try:
+        while True:
+            try:
+                opps = await scan_for_arbitrage()
+                # Keep last 100 opportunities
+                _arb_opportunities = (opps + _arb_opportunities)[:100]
+                if opps:
+                    logger.info("Found %d arbitrage opportunities", len(opps))
+            except Exception as e:
+                logger.error("Arbitrage scan error: %s", e)
+            scheduler_heartbeat("arbitrage_monitor")
+            await asyncio.sleep(ARB_CHECK_INTERVAL)
+    finally:
+        release_scheduler_lock("arbitrage_monitor")
 
 
 async def start_arbitrage_monitor():
@@ -157,14 +174,12 @@ async def stop_arbitrage_monitor():
     global _arb_task
     if _arb_task and not _arb_task.done():
         _arb_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await _arb_task
-        except asyncio.CancelledError:
-            pass
     _arb_task = None
     logger.info("Arbitrage monitor stopped")
 
 
-def get_recent_opportunities() -> List[Dict[str, Any]]:
+def get_recent_opportunities() -> list[dict[str, Any]]:
     """Get recently detected arbitrage opportunities."""
     return _arb_opportunities[:50]

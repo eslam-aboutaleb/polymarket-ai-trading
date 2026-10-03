@@ -11,15 +11,13 @@ Features:
 - Semantic filtering for opportunity discovery
 - TTL-based auto-refresh of the index
 """
+
 from __future__ import annotations
 
-import json
 import logging
-import os
-import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from langchain_core.messages import HumanMessage
 
@@ -38,6 +36,7 @@ def _ensure_imports():
     if _chromadb is None:
         try:
             import chromadb as _chromadb_mod
+
             _chromadb = _chromadb_mod
         except ImportError:
             logger.warning("chromadb not installed — RAG features disabled")
@@ -45,6 +44,7 @@ def _ensure_imports():
     if _OpenAIEmbeddings is None:
         try:
             from langchain_openai import OpenAIEmbeddings as _OAI
+
             _OpenAIEmbeddings = _OAI
         except ImportError:
             logger.warning("langchain-openai not installed — RAG features disabled")
@@ -58,7 +58,7 @@ class MarketRAGService:
     semantic similarity search and opportunity discovery.
     """
 
-    _instance: Optional["MarketRAGService"] = None
+    _instance: MarketRAGService | None = None
     _last_index_time: float = 0
     _index_ttl_seconds: int = 15 * 60  # 15 minutes
 
@@ -70,7 +70,7 @@ class MarketRAGService:
         self._initialized = False
 
     @classmethod
-    def get_instance(cls) -> "MarketRAGService":
+    def get_instance(cls) -> MarketRAGService:
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
@@ -84,7 +84,7 @@ class MarketRAGService:
 
         try:
             persist_dir = self.settings.chroma_persist_dir
-            os.makedirs(persist_dir, exist_ok=True)
+            Path(persist_dir).mkdir(parents=True, exist_ok=True)
 
             self._chroma_client = _chromadb.PersistentClient(path=persist_dir)
             self._collection = self._chroma_client.get_or_create_collection(
@@ -106,7 +106,7 @@ class MarketRAGService:
             logger.error("Failed to initialize ChromaDB: %s", e)
             return False
 
-    def index_markets(self, markets: List[Dict[str, Any]], force: bool = False) -> int:
+    def index_markets(self, markets: list[dict[str, Any]], force: bool = False) -> int:
         """
         Index a list of market dicts into ChromaDB.
 
@@ -129,9 +129,9 @@ class MarketRAGService:
         if not self._init_chroma():
             return 0
 
-        documents: List[str] = []
-        metadatas: List[Dict[str, Any]] = []
-        ids: List[str] = []
+        documents: list[str] = []
+        metadatas: list[dict[str, Any]] = []
+        ids: list[str] = []
 
         for m in markets:
             cid = str(m.get("condition_id") or m.get("conditionId") or m.get("id", ""))
@@ -195,7 +195,7 @@ class MarketRAGService:
         n_results: int = 10,
         min_volume: float = 0,
         active_only: bool = True,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Search for markets semantically similar to a query.
 
@@ -238,14 +238,16 @@ class MarketRAGService:
                 if min_volume > 0 and float(meta.get("volume_24h", 0)) < min_volume:
                     continue
 
-                output.append({
-                    "condition_id": doc_id,
-                    "question": meta.get("question", ""),
-                    "score": round(score, 4),
-                    "distance": round(distance, 4),
-                    "metadata": meta,
-                    "document": results["documents"][0][i] if results["documents"] else "",
-                })
+                output.append(
+                    {
+                        "condition_id": doc_id,
+                        "question": meta.get("question", ""),
+                        "score": round(score, 4),
+                        "distance": round(distance, 4),
+                        "metadata": meta,
+                        "document": results["documents"][0][i] if results["documents"] else "",
+                    }
+                )
 
             return output[:n_results]
         except Exception as e:
@@ -258,7 +260,7 @@ class MarketRAGService:
         llm,
         n_results: int = 10,
         min_volume: float = 0,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Multi-query RAG: generate N paraphrased queries using LLM,
         then union the results for better recall.
@@ -266,6 +268,7 @@ class MarketRAGService:
         Inspired by Polymarket/agents multi-query technique.
         """
         from src.analysis_chain import PromptManager
+
         prompts = PromptManager()
 
         # Generate alternative queries
@@ -274,10 +277,8 @@ class MarketRAGService:
             expansion_text = expansion_prompt.format(question=query)
             response = await llm.ainvoke([HumanMessage(content=expansion_text)])
             alt_queries = [
-                line.strip()
-                for line in response.content.strip().split("\n")
-                if line.strip()
-            ][:self.settings.rag_multi_query_count]
+                line.strip() for line in response.content.strip().split("\n") if line.strip()
+            ][: self.settings.rag_multi_query_count]
         except Exception as e:
             logger.warning("Multi-query expansion failed: %s", e)
             alt_queries = []

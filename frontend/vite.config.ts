@@ -6,10 +6,17 @@ import path from "path";
 export default defineConfig(({ command, mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const isDevServer = command === "serve";
-  const configuredApi = (env.VITE_API_URL || "").trim();
-  const cspConnectSrc = ["'self'", configuredApi || "http://localhost:8000"].join(
-    " ",
-  );
+  // Resolve the API origin the same way Vite resolves import.meta.env:
+  // process.env (Docker ARG/ENV, CI) wins over .env files. Using loadEnv() here
+  // would read the local .env and disagree with the value baked into the bundle.
+  const configuredApi = (process.env.VITE_API_URL ?? env.VITE_API_URL ?? "").trim();
+  // Only allow-list the configured origin when one is actually set. With an
+  // empty VITE_API_URL the app talks to its own origin via nginx, so connect-src
+  // must be exactly 'self' — never a hardcoded localhost fallback.
+  const cspConnectSrc =
+    configuredApi && /^https?:\/\//.test(configuredApi)
+      ? ["'self'", configuredApi].join(" ")
+      : "'self'";
   const productionCsp = [
     "default-src 'self'",
     "script-src 'self'",
@@ -17,6 +24,9 @@ export default defineConfig(({ command, mode }) => {
     "img-src 'self' data: https:",
     "font-src 'self' data:",
     `connect-src ${cspConnectSrc}`,
+    "object-src 'none'",
+    // frame-ancestors is ignored when delivered via <meta>; nginx.conf sets
+    // X-Frame-Options: DENY. Keep it here for documentation value only.
     "frame-ancestors 'none'",
     "base-uri 'self'",
     "form-action 'self'",
@@ -39,7 +49,7 @@ export default defineConfig(({ command, mode }) => {
           port: 5173,
           proxy: {
             "/api": {
-              target: "http://localhost:8000",
+              target: "http://localhost:8002",
               changeOrigin: true,
             },
           },

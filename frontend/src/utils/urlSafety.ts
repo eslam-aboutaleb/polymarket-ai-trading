@@ -1,3 +1,13 @@
+/**
+ * Builders for external Polymarket and Polygonscan links that refuse unsafe input.
+ *
+ * Every builder validates before interpolating: slugs must match a conservative safe-segment pattern
+ * and are URI-encoded, wallets must be 20-byte hex addresses, and tx hashes must be 32-byte hex.
+ * Anything that fails validation returns `null` rather than a partially-valid URL.
+ *
+ * @module utils/urlSafety
+ */
+
 const POLYMARKET_BASE_URL = "https://polymarket.com";
 const POLYGONSCAN_BASE_URL = "https://polygonscan.com";
 

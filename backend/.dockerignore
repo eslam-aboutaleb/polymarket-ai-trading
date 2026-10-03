@@ -1,0 +1,18 @@
+# Build-context hygiene for the backend image (context: ./backend).
+# The Dockerfile only needs pyproject.toml, app/, database/, proto/,
+# migrations/ and alembic.ini — everything else stays local.
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+.env
+.env.*
+!.env.example
+!.env.prod.example
+.coverage
+coverage.xml
+htmlcov
+tests
+*.log

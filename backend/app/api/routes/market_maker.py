@@ -1,5 +1,6 @@
 """Market Maker API routes."""
-from typing import List, Optional, Any
+
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -8,10 +9,10 @@ from sqlalchemy.orm import Session
 from app.api.routes.auth import get_current_user_from_token
 from app.models.market_maker_config import MarketMakerConfig
 from app.services.market_maker_service import (
+    get_running_maker_ids,
     start_market_maker,
     stop_market_maker,
     trigger_single_sync,
-    get_running_maker_ids,
 )
 from app.utils.database import get_db
 
@@ -19,6 +20,7 @@ router = APIRouter(prefix="/api/market-maker", tags=["market-maker"])
 
 
 # ── Pydantic schemas ──
+
 
 class MarketMakerConfigRequest(BaseModel):
     condition_id: str = Field(..., min_length=2)
@@ -58,29 +60,30 @@ class MarketMakerConfigResponse(BaseModel):
     min_price: float
     max_price: float
     status: str
-    last_sync_at: Optional[str]
-    last_error: Optional[str]
+    last_sync_at: str | None
+    last_error: str | None
     total_orders_placed: int
     total_orders_cancelled: int
     total_volume_usdc: float
     current_open_orders: int
     is_running: bool
     created_at: str
-    updated_at: Optional[str]
+    updated_at: str | None
 
 
 class MarketMakerSyncResponse(BaseModel):
     success: bool
     result: dict[str, Any] | None = None
-    detail: Optional[str] = None
+    detail: str | None = None
 
 
 class MarketMakerMetricsResponse(BaseModel):
-    running_configs: List[int]
+    running_configs: list[int]
     total_running: int
 
 
 # ── Helpers ──
+
 
 def _to_response(row: MarketMakerConfig) -> MarketMakerConfigResponse:
     running_ids = get_running_maker_ids()
@@ -117,7 +120,8 @@ def _to_response(row: MarketMakerConfig) -> MarketMakerConfigResponse:
 
 # ── Endpoints ──
 
-@router.get("/configs", response_model=List[MarketMakerConfigResponse])
+
+@router.get("/configs", response_model=list[MarketMakerConfigResponse])
 async def list_market_maker_configs(
     current_user: dict = Depends(get_current_user_from_token),
     db: Session = Depends(get_db),
@@ -296,9 +300,7 @@ async def sync_market_maker_endpoint(
 
     result = await trigger_single_sync(config_id)
     if result.get("error"):
-        return MarketMakerSyncResponse(
-            success=False, detail=result["error"]
-        )
+        return MarketMakerSyncResponse(success=False, detail=result["error"])
     return MarketMakerSyncResponse(success=True, result=result)
 
 

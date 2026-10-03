@@ -1,14 +1,17 @@
 """Binance Skills Hub API routes — exposes smart money signals,
 social hype rankings, and token market data to the frontend dashboard."""
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
-from datetime import datetime
-import httpx
+
 import logging
+import time
+from typing import Any
+
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from app.api.routes.auth import get_current_user_from_token
 from app.config import get_settings
+from app.utils.time import utc_now
 
 router = APIRouter(prefix="/api/binance", tags=["binance-signals"])
 settings = get_settings()
@@ -17,8 +20,6 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://web3.binance.com"
 
 # ── In-memory TTL cache ─────────────────────────────────────────────
-import time
-
 _cache: dict[str, tuple[float, Any]] = {}
 CACHE_TTL = 300  # 5 minutes
 
@@ -46,6 +47,7 @@ SUPPORTED_CHAINS = {
 
 
 # ── Response schemas ────────────────────────────────────────────────
+
 
 class SmartMoneySignal(BaseModel):
     token_address: str = ""
@@ -83,16 +85,17 @@ class TrendingToken(BaseModel):
 
 
 class BinanceDashboardResponse(BaseModel):
-    smart_money_signals: List[Dict[str, Any]] = []
-    social_hype: List[Dict[str, Any]] = []
-    trending_tokens: List[Dict[str, Any]] = []
-    smart_money_inflow: List[Dict[str, Any]] = []
-    pnl_leaderboard: List[Dict[str, Any]] = []
+    smart_money_signals: list[dict[str, Any]] = []
+    social_hype: list[dict[str, Any]] = []
+    trending_tokens: list[dict[str, Any]] = []
+    smart_money_inflow: list[dict[str, Any]] = []
+    pnl_leaderboard: list[dict[str, Any]] = []
     fetched_at: str = ""
     enabled: bool = True
 
 
 # ── Helper: async fetch from Binance ────────────────────────────────
+
 
 async def _binance_post(path: str, payload: dict, cache_key: str | None = None) -> Any:
     """POST to Binance web3 API with caching."""
@@ -104,10 +107,14 @@ async def _binance_post(path: str, payload: dict, cache_key: str | None = None) 
     url = f"{BASE_URL}{path}"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(url, json=payload, headers={
-                "Content-Type": "application/json",
-                "User-Agent": "PolymarketBot/1.0",
-            })
+            resp = await client.post(
+                url,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "PolymarketBot/1.0",
+                },
+            )
             resp.raise_for_status()
             data = resp.json()
             result = data.get("data", data)
@@ -129,9 +136,13 @@ async def _binance_get(path: str, params: dict | None = None, cache_key: str | N
     url = f"{BASE_URL}{path}"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(url, params=params, headers={
-                "User-Agent": "PolymarketBot/1.0",
-            })
+            resp = await client.get(
+                url,
+                params=params,
+                headers={
+                    "User-Agent": "PolymarketBot/1.0",
+                },
+            )
             resp.raise_for_status()
             data = resp.json()
             result = data.get("data", data)
@@ -145,7 +156,8 @@ async def _binance_get(path: str, params: dict | None = None, cache_key: str | N
 
 # ── Routes ──────────────────────────────────────────────────────────
 
-@router.get("/signals/smart-money", response_model=List[Dict[str, Any]])
+
+@router.get("/signals/smart-money", response_model=list[dict[str, Any]])
 async def get_smart_money_signals(
     chain: str = Query("ethereum", description="Chain name"),
     limit: int = Query(20, ge=1, le=50),
@@ -174,7 +186,7 @@ async def get_smart_money_signals(
     return signals[:limit]
 
 
-@router.get("/signals/active-buys", response_model=List[Dict[str, Any]])
+@router.get("/signals/active-buys", response_model=list[dict[str, Any]])
 async def get_active_buy_signals(
     chain: str = Query("ethereum", description="Chain name"),
     limit: int = Query(10, ge=1, le=30),
@@ -203,7 +215,7 @@ async def get_active_buy_signals(
     return signals[:limit]
 
 
-@router.get("/rankings/social-hype", response_model=List[Dict[str, Any]])
+@router.get("/rankings/social-hype", response_model=list[dict[str, Any]])
 async def get_social_hype_ranking(
     limit: int = Query(20, ge=1, le=50),
     _user: dict = Depends(get_current_user_from_token),
@@ -224,7 +236,7 @@ async def get_social_hype_ranking(
     return rows[:limit]
 
 
-@router.get("/rankings/trending", response_model=List[Dict[str, Any]])
+@router.get("/rankings/trending", response_model=list[dict[str, Any]])
 async def get_trending_tokens(
     limit: int = Query(20, ge=1, le=50),
     _user: dict = Depends(get_current_user_from_token),
@@ -245,7 +257,7 @@ async def get_trending_tokens(
     return rows[:limit]
 
 
-@router.get("/rankings/smart-money-inflow", response_model=List[Dict[str, Any]])
+@router.get("/rankings/smart-money-inflow", response_model=list[dict[str, Any]])
 async def get_smart_money_inflow(
     limit: int = Query(20, ge=1, le=50),
     _user: dict = Depends(get_current_user_from_token),
@@ -266,7 +278,7 @@ async def get_smart_money_inflow(
     return rows[:limit]
 
 
-@router.get("/rankings/pnl-leaderboard", response_model=List[Dict[str, Any]])
+@router.get("/rankings/pnl-leaderboard", response_model=list[dict[str, Any]])
 async def get_pnl_leaderboard(
     period: str = Query("7d", description="7d or 30d"),
     limit: int = Query(20, ge=1, le=50),
@@ -288,7 +300,7 @@ async def get_pnl_leaderboard(
     return rows[:limit]
 
 
-@router.get("/token/search", response_model=List[Dict[str, Any]])
+@router.get("/token/search", response_model=list[dict[str, Any]])
 async def search_token(
     query: str = Query(..., description="Token name or symbol"),
     _user: dict = Depends(get_current_user_from_token),
@@ -309,7 +321,7 @@ async def search_token(
     return rows[:10]
 
 
-@router.get("/token/data", response_model=Dict[str, Any])
+@router.get("/token/data", response_model=dict[str, Any])
 async def get_token_data(
     address: str = Query(..., description="Token contract address"),
     chain: str = Query("ethereum", description="Chain name"),
@@ -335,7 +347,7 @@ async def get_binance_dashboard(
     """Aggregated Binance signals dashboard — returns smart money signals,
     social hype, trending tokens, and inflow data in a single call."""
     if not settings.binance_skills_enabled:
-        return BinanceDashboardResponse(enabled=False, fetched_at=datetime.utcnow().isoformat())
+        return BinanceDashboardResponse(enabled=False, fetched_at=utc_now().isoformat())
 
     import asyncio
 
@@ -384,6 +396,6 @@ async def get_binance_dashboard(
         trending_tokens=_extract(results[2]),
         smart_money_inflow=_extract(results[3]),
         pnl_leaderboard=_extract(results[4]),
-        fetched_at=datetime.utcnow().isoformat(),
+        fetched_at=utc_now().isoformat(),
         enabled=True,
     )

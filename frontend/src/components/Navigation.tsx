@@ -1,7 +1,16 @@
+/**
+ * Top navigation bar: brand button, hamburger dropdown, and the wallet/logout or connect CTA.
+ *
+ * Visible items come from navItems, restricted to PUBLIC_NAV_IDS when isPublic is set and to
+ * non-debug routes for non-admins; the highlighted entry is derived from the router pathname.
+ *
+ * @module components/Navigation
+ */
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "../store/authStore";
 import { useLoginModal } from "../context/LoginModalContext";
+import NotificationCenter from "./NotificationCenter";
 
 type PageId =
   | "dashboard"
@@ -14,6 +23,8 @@ type PageId =
   | "news"
   | "guide"
   | "trades"
+  | "whales"
+  | "latency-arb"
   | "ops"
   | "settings"
   | "debug";
@@ -36,6 +47,8 @@ const navItems: { id: PageId; label: string; path: string }[] = [
   { id: "news", label: "📰 News", path: "/news" },
   { id: "guide", label: "\u{1F4D6} Your Guide", path: "/guide" },
   { id: "trades", label: "Trades", path: "/trades" },
+  { id: "whales", label: "🐋 Whales", path: "/whales" },
+  { id: "latency-arb", label: "⚡ Latency Arb", path: "/latency-arb" },
   { id: "ops", label: "Ops Center", path: "/ops" },
   { id: "settings", label: "Settings", path: "/settings" },
   { id: "debug", label: "\u{1F527} Debug", path: "/debug" },
@@ -55,18 +68,12 @@ function activeId(pathname: string): PageId {
   // /analysis tab should highlight "opportunities"
   if (pathname.startsWith("/analysis")) return "opportunities";
   if (pathname.startsWith("/debug")) return "debug";
-  const match = navItems.find(
-    (n) => n.path !== "/" && pathname.startsWith(n.path),
-  );
+  const match = navItems.find((n) => n.path !== "/" && pathname.startsWith(n.path));
   if (match) return match.id;
   return "dashboard";
 }
 
-export default function Navigation({
-  walletAddress,
-  onLogout,
-  isPublic = false,
-}: NavigationProps) {
+export default function Navigation({ walletAddress, onLogout, isPublic = false }: NavigationProps) {
   const [showMenu, setShowMenu] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [logoutLoading, setLogoutLoading] = useState(false);
@@ -133,10 +140,7 @@ export default function Navigation({
         <div className="max-w-7xl mx-auto px-4">
           <div className="flex items-center justify-between h-16">
             {/* Logo */}
-            <div
-              ref={menuContainerRef}
-              className="relative flex items-center gap-2"
-            >
+            <div ref={menuContainerRef} className="relative flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => setShowMenu((prev) => !prev)}
@@ -212,15 +216,14 @@ export default function Navigation({
                 </button>
               ) : (
                 <>
+                  <NotificationCenter />
+
                   <div className="hidden sm:flex items-center px-3 py-2 rounded-md text-sm text-soft border border-[var(--line)] bg-[var(--bg-elevated)] mono">
                     {shortAddress}
                   </div>
 
                   {/* Logout Button */}
-                  <button
-                    onClick={() => setShowLogoutConfirm(true)}
-                    className="btn-danger"
-                  >
+                  <button onClick={() => setShowLogoutConfirm(true)} className="btn-danger">
                     Logout
                   </button>
                 </>
@@ -237,12 +240,8 @@ export default function Navigation({
             onClick={() => (logoutLoading ? null : setShowLogoutConfirm(false))}
           />
           <div className="relative z-[81] w-full max-w-sm surface-panel p-5 space-y-4">
-            <h3 className="text-base font-semibold text-white">
-              Confirm Logout
-            </h3>
-            <p className="text-sm text-soft">
-              Are you sure you want to end your session now?
-            </p>
+            <h3 className="text-base font-semibold text-white">Confirm Logout</h3>
+            <p className="text-sm text-soft">Are you sure you want to end your session now?</p>
             <div className="flex justify-end gap-2">
               <button
                 type="button"

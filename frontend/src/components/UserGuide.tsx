@@ -1,3 +1,12 @@
+/**
+ * Documentation page rendering the static guide sections with a sticky table of contents.
+ *
+ * Content is the hard-coded sections array, filtered by a text search across titles, descriptions
+ * and items. Each card expands/collapses, and the header button drives the TutorialOverlay tour
+ * through useTutorialState.
+ *
+ * @module components/UserGuide
+ */
 import { useState } from "react";
 import TutorialOverlay, { useTutorialState } from "./TutorialOverlay";
 
@@ -16,8 +25,7 @@ const sections: GuideSection[] = [
     id: "getting-started",
     icon: "🚀",
     title: "Getting Started",
-    description:
-      "Everything you need to begin trading on Polymarket with the AI bot.",
+    description: "Everything you need to begin trading on Polymarket with the AI bot.",
     items: [
       {
         heading: "Connect Your Wallet",
@@ -37,8 +45,7 @@ const sections: GuideSection[] = [
     id: "copy-trading",
     icon: "📋",
     title: "Copy Trading",
-    description:
-      "Automatically mirror trades from top Polymarket traders in real time.",
+    description: "Automatically mirror trades from top Polymarket traders in real time.",
     items: [
       {
         heading: "Find Top Traders",
@@ -66,8 +73,7 @@ const sections: GuideSection[] = [
     id: "market-making",
     icon: "💹",
     title: "Market Making",
-    description:
-      "Provide liquidity to markets and earn the bid-ask spread automatically.",
+    description: "Provide liquidity to markets and earn the bid-ask spread automatically.",
     items: [
       {
         heading: "What is Market Making?",
@@ -95,8 +101,7 @@ const sections: GuideSection[] = [
     id: "backtesting",
     icon: "📊",
     title: "Backtesting",
-    description:
-      "Test trading strategies against historical data before risking real capital.",
+    description: "Test trading strategies against historical data before risking real capital.",
     items: [
       {
         heading: "Copy Trade Replay",
@@ -120,8 +125,7 @@ const sections: GuideSection[] = [
     id: "inverse-bot",
     icon: "🔄",
     title: "Inverse Bot",
-    description:
-      "AI-powered position reversal for markets where sentiment shifts.",
+    description: "AI-powered position reversal for markets where sentiment shifts.",
     items: [
       {
         heading: "How It Works",
@@ -141,8 +145,7 @@ const sections: GuideSection[] = [
     id: "stop-loss",
     icon: "🛡️",
     title: "Stop Loss & Take Profit",
-    description:
-      "Automatically exit positions to protect gains or limit losses.",
+    description: "Automatically exit positions to protect gains or limit losses.",
     items: [
       {
         heading: "Setting Stop Loss",
@@ -162,8 +165,7 @@ const sections: GuideSection[] = [
     id: "emergency-stop",
     icon: "🚨",
     title: "Emergency Stop & Panic Sell",
-    description:
-      "Instantly halt all trading and optionally liquidate every open position.",
+    description: "Instantly halt all trading and optionally liquidate every open position.",
     items: [
       {
         heading: "Emergency Stop",
@@ -216,8 +218,7 @@ const sections: GuideSection[] = [
     id: "dynamic-sizing",
     icon: "📈",
     title: "Dynamic Streak-Based Sizing",
-    description:
-      "Automatically adjust position sizes based on your recent win/loss streaks.",
+    description: "Automatically adjust position sizes based on your recent win/loss streaks.",
     items: [
       {
         heading: "How It Works",
@@ -237,8 +238,7 @@ const sections: GuideSection[] = [
     id: "simulation-mode",
     icon: "🧪",
     title: "Simulation / Dry-Run Mode",
-    description:
-      "Paper-trade with real market data without risking actual funds.",
+    description: "Paper-trade with real market data without risking actual funds.",
     items: [
       {
         heading: "Enable Simulation",
@@ -258,8 +258,7 @@ const sections: GuideSection[] = [
     id: "trader-quality",
     icon: "⭐",
     title: "Trader Quality Scoring",
-    description:
-      "AI-powered composite scoring to rank traders you follow by overall quality.",
+    description: "AI-powered composite scoring to rank traders you follow by overall quality.",
     items: [
       {
         heading: "Composite Score (0-100)",
@@ -279,8 +278,7 @@ const sections: GuideSection[] = [
     id: "arbitrage-detection",
     icon: "💰",
     title: "Arbitrage Detection",
-    description:
-      "Automatically scan markets for complement and spread mispricing opportunities.",
+    description: "Automatically scan markets for complement and spread mispricing opportunities.",
     items: [
       {
         heading: "Complement Arbitrage",
@@ -300,8 +298,7 @@ const sections: GuideSection[] = [
     id: "ops-center",
     icon: "🧭",
     title: "Ops Center & Analysis Lab",
-    description:
-      "Operational controls and endpoint-level testing tools for advanced users.",
+    description: "Operational controls and endpoint-level testing tools for advanced users.",
     items: [
       {
         heading: "What Ops Center Is For",
@@ -428,9 +425,7 @@ function TableOfContents({
 }) {
   return (
     <nav className="surface-panel p-4 space-y-1 sticky top-24">
-      <h3 className="text-xs font-bold uppercase tracking-wider text-muted mb-3">
-        Contents
-      </h3>
+      <h3 className="text-xs font-bold uppercase tracking-wider text-muted mb-3">Contents</h3>
       {sections.map((s) => (
         <button
           key={s.id}
@@ -475,12 +470,7 @@ function SectionCard({ section }: { section: GuideSection }) {
           viewBox="0 0 24 24"
           stroke="currentColor"
         >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M19 9l-7 7-7-7"
-          />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
         </svg>
       </button>
 
@@ -488,9 +478,7 @@ function SectionCard({ section }: { section: GuideSection }) {
         <div className="mt-5 space-y-4 pl-11">
           {section.items.map((item, idx) => (
             <div key={idx} className="surface-soft p-4">
-              <h3 className="text-sm font-semibold text-white mb-1.5">
-                {item.heading}
-              </h3>
+              <h3 className="text-sm font-semibold text-white mb-1.5">{item.heading}</h3>
               <p className="text-sm text-soft leading-relaxed">{item.body}</p>
             </div>
           ))}
@@ -516,9 +504,7 @@ export default function UserGuide() {
 
   const handleSelect = (id: string) => {
     setActiveSection(id);
-    document
-      .getElementById(id)
-      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const filtered = search.trim()
@@ -541,8 +527,7 @@ export default function UserGuide() {
         <div>
           <h1 className="text-2xl font-bold text-white">📖 Your Guide</h1>
           <p className="text-soft text-sm mt-1">
-            Everything you need to know about using the Polymarket AI Trading
-            Bot
+            Everything you need to know about using the Polymarket AI Trading Bot
           </p>
         </div>
 
@@ -555,12 +540,7 @@ export default function UserGuide() {
             }}
             className="btn-accent text-sm flex items-center gap-2"
           >
-            <svg
-              className="w-4 h-4"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -616,25 +596,15 @@ export default function UserGuide() {
           <div className="surface-panel p-6 border-l-4 border-[var(--accent)]">
             <h3 className="text-sm font-bold text-white mb-2">💡 Pro Tips</h3>
             <ul className="text-sm text-soft space-y-1.5 list-disc list-inside">
-              <li>
-                Start with small amounts while learning the bot's behavior
-              </li>
-              <li>
-                Always backtest a strategy before running it with real funds
-              </li>
+              <li>Start with small amounts while learning the bot's behavior</li>
+              <li>Always backtest a strategy before running it with real funds</li>
               <li>Use stop-losses on every position to protect your capital</li>
-              <li>
-                Monitor the Leaderboard regularly to find new traders to follow
-              </li>
-              <li>
-                Check AI analysis before entering large positions manually
-              </li>
+              <li>Monitor the Leaderboard regularly to find new traders to follow</li>
+              <li>Check AI analysis before entering large positions manually</li>
               <li>
                 Use the keyboard shortcut{" "}
-                <span className="mono text-xs bg-[var(--bg-soft)] px-1.5 py-0.5 rounded">
-                  /
-                </span>{" "}
-                to quickly search markets
+                <span className="mono text-xs bg-[var(--bg-soft)] px-1.5 py-0.5 rounded">/</span> to
+                quickly search markets
               </li>
             </ul>
           </div>
@@ -643,10 +613,7 @@ export default function UserGuide() {
 
       {/* Tutorial overlay */}
       {showTutorial && (
-        <TutorialOverlay
-          onComplete={completeTutorial}
-          onDismiss={dismissTutorial}
-        />
+        <TutorialOverlay onComplete={completeTutorial} onDismiss={dismissTutorial} />
       )}
     </div>
   );

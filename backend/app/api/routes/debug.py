@@ -1,13 +1,14 @@
 """Debug / monitoring API routes — serves request logs, endpoint stats and
 comprehensive health checks for the debug dashboard."""
+
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
-import time
 import platform
-from datetime import datetime, timezone
-from typing import Optional
+import time
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -16,15 +17,13 @@ from sqlalchemy.orm import Session
 from app.api.routes.auth import get_current_user_from_token
 from app.config import get_settings
 from app.middleware.request_logger import (
-    get_log_entries,
-    get_endpoint_stats,
-    get_uptime_seconds,
     clear_logs,
+    get_endpoint_stats,
+    get_log_entries,
+    get_uptime_seconds,
 )
 from app.models.user import User
 from app.utils.database import get_db
-
-import logging
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -70,7 +69,7 @@ class LogEntry(BaseModel):
     level: str
     client_ip: str = ""
     user_agent: str = ""
-    error_detail: Optional[str] = None
+    error_detail: str | None = None
 
 
 class LogsResponse(BaseModel):
@@ -103,7 +102,7 @@ class StatsResponse(BaseModel):
 class ServiceHealth(BaseModel):
     name: str
     status: str  # "healthy" | "unhealthy" | "unknown"
-    latency_ms: Optional[float] = None
+    latency_ms: float | None = None
     detail: str = ""
 
 
@@ -137,13 +136,17 @@ async def _check_postgres() -> ServiceHealth:
     """Ping PostgreSQL via SQLAlchemy."""
     try:
         from sqlalchemy import text
+
         from app.utils.database import SessionLocal
+
         start = time.perf_counter()
         db = SessionLocal()
         try:
             db.execute(text("SELECT 1"))
             latency = round((time.perf_counter() - start) * 1000, 2)
-            return ServiceHealth(name="PostgreSQL", status="healthy", latency_ms=latency, detail="Connected")
+            return ServiceHealth(
+                name="PostgreSQL", status="healthy", latency_ms=latency, detail="Connected"
+            )
         finally:
             db.close()
     except Exception as e:
@@ -154,6 +157,7 @@ async def _check_redis() -> ServiceHealth:
     """Ping Redis."""
     try:
         import redis as redis_lib
+
         redis_url = os.environ.get("REDIS_URL", "")
         if not redis_url:
             return ServiceHealth(name="Redis", status="unknown", detail="REDIS_URL not set")
@@ -171,15 +175,17 @@ async def _check_grpc_service(name: str, host: str, port: int) -> ServiceHealth:
     """Ping a gRPC service via TCP connect."""
     try:
         start = time.perf_counter()
-        _, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port), timeout=3.0
-        )
+        _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=3.0)
         latency = round((time.perf_counter() - start) * 1000, 2)
         writer.close()
         await writer.wait_closed()
-        return ServiceHealth(name=name, status="healthy", latency_ms=latency, detail=f"{host}:{port}")
-    except asyncio.TimeoutError:
-        return ServiceHealth(name=name, status="unhealthy", detail=f"Timeout connecting to {host}:{port}")
+        return ServiceHealth(
+            name=name, status="healthy", latency_ms=latency, detail=f"{host}:{port}"
+        )
+    except TimeoutError:
+        return ServiceHealth(
+            name=name, status="unhealthy", detail=f"Timeout connecting to {host}:{port}"
+        )
     except Exception as e:
         return ServiceHealth(name=name, status="unhealthy", detail=str(e)[:200])
 
@@ -188,9 +194,12 @@ async def _check_background_tasks() -> ServiceHealth:
     """Check if background asyncio tasks are still alive."""
     try:
         from app.main import _background_tasks
+
         alive = sum(1 for t in _background_tasks if not t.done())
         total = len(_background_tasks)
-        status = "healthy" if alive == total and total > 0 else "unhealthy" if alive == 0 else "warning"
+        status = (
+            "healthy" if alive == total and total > 0 else "unhealthy" if alive == 0 else "warning"
+        )
         if total == 0:
             status = "unknown"
         return ServiceHealth(
@@ -258,9 +267,9 @@ async def _check_research_mcp() -> ServiceHealth:
 
 @router.get("/logs", response_model=LogsResponse)
 async def get_logs(
-    level: Optional[str] = Query(None, description="Filter by level: info, warning, error"),
-    path: Optional[str] = Query(None, description="Filter by path substring"),
-    method: Optional[str] = Query(None, description="Filter by HTTP method"),
+    level: str | None = Query(None, description="Filter by level: info, warning, error"),
+    path: str | None = Query(None, description="Filter by path substring"),
+    method: str | None = Query(None, description="Filter by HTTP method"),
     limit: int = Query(200, ge=1, le=1000),
     current_user: dict = Depends(require_admin),
 ):
@@ -353,7 +362,7 @@ async def comprehensive_health(
     return HealthResponse(
         uptime_seconds=round(uptime, 1),
         uptime_human=_format_uptime(uptime),
-        server_time=datetime.now(timezone.utc).isoformat(),
+        server_time=datetime.now(UTC).isoformat(),
         python_version=platform.python_version(),
         services=list(services),
     )

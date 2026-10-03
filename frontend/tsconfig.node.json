@@ -4,7 +4,12 @@
     "skipLibCheck": true,
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "allowSyntheticDefaultImports": true
+    "allowSyntheticDefaultImports": true,
+    // Emit build artifacts outside the project root. Without this, `tsc -b`
+    // writes vite.config.js next to vite.config.ts, and Vite resolves the
+    // emitted .js in preference to the .ts — silently ignoring edits to the
+    // TypeScript source.
+    "outDir": "./node_modules/.tmp/tsconfig.node"
   },
   "include": ["vite.config.ts"]
 }

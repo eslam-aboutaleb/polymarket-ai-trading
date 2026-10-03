@@ -1,3 +1,13 @@
+/**
+ * Backtesting workbench: submit a strategy run, then browse and inspect historical results.
+ *
+ * Loads recent runs and the available strategy catalogue via `backtestingService`, with a create
+ * form whose parameter fields depend on the chosen strategy type (`indicator` or `copy_trade`).
+ * Selecting a run shows PnL, win rate, Sharpe, drawdown, profit factor and the per-trade log;
+ * runs can be deleted from the list.
+ *
+ * @module components/Backtesting
+ */
 import { useEffect, useState, useCallback } from "react";
 import {
   backtestingService,
@@ -112,10 +122,7 @@ export default function Backtesting() {
             Test strategies against historical data before trading live
           </p>
         </div>
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="btn-primary text-sm"
-        >
+        <button onClick={() => setShowForm(!showForm)} className="btn-primary text-sm">
           {showForm ? "Cancel" : "+ New Backtest"}
         </button>
       </div>
@@ -123,10 +130,7 @@ export default function Backtesting() {
       {error && (
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
           {error}
-          <button
-            onClick={() => setError(null)}
-            className="ml-2 text-red-300 hover:text-white"
-          >
+          <button onClick={() => setError(null)} className="ml-2 text-red-300 hover:text-white">
             ✕
           </button>
         </div>
@@ -139,9 +143,7 @@ export default function Backtesting() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs text-soft mb-1">
-                Strategy Type
-              </label>
+              <label className="block text-xs text-soft mb-1">Strategy Type</label>
               <select
                 value={form.strategy_type}
                 onChange={(e) =>
@@ -157,15 +159,11 @@ export default function Backtesting() {
               </select>
             </div>
             <div>
-              <label className="block text-xs text-soft mb-1">
-                Strategy Name
-              </label>
+              <label className="block text-xs text-soft mb-1">Strategy Name</label>
               <input
                 type="text"
                 value={form.strategy_name || ""}
-                onChange={(e) =>
-                  setForm({ ...form, strategy_name: e.target.value })
-                }
+                onChange={(e) => setForm({ ...form, strategy_name: e.target.value })}
                 className="input-field w-full"
                 placeholder="My Strategy"
               />
@@ -175,9 +173,7 @@ export default function Backtesting() {
               <input
                 type="date"
                 value={form.start_date}
-                onChange={(e) =>
-                  setForm({ ...form, start_date: e.target.value })
-                }
+                onChange={(e) => setForm({ ...form, start_date: e.target.value })}
                 className="input-field w-full"
               />
             </div>
@@ -195,13 +191,9 @@ export default function Backtesting() {
           {form.strategy_type === "indicator" && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div>
-                <label className="block text-xs text-soft mb-1">
-                  Indicator Strategy
-                </label>
+                <label className="block text-xs text-soft mb-1">Indicator Strategy</label>
                 <select
-                  value={
-                    (form.parameters.strategy as string) || "rsi_mean_reversion"
-                  }
+                  value={(form.parameters.strategy as string) || "rsi_mean_reversion"}
                   onChange={(e) =>
                     setForm({
                       ...form,
@@ -219,9 +211,7 @@ export default function Backtesting() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-soft mb-1">
-                  Position Size ($)
-                </label>
+                <label className="block text-xs text-soft mb-1">Position Size ($)</label>
                 <input
                   type="number"
                   value={(form.parameters.position_size as number) || 10}
@@ -238,9 +228,7 @@ export default function Backtesting() {
                 />
               </div>
               <div>
-                <label className="block text-xs text-soft mb-1">
-                  Condition ID
-                </label>
+                <label className="block text-xs text-soft mb-1">Condition ID</label>
                 <input
                   type="text"
                   value={(form.parameters.condition_id as string) || ""}
@@ -258,9 +246,7 @@ export default function Backtesting() {
                 />
               </div>
               <div>
-                <label className="block text-xs text-soft mb-1">
-                  RSI Oversold
-                </label>
+                <label className="block text-xs text-soft mb-1">RSI Oversold</label>
                 <input
                   type="number"
                   value={(form.parameters.rsi_oversold as number) || 30}
@@ -282,9 +268,7 @@ export default function Backtesting() {
           {form.strategy_type === "copy_trade" && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
-                <label className="block text-xs text-soft mb-1">
-                  Followed Wallet
-                </label>
+                <label className="block text-xs text-soft mb-1">Followed Wallet</label>
                 <input
                   type="text"
                   value={(form.parameters.followed_wallet as string) || ""}
@@ -302,9 +286,7 @@ export default function Backtesting() {
                 />
               </div>
               <div>
-                <label className="block text-xs text-soft mb-1">
-                  Max Position Size ($)
-                </label>
+                <label className="block text-xs text-soft mb-1">Max Position Size ($)</label>
                 <input
                   type="number"
                   value={(form.parameters.max_position_size as number) || 100}
@@ -321,9 +303,7 @@ export default function Backtesting() {
                 />
               </div>
               <div>
-                <label className="block text-xs text-soft mb-1">
-                  Daily Loss Limit ($)
-                </label>
+                <label className="block text-xs text-soft mb-1">Daily Loss Limit ($)</label>
                 <input
                   type="number"
                   value={(form.parameters.daily_loss_limit as number) || 50}
@@ -352,11 +332,7 @@ export default function Backtesting() {
             >
               Cancel
             </button>
-            <button
-              onClick={handleRun}
-              disabled={running}
-              className="btn-primary text-sm"
-            >
+            <button onClick={handleRun} disabled={running} className="btn-primary text-sm">
               {running ? "Running..." : "Run Backtest"}
             </button>
           </div>
@@ -381,9 +357,7 @@ export default function Backtesting() {
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 text-xs">
             <div>
               <span className="text-soft">Total PnL</span>
-              <p
-                className={`font-bold text-lg ${pnlColor(selectedRun.total_pnl)}`}
-              >
+              <p className={`font-bold text-lg ${pnlColor(selectedRun.total_pnl)}`}>
                 ${selectedRun.total_pnl.toFixed(2)}
               </p>
             </div>
@@ -395,9 +369,7 @@ export default function Backtesting() {
             </div>
             <div>
               <span className="text-soft">Total Trades</span>
-              <p className="text-white font-semibold">
-                {selectedRun.total_trades}
-              </p>
+              <p className="text-white font-semibold">{selectedRun.total_trades}</p>
             </div>
             <div>
               <span className="text-soft">Sharpe Ratio</span>
@@ -422,21 +394,15 @@ export default function Backtesting() {
           <div className="grid grid-cols-3 gap-4 text-xs">
             <div>
               <span className="text-soft">Winning</span>
-              <p className="text-green-400 font-semibold">
-                {selectedRun.winning_trades}
-              </p>
+              <p className="text-green-400 font-semibold">{selectedRun.winning_trades}</p>
             </div>
             <div>
               <span className="text-soft">Losing</span>
-              <p className="text-red-400 font-semibold">
-                {selectedRun.losing_trades}
-              </p>
+              <p className="text-red-400 font-semibold">{selectedRun.losing_trades}</p>
             </div>
             <div>
               <span className="text-soft">Avg PnL / Trade</span>
-              <p
-                className={`font-semibold ${pnlColor(selectedRun.avg_trade_pnl ?? 0)}`}
-              >
+              <p className={`font-semibold ${pnlColor(selectedRun.avg_trade_pnl ?? 0)}`}>
                 ${selectedRun.avg_trade_pnl?.toFixed(2) ?? "—"}
               </p>
             </div>
@@ -451,9 +417,7 @@ export default function Backtesting() {
           {/* Trade Log */}
           {selectedRun.trade_log && selectedRun.trade_log.length > 0 && (
             <div>
-              <h4 className="text-sm font-semibold text-white mb-2">
-                Trade Log
-              </h4>
+              <h4 className="text-sm font-semibold text-white mb-2">Trade Log</h4>
               <div className="max-h-60 overflow-y-auto">
                 <table className="w-full text-xs">
                   <thead>
@@ -466,23 +430,14 @@ export default function Backtesting() {
                     </tr>
                   </thead>
                   <tbody>
-                    {(
-                      selectedRun.trade_log as Array<Record<string, unknown>>
-                    ).map((trade, idx) => (
-                      <tr
-                        key={idx}
-                        className="border-b border-[var(--line)]/30"
-                      >
+                    {(selectedRun.trade_log as Array<Record<string, unknown>>).map((trade, idx) => (
+                      <tr key={idx} className="border-b border-[var(--line)]/30">
                         <td className="py-1 px-2 text-soft">
                           {String(trade.timestamp || "").slice(0, 16)}
                         </td>
                         <td className="py-1 px-2">
                           <span
-                            className={
-                              trade.side === "BUY"
-                                ? "text-green-400"
-                                : "text-red-400"
-                            }
+                            className={trade.side === "BUY" ? "text-green-400" : "text-red-400"}
                           >
                             {String(trade.side)}
                           </span>
@@ -537,14 +492,10 @@ export default function Backtesting() {
                   </span>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span
-                    className={`text-sm font-bold ${pnlColor(run.total_pnl)}`}
-                  >
+                  <span className={`text-sm font-bold ${pnlColor(run.total_pnl)}`}>
                     ${run.total_pnl.toFixed(2)}
                   </span>
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded-full ${statusBadge(run.status)}`}
-                  >
+                  <span className={`text-xs px-2 py-0.5 rounded-full ${statusBadge(run.status)}`}>
                     {run.status}
                   </span>
                   <button

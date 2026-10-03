@@ -1,6 +1,4 @@
 """Per-user trader notification follow configuration."""
-from datetime import datetime
-from app.utils.time import utc_now
 
 from sqlalchemy import (
     Boolean,
@@ -13,6 +11,7 @@ from sqlalchemy import (
 )
 
 from app.models.base import Base
+from app.utils.time import utc_now
 
 
 class NotificationFollowedTrader(Base):

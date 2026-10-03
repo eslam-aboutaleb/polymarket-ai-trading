@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: polymarket_password
       POSTGRES_DB: polymarket
     ports:
-      - "5432:5432"
+      - "5435:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -35,13 +35,16 @@ services:
       context: .
       dockerfile: services/llm-chain/Dockerfile
     ports:
-      - "50051:50051"
+      - "50061:50051"
     environment:
       # LLM Configuration
       LLM_PROVIDER: ${LLM_PROVIDER:-openai}
-      LLM_MODEL: ${LLM_MODEL:-gpt-4-turbo-preview}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
       LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.3}
       LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-4096}
+      # Per-task model tiering (see polymarket_settings)
+      LLM_TIERING_ENABLED: ${LLM_TIERING_ENABLED:-true}
+      LLM_STRONG_REASONING_EFFORT: ${LLM_STRONG_REASONING_EFFORT:-medium}
       # Provider API Keys (only the selected provider's key is used)
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -102,7 +105,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"
+      - "8002:8002"
     environment:
       DATABASE_URL: postgresql://polymarket_user:polymarket_password@postgres:5432/polymarket
       REDIS_URL: redis://:${REDIS_PASSWORD:-dev_redis_password}@redis:6379/0
@@ -123,6 +126,9 @@ services:
       POLYMARKET_PRIVATE_KEY: ${POLYMARKET_PRIVATE_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       PROMPTS_PATH: /app/prompts/prompts.json
+      # Shared polymarket_settings package (read-only mount; the
+      # ./backend build context cannot COPY services/shared).
+      PYTHONPATH: /app:/app/shared
       # AI Service gRPC configuration
       LLM_CHAIN_GRPC_HOST: llm-chain
       LLM_CHAIN_GRPC_PORT: 50051
@@ -143,11 +149,12 @@ services:
     volumes:
       - ./backend:/app
       - ./prompts:/app/prompts:ro
+      - ./services/shared:/app/shared:ro
     command: >
       sh -c "uv run alembic upgrade head &&
              uv run python3 -m grpc_tools.protoc -Iproto --python_out=app/grpc_clients --grpc_python_out=app/grpc_clients proto/analysis.proto &&
              sed -i 's/^import analysis_pb2/from app.grpc_clients import analysis_pb2/' app/grpc_clients/analysis_pb2_grpc.py &&
-             uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+              uv run uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload"
 
   frontend:
     build:
@@ -165,7 +172,7 @@ services:
              fi &&
              npm run dev -- --host 0.0.0.0"
     environment:
-      VITE_API_URL: http://localhost:8000
+      VITE_API_URL: http://localhost:8002
 
 volumes:
   postgres_data:

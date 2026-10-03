@@ -6,7 +6,6 @@ from sqlalchemy import DateTime
 from app.models import Base
 from app.utils.time import utc_now
 
-
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 

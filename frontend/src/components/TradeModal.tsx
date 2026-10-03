@@ -1,9 +1,19 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+/**
+ * Portal trade ticket for buying or selling a Yes/No outcome token on a Polymarket market.
+ *
+ * buildValidationResult gates submission on amount, balance, shares, quote age, spread and
+ * liquidity, and requires a second confirmation above a configurable notional threshold. Side,
+ * outcome and amount persist via tradePreferences; successful buys push a recent-trade entry.
+ *
+ * @module components/TradeModal
+ */
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   tradesService,
   ExecuteTradeRequest,
   ExecuteTradeResponse,
+  SizeSuggestion,
 } from "../services/tradesService";
 import {
   portfolioService,
@@ -119,12 +129,7 @@ function findAvailableShares(
       continue;
     }
 
-    if (
-      marketKey &&
-      conditionId &&
-      conditionId === marketKey &&
-      rowOutcome === normalizedOutcome
-    ) {
+    if (marketKey && conditionId && conditionId === marketKey && rowOutcome === normalizedOutcome) {
       totalByConditionOutcome += size;
     }
   }
@@ -199,11 +204,7 @@ function buildValidationResult(params: {
     if (amountNum > 0 && amountNum < MIN_BUY_USDC) {
       errors.push(`Minimum buy amount is ${fmt$(MIN_BUY_USDC)}.`);
     }
-    if (
-      usdcBalance != null &&
-      Number.isFinite(usdcBalance) &&
-      amountNum > usdcBalance + 1e-9
-    ) {
+    if (usdcBalance != null && Number.isFinite(usdcBalance) && amountNum > usdcBalance + 1e-9) {
       errors.push(`Insufficient USDC balance. Available: ${fmt$(usdcBalance)}.`);
     }
   }
@@ -214,9 +215,7 @@ function buildValidationResult(params: {
       Number.isFinite(availableShares) &&
       amountNum > availableShares + 1e-9
     ) {
-      errors.push(
-        `Insufficient shares. Available: ${availableShares.toFixed(4)} ${"shares"}.`,
-      );
+      errors.push(`Insufficient shares. Available: ${availableShares.toFixed(4)} ${"shares"}.`);
     }
   }
 
@@ -233,15 +232,11 @@ function buildValidationResult(params: {
   }
 
   if (liquidity != null && liquidity > 0 && liquidity < LOW_LIQUIDITY_THRESHOLD) {
-    warnings.push(
-      `Low liquidity market (${fmt$(liquidity)}). Slippage risk can be elevated.`,
-    );
+    warnings.push(`Low liquidity market (${fmt$(liquidity)}). Slippage risk can be elevated.`);
   }
 
   if (requiresConfirm) {
-    warnings.push(
-      `Large order notional (${fmt$(notional)}). Confirmation required before submit.`,
-    );
+    warnings.push(`Large order notional (${fmt$(notional)}). Confirmation required before submit.`);
   }
 
   return { errors, warnings, requiresConfirm };
@@ -262,9 +257,7 @@ export default function TradeModal({
   const [presetMode, setPresetMode] = useState<TradePresetMode>("fixed");
   const [highNotionalThreshold, setHighNotionalThreshold] = useState(250);
 
-  const [portfolioSummary, setPortfolioSummary] = useState<PortfolioSummary | null>(
-    null,
-  );
+  const [portfolioSummary, setPortfolioSummary] = useState<PortfolioSummary | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
 
@@ -273,6 +266,11 @@ export default function TradeModal({
   const [error, setError] = useState<string | null>(null);
   const [confirmArmed, setConfirmArmed] = useState(false);
   const [quoteNowTs, setQuoteNowTs] = useState(Date.now());
+  const [sizeSuggestion, setSizeSuggestion] = useState<SizeSuggestion | null>(null);
+
+  // True once the user typed or picked an amount themselves;
+  // the Kelly suggestion only pre-fills an untouched field.
+  const amountEditedRef = useRef(false);
 
   const yesToken = useMemo(
     () => market?.tokens.find((t) => normalizeTokenOutcome(t.outcome) === "Yes"),
@@ -306,12 +304,7 @@ export default function TradeModal({
 
   const availableShares = useMemo(() => {
     if (!market || !activeToken) return null;
-    return findAvailableShares(
-      portfolioSummary,
-      market.market_id,
-      activeToken.token_id,
-      outcome,
-    );
+    return findAvailableShares(portfolioSummary, market.market_id, activeToken.token_id, outcome);
   }, [activeToken, market, outcome, portfolioSummary]);
 
   const quoteAgeSec = useMemo(() => {
@@ -385,6 +378,8 @@ export default function TradeModal({
         : fallback.highNotionalConfirmThreshold,
     );
 
+    amountEditedRef.current = false;
+    setSizeSuggestion(null);
     setResult(null);
     setError(null);
     setConfirmArmed(false);
@@ -436,6 +431,42 @@ export default function TradeModal({
     return () => window.clearInterval(id);
   }, [market]);
 
+  // Kelly size suggestion (plan 04): pre-fills the
+  // amount while the field is untouched and stays
+  // editable afterwards.  Keyed on market + side; the
+  // then-current price is sent with the request.
+  useEffect(() => {
+    if (!market?.market_id) return;
+
+    let cancelled = false;
+    tradesService
+      .getSizeSuggestion(market.market_id, side, activePrice)
+      .then((suggestion) => {
+        if (cancelled) return;
+        setSizeSuggestion(suggestion);
+        const notional = suggestion.suggested_size_usdc;
+        const decimals = side === "BUY" ? 2 : 4;
+        const suggestedAmount =
+          notional > 0
+            ? side === "BUY"
+              ? fmtNumber(notional, decimals)
+              : fmtNumber(notional / (activePrice || 1), decimals)
+            : "";
+        if (suggestedAmount && !amountEditedRef.current) {
+          setAmount(suggestedAmount);
+        }
+      })
+      .catch(() => {
+        // Advisory only: a failed suggestion lookup
+        // must never block trading.
+        if (!cancelled) setSizeSuggestion(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [market?.market_id, side]);
+
   useEffect(() => {
     setResult(null);
     setError(null);
@@ -444,6 +475,7 @@ export default function TradeModal({
 
   const applyPreset = useCallback(
     (index: number) => {
+      amountEditedRef.current = true;
       if (presetMode === "fixed") {
         const preset = fixedPresets[index];
         if (preset != null) {
@@ -466,6 +498,7 @@ export default function TradeModal({
   );
 
   const setMaxAmount = useCallback(() => {
+    amountEditedRef.current = true;
     const maxValue = side === "BUY" ? usdcBalance : availableShares;
     if (maxValue == null || !Number.isFinite(maxValue) || maxValue <= 0) return;
     const decimals = side === "BUY" ? 2 : 4;
@@ -534,6 +567,7 @@ export default function TradeModal({
   ]);
 
   const handleReverseSide = () => {
+    amountEditedRef.current = true;
     const prevSide = side;
     const sameNotional = prevSide === "BUY" ? amountNum : amountNum * activePrice;
     const nextSide: TradeTicketSide = prevSide === "BUY" ? "SELL" : "BUY";
@@ -640,133 +674,154 @@ export default function TradeModal({
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto">
-        <div className="flex border-b border-[var(--line)]">
-          <button
-            onClick={() => setOutcome("Yes")}
-            className={`flex-1 py-3 text-sm font-semibold transition relative ${
-              outcome === "Yes" ? "text-emerald-400" : "text-muted hover:text-white"
-            }`}
-          >
-            <span className="flex items-center justify-center gap-2">
-              Yes
-              <span
-                className={`text-xs font-mono px-1.5 py-0.5 rounded ${
-                  outcome === "Yes"
-                    ? "bg-emerald-500/20 text-emerald-400"
-                    : "bg-[var(--bg-soft)] text-muted"
-                }`}
-              >
-                {pct(yesPrice)}
-              </span>
-            </span>
-            {outcome === "Yes" && (
-              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-400" />
-            )}
-          </button>
-          <button
-            onClick={() => setOutcome("No")}
-            className={`flex-1 py-3 text-sm font-semibold transition relative ${
-              outcome === "No" ? "text-red-400" : "text-muted hover:text-white"
-            }`}
-          >
-            <span className="flex items-center justify-center gap-2">
-              No
-              <span
-                className={`text-xs font-mono px-1.5 py-0.5 rounded ${
-                  outcome === "No"
-                    ? "bg-red-500/20 text-red-400"
-                    : "bg-[var(--bg-soft)] text-muted"
-                }`}
-              >
-                {pct(noPrice)}
-              </span>
-            </span>
-            {outcome === "No" && (
-              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-red-400" />
-            )}
-          </button>
-        </div>
-
-        <div className="px-5 pt-4">
-          <div className="flex gap-2 p-1 rounded-lg bg-[var(--bg-soft)]">
+          <div className="flex border-b border-[var(--line)]">
             <button
-              onClick={() => setSide("BUY")}
-              className={`flex-1 py-2 rounded-md text-sm font-semibold transition ${
-                side === "BUY"
-                  ? "bg-emerald-500/20 text-emerald-400 shadow-sm"
-                  : "text-muted hover:text-white"
+              onClick={() => setOutcome("Yes")}
+              className={`flex-1 py-3 text-sm font-semibold transition relative ${
+                outcome === "Yes" ? "text-emerald-400" : "text-muted hover:text-white"
               }`}
             >
-              Buy (B)
+              <span className="flex items-center justify-center gap-2">
+                Yes
+                <span
+                  className={`text-xs font-mono px-1.5 py-0.5 rounded ${
+                    outcome === "Yes"
+                      ? "bg-emerald-500/20 text-emerald-400"
+                      : "bg-[var(--bg-soft)] text-muted"
+                  }`}
+                >
+                  {pct(yesPrice)}
+                </span>
+              </span>
+              {outcome === "Yes" && (
+                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-400" />
+              )}
             </button>
             <button
-              onClick={() => setSide("SELL")}
-              className={`flex-1 py-2 rounded-md text-sm font-semibold transition ${
-                side === "SELL"
-                  ? "bg-red-500/20 text-red-400 shadow-sm"
-                  : "text-muted hover:text-white"
+              onClick={() => setOutcome("No")}
+              className={`flex-1 py-3 text-sm font-semibold transition relative ${
+                outcome === "No" ? "text-red-400" : "text-muted hover:text-white"
               }`}
             >
-              Sell (S)
+              <span className="flex items-center justify-center gap-2">
+                No
+                <span
+                  className={`text-xs font-mono px-1.5 py-0.5 rounded ${
+                    outcome === "No"
+                      ? "bg-red-500/20 text-red-400"
+                      : "bg-[var(--bg-soft)] text-muted"
+                  }`}
+                >
+                  {pct(noPrice)}
+                </span>
+              </span>
+              {outcome === "No" && (
+                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-red-400" />
+              )}
             </button>
           </div>
-        </div>
 
-        <div className="p-5 space-y-4">
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="block text-sm text-soft">
-                {side === "BUY" ? "Amount (USDC)" : "Shares to Sell"}
-              </label>
+          <div className="px-5 pt-4">
+            <div className="flex gap-2 p-1 rounded-lg bg-[var(--bg-soft)]">
               <button
-                onClick={setMaxAmount}
-                className="text-xs text-[var(--accent)] hover:underline"
-                type="button"
-              >
-                Max
-              </button>
-            </div>
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted text-sm">
-                {side === "BUY" ? "$" : "#"}
-              </span>
-              <input
-                type="text"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                placeholder={side === "BUY" ? "10.00" : "100"}
-                className="w-full pl-7 pr-4 py-2.5 rounded-lg bg-[var(--bg-soft)] border border-[var(--line)] text-white placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition mono"
-              />
-            </div>
-
-            <div className="flex items-center gap-2 mt-2">
-              <button
-                type="button"
-                onClick={() => setPresetMode("fixed")}
-                className={`text-xs px-2.5 py-1 rounded border ${
-                  presetMode === "fixed"
-                    ? "border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]"
-                    : "border-[var(--line)] text-soft"
+                onClick={() => setSide("BUY")}
+                className={`flex-1 py-2 rounded-md text-sm font-semibold transition ${
+                  side === "BUY"
+                    ? "bg-emerald-500/20 text-emerald-400 shadow-sm"
+                    : "text-muted hover:text-white"
                 }`}
               >
-                Fixed
+                Buy (B)
               </button>
               <button
-                type="button"
-                onClick={() => setPresetMode("percentage")}
-                className={`text-xs px-2.5 py-1 rounded border ${
-                  presetMode === "percentage"
-                    ? "border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]"
-                    : "border-[var(--line)] text-soft"
+                onClick={() => setSide("SELL")}
+                className={`flex-1 py-2 rounded-md text-sm font-semibold transition ${
+                  side === "SELL"
+                    ? "bg-red-500/20 text-red-400 shadow-sm"
+                    : "text-muted hover:text-white"
                 }`}
               >
-                % Balance
+                Sell (S)
               </button>
             </div>
+          </div>
 
-            <div className="grid grid-cols-4 gap-2 mt-2">
-              {(presetMode === "fixed" ? fixedPresets : PERCENT_PRESETS).map(
-                (value, index) => (
+          <div className="p-5 space-y-4">
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-sm text-soft">
+                  {side === "BUY" ? "Amount (USDC)" : "Shares to Sell"}
+                </label>
+                <button
+                  onClick={setMaxAmount}
+                  className="text-xs text-[var(--accent)] hover:underline"
+                  type="button"
+                >
+                  Max
+                </button>
+              </div>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted text-sm">
+                  {side === "BUY" ? "$" : "#"}
+                </span>
+                <input
+                  type="text"
+                  value={amount}
+                  onChange={(e) => {
+                    amountEditedRef.current = true;
+                    setAmount(e.target.value);
+                  }}
+                  placeholder={side === "BUY" ? "10.00" : "100"}
+                  className="w-full pl-7 pr-4 py-2.5 rounded-lg bg-[var(--bg-soft)] border border-[var(--line)] text-white placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition mono"
+                />
+              </div>
+
+              {sizeSuggestion && (
+                <div className="flex items-center justify-between mt-1.5 text-xs">
+                  <span className="text-muted">
+                    Kelly suggestion
+                    {sizeSuggestion.edge_probability != null
+                      ? ` (edge ${(sizeSuggestion.edge_probability * 100).toFixed(
+                          0,
+                        )}% · ${sizeSuggestion.edge_source ?? "n/a"})`
+                      : ""}
+                    {sizeSuggestion.capped_by ? ` · capped: ${sizeSuggestion.capped_by}` : ""}
+                  </span>
+                  <span className="text-soft mono">
+                    {sizeSuggestion.suggested_size_usdc > 0
+                      ? fmt$(sizeSuggestion.suggested_size_usdc)
+                      : "no edge"}
+                  </span>
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 mt-2">
+                <button
+                  type="button"
+                  onClick={() => setPresetMode("fixed")}
+                  className={`text-xs px-2.5 py-1 rounded border ${
+                    presetMode === "fixed"
+                      ? "border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]"
+                      : "border-[var(--line)] text-soft"
+                  }`}
+                >
+                  Fixed
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPresetMode("percentage")}
+                  className={`text-xs px-2.5 py-1 rounded border ${
+                    presetMode === "percentage"
+                      ? "border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]"
+                      : "border-[var(--line)] text-soft"
+                  }`}
+                >
+                  % Balance
+                </button>
+              </div>
+
+              <div className="grid grid-cols-4 gap-2 mt-2">
+                {(presetMode === "fixed" ? fixedPresets : PERCENT_PRESETS).map((value, index) => (
                   <button
                     key={`${presetMode}-${value}`}
                     onClick={() => applyPreset(index)}
@@ -779,229 +834,238 @@ export default function TradeModal({
                         : `${value}`
                       : `${value}%`}
                   </button>
-                ),
-              )}
-            </div>
+                ))}
+              </div>
 
-            <div className="flex justify-between mt-2 text-xs text-muted">
-              <span>
-                {side === "BUY"
-                  ? `USDC available: ${
-                      usdcBalance != null ? fmt$(usdcBalance) : balanceLoading ? "Loading..." : "N/A"
-                    }`
-                  : `Shares available: ${
-                      availableShares != null
-                        ? `${availableShares.toFixed(4)} ${outcome}`
-                        : balanceLoading
-                          ? "Loading..."
-                          : "N/A"
-                    }`}
-              </span>
-              {side === "BUY" && (
-                <span>Minimum buy: {fmt$(MIN_BUY_USDC)}</span>
-              )}
-            </div>
-          </div>
-
-          <div className="surface-soft rounded-lg p-3 text-xs space-y-1.5">
-            <div className="flex justify-between text-soft">
-              <span>Quote age</span>
-              <span className={isStale ? "text-yellow-300" : "text-emerald-300"}>
-                {quoteAgeSec}s {isStale ? "stale" : "fresh"}
-              </span>
-            </div>
-            <div className="flex justify-between text-soft">
-              <span>Spread proxy</span>
-              <span>{spread != null ? `${(spread * 100).toFixed(2)}c` : "N/A"}</span>
-            </div>
-            <div className="flex justify-between text-soft">
-              <span>Liquidity</span>
-              <span>
-                {liquidity != null ? fmt$(liquidity) : "N/A"}
-                {liquidity != null && liquidity < LOW_LIQUIDITY_THRESHOLD ? " (low)" : ""}
-              </span>
-            </div>
-          </div>
-
-          {amountNum > 0 && Number.isFinite(amountNum) && (
-            <div className="surface-soft p-3.5 rounded-lg space-y-2 text-sm">
-              {side === "BUY" ? (
-                <>
-                  <div className="flex justify-between">
-                    <span className="text-muted">You pay</span>
-                    <span className="text-white mono">{fmt$(notional)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted">Est. shares</span>
-                    <span className="text-white mono">
-                      {shares.toFixed(4)} {outcome}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted">Payout if correct</span>
-                    <span className="text-white mono">{fmt$(potentialPayout)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted">Max loss</span>
-                    <span className="text-red-300 mono">{fmt$(notional)}</span>
-                  </div>
-                  <div className="border-t border-[var(--line)] pt-2 flex justify-between font-semibold">
-                    <span className="text-muted">Breakeven framing</span>
-                    <span className="text-soft mono">Need &gt; {(activePrice * 100).toFixed(1)}%</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted">Potential profit</span>
-                    <span className="status-good mono">+{fmt$(potentialProfit)}</span>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="flex justify-between">
-                    <span className="text-muted">Shares to sell</span>
-                    <span className="text-white mono">
-                      {amountNum.toFixed(4)} {outcome}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted">Estimated proceeds</span>
-                    <span className="text-white mono">{fmt$(notional)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted">Upside given up if {outcome}</span>
-                    <span className="text-yellow-300 mono">
-                      {fmt$(Math.max(0, shares * (1 - activePrice)))}
-                    </span>
-                  </div>
-                  <div className="border-t border-[var(--line)] pt-2 flex justify-between font-semibold">
-                    <span className="text-muted">Breakeven framing</span>
-                    <span className="text-soft mono">Selling near {(activePrice * 100).toFixed(1)}%</span>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-
-          {balanceError && (
-            <div className="p-2.5 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-200 text-xs">
-              {balanceError}
-            </div>
-          )}
-
-          {validation.errors.length > 0 && (
-            <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-300 text-xs space-y-1">
-              {validation.errors.map((row) => (
-                <p key={row}>{row}</p>
-              ))}
-            </div>
-          )}
-
-          {validation.warnings.length > 0 && (
-            <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-200 text-xs space-y-1">
-              {validation.warnings.map((row) => (
-                <p key={row}>{row}</p>
-              ))}
-            </div>
-          )}
-
-          {error && (
-            <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
-              {error}
-            </div>
-          )}
-
-          {result?.success && (
-            <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-sm">
-              <p className="font-semibold">
-                {side === "BUY" ? "Bought" : "Sold"} {outcome} shares.
-              </p>
-              <p className="text-xs mt-1 mono">
-                {result.side} {result.side === "BUY" ? `${fmt$(result.size ?? amountNum)}` : `${result.size ?? amountNum} shares`} @ {pct(result.price)}
-              </p>
-              {result.order_hash && (
-                <p className="text-xs mt-1 text-muted truncate">Hash: {result.order_hash}</p>
-              )}
-            </div>
-          )}
-
-          <div className="flex items-center gap-2 text-xs">
-            <span className="text-muted">High-notional confirm at</span>
-            <input
-              type="number"
-              min={1}
-              step={1}
-              value={highNotionalThreshold}
-              onChange={(e) => {
-                const next = Number(e.target.value);
-                setHighNotionalThreshold(Number.isFinite(next) && next >= 1 ? next : 1);
-              }}
-              className="w-24 px-2 py-1 rounded bg-[var(--bg-soft)] border border-[var(--line)] text-white"
-            />
-            <span className="text-muted">USDC</span>
-          </div>
-
-          {!result?.success ? (
-            <button
-              onClick={() => void handleSubmit()}
-              disabled={!canSubmit}
-              className={`w-full py-3 rounded-lg font-bold text-sm transition ${
-                side === "BUY" ? "btn-success" : "btn-danger"
-              }`}
-            >
-              {loading ? (
-                <span className="flex items-center justify-center gap-2">
-                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-                    <circle
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="3"
-                      className="opacity-30"
-                    />
-                    <path
-                      d="M4 12a8 8 0 018-8"
-                      stroke="currentColor"
-                      strokeWidth="3"
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                  Placing order...
+              <div className="flex justify-between mt-2 text-xs text-muted">
+                <span>
+                  {side === "BUY"
+                    ? `USDC available: ${
+                        usdcBalance != null
+                          ? fmt$(usdcBalance)
+                          : balanceLoading
+                            ? "Loading..."
+                            : "N/A"
+                      }`
+                    : `Shares available: ${
+                        availableShares != null
+                          ? `${availableShares.toFixed(4)} ${outcome}`
+                          : balanceLoading
+                            ? "Loading..."
+                            : "N/A"
+                      }`}
                 </span>
-              ) : validation.requiresConfirm && !confirmArmed ? (
-                `Confirm large ${side.toLowerCase()} (${fmt$(notional)})`
-              ) : (
-                `${side === "BUY" ? "Buy" : "Sell"} ${outcome}${
-                  amountNum > 0
-                    ? side === "BUY"
-                      ? ` - ${fmt$(amountNum)}`
-                      : ` - ${amountNum.toFixed(4)} shares`
-                    : ""
-                }`
-              )}
-            </button>
-          ) : (
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={handleReverseSide}
-                className="py-3 rounded-lg font-bold text-sm btn-muted"
-                type="button"
-              >
-                Reverse Side
-              </button>
-              <button
-                onClick={onClose}
-                className="py-3 rounded-lg font-bold text-sm btn-muted"
-                type="button"
-              >
-                Done
-              </button>
+                {side === "BUY" && <span>Minimum buy: {fmt$(MIN_BUY_USDC)}</span>}
+              </div>
             </div>
-          )}
 
-          <p className="text-[11px] text-muted">
-            Shortcuts: Y/N outcome, B/S side, 1-4 presets, Enter submit, Esc close.
-          </p>
-        </div>
+            <div className="surface-soft rounded-lg p-3 text-xs space-y-1.5">
+              <div className="flex justify-between text-soft">
+                <span>Quote age</span>
+                <span className={isStale ? "text-yellow-300" : "text-emerald-300"}>
+                  {quoteAgeSec}s {isStale ? "stale" : "fresh"}
+                </span>
+              </div>
+              <div className="flex justify-between text-soft">
+                <span>Spread proxy</span>
+                <span>{spread != null ? `${(spread * 100).toFixed(2)}c` : "N/A"}</span>
+              </div>
+              <div className="flex justify-between text-soft">
+                <span>Liquidity</span>
+                <span>
+                  {liquidity != null ? fmt$(liquidity) : "N/A"}
+                  {liquidity != null && liquidity < LOW_LIQUIDITY_THRESHOLD ? " (low)" : ""}
+                </span>
+              </div>
+            </div>
+
+            {amountNum > 0 && Number.isFinite(amountNum) && (
+              <div className="surface-soft p-3.5 rounded-lg space-y-2 text-sm">
+                {side === "BUY" ? (
+                  <>
+                    <div className="flex justify-between">
+                      <span className="text-muted">You pay</span>
+                      <span className="text-white mono">{fmt$(notional)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted">Est. shares</span>
+                      <span className="text-white mono">
+                        {shares.toFixed(4)} {outcome}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted">Payout if correct</span>
+                      <span className="text-white mono">{fmt$(potentialPayout)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted">Max loss</span>
+                      <span className="text-red-300 mono">{fmt$(notional)}</span>
+                    </div>
+                    <div className="border-t border-[var(--line)] pt-2 flex justify-between font-semibold">
+                      <span className="text-muted">Breakeven framing</span>
+                      <span className="text-soft mono">
+                        Need &gt; {(activePrice * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted">Potential profit</span>
+                      <span className="status-good mono">+{fmt$(potentialProfit)}</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex justify-between">
+                      <span className="text-muted">Shares to sell</span>
+                      <span className="text-white mono">
+                        {amountNum.toFixed(4)} {outcome}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted">Estimated proceeds</span>
+                      <span className="text-white mono">{fmt$(notional)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted">Upside given up if {outcome}</span>
+                      <span className="text-yellow-300 mono">
+                        {fmt$(Math.max(0, shares * (1 - activePrice)))}
+                      </span>
+                    </div>
+                    <div className="border-t border-[var(--line)] pt-2 flex justify-between font-semibold">
+                      <span className="text-muted">Breakeven framing</span>
+                      <span className="text-soft mono">
+                        Selling near {(activePrice * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {balanceError && (
+              <div className="p-2.5 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-200 text-xs">
+                {balanceError}
+              </div>
+            )}
+
+            {validation.errors.length > 0 && (
+              <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-300 text-xs space-y-1">
+                {validation.errors.map((row) => (
+                  <p key={row}>{row}</p>
+                ))}
+              </div>
+            )}
+
+            {validation.warnings.length > 0 && (
+              <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-200 text-xs space-y-1">
+                {validation.warnings.map((row) => (
+                  <p key={row}>{row}</p>
+                ))}
+              </div>
+            )}
+
+            {error && (
+              <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
+                {error}
+              </div>
+            )}
+
+            {result?.success && (
+              <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-sm">
+                <p className="font-semibold">
+                  {side === "BUY" ? "Bought" : "Sold"} {outcome} shares.
+                </p>
+                <p className="text-xs mt-1 mono">
+                  {result.side}{" "}
+                  {result.side === "BUY"
+                    ? `${fmt$(result.size ?? amountNum)}`
+                    : `${result.size ?? amountNum} shares`}{" "}
+                  @ {pct(result.price)}
+                </p>
+                {result.order_hash && (
+                  <p className="text-xs mt-1 text-muted truncate">Hash: {result.order_hash}</p>
+                )}
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-muted">High-notional confirm at</span>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={highNotionalThreshold}
+                onChange={(e) => {
+                  const next = Number(e.target.value);
+                  setHighNotionalThreshold(Number.isFinite(next) && next >= 1 ? next : 1);
+                }}
+                className="w-24 px-2 py-1 rounded bg-[var(--bg-soft)] border border-[var(--line)] text-white"
+              />
+              <span className="text-muted">USDC</span>
+            </div>
+
+            {!result?.success ? (
+              <button
+                onClick={() => void handleSubmit()}
+                disabled={!canSubmit}
+                className={`w-full py-3 rounded-lg font-bold text-sm transition ${
+                  side === "BUY" ? "btn-success" : "btn-danger"
+                }`}
+              >
+                {loading ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                      <circle
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="3"
+                        className="opacity-30"
+                      />
+                      <path
+                        d="M4 12a8 8 0 018-8"
+                        stroke="currentColor"
+                        strokeWidth="3"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                    Placing order...
+                  </span>
+                ) : validation.requiresConfirm && !confirmArmed ? (
+                  `Confirm large ${side.toLowerCase()} (${fmt$(notional)})`
+                ) : (
+                  `${side === "BUY" ? "Buy" : "Sell"} ${outcome}${
+                    amountNum > 0
+                      ? side === "BUY"
+                        ? ` - ${fmt$(amountNum)}`
+                        : ` - ${amountNum.toFixed(4)} shares`
+                      : ""
+                  }`
+                )}
+              </button>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={handleReverseSide}
+                  className="py-3 rounded-lg font-bold text-sm btn-muted"
+                  type="button"
+                >
+                  Reverse Side
+                </button>
+                <button
+                  onClick={onClose}
+                  className="py-3 rounded-lg font-bold text-sm btn-muted"
+                  type="button"
+                >
+                  Done
+                </button>
+              </div>
+            )}
+
+            <p className="text-[11px] text-muted">
+              Shortcuts: Y/N outcome, B/S side, 1-4 presets, Enter submit, Esc close.
+            </p>
+          </div>
         </div>
       </div>
     </div>,

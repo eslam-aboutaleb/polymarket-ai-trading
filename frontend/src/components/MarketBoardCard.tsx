@@ -1,3 +1,13 @@
+/**
+ * Presentational market card driven entirely by a `MarketBoardCardVM` view model.
+ *
+ * Holds no state: it renders the title, optional AI summary chips and a probability ring, then
+ * dispatches intent upward. Binary and price-direction variants expose two outcome buttons
+ * (`onTrade`), multi-option variants render per-row Yes/No pills (`onRowTrade`), and the footer
+ * shows volume/live meta plus optional detail and favourite actions.
+ *
+ * @module components/MarketBoardCard
+ */
 import { MarketBoardCardVM } from "../types/marketBoard";
 import { TradeTicketOutcome } from "../types/trading";
 
@@ -9,13 +19,7 @@ interface MarketBoardCardProps {
   onToggleFavorite?: () => void;
 }
 
-function ProbabilityRing({
-  probability,
-  label,
-}: {
-  probability: number;
-  label?: string;
-}) {
+function ProbabilityRing({ probability, label }: { probability: number; label?: string }) {
   const pct = Math.max(0, Math.min(100, Math.round(probability * 100)));
   const radius = 18;
   const circumference = 2 * Math.PI * radius;

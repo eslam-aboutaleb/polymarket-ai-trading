@@ -4,6 +4,7 @@ Revision ID: 20260228_0003
 Revises: 20260228_0002
 Create Date: 2026-02-28 22:30:00
 """
+
 from __future__ import annotations
 
 from alembic import op
@@ -59,10 +60,7 @@ def upgrade() -> None:
     for table_name, column_names in _TIMESTAMP_COLUMNS.items():
         if table_name not in tables:
             continue
-        cols = {
-            column["name"]: column["type"]
-            for column in inspector.get_columns(table_name)
-        }
+        cols = {column["name"]: column["type"] for column in inspector.get_columns(table_name)}
         for column_name in column_names:
             col_type = cols.get(column_name)
             if col_type is None or _is_tz_aware(col_type):
@@ -72,7 +70,7 @@ def upgrade() -> None:
                     f'ALTER TABLE "{table_name}" '
                     f'ALTER COLUMN "{column_name}" '
                     "TYPE TIMESTAMP WITH TIME ZONE "
-                    f'USING "{column_name}" AT TIME ZONE \'UTC\''
+                    f"USING \"{column_name}\" AT TIME ZONE 'UTC'"
                 )
             )
 
