@@ -82,6 +82,70 @@ export interface PriceRefreshResponse {
   ts: string;
 }
 
+export interface EquitySnapshotPoint {
+  captured_at: string;
+  bucket_hour?: string;
+  usdc_balance: number;
+  unrealized_pnl: number;
+  bankroll: number;
+  total_invested?: number;
+  total_current_value?: number;
+  positions_count?: number;
+  is_paper?: boolean;
+}
+
+export interface EquitySummary {
+  period: string;
+  start: number;
+  end: number;
+  delta: number;
+  delta_pct: number;
+  max_drawdown_pct: number;
+  points: number;
+}
+
+export interface RiskReportPosition {
+  market_title?: string;
+  condition_id?: string;
+  outcome?: string;
+  size: number;
+  avg_price?: number;
+  current_price?: number;
+  value: number;
+  weight: number;
+  cost_basis: number;
+  loss_bound: number;
+  concentration_flag: boolean;
+}
+
+export interface RiskReport {
+  metrics: {
+    portfolio_value: number;
+    usdc_balance: number;
+    unrealized_pnl: number;
+    positions_count: number;
+    loss_bound: number;
+    max_position_weight: number;
+    concentration_flags: number;
+    clusters: Array<{ label: string; members: string[]; weight: number }>;
+    catalysts: Array<{
+      market_title: string;
+      end_date: string;
+      days_to_expiry: number;
+    }>;
+    risk_limits?: Record<string, number | string | boolean>;
+  };
+  narrative: {
+    overall_risk_rating: string;
+    var_estimate: string;
+    concentration_flags: string[];
+    correlated_clusters: string[];
+    tail_scenarios: string[];
+    hedges: string[];
+  } | null;
+  generated_at: string;
+}
+
 export interface PolymarketMarket {
   id?: string;
   question?: string;
@@ -155,5 +219,38 @@ export const portfolioService = {
     ts: string;
   }> {
     return apiClient.get("/api/portfolio/positions/prices");
+  },
+
+  async getEquitySnapshots(params?: {
+    date?: string;
+    from?: string;
+    to?: string;
+    limit?: number;
+    isPaper?: boolean;
+  }): Promise<EquitySnapshotPoint[]> {
+    const query = new URLSearchParams();
+    if (params?.date) query.set("date", params.date);
+    if (params?.from) query.set("from", params.from);
+    if (params?.to) query.set("to", params.to);
+    if (params?.limit) query.set("limit", String(params.limit));
+    // Always send the account being charted: an unfiltered payload mixes the
+    // paper and the live bankroll on one series.
+    if (params?.isPaper !== undefined) query.set("is_paper", String(params.isPaper));
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return apiClient.get<EquitySnapshotPoint[]>(`/api/portfolio/equity/snapshots${suffix}`);
+  },
+
+  async getEquitySummary(
+    period: "24h" | "7d" | "30d" | "all" = "7d",
+    isPaper?: boolean,
+  ): Promise<EquitySummary> {
+    const query = new URLSearchParams({ period });
+    // The summary must describe the same account as the chart beside it.
+    if (isPaper !== undefined) query.set("is_paper", String(isPaper));
+    return apiClient.get<EquitySummary>(`/api/portfolio/equity/summary?${query.toString()}`);
+  },
+
+  async getRiskReport(): Promise<RiskReport> {
+    return apiClient.get<RiskReport>("/api/portfolio/risk-report");
   },
 };

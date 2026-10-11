@@ -107,6 +107,8 @@ TASK_TIERS: dict[str, ModelTier] = {
     "event_quick_analysis": ModelTier.CHEAP,
     "multi_query_expansion": ModelTier.CHEAP,
     "source_evaluation": ModelTier.CHEAP,
+    "synthesize_research": ModelTier.CHEAP,
+    "event_batch_scoring": ModelTier.CHEAP,
     # ── STANDARD: everyday analysis ────────────────────────────
     "risk_assessment": ModelTier.STANDARD,
     "trade_execution_plan": ModelTier.STANDARD,
@@ -123,6 +125,7 @@ TASK_TIERS: dict[str, ModelTier] = {
     "discover_best_trade": ModelTier.STRONG,
     # ── WRITER: long-form ──────────────────────────────────────
     "news_article": ModelTier.WRITER,
+    "daily_portfolio_summary": ModelTier.WRITER,
 }
 
 #: Per-tier defaults: model, temperature, max_tokens, reasoning_effort.

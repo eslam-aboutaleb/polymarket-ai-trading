@@ -51,6 +51,18 @@ STORE = json.loads(PROMPTS_PATH.read_text())
             ['"id"', '"question"', '"edge_estimate"'],
             [],
         ),
+        (
+            "monitoring",
+            "price_alert_analysis",
+            ['"verdict"', '"thesis_changed"', '"confidence"', '"driver"', '"reasoning"'],
+            [],
+        ),
+        (
+            "monitoring",
+            "daily_portfolio_summary",
+            [],
+            [],
+        ),
     ],
 )
 def test_fixed_template_schema_matches_its_parser(
@@ -73,11 +85,23 @@ def test_sentiment_template_encodes_the_label_thresholds() -> None:
     assert '"bullish" | "bearish" | "neutral"' in template
 
 
+def test_opportunity_scoring_asks_for_a_calibrated_probability() -> None:
+    """Forecast calibration (plan 01) reads ``ai_probability`` off the
+    opportunity-scoring schemas — both templates must ask for it."""
+    for key in ("market_scoring", "event_scoring"):
+        template = STORE["opportunity_analysis"][key]
+        assert '"ai_probability"' in template, (
+            f"opportunity_analysis.{key} must ask for ai_probability"
+        )
+        assert '"ai_score"' in template, f"opportunity_analysis.{key} must ask for ai_score"
+
+
 def test_copy_trade_evaluation_ends_with_the_parseable_fields() -> None:
     template = STORE["copy_trading"]["trade_evaluation"]
 
     assert "Recommendation: COPY|REDUCE_SIZE|SKIP" in template
     assert "Confidence: <integer 0-100>" in template
+    assert "AI Probability: <integer 0-100>" in template
 
 
 def test_copy_trade_evaluation_uses_the_prose_system_prompt() -> None:

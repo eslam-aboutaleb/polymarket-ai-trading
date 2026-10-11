@@ -116,6 +116,11 @@ export default function MarketBoardCard({
                 <span className="pm-chip pm-chip-ai">AI {Math.round(card.aiSummary.score)}</span>
                 <span className="pm-chip pm-chip-rec">{card.aiSummary.recommendation}</span>
                 <span className="pm-chip pm-chip-risk">{card.aiSummary.risk}</span>
+                {/* Research credibility is only computed on scoring surfaces,
+                    so this chip (and its markup) stays absent elsewhere. */}
+                {typeof card.aiSummary.credibility === "number" ? (
+                  <span className="pm-chip pm-chip-rec">Cred {card.aiSummary.credibility}</span>
+                ) : null}
               </div>
             )}
           </div>

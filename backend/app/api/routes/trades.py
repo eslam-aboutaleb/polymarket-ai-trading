@@ -1942,3 +1942,69 @@ async def get_size_suggestion(
         bankroll_usdc=bankroll,
         kelly_size_usdc=kelly_size,
     )
+
+
+# ────────────── Per-Trader Copy Attribution (plan 07) ──────────────
+
+
+class CopyAttributionTrader(BaseModel):
+    """Realized copy-PnL attribution for one copied trader."""
+
+    wallet: str
+    label: str
+    realized_pnl: float = 0.0
+    trade_count: int = 0
+    wins: int = 0
+    losses: int = 0
+    win_rate: float | None = None
+    volume_usdc: float = 0.0
+    open_positions: int = 0
+    last_trade_at: str | None = None
+
+
+class CopyAttributionTotals(BaseModel):
+    """Copy attribution summed across every trader in the window."""
+
+    realized_pnl: float = 0.0
+    trade_count: int = 0
+    win_rate: float | None = None
+
+
+class CopyAttributionResponse(BaseModel):
+    """Per-trader realized PnL for copy trades over a rolling window."""
+
+    window_days: int
+    generated_at: str
+    traders: list[CopyAttributionTrader] = []
+    totals: CopyAttributionTotals
+    data_quality: dict[str, int] = {}
+
+
+@router.get("/copy-trades/pnl/by-trader", response_model=CopyAttributionResponse)
+async def get_copy_trade_attribution(
+    window_days: int = Query(default=30, ge=1, le=365),
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """Per-trader realized PnL and win rate for copy trades.
+
+    Unlike ``GET /copy-trades/pnl`` (a single today-only number), this
+    splits the PnL by ``copied_from_wallet`` over a rolling window, so
+    "which trader actually made me money?" is answerable per row.
+
+    ``UserTrade.pnl`` is written only by the PnL reconciler
+    (``app.services.pnl_reconciliation``) — this endpoint reads it. Sells
+    that reached the exchange but were never reconciled are excluded from
+    the PnL sums and reported in ``data_quality.unreconciled_sells``, and
+    copy trades whose ``executed_at`` was never recorded (so they match no
+    window at all) are reported in ``data_quality.missing_executed_at``, so
+    attribution never silently over- or under-states a trader.
+    """
+    from app.services.copy_trade_service import get_trader_copy_stats
+
+    # Subscript, not .get(): a token payload without ``user_id`` is a broken
+    # auth contract and must fail loudly rather than quietly returning an
+    # empty attribution table that reads as "no copy trades".
+    user_id = current_user["user_id"]
+    stats = get_trader_copy_stats(db, user_id, window_days=window_days)
+    return CopyAttributionResponse(**stats)

@@ -10,11 +10,18 @@ directly with fake DB sessions, gateway and Polymarket service doubles.
 """
 
 import asyncio
+import contextlib
+import json
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
+import app.models  # noqa: F401  (register models on Base.metadata)
+from app.api.routes import analysis
 from app.api.routes.analysis import (
     _enrich_trader_request,
     _group_markets_by_event,
@@ -28,6 +35,8 @@ from app.api.routes.auth import (
 from app.config import AIBackend
 from app.grpc_clients.analysis_client import AnalysisClient
 from app.main import app
+from app.models.assessment import Assessment
+from app.models.base import Base
 from app.models.user_settings import AIBackendType
 from app.services.llm_gateway import LLMConfig, LLMProviderType
 from app.utils.database import get_db
@@ -114,8 +123,8 @@ def _raising_gen(error):
     return gen()
 
 
-class AnalysisRouteTests(unittest.TestCase):
-    """HTTP-level tests for every analysis route."""
+class _AnalysisRouteMixin:
+    """Shared harness: mocked analysis client + auth overrides."""
 
     def setUp(self):
         self.client = TestClient(app)
@@ -159,6 +168,31 @@ class AnalysisRouteTests(unittest.TestCase):
             status = response.status_code
             body = "\n".join(response.iter_lines())
         return status, body
+
+    def _patch_service(self, service):
+        patcher = patch("app.api.routes.analysis.get_polymarket_service", return_value=service)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def _sse_scores(body):
+        """Decode ``market_id -> scores`` from an SSE response body."""
+        scores = {}
+        for line in body.splitlines():
+            if not line.startswith("data: "):
+                continue
+            try:
+                payload = json.loads(line[len("data: ") :])
+            except json.JSONDecodeError:
+                continue
+            market_id = payload.get("market_id")
+            if market_id:
+                scores[market_id] = payload["scores"]
+        return scores
+
+
+class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
+    """HTTP-level tests for every analysis route."""
 
     # ── POST /api/analysis/market ───────────────────────
 
@@ -551,11 +585,6 @@ class AnalysisRouteTests(unittest.TestCase):
 
     # ── POST /api/analysis/opportunities/analyze-markets ──
 
-    def _patch_service(self, service):
-        patcher = patch("app.api.routes.analysis.get_polymarket_service", return_value=service)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
     def test_analyze_markets_stream_empty(self):
         self._patch_service(MagicMock())
         status, body = self._stream("/api/analysis/opportunities/analyze-markets", {"markets": []})
@@ -567,9 +596,10 @@ class AnalysisRouteTests(unittest.TestCase):
         service = MagicMock()
         service.get_smart_money_analysis = AsyncMock(
             return_value={
-                "whale_activity": "whales buying",
-                "trader_stats": "stats",
-                "market_signal": "bullish",
+                "condition_id": "cid-1",
+                "whale_count": 2,
+                "whale_bias": "YES",
+                "context_text": "Order book participants — YES side: 3",
             }
         )
         self._patch_service(service)
@@ -607,10 +637,8 @@ class AnalysisRouteTests(unittest.TestCase):
         self.assertEqual(kwargs["volume_24h"], 100.0)
         self.assertEqual(kwargs["liquidity"], 50.0)
         self.assertEqual(kwargs["end_date"], "2026-12-31T00:00:00Z")
-        self.assertEqual(
-            kwargs["smart_money_context"],
-            "Whale activity: whales buying\nTrader stats: stats\nSignal: bullish",
-        )
+        # the real get_smart_money_analysis payload renders through context_text
+        self.assertEqual(kwargs["smart_money_context"], "Order book participants — YES side: 3")
 
     def test_analyze_markets_stream_smart_money_empty(self):
         service = MagicMock()
@@ -856,6 +884,309 @@ class AnalysisRouteTests(unittest.TestCase):
         self.assertEqual(kwargs["yes_price"], 0.5)
         self.assertEqual(kwargs["no_price"], 0.5)
 
+    # ── event easy trades + research credibility (plan 06) ───
+
+    MULTI_MARKETS = [
+        {
+            **SINGLE_MARKET,
+            "condition_id": "c1",
+            "slug": "election-2028",
+            "groupItemTitle": "Democrat",
+        },
+        {
+            "question": "Republican wins?",
+            "condition_id": "c2",
+            "slug": "election-2028",
+            "outcomePrices": ["0.3", "0.7"],
+            "groupItemTitle": "Republican",
+        },
+        {**SINGLE_MARKET, "condition_id": "s1", "slug": "solo-1", "volume24hr": 10},
+    ]
+
+    EASY_TRADES = [
+        {
+            "condition_id": "c1",
+            "market_title": "Election 2028",
+            "recommended_option": "Democrat",
+            "ease_score": 88,
+            "ai_probability": 0.72,
+            "edge_estimate": 0.11,
+            "expected_probability": 0.7,
+            "confidence": 0.9,
+            "category": "politics",
+            "search_summary": "one clear option",
+        }
+    ]
+
+    EVENT_SCORES = {
+        "event_title": "election-2028",
+        "ai_score": 61,
+        "risk_level": "medium",
+        "pnl_potential": 0.4,
+        "credibility_score": "llm-said-50",
+        "recommendation": "buy",
+        "recommended_side": "YES",
+        "recommended_option": "LLM-option",
+        "reasoning": "event level reasoning",
+        "search_summary": "",
+    }
+
+    def _patch_event(self, event_scores=None):
+        service = MagicMock()
+        service.get_smart_money_analysis = AsyncMock(return_value={})
+        self._patch_service(service)
+        self.mock_client.scan_event_opportunity = AsyncMock(
+            return_value=dict(self.EVENT_SCORES, **(event_scores or {}))
+        )
+        self.mock_client.scan_opportunity = AsyncMock(
+            return_value={
+                "condition_id": "s1",
+                "market_title": "Solo",
+                "ai_score": 55,
+                "credibility_score": "llm-said-95",
+                "search_summary": "",
+            }
+        )
+        return service
+
+    def _stream_marks(self, markets=None):
+        # setUp already routes the route's client factory to the mock.
+        return self._stream(
+            "/api/analysis/opportunities/analyze-markets",
+            {"markets": markets or self.MULTI_MARKETS},
+        )
+
+    def test_event_easy_trades_are_one_call_per_batch(self):
+        self._patch_event()
+        self.mock_client.scan_event_easy_trades = AsyncMock(return_value=self.EASY_TRADES)
+        status, body = self._stream_marks()
+        self.assertEqual(status, 200)
+        self.assertEqual(self.mock_client.scan_event_easy_trades.await_count, 1)
+        kwargs = self.mock_client.scan_event_easy_trades.await_args.kwargs
+        # only the multi-option group is sent, with its sub-markets
+        self.assertEqual(len(kwargs["events"]), 1)
+        # the group title falls back to the first market's question
+        self.assertEqual(kwargs["events"][0]["event_title"], "Will it happen?")
+        self.assertEqual(
+            [sm["condition_id"] for sm in kwargs["events"][0]["sub_markets"]], ["c1", "c2"]
+        )
+
+    def test_easy_trade_fields_merge_before_the_sub_market_fanout(self):
+        self._patch_event()
+        self.mock_client.scan_event_easy_trades = AsyncMock(return_value=self.EASY_TRADES)
+        status, body = self._stream_marks()
+        self.assertEqual(status, 200)
+        # every sub-market of the event keeps its own condition_id ...
+        self.assertIn('"market_id": "c1"', body)
+        self.assertIn('"market_id": "c2"', body)
+        # ... while inheriting the event-level score the easy trade found
+        for marker in (
+            '"ease_score": 88',
+            '"edge_estimate": 0.11',
+            '"recommended_option": "Democrat"',
+            '"category": "politics"',
+        ):
+            self.assertIn(marker, body)
+        # the event scan's own verdicts survive the merge
+        self.assertIn('"ai_score": 61', body)
+        self.assertIn('"risk_level": "medium"', body)
+        self.assertIn("event level reasoning", body)
+        # ai_probability becomes the option's own forecast on the option
+        # the easy trade actually scored, and lands nowhere else
+        self.assertIn('"ai_probability": 0.72', body)
+        scores = self._sse_scores(body)
+        self.assertAlmostEqual(scores["c1"]["ai_probability"], 0.72)
+        self.assertAlmostEqual(scores["c1"]["expected_probability"], 0.7)
+        self.assertEqual(body.count('"ai_probability": 0.72'), 1)
+        # (calibration poisoning) the non-scored option must not inherit it
+        self.assertIsNone(scores["c2"]["ai_probability"])
+        self.assertIsNone(scores["c2"]["expected_probability"])
+
+    def test_non_best_sub_market_carries_no_probability_in_the_sse_body(self):
+        """Every other option keeps the ranking fields but no forecast.
+
+        ``record_verdict`` fires once per emitted score, so a fanned-out
+        per-option probability would persist one option's forecast under
+        every other option's ``condition_id`` — the calibration data would
+        then compare unrelated forecasts with unrelated resolutions.
+        """
+        self._patch_event()
+        self.mock_client.scan_event_easy_trades = AsyncMock(return_value=self.EASY_TRADES)
+        status, body = self._stream_marks()
+        self.assertEqual(status, 200)
+
+        scores = self._sse_scores(body)
+        self.assertEqual(sorted(set(scores) & {"c1", "c2"}), ["c1", "c2"])
+        # Board ranking still sees the event-wide fields on both options ...
+        for cid in ("c1", "c2"):
+            self.assertEqual(scores[cid]["ease_score"], 88)
+            self.assertEqual(scores[cid]["edge_estimate"], 0.11)
+            self.assertEqual(scores[cid]["recommended_option"], "Democrat")
+            self.assertEqual(scores[cid]["category"], "politics")
+            self.assertEqual(scores[cid]["ai_score"], 61)
+        # ... while only the scored option carries a probability at all.
+        self.assertAlmostEqual(scores["c1"]["ai_probability"], 0.72)
+        self.assertNotIn('"ai_probability": 0.72', json.dumps(scores["c2"]))
+
+    def test_event_without_easy_trades_fans_out_no_probabilities(self):
+        """No easy trade → no per-option probability for any sub-market.
+
+        The event scan reports "the recommended option's" probability,
+        which is not reproducible for every sub-market, so the fan-out
+        drops it rather than attaching it to each condition_id.
+        """
+        self._patch_event()
+        self.mock_client.scan_event_easy_trades = AsyncMock(return_value=[])
+        status, body = self._stream_marks(
+            markets=[m for m in self.MULTI_MARKETS if m["condition_id"] in ("c1", "c2")]
+        )
+        self.assertEqual(status, 200)
+
+        scores = self._sse_scores(body)
+        self.assertEqual(sorted(scores), ["c1", "c2"])
+        self.assertIsNone(scores["c1"]["ai_probability"])
+        self.assertIsNone(scores["c2"]["ai_probability"])
+
+    def test_client_disconnect_during_the_batch_phase_closes_the_channel(self):
+        """A cancelled batch phase must not leak the per-request channel.
+
+        ``_score_event_groups`` runs outside the loop's own try/finally, so
+        a disconnect (``CancelledError`` raised inside the batch phase)
+        used to skip ``client.close()`` and leave the gRPC channel and the
+        spawned group tasks behind.
+        """
+        service = MagicMock()
+        service.get_smart_money_analysis = AsyncMock(return_value={})
+        self._patch_service(service)
+        cancelled = AsyncMock(side_effect=asyncio.CancelledError)
+
+        with (
+            patch.object(analysis, "_score_event_groups", new=cancelled),
+            # The cancellation still propagates; only cleanup was added.
+            contextlib.suppress(asyncio.CancelledError),
+        ):
+            self._stream(
+                "/api/analysis/opportunities/analyze-markets",
+                {"markets": [SINGLE_MARKET]},
+            )
+
+        self.assertEqual(cancelled.await_count, 1)
+        self.mock_client.close.assert_awaited_once_with()
+
+    def test_client_disconnect_during_the_scan_batch_phase_closes_the_channel(self):
+        """Same guarantee for the easy-trade scan stream."""
+        cache = MagicMock()
+        cache.get.return_value = None
+        service = MagicMock()
+        service.get_newest_markets = AsyncMock(return_value=[SINGLE_MARKET])
+        service.get_active_markets = AsyncMock(return_value=[])
+        cancelled = AsyncMock(side_effect=asyncio.CancelledError)
+
+        with (
+            patch("app.api.routes.analysis.opportunity_cache", cache),
+            patch("app.api.routes.analysis.get_polymarket_service", return_value=service),
+            patch.object(analysis, "_score_event_groups", new=cancelled),
+            contextlib.suppress(asyncio.CancelledError),
+        ):
+            self._stream("/api/analysis/opportunities/stream", {"limit": 10})
+
+        self.assertEqual(cancelled.await_count, 1)
+        self.mock_client.close.assert_awaited_once_with()
+
+    def test_easy_trade_failure_keeps_the_event_scores(self):
+        self._patch_event()
+        self.mock_client.scan_event_easy_trades = AsyncMock(side_effect=RuntimeError("ai down"))
+        status, body = self._stream_marks()
+        self.assertEqual(status, 200)
+        self.assertIn('"market_id": "c1"', body)
+        self.assertIn('"ai_score": 61', body)
+        self.assertNotIn("ease_score", body)
+        self.assertNotIn("ai down", body)
+
+    def test_easy_trade_reply_with_unusable_payload_keeps_the_event_scores(self):
+        self._patch_event()
+        # a client that is not an AsyncMock answers with a MagicMock, so
+        # the route must degrade instead of failing the scan
+        status, body = self._stream_marks()
+        self.assertEqual(status, 200)
+        self.assertIn('"market_id": "c1"', body)
+        self.assertNotIn("ease_score", body)
+
+    def test_credibility_score_is_deterministic_without_the_model(self):
+        """No reachable LLM → the deterministic baseline, not the LLM's.
+
+        The (real) ``synthesize_research`` double is a MagicMock, so it is
+        not awaitable: the scan must still emit the evidence-derived
+        credibility for a market with 24h volume and without one.
+        """
+        self._patch_event()
+        self.mock_client.scan_event_easy_trades = AsyncMock(return_value=[])
+        self.mock_client.scan_opportunity = AsyncMock(return_value={"ai_score": 55})
+        status, body = self._stream_marks(
+            markets=[
+                {**SINGLE_MARKET, "condition_id": "with-volume", "question": "With volume?"},
+                {
+                    **SINGLE_MARKET,
+                    "condition_id": "no-data",
+                    "question": "No data?",
+                    "volume24hr": 0,
+                    "liquidityNum": 0,
+                },
+            ]
+        )
+        self.assertEqual(status, 200)
+        self.assertIn('"market_id": "with-volume"', body)
+        self.assertIn('"market_id": "no-data"', body)
+        # traded in the last 24h: the volume window dates the evidence
+        self.assertIn(
+            '"market_id": "with-volume", "scores": {"ai_score": 55, "credibility_score": 50}', body
+        )
+        # no volume and no liquidity: nothing dates the evidence, and the
+        # single (market) family cannot corroborate itself
+        self.assertIn(
+            '"market_id": "no-data", "scores": {"ai_score": 55, "credibility_score": 42}', body
+        )
+
+    def test_synthesis_reply_fills_missing_search_summary(self):
+        self._patch_event()
+        self.mock_client.scan_event_easy_trades = AsyncMock(return_value=[])
+        self.mock_client.synthesize_research = AsyncMock(
+            return_value={
+                "success": True,
+                "report": "KEY CONSENSUS: whale bias and momentum agree.\n2. DISAGREEMENTS: none\n",
+            }
+        )
+        status, body = self._stream_marks()
+        self.assertEqual(status, 200)
+        self.assertEqual(self.mock_client.synthesize_research.await_count, 1)
+        self.assertIn("whale bias and momentum agree.", body)
+        self.assertIn('"credibility_score": 50', body)
+
+    def test_synthesis_failure_keeps_the_deterministic_baseline(self):
+        self._patch_event()
+        self.mock_client.scan_event_easy_trades = AsyncMock(return_value=[])
+        self.mock_client.synthesize_research = AsyncMock(side_effect=RuntimeError("model down"))
+        status, body = self._stream_marks(markets=[SINGLE_MARKET])
+        self.assertEqual(status, 200)
+        self.assertIn('"credibility_score": 50', body)
+        self.assertNotIn("model down", body)
+
+    def test_scan_opportunity_error_keeps_credibility_and_records_verdict(self):
+        """The plan-01 recorder hook survives the batch upgrades."""
+        service = MagicMock()
+        service.get_smart_money_analysis = AsyncMock(return_value={})
+        self._patch_service(service)
+        self.mock_client.scan_opportunity = AsyncMock(side_effect=RuntimeError("ai down"))
+        self.mock_client.scan_event_easy_trades = AsyncMock(side_effect=RuntimeError("down"))
+        self.mock_client.synthesize_research = AsyncMock(side_effect=RuntimeError("down"))
+
+        status, body = self._stream_marks(markets=[SINGLE_MARKET])
+        self.assertEqual(status, 200)
+        self.assertIn("AI analysis failed: ai down", body)
+        # the deterministic credibility replaces the 30 in the scan
+        # failure fallback, and the verdict hook still fires
+        self.assertIn('"credibility_score": 50', body)
+
     # ── POST /api/analysis/opportunities/stream ─────────
 
     def test_opportunity_stream_serves_from_cache(self):
@@ -1009,9 +1340,10 @@ class AnalysisRouteTests(unittest.TestCase):
         service.get_active_markets = AsyncMock(return_value=[])
         service.get_smart_money_analysis = AsyncMock(
             return_value={
-                "whale_activity": "whales buying",
-                "trader_stats": "stats",
-                "market_signal": "bullish",
+                "condition_id": "cid-1",
+                "whale_count": 0,
+                "whale_bias": "MIXED",
+                "context_text": "Order book participants — YES side: 1 | NO side: 1",
             }
         )
         self.mock_client.scan_opportunity = AsyncMock(
@@ -1026,7 +1358,7 @@ class AnalysisRouteTests(unittest.TestCase):
         kwargs = self.mock_client.scan_opportunity.await_args.kwargs
         self.assertEqual(
             kwargs["smart_money_context"],
-            "Whale activity: whales buying\nTrader stats: stats\nSignal: bullish",
+            "Order book participants — YES side: 1 | NO side: 1",
         )
 
     def test_opportunity_stream_smart_money_error(self):
@@ -1252,6 +1584,106 @@ class AnalysisRouteTests(unittest.TestCase):
         self.assertIn('"all_done": true', body)
         self.assertIn('"total": 1', body)
         self.assertIn('"market_id": "cid-1"', body)
+
+
+class AnalysisRouteRecorderTests(_AnalysisRouteMixin, unittest.TestCase):
+    """The plan-01 ``record_verdict`` hook against a real SQLite session.
+
+    Route tests normally override ``get_db`` with a ``MagicMock``, which
+    makes ``record_verdict`` a silent no-op.  These tests inject a real
+    in-memory session so the hook is proven to write exactly one
+    ``Assessment`` row per emitted score — with the market price captured
+    at decision time — and to skip a re-analysis that repeats the same
+    dedupe key.
+    """
+
+    def _real_db(self):
+        engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine)
+        db = session_factory()
+        self.addCleanup(engine.dispose)
+        self.addCleanup(db.close)
+        # setUp registered the MagicMock override; replace it for this test.
+        app.dependency_overrides[get_db] = lambda: db
+        return db
+
+    def _scan_one(self, db, scores):
+        service = MagicMock()
+        service.get_smart_money_analysis = AsyncMock(return_value={})
+        self._patch_service(service)
+        self.mock_client.scan_opportunity = AsyncMock(return_value=scores)
+        return self._stream(
+            "/api/analysis/opportunities/analyze-markets", {"markets": [SINGLE_MARKET]}
+        )
+
+    def test_probability_present_writes_one_row_with_the_decision_time_price(self):
+        db = self._real_db()
+
+        status, body = self._scan_one(
+            db,
+            {
+                "condition_id": "cid-1",
+                "market_title": "Will it happen?",
+                "ai_score": 70,
+                "ai_probability": 0.72,
+                "model": "gpt-4",
+                "provider": "openai",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertIn('"market_id": "cid-1"', body)
+
+        rows = db.query(Assessment).all()
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row.condition_id, "cid-1")
+        self.assertEqual(row.task, "analyze-markets")
+        self.assertEqual(row.model_name, "gpt-4")
+        self.assertEqual(row.provider, "openai")
+        self.assertAlmostEqual(row.ai_probability, 0.72)
+        # SINGLE_MARKET outcomePrices[0] — the price at decision time
+        self.assertAlmostEqual(row.market_price_at_assessment, 0.6)
+
+    def test_missing_probability_writes_no_row(self):
+        db = self._real_db()
+
+        status, _body = self._scan_one(
+            db,
+            {
+                "condition_id": "cid-1",
+                "market_title": "Will it happen?",
+                "ai_score": 70,
+                "model": "gpt-4",
+                "provider": "openai",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(db.query(Assessment).all(), [])
+
+    def test_duplicate_key_writes_no_second_row(self):
+        db = self._real_db()
+        scores = {
+            "condition_id": "cid-1",
+            "market_title": "Will it happen?",
+            "ai_score": 70,
+            "ai_probability": 0.72,
+            "model": "gpt-4",
+            "provider": "openai",
+        }
+
+        status, _body = self._scan_one(db, dict(scores))
+        self.assertEqual(status, 200)
+        # A second scan of the same market in the same UTC day repeats the
+        # (condition_id, price, probability, model) key exactly.
+        status, _body = self._scan_one(db, dict(scores))
+        self.assertEqual(status, 200)
+
+        self.assertEqual(len(db.query(Assessment).all()), 1)
 
 
 class AnalysisRouteHelperTests(unittest.IsolatedAsyncioTestCase):

@@ -14,6 +14,7 @@ from app.models.notification_channel import NotificationChannel
 from app.models.notification_delivery import NotificationDelivery
 from app.models.notification_feed_event import NotificationFeedEvent
 from app.models.notification_followed_trader import NotificationFollowedTrader
+from app.models.portfolio_snapshot import PortfolioSnapshot
 from app.models.redemption_attempt import RedemptionAttempt
 from app.models.stop_loss import StopLossOrder
 from app.models.take_profit import TakeProfitOrder
@@ -44,6 +45,7 @@ __all__ = [
     "NotificationChannel",
     "NotificationDelivery",
     "UserNotificationPreference",
+    "PortfolioSnapshot",
     "TraderPositionState",
     "InverseBotPosition",
     "InverseBotAction",

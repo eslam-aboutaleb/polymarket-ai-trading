@@ -1,5 +1,13 @@
 """Open-source research MCP server (stdio JSON protocol).
 
+Protocol
+--------
+One JSON object per stdin line: ``{"tool": <name>, "args": {...}}``. Exactly one
+JSON object is written back per request line, in request order, so a client may
+pipeline several requests in one process. The special ``__shutdown__`` tool
+acknowledges and then stops the read loop (a client that simply closes stdin
+gets the same outcome via EOF).
+
 Tools:
 - web_search(query, recency_hours=24, max_results=8)        — DuckDuckGo free search
 - x_posts_search(query, recency_hours=24, max_results=8)    — X/Twitter via DDG
@@ -352,23 +360,33 @@ def news_search(
 
 
 def main() -> int:
-    for line in sys.stdin:
-        raw = line.strip()
-        if not raw:
-            continue
-        try:
-            payload = json.loads(raw)
-            if not isinstance(payload, dict):
-                raise ValueError("Request must be an object")
-            response = _run_one(payload)
-        except Exception as exc:  # pragma: no cover
-            response = {"ok": False, "error": str(exc)}
-        sys.stdout.write(json.dumps(response) + "\n")
-        sys.stdout.flush()
-    # Release the shared Binance HTTP client on shutdown.
-    if _BINANCE_AVAILABLE:
-        with contextlib.suppress(Exception):
-            _run_async(binance_skills._close_shared_client())
+    # ``__shutdown__`` lets a client that keeps stdin open close the loop
+    # deliberately; the batched client in polymarket_mcp sends it as the last
+    # frame of every call so a batch always ends in a clean exit.
+    try:
+        for line in sys.stdin:
+            raw = line.strip()
+            if not raw:
+                continue
+            try:
+                payload = json.loads(raw)
+                if not isinstance(payload, dict):
+                    raise ValueError("Request must be an object")
+                if payload.get("tool") == "__shutdown__":
+                    sys.stdout.write(json.dumps({"ok": True, "result": {"shutdown": True}}) + "\n")
+                    sys.stdout.flush()
+                    break
+                response = _run_one(payload)
+            except Exception as exc:  # pragma: no cover
+                response = {"ok": False, "error": str(exc)}
+            sys.stdout.write(json.dumps(response) + "\n")
+            sys.stdout.flush()
+    finally:
+        # Release the shared Binance HTTP client on shutdown (EOF or
+        # ``__shutdown__``); idempotent, so it also covers an exception path.
+        if _BINANCE_AVAILABLE:
+            with contextlib.suppress(Exception):
+                _run_async(binance_skills._close_shared_client())
     return 0
 
 

@@ -16,6 +16,7 @@ import {
   LeaderboardEntry,
   FollowTraderRequest,
   CopyEvaluationRow,
+  CopyAttributionResponse,
 } from "../services/tradesService";
 import { getApiErrorMessage } from "../utils/apiError";
 import {
@@ -44,6 +45,10 @@ const MOCK_PERIODS: { value: MockPeriod; label: string }[] = [
 
 const MOCK_CAPITAL_PER_TRADER = MOCK_COPY_DEFAULT_CAPITAL;
 const COPY_TRADING_TAB_STORAGE_KEY = "pm:copy-trading:active-tab";
+
+// Rolling windows offered by the trader-attribution selector, mirroring the
+// execution-analytics windows.
+const ATTRIBUTION_WINDOW_OPTIONS = [7, 30, 90];
 
 const SIZING_MODE_OPTIONS = [
   { value: "inherit_global", label: "Inherit Global" },
@@ -118,6 +123,10 @@ export default function CopyTrading() {
   const [following, setFollowing] = useState<FollowedTrader[]>([]);
   const [copyTrades, setCopyTrades] = useState<CopyTradeRecord[]>([]);
   const [dailyPnl, setDailyPnl] = useState<number>(0);
+  const [attributionWindow, setAttributionWindow] = useState(30);
+  const [attribution, setAttribution] = useState<CopyAttributionResponse | null>(null);
+  const [attributionLoading, setAttributionLoading] = useState(true);
+  const [attributionError, setAttributionError] = useState<string | null>(null);
   const [walletInput, setWalletInput] = useState("");
   const [maxPositionInput, setMaxPositionInput] = useState("");
   const [addingWallet, setAddingWallet] = useState(false);
@@ -191,6 +200,24 @@ export default function CopyTrading() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  const fetchAttribution = useCallback(async () => {
+    setAttributionLoading(true);
+    setAttributionError(null);
+    try {
+      const data = await tradesService.getCopyAttribution(attributionWindow);
+      setAttribution(data);
+    } catch (err: unknown) {
+      setAttributionError(getApiErrorMessage(err, "Failed to load copy attribution"));
+    } finally {
+      setAttributionLoading(false);
+    }
+  }, [attributionWindow]);
+
+  useEffect(() => {
+    if (activeTab !== "copy") return;
+    fetchAttribution();
+  }, [activeTab, fetchAttribution]);
 
   useEffect(() => {
     localStorage.setItem(COPY_TRADING_TAB_STORAGE_KEY, activeTab);
@@ -730,6 +757,13 @@ export default function CopyTrading() {
     };
   }, [mockRows]);
 
+  // Best trader first; the backend already returns this order, so the sort
+  // also survives a payload from an older API version.
+  const attributionRows = useMemo(() => {
+    const rows = attribution?.traders ?? [];
+    return [...rows].sort((a, b) => b.realized_pnl - a.realized_pnl);
+  }, [attribution]);
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -1025,6 +1059,140 @@ export default function CopyTrading() {
               {formatUSD(dailyPnl)}
             </p>
           </div>
+        </div>
+      )}
+
+      {activeTab === "copy" && (
+        <div className="surface-panel p-6 rounded-lg space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h2 className="text-lg font-semibold">Trader Attribution</h2>
+              <p className="text-soft text-sm">
+                Realized PnL and win rate per copied trader over the last {attributionWindow} days.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {ATTRIBUTION_WINDOW_OPTIONS.map((days) => (
+                <button
+                  key={days}
+                  onClick={() => setAttributionWindow(days)}
+                  className={`px-3 py-1.5 rounded-lg text-sm ${
+                    attributionWindow === days
+                      ? "btn-primary"
+                      : "bg-surface border border-border text-soft"
+                  }`}
+                >
+                  {days}d
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {attributionError && (
+            <div className="p-3 alert-error rounded text-sm">{attributionError}</div>
+          )}
+
+          {attribution?.data_quality && attribution.data_quality.unreconciled_sells > 0 && (
+            <div className="p-3 rounded text-sm border border-yellow-500/30 bg-yellow-500/10 text-yellow-300">
+              {attribution.data_quality.unreconciled_sells} closed copy sell(s) are still awaiting
+              PnL reconciliation, so their profit is missing from every trader below.
+            </div>
+          )}
+
+          {attribution?.data_quality && attribution.data_quality.missing_executed_at > 0 && (
+            <div className="p-3 rounded text-sm border border-yellow-500/30 bg-yellow-500/10 text-yellow-300">
+              {attribution.data_quality.missing_executed_at} pasted copy trade(s) have no execution
+              timestamp, so they are missing from the per-trader figures below.
+            </div>
+          )}
+
+          {attributionLoading && !attribution ? (
+            <p className="text-soft text-sm">Loading attribution...</p>
+          ) : attributionRows.length === 0 ? (
+            <p className="text-soft text-sm">
+              No copy trades with settled PnL in this window. Follow a trader and let positions
+              close before attribution appears here.
+            </p>
+          ) : (
+            <>
+              <div className="overflow-x-auto">
+                <table className="table-theme text-sm">
+                  <thead>
+                    <tr>
+                      <th className="text-left p-3">Trader</th>
+                      <th className="text-right p-3">Realized PnL</th>
+                      <th className="text-right p-3">Win Rate</th>
+                      <th className="text-right p-3">Trades</th>
+                      <th className="text-right p-3">Volume</th>
+                      <th className="text-right p-3">Open</th>
+                      <th className="text-right p-3">Last Trade</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {attributionRows.map((row) => (
+                      <tr key={row.wallet}>
+                        <td className="p-3 text-xs">
+                          <p className="text-white">{row.label}</p>
+                          <p className="text-muted mono">{shortAddress(row.wallet)}</p>
+                        </td>
+                        <td
+                          className={`p-3 text-right mono ${
+                            row.realized_pnl >= 0 ? "status-good" : "status-bad"
+                          }`}
+                        >
+                          {row.realized_pnl >= 0 ? "+" : ""}
+                          {formatUSD(row.realized_pnl)}
+                        </td>
+                        <td className="p-3 text-right mono">
+                          {row.win_rate == null ? (
+                            <span className="text-muted">—</span>
+                          ) : (
+                            `${(row.win_rate * 100).toFixed(1)}%`
+                          )}
+                        </td>
+                        <td className="p-3 text-right mono">{row.trade_count}</td>
+                        <td className="p-3 text-right mono">{formatUSD(row.volume_usdc)}</td>
+                        <td className="p-3 text-right mono">{row.open_positions}</td>
+                        <td className="p-3 text-right text-muted text-xs">
+                          {row.last_trade_at
+                            ? new Date(row.last_trade_at).toLocaleDateString()
+                            : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {attribution?.totals && (
+                <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm border-t border-[var(--line)] pt-3">
+                  <span className="text-muted">
+                    Total realized
+                    <span
+                      className={`mono ml-2 ${
+                        attribution.totals.realized_pnl >= 0 ? "status-good" : "status-bad"
+                      }`}
+                    >
+                      {attribution.totals.realized_pnl >= 0 ? "+" : ""}
+                      {formatUSD(attribution.totals.realized_pnl)}
+                    </span>
+                  </span>
+                  <span className="text-muted">
+                    Copy trades
+                    <span className="mono ml-2 text-white">{attribution.totals.trade_count}</span>
+                  </span>
+                  <span className="text-muted">
+                    Win rate
+                    <span className="mono ml-2 text-white">
+                      {attribution.totals.win_rate == null
+                        ? "—"
+                        : `${(attribution.totals.win_rate * 100).toFixed(1)}%`}
+                    </span>
+                  </span>
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
 

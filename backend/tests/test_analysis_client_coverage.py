@@ -72,7 +72,7 @@ def _async_stream(chunks):
     return gen()
 
 
-class AnalysisClientCoverageTests(unittest.IsolatedAsyncioTestCase):
+class _FakeAnalysisClientMixin:
     """Base fixture: fake pooled channel + stub, real proto messages."""
 
     async def asyncSetUp(self):
@@ -137,6 +137,8 @@ class AnalysisClientCoverageTests(unittest.IsolatedAsyncioTestCase):
             side_effect=lambda request, timeout=None: _async_stream(["chunk-one", "chunk-two"])
         )
 
+
+class AnalysisClientCoverageTests(_FakeAnalysisClientMixin, unittest.IsolatedAsyncioTestCase):
     # ── module-level helpers ──────────────────────────────────
 
     def test_get_channels_lock_creates_and_reuses(self):
@@ -1424,6 +1426,234 @@ class AnalysisClientCoverageTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):
             await self.client.index_markets_rag([])
 
+    # ── scan_event_easy_trades / synthesize_research (plan 06) ──
+
+    async def test_scan_event_easy_trades_success(self):
+        raw = json.dumps(
+            {
+                "easy_trades": [
+                    {
+                        "condition_id": "c1",
+                        "market_title": "Election 2028",
+                        "recommended_option": "Democrat",
+                        "ease_score": 85,
+                        "recommended_side": "YES",
+                        "ai_probability": 0.7,
+                        "expected_probability": 0.75,
+                        "edge_estimate": 0.12,
+                        "confidence": 0.9,
+                        "reasoning": "obvious",
+                        "risk_level": "low",
+                        "category": "politics",
+                    },
+                    {"ease_score": 40, "ai_probability": "bad"},
+                    {"ease_score": 60},
+                    "not-a-dict",
+                ],
+                "scan_summary": "scanned",
+            }
+        )
+        self.stub.AnalyzeMarket = AsyncMock(
+            return_value=_ok_response(
+                analysis=raw, metadata={"model": "gpt-4o-mini", "provider": "openai"}
+            )
+        )
+        events = [
+            {
+                "event_title": "Election 2028",
+                "sub_markets": [
+                    {
+                        "label": "Democrat",
+                        "condition_id": "c1",
+                        "yes_price": 0.4,
+                        "no_price": 0.6,
+                        "volume_24h": 100,
+                        "liquidity": 50,
+                    },
+                    {
+                        "label": "Republican",
+                        "condition_id": "c2",
+                        "yes_price": 0.6,
+                        "no_price": 0.4,
+                        "volume_24h": 200,
+                        "liquidity": 75,
+                    },
+                ],
+            },
+            {
+                "event_title": "BTC 150k",
+                "sub_markets": [
+                    {
+                        "label": "Yes",
+                        "condition_id": "c3",
+                        "yes_price": 0.22,
+                        "no_price": 0.78,
+                    }
+                ],
+            },
+        ]
+        results = await self.client.scan_event_easy_trades(events, max_results=10)
+        self.assertEqual(len(results), 3)  # non-dict entry skipped
+        # ranked by ease_score descending
+        self.assertEqual([r["ease_score"] for r in results], [85, 60, 40])
+
+        first = results[0]
+        self.assertEqual(first["condition_id"], "c1")
+        self.assertEqual(first["market_title"], "Election 2028")
+        self.assertEqual(first["ai_score"], 85)
+        self.assertEqual(first["ai_probability"], 0.7)
+        self.assertEqual(first["risk_level"], "low")
+        self.assertEqual(first["pnl_potential"], 0.12)
+        self.assertEqual(first["credibility_score"], 90)
+        self.assertEqual(first["recommendation"], "strong_buy")
+        self.assertEqual(first["recommended_side"], "YES")
+        self.assertEqual(first["recommended_option"], "Democrat")
+        self.assertEqual(first["reasoning"], "obvious")
+        self.assertEqual(first["search_summary"], "scanned")
+        self.assertEqual(first["expected_probability"], 0.75)
+        self.assertEqual(first["edge_estimate"], 0.12)
+        self.assertEqual(first["confidence"], 0.9)
+        self.assertEqual(first["category"], "politics")
+        self.assertEqual(first["model"], "gpt-4o-mini")
+        self.assertEqual(first["provider"], "openai")
+        # a malformed forecast stays absent instead of defaulting to 0.5
+        self.assertIsNone(results[2]["ai_probability"])
+        # defaults for the sparse entry
+        self.assertEqual(results[1]["condition_id"], "")
+        self.assertEqual(results[1]["recommendation"], "buy")
+        self.assertEqual(results[1]["credibility_score"], 50)
+        self.assertEqual(results[1]["category"], "other")
+
+        request = self.stub.AnalyzeMarket.await_args.args[0]
+        self.assertEqual(request.market_title, "Event Easy Trade Scan — 2 event groups")
+        self.assertIn("Election 2028", request.market_description)
+        self.assertIn("Democrat", request.market_description)
+        # representative prices from the first sub-market of the first group
+        self.assertAlmostEqual(request.yes_price, 0.4)
+        self.assertAlmostEqual(request.no_price, 0.6)
+        self.assertFalse(request.include_research)
+        self.assertEqual(
+            self.stub.AnalyzeMarket.await_args.kwargs["timeout"],
+            get_settings().grpc_timeout * 2,
+        )
+
+    async def test_scan_event_easy_trades_max_results_truncation(self):
+        raw = json.dumps(
+            {"easy_trades": [{"ease_score": 90}, {"ease_score": 80}, {"ease_score": 70}]}
+        )
+        self.stub.AnalyzeMarket = AsyncMock(return_value=_ok_response(analysis=raw))
+        events = [{"event_title": "E", "sub_markets": [{"label": "A", "yes_price": 0.5}]}]
+        results = await self.client.scan_event_easy_trades(events, max_results=2)
+        self.assertEqual([r["ease_score"] for r in results], [90, 80])
+
+    async def test_scan_event_easy_trades_empty_events(self):
+        self.stub.AnalyzeMarket = AsyncMock(return_value=_ok_response(analysis="{}"))
+        results = await self.client.scan_event_easy_trades([])
+        self.assertEqual(results, [])
+        request = self.stub.AnalyzeMarket.await_args.args[0]
+        self.assertEqual(request.market_title, "Event Easy Trade Scan — 0 event groups")
+        self.assertEqual(request.yes_price, 0.5)
+        self.assertEqual(request.no_price, 0.5)
+
+    async def test_scan_event_easy_trades_invalid_json(self):
+        self.stub.AnalyzeMarket = AsyncMock(return_value=_ok_response(analysis="{bad json}"))
+        events = [{"event_title": "E", "sub_markets": [{"label": "A"}]}]
+        self.assertEqual(await self.client.scan_event_easy_trades(events), [])
+
+    async def test_scan_event_easy_trades_rpc_exception(self):
+        self.stub.AnalyzeMarket = AsyncMock(side_effect=RuntimeError("dead"))
+        events = [{"event_title": "E", "sub_markets": [{"label": "A"}]}]
+        self.assertEqual(await self.client.scan_event_easy_trades(events), [])
+
+    async def test_scan_event_easy_trades_non_list_easy_trades(self):
+        self.stub.AnalyzeMarket = AsyncMock(
+            return_value=_ok_response(analysis=json.dumps({"easy_trades": "not-a-list"}))
+        )
+        events = [{"event_title": "E", "sub_markets": [{"label": "A"}]}]
+        self.assertEqual(await self.client.scan_event_easy_trades(events), [])
+
+    async def test_scan_event_easy_trades_with_llm_config(self):
+        self.stub.AnalyzeMarket = AsyncMock(return_value=_ok_response(analysis="{}"))
+        events = [{"event_title": "E", "sub_markets": [{"label": "A", "yes_price": 0.5}]}]
+        await self.client.scan_event_easy_trades(events, llm_config={"model": "m"})
+        request = self.stub.AnalyzeMarket.await_args.args[0]
+        self.assertEqual(request.llm_config.model, "m")
+
+    async def test_scan_event_easy_trades_without_template(self):
+        with patch.object(self.mod, "_load_prompts", return_value={}):
+            self.stub.AnalyzeMarket = AsyncMock(return_value=_ok_response(analysis="{}"))
+            events = [{"event_title": "E", "sub_markets": [{"label": "A", "yes_price": 0.5}]}]
+            await self.client.scan_event_easy_trades(events, max_results=3)
+        request = self.stub.AnalyzeMarket.await_args.args[0]
+        self.assertIn("NEWEST EVENT GROUPS", request.market_description)
+        self.assertIn("up to 3", request.market_description)
+
+    async def test_scan_event_easy_trades_caps_events_and_options(self):
+        self.stub.AnalyzeMarket = AsyncMock(return_value=_ok_response(analysis="{}"))
+        events = [
+            {
+                "event_title": f"Event {i}",
+                "sub_markets": [
+                    {"label": f"Option {j}", "condition_id": f"c{i}-{j}"} for j in range(25)
+                ],
+            }
+            for i in range(25)
+        ]
+        await self.client.scan_event_easy_trades(events)
+        description = self.stub.AnalyzeMarket.await_args.args[0].market_description
+        self.assertIn("Event 19", description)
+        self.assertNotIn("Event 20", description)
+        self.assertIn("Option 19", description)
+        self.assertNotIn("Option 20", description)
+
+    async def test_synthesize_research_success(self):
+        self.stub.AnalyzeMarket = AsyncMock(
+            return_value=_ok_response(
+                analysis="  KEY CONSENSUS: the streams agree.  ",
+                metadata={"model": "m1", "provider": "p1"},
+            )
+        )
+        result = await self.client.synthesize_research(
+            market_question="Will BTC hit $150k?",
+            findings_json=json.dumps({"groups": [{"key": "event-1"}]}),
+        )
+        self.assertEqual(result, {"report": "KEY CONSENSUS: the streams agree.", "success": True})
+        request = self.stub.AnalyzeMarket.await_args.args[0]
+        self.assertEqual(request.market_title, "Research synthesis — Will BTC hit $150k?")
+        self.assertIn("Will BTC hit $150k?", request.market_description)
+        self.assertIn("event-1", request.market_description)
+        self.assertFalse(request.include_research)
+        self.assertEqual(
+            self.stub.AnalyzeMarket.await_args.kwargs["timeout"],
+            get_settings().grpc_timeout * 2,
+        )
+
+    async def test_synthesize_research_service_failure(self):
+        self.stub.AnalyzeMarket = AsyncMock(
+            return_value=analysis_pb2.AnalysisResponse(success=False, error="model down")
+        )
+        result = await self.client.synthesize_research("Q?", "[]")
+        self.assertEqual(result, {"report": "", "success": False})
+
+    async def test_synthesize_research_rpc_exception(self):
+        self.stub.AnalyzeMarket = AsyncMock(side_effect=_FakeRpcError())
+        result = await self.client.synthesize_research("Q?", "[]")
+        self.assertEqual(result, {"report": "", "success": False})
+
+    async def test_synthesize_research_with_llm_config(self):
+        self.stub.AnalyzeMarket = AsyncMock(return_value=_ok_response(analysis="report"))
+        await self.client.synthesize_research("Q?", "[]", llm_config={"provider": 2})
+        request = self.stub.AnalyzeMarket.await_args.args[0]
+        self.assertEqual(request.llm_config.provider, 2)
+
+    async def test_synthesize_research_without_template(self):
+        with patch.object(self.mod, "_load_prompts", return_value={}):
+            self.stub.AnalyzeMarket = AsyncMock(return_value=_ok_response(analysis="report"))
+            await self.client.synthesize_research("Q?", "findings-json")
+        request = self.stub.AnalyzeMarket.await_args.args[0]
+        self.assertIn("Synthesize the research findings for: Q?", request.market_description)
+        self.assertIn("findings-json", request.market_description)
+
     # ── factory / shared channel lifecycle ────────────────────
 
     def test_get_analysis_client_factory(self):
@@ -1438,9 +1668,216 @@ class AnalysisClientCoverageTests(unittest.IsolatedAsyncioTestCase):
         await client._get_stub()
         self.assertEqual(len(self.mod._shared_channels), 1)
         await self.mod.close_shared_channels()
-        self.channel.close.assert_awaited_once()
+        self.channel.close.assert_awaited_once_with()
         self.assertEqual(self.mod._shared_channels, {})
         self.assertEqual(self.mod._shared_stubs, {})
+
+
+class PriceAlertClientTests(_FakeAnalysisClientMixin, unittest.IsolatedAsyncioTestCase):
+    """The monitored price-alert verdict call (plan 03, B-M4).
+
+    The prompt has no dedicated RPC yet: it is rendered into
+    ``AnalyzeMarket.market_description`` with ``include_research=True``
+    (news context is what separates a news-driven crash from noise), and
+    the JSON-schema verdict is parsed back out of the response.
+    """
+
+    async def test_parses_and_clamps_the_verdict(self):
+        raw = (
+            'Noise... {"verdict": "EXIT", "thesis_changed": true, "confidence": 0.62,'
+            ' "driver": "news", "reasoning": "Exchange hack dominates the tape."}'
+        )
+        self.stub.AnalyzeMarket = AsyncMock(return_value=_ok_response(analysis=raw))
+
+        result = await self.client.analyze_price_alert(
+            market_title="Will BTC hit $150k?",
+            position="120 shares of Yes",
+            trigger_condition="price <= stop 0.2000",
+            current_price="0.1500",
+            price_change="-25.0",
+            condition_id="0xcond-1",
+        )
+
+        self.assertEqual(result["verdict"], "exit")
+        self.assertTrue(result["thesis_changed"])
+        self.assertAlmostEqual(result["confidence"], 0.62)
+        self.assertEqual(result["driver"], "news")
+        self.assertEqual(result["reasoning"], "Exchange hack dominates the tape.")
+        self.assertEqual(result["condition_id"], "0xcond-1")
+        # research smuggling: the alert verdict needs news context
+        request = self.stub.AnalyzeMarket.await_args.args[0]
+        self.assertTrue(request.include_research)
+        self.assertIn("Will BTC hit $150k?", request.market_description)
+        self.assertIn("price <= stop 0.2000", request.market_description)
+
+    async def test_unknown_verdict_is_clamped_to_hold(self):
+        raw = '{"verdict": "moon", "confidence": 0.5, "reasoning": "to the stars"}'
+        self.stub.AnalyzeMarket = AsyncMock(return_value=_ok_response(analysis=raw))
+
+        result = await self.client.analyze_price_alert(
+            market_title="T",
+            position="p",
+            trigger_condition="c",
+            current_price="0.1",
+            price_change="-1.0",
+        )
+
+        self.assertEqual(result["verdict"], "hold")
+        self.assertAlmostEqual(result["confidence"], 0.5)
+
+    async def test_unparseable_response_fails_open_but_marked(self):
+        self.stub.AnalyzeMarket = AsyncMock(
+            return_value=_ok_response(analysis="no braces at all here")
+        )
+
+        result = await self.client.analyze_price_alert(
+            market_title="T",
+            position="p",
+            trigger_condition="c",
+            current_price="0.1",
+            price_change="-1.0",
+        )
+
+        # Fail-open defaults, but distinguishable from a model "hold".
+        self.assertEqual(result["verdict"], self.mod.UNUSABLE_VERDICT)
+        self.assertAlmostEqual(result["confidence"], 0.0)
+        self.assertEqual(result["reasoning"], "")
+
+    async def test_rpc_failure_fails_open(self):
+        self.stub.AnalyzeMarket = AsyncMock(side_effect=_FakeRpcError())
+
+        result = await self.client.analyze_price_alert(
+            market_title="T",
+            position="p",
+            trigger_condition="c",
+            current_price="0.1",
+            price_change="-1.0",
+        )
+
+        self.assertEqual(result["verdict"], self.mod.UNUSABLE_VERDICT)
+        self.assertAlmostEqual(result["confidence"], 0.0)
+
+    async def test_service_failure_response_fails_open(self):
+        self.stub.AnalyzeMarket = AsyncMock(
+            return_value=analysis_pb2.AnalysisResponse(success=False, error="model down")
+        )
+
+        result = await self.client.analyze_price_alert(
+            market_title="T",
+            position="p",
+            trigger_condition="c",
+            current_price="0.1",
+            price_change="-1.0",
+        )
+
+        self.assertEqual(result["verdict"], self.mod.UNUSABLE_VERDICT)
+
+    async def test_without_template_the_fallback_prompt_is_used(self):
+        with patch.object(self.mod, "_load_prompts", return_value={}):
+            self.stub.AnalyzeMarket = AsyncMock(
+                return_value=_ok_response(analysis='{"verdict": "add"}')
+            )
+            await self.client.analyze_price_alert(
+                market_title="T",
+                position="p",
+                trigger_condition="c",
+                current_price="0.1",
+                price_change="-1.0",
+            )
+        request = self.stub.AnalyzeMarket.await_args.args[0]
+        self.assertIn("Respond with ONLY JSON", request.market_description)
+
+
+class DailyDigestClientTests(_FakeAnalysisClientMixin, unittest.IsolatedAsyncioTestCase):
+    """The daily digest call (plan 02, B-M4)."""
+
+    async def test_renders_the_prompt_without_research(self):
+        self.stub.AnalyzeMarket = AsyncMock(return_value=_ok_response(analysis="  article  "))
+
+        article = await self.client.generate_daily_digest(
+            date="2026-10-11",
+            start_value="1234.56",
+            current_value="1300.00",
+            positions_json='[{"market": "M", "size": 1}]',
+            events="stop-loss filled on M",
+        )
+
+        self.assertEqual(article, "article")
+        request = self.stub.AnalyzeMarket.await_args.args[0]
+        self.assertEqual(request.market_title, "Daily Portfolio Digest — 2026-10-11")
+        self.assertIn("1234.56", request.market_description)
+        self.assertIn("1300.00", request.market_description)
+        self.assertIn('"market": "M"', request.market_description)
+        self.assertIn("stop-loss filled on M", request.market_description)
+        # A summary product, not a research product.
+        self.assertFalse(request.include_research)
+
+    async def test_empty_response_yields_empty_article(self):
+        self.stub.AnalyzeMarket = AsyncMock(return_value=_ok_response(analysis="   "))
+
+        article = await self.client.generate_daily_digest(
+            date="2026-10-11",
+            start_value="0",
+            current_value="0",
+            positions_json="[]",
+            events="",
+        )
+
+        self.assertEqual(article, "")
+
+    async def test_service_failure_yields_empty_article(self):
+        self.stub.AnalyzeMarket = AsyncMock(
+            return_value=analysis_pb2.AnalysisResponse(success=False, error="overloaded")
+        )
+
+        article = await self.client.generate_daily_digest(
+            date="2026-10-11",
+            start_value="0",
+            current_value="0",
+            positions_json="[]",
+            events="",
+        )
+
+        self.assertEqual(article, "")
+
+    async def test_rpc_exception_yields_empty_article(self):
+        self.stub.AnalyzeMarket = AsyncMock(side_effect=_FakeRpcError())
+
+        article = await self.client.generate_daily_digest(
+            date="2026-10-11",
+            start_value="0",
+            current_value="0",
+            positions_json="[]",
+            events="",
+        )
+
+        self.assertEqual(article, "")
+
+    async def test_without_template_the_fallback_prompt_is_used(self):
+        with patch.object(self.mod, "_load_prompts", return_value={}):
+            self.stub.AnalyzeMarket = AsyncMock(return_value=_ok_response(analysis="a"))
+            await self.client.generate_daily_digest(
+                date="2026-10-11",
+                start_value="0.00",
+                current_value="10.00",
+                positions_json="[]",
+                events="",
+            )
+        request = self.stub.AnalyzeMarket.await_args.args[0]
+        self.assertIn("Write a concise daily portfolio report", request.market_description)
+
+    async def test_llm_config_is_forwarded(self):
+        self.stub.AnalyzeMarket = AsyncMock(return_value=_ok_response(analysis="a"))
+        await self.client.generate_daily_digest(
+            date="2026-10-11",
+            start_value="0",
+            current_value="0",
+            positions_json="[]",
+            events="",
+            llm_config={"provider": 2},
+        )
+        request = self.stub.AnalyzeMarket.await_args.args[0]
+        self.assertEqual(request.llm_config.provider, 2)
 
 
 def request_alternatives(stub):

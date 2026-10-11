@@ -28,6 +28,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
+import app.services.price_alert_service as price_alert_service
 import app.services.stop_loss_monitor as stop_loss_monitor
 from app.security.credential_store import CredentialStoreError
 from app.services.polymarket_service import PolymarketService
@@ -1045,6 +1046,436 @@ class ModuleConfigurationTests(unittest.TestCase):
     def test_reload_restores_a_usable_interval(self):
         """After any patched reload the module must be usable again."""
         self.assertGreater(stop_loss_monitor.STOP_LOSS_CHECK_INTERVAL, 0)
+
+
+# ────────────── Price-alert verdict tasks (plan 03) ──────────────
+
+
+def _park_side_effect(park):
+    """AsyncMock side effect: record activity, then park on the gate."""
+
+    async def _side_effect(_order, **_kwargs):
+        park.started.set()
+        await park.gate.wait()
+
+    return _side_effect
+
+
+def _make_park():
+    """Per-test park events (an ``asyncio.Event`` is loop-bound)."""
+    return SimpleNamespace(gate=asyncio.Event(), started=asyncio.Event())
+
+
+def _reset_price_cache():
+    stop_loss_monitor._LAST_PRICES.clear()
+
+
+def _isolate_price_alert_metrics():
+    """Reset the process-global verdict counters around a test.
+
+    ``test_price_alert_service`` asserts exact counter values and runs
+    after this module under the default collection order, so this module
+    has to leave them clean.
+    """
+    original = dict(price_alert_service._metrics)
+    price_alert_service.reset_price_alert_metrics()
+
+    def _restore():
+        price_alert_service._metrics.clear()
+        price_alert_service._metrics.update(original)
+
+    return _restore
+
+
+def _trigger_context(order, price):
+    """Patches for a single user whose order breaches at ``price``."""
+    return (
+        patch.object(
+            stop_loss_monitor,
+            "load_wallet_credentials",
+            return_value={"private_key": "0xpk", "clob_creds": None},
+        ),
+        patch.object(
+            stop_loss_monitor,
+            "_fetch_live_prices",
+            new=AsyncMock(return_value={order.token_id: price}),
+        ),
+        patch.object(stop_loss_monitor, "_execute_stop_loss", new=AsyncMock()),
+        patch.object(stop_loss_monitor, "_execute_take_profit", new=AsyncMock()),
+    )
+
+
+async def _check_one(db, order, price, *, stop_loss=True):
+    with contextlib.ExitStack() as stack:
+        for patcher in _trigger_context(order, price):
+            stack.enter_context(patcher)
+        return await stop_loss_monitor._check_user_price_orders(
+            db=db,
+            user_id=1,
+            wallet_address="0xaaa",
+            sl_orders=[order] if stop_loss else [],
+            tp_orders=[] if stop_loss else [order],
+        )
+
+
+async def _drain(cycles=3):
+    """Give freshly spawned tasks a chance to run to their first await."""
+    for _ in range(cycles):
+        await asyncio.sleep(0)
+
+
+class PriceAlertTriggerTests(unittest.IsolatedAsyncioTestCase):
+    """The trigger path must spawn a verdict task without awaiting it."""
+
+    def setUp(self):
+        self.db = MagicMock()
+        self.db.query.return_value.filter.return_value.first.return_value = None
+        self.addCleanup(_reset_price_cache)
+        _reset_price_cache()
+
+    async def test_trigger_spawns_one_task_and_returns_without_awaiting_it(self):
+        park = _make_park()
+        enrich_mock = AsyncMock(side_effect=_park_side_effect(park))
+        order = _sl_order(1, 1, "tok-1", 0.20)
+
+        with patch.object(stop_loss_monitor, "enrich_trigger_alert", new=enrich_mock):
+            triggered = await _check_one(self.db, order, 0.10)
+            await _drain()
+
+        # The execution itself happened and the loop reported the trigger.
+        self.assertEqual(triggered, 1)
+        # Exactly one background task, parked mid-verdict: the cycle did
+        # not wait for the LLM (which can outlast the whole 10s loop).
+        tasks = list(stop_loss_monitor._price_alert_tasks)
+        self.assertEqual(len(tasks), 1)
+        self.assertFalse(tasks[0].done())
+        self.assertTrue(park.started.is_set())
+        self.assertEqual(enrich_mock.await_count, 1)
+
+        park.gate.set()
+        await asyncio.gather(*tasks)
+        self.assertTrue(tasks[0].done())
+
+    async def test_verdict_task_receives_the_trigger_context(self):
+        enrich_mock = AsyncMock()
+        order = _sl_order(2, 1, "tok-1", 0.20, size=3.0)
+
+        with patch.object(stop_loss_monitor, "enrich_trigger_alert", new=enrich_mock):
+            triggered = await _check_one(self.db, order, 0.10)
+            await _drain()
+
+        self.assertEqual(triggered, 1)
+        self.assertEqual(enrich_mock.await_count, 1)
+        # The task receives a SNAPSHOT, not the live ORM instance: the
+        # task's first step runs after the monitor's session is closed
+        # (and rolled back), which expires the instance.
+        snapshot = enrich_mock.await_args.args[0]
+        self.assertIsNot(snapshot, order)
+        self.assertEqual(snapshot.id, order.id)
+        self.assertEqual(snapshot.user_id, 1)
+        self.assertEqual(snapshot.token_id, "tok-1")
+        self.assertEqual(snapshot.stop_price, 0.20)
+        self.assertEqual(snapshot.size, 3.0)
+        kwargs = enrich_mock.await_args.kwargs
+        self.assertEqual(kwargs["event_type"], "stop_loss_hit")
+        self.assertEqual(kwargs["live_price"], 0.10)
+        self.assertEqual(kwargs["trigger_condition"], "price <= stop 0.2000")
+        # First sighting of the token: no reference price yet.
+        self.assertIsNone(kwargs["prev_price"])
+        # Live mode (no UserSettings row) never claims a simulated fill.
+        self.assertFalse(kwargs["simulation_mode"])
+
+    async def test_verdict_cap_still_fires_the_plain_alert(self):
+        """Past the cap the LLM verdict is skipped, never the alert.
+
+        A flash crash breaching nine orders must not fire nine concurrent
+        STRONG-tier LLM calls (plus their research subprocesses); the
+        ninth alert is delivered un-enriched instead.
+        """
+        park = _make_park()
+        for index in range(stop_loss_monitor.MAX_PRICE_ALERT_VERDICTS):
+            order = _sl_order(10 + index, 1, f"tok-{index}", 0.20)
+            with patch.object(
+                stop_loss_monitor,
+                "enrich_trigger_alert",
+                new=AsyncMock(side_effect=_park_side_effect(park)),
+            ):
+                await _check_one(self.db, order, 0.10)
+        await _drain()
+        self.assertEqual(len(stop_loss_monitor._price_alert_tasks), 8)
+
+        order = _sl_order(99, 1, "tok-cap", 0.20)
+        with patch.object(stop_loss_monitor, "enrich_trigger_alert", new=AsyncMock()) as mock:
+            await _check_one(self.db, order, 0.10)
+            await _drain()
+
+        # The task still runs (so the alert fires) but asks for no verdict.
+        self.assertEqual(mock.await_count, 1)
+        self.assertFalse(mock.await_args.kwargs["enrich"])
+
+        park.gate.set()
+        await asyncio.gather(*list(stop_loss_monitor._price_alert_tasks))
+
+    async def test_paper_mode_trigger_marks_the_fill_as_simulated(self):
+        """A paper position was never sold; the alert must not claim it was."""
+        enrich_mock = AsyncMock()
+        order = _sl_order(7, 1, "tok-1", 0.20, size=3.0)
+        # The owning user's settings row puts this order in paper mode.
+        self.db.query.return_value.filter.return_value.first.return_value = SimpleNamespace(
+            simulation_mode=True
+        )
+
+        with (
+            patch.object(
+                stop_loss_monitor,
+                "_fetch_public_prices",
+                new=AsyncMock(return_value={order.token_id: 0.10}),
+            ),
+            patch.object(stop_loss_monitor, "_execute_stop_loss_simulated", new=AsyncMock()),
+            patch.object(stop_loss_monitor, "enrich_trigger_alert", new=enrich_mock),
+        ):
+            triggered = await stop_loss_monitor._check_user_price_orders(
+                db=self.db,
+                user_id=1,
+                wallet_address="0xaaa",
+                sl_orders=[order],
+                tp_orders=[],
+            )
+            await _drain()
+
+        self.assertEqual(triggered, 1)
+        self.assertTrue(enrich_mock.await_args.kwargs["simulation_mode"])
+
+    async def test_previous_cycle_price_is_passed_as_prev_price(self):
+        enrich_mock = AsyncMock()
+        order = _sl_order(3, 1, "tok-1", 0.20)
+        # Cycle 1: the price sits above the stop, so nothing triggers but
+        # the price cache records 0.30 for the token.
+        with patch.object(stop_loss_monitor, "enrich_trigger_alert", new=enrich_mock):
+            await _check_one(self.db, order, 0.30)
+            await _drain()
+            enrich_mock.assert_not_awaited()
+
+            # Cycle 2: the price drops through the stop.
+            triggered = await _check_one(self.db, order, 0.10)
+            await _drain()
+
+        self.assertEqual(triggered, 1)
+        self.assertEqual(enrich_mock.await_count, 1)
+        self.assertEqual(enrich_mock.await_args.kwargs["prev_price"], 0.30)
+
+    async def test_take_profit_trigger_uses_the_take_profit_event_type(self):
+        enrich_mock = AsyncMock()
+        order = _tp_order(4, 1, "tok-9", 0.75)
+
+        with patch.object(stop_loss_monitor, "enrich_trigger_alert", new=enrich_mock):
+            triggered = await _check_one(self.db, order, 0.90, stop_loss=False)
+            await _drain()
+
+        self.assertEqual(triggered, 1)
+        kwargs = enrich_mock.await_args.kwargs
+        self.assertEqual(kwargs["event_type"], "take_profit_hit")
+        self.assertEqual(kwargs["trigger_condition"], "price >= target 0.7500")
+
+    async def test_no_trigger_no_task(self):
+        enrich_mock = AsyncMock()
+        order = _sl_order(5, 1, "tok-1", 0.20)
+
+        with patch.object(stop_loss_monitor, "enrich_trigger_alert", new=enrich_mock):
+            triggered = await _check_one(self.db, order, 0.90)
+            await _drain()
+
+        self.assertEqual(triggered, 0)
+        enrich_mock.assert_not_awaited()
+        self.assertEqual(stop_loss_monitor._price_alert_tasks, set())
+
+    async def test_finished_tasks_are_discarded_from_the_reference_set(self):
+        """The reference set must not leak one entry per trigger."""
+        enrich_mock = AsyncMock()
+        order = _sl_order(6, 1, "tok-1", 0.20)
+
+        with patch.object(stop_loss_monitor, "enrich_trigger_alert", new=enrich_mock):
+            await _check_one(self.db, order, 0.10)
+            await _drain()
+            await _drain()
+
+        self.assertEqual(stop_loss_monitor._price_alert_tasks, set())
+
+    async def test_spawn_without_a_running_loop_is_survivable(self):
+        """A direct call outside the monitor must not raise into the caller."""
+        order = _sl_order(8, 1, "tok-1", 0.20)
+
+        async def _noop_verdict(_order, **_kwargs):
+            return None
+
+        coro = _noop_verdict(order)
+        coro.close()  # never scheduled, so close it before it warns
+        enrich_mock = MagicMock(return_value=coro)
+
+        with (
+            patch.object(stop_loss_monitor, "enrich_trigger_alert", new=enrich_mock),
+            patch.object(
+                stop_loss_monitor.asyncio, "create_task", side_effect=RuntimeError("no loop")
+            ),
+        ):
+            task = stop_loss_monitor._spawn_price_alert(
+                order,
+                event_type="stop_loss_hit",
+                live_price=0.10,
+                prev_price=None,
+            )
+
+        self.assertIsNone(task)
+        self.assertEqual(stop_loss_monitor._price_alert_tasks, set())
+        self.assertEqual(enrich_mock.call_count, 1)
+
+
+class PriceAlertDispatchTests(unittest.IsolatedAsyncioTestCase):
+    """Trigger → verdict → enriched alert, end to end.
+
+    The real ``enrich_trigger_alert`` runs (only its collaborators are
+    patched), so these tests prove the alert users receive carries the
+    verdict and still fires when the LLM is switched off.
+    """
+
+    def setUp(self):
+        self.monitor_db = MagicMock(name="monitor-db")
+        self.monitor_db.query.return_value.filter.return_value.first.return_value = None
+        self.verdict_db = MagicMock(name="verdict-db")
+        self.addCleanup(_reset_price_cache)
+        _reset_price_cache()
+        self.addCleanup(_isolate_price_alert_metrics())
+
+        self.client = MagicMock(name="client")
+        self.client.analyze_price_alert = AsyncMock(
+            return_value={
+                "verdict": "reduce",
+                "thesis_changed": True,
+                "confidence": 0.62,
+                "driver": "news",
+                "reasoning": "Rate decision dominates the tape.",
+            }
+        )
+        self.client.close = AsyncMock()
+        self.dispatch = AsyncMock(return_value={"status": "dispatched"})
+
+        self._patches = [
+            patch.object(price_alert_service, "SessionLocal", return_value=self.verdict_db),
+            patch.object(price_alert_service, "AnalysisClient", return_value=self.client),
+            patch.object(price_alert_service, "alert_dispatch", new=self.dispatch),
+            patch.object(price_alert_service, "average_entry_price", return_value=0.42),
+        ]
+        for patcher in self._patches:
+            patcher.start()
+        self._kill_switch = None
+        self.addCleanup(self._stop_patches)
+        self._set_kill_switch(True)
+
+    def _stop_patches(self):
+        if self._kill_switch is not None:
+            self._kill_switch.stop()
+            self._kill_switch = None
+        for patcher in self._patches:
+            patcher.stop()
+
+    def _set_kill_switch(self, enabled):
+        if self._kill_switch is not None:
+            self._kill_switch.stop()
+        self._kill_switch = patch.object(
+            price_alert_service, "verdicts_enabled", return_value=enabled
+        )
+        self._kill_switch.start()
+
+    async def _run_trigger(self, price, *, stop_loss=True):
+        order = _sl_order(1, 1, "tok-1", 0.20) if stop_loss else _tp_order(1, 1, "tok-1", 0.80)
+        await _check_one(self.monitor_db, order, price, stop_loss=stop_loss)
+        await _drain()
+        return order
+
+    async def test_enriched_alert_payload_carries_the_verdict(self):
+        await self._run_trigger(0.10)
+
+        self.dispatch.assert_awaited_once()
+        event_type, user_id, payload = self.dispatch.await_args.args
+        self.assertEqual(event_type, "stop_loss_hit")
+        self.assertEqual(user_id, 1)
+        self.assertIn("Stop-loss triggered", payload["message"])
+        self.assertIn("sold 1 shares @ $0.1000", payload["message"])
+        self.assertIn("AI verdict: REDUCE (confidence 62%, driver news)", payload["message"])
+        self.assertIn("Reasoning: Rate decision dominates the tape.", payload["message"])
+        self.assertEqual(payload["verdict"], "reduce")
+        self.assertEqual(payload["side"], "sell")
+
+    async def test_kill_switch_still_dispatches_the_plain_alert(self):
+        self._set_kill_switch(False)
+
+        await self._run_trigger(0.10)
+
+        self.dispatch.assert_awaited_once()
+        payload = self.dispatch.await_args.args[2]
+        self.assertIn("Stop-loss triggered", payload["message"])
+        self.assertNotIn("AI verdict", payload["message"])
+        self.assertNotIn("verdict", payload)
+        # No session, no gRPC client, no LLM call.
+        self.client.analyze_price_alert.assert_not_awaited()
+        self.verdict_db.query.assert_not_called()
+
+    async def test_take_profit_alert_carries_the_verdict(self):
+        await self._run_trigger(0.90, stop_loss=False)
+
+        self.dispatch.assert_awaited_once()
+        event_type, _user_id, payload = self.dispatch.await_args.args
+        self.assertEqual(event_type, "take_profit_hit")
+        self.assertIn("Take-profit triggered", payload["message"])
+        self.assertIn("AI verdict: REDUCE", payload["message"])
+
+    async def test_verdict_failure_dispatches_the_plain_alert(self):
+        self.client.analyze_price_alert.side_effect = RuntimeError("grpc down")
+
+        await self._run_trigger(0.10)
+
+        self.dispatch.assert_awaited_once()
+        payload = self.dispatch.await_args.args[2]
+        self.assertNotIn("AI verdict", payload["message"])
+
+
+class PriceAlertShutdownTests(unittest.IsolatedAsyncioTestCase):
+    """``stop_stop_loss_monitor`` cancels in-flight verdict tasks."""
+
+    def setUp(self):
+        self.addCleanup(_reset_price_cache)
+        _reset_price_cache()
+
+    async def test_shutdown_cancels_and_clears_outstanding_tasks(self):
+        park = _make_park()
+        order = _sl_order(1, 1, "tok-1", 0.20)
+        db = MagicMock()
+        db.query.return_value.filter.return_value.first.return_value = None
+
+        with patch.object(
+            stop_loss_monitor,
+            "enrich_trigger_alert",
+            new=AsyncMock(side_effect=_park_side_effect(park)),
+        ):
+            await _check_one(db, order, 0.10)
+            await _drain()
+            tasks = list(stop_loss_monitor._price_alert_tasks)
+            self.assertEqual(len(tasks), 1)
+            self.assertFalse(tasks[0].done())
+
+            await stop_loss_monitor.stop_stop_loss_monitor()
+
+        self.assertTrue(all(task.done() for task in tasks))
+        self.assertTrue(all(task.cancelled() for task in tasks))
+        self.assertEqual(stop_loss_monitor._price_alert_tasks, set())
+
+    async def test_shutdown_without_price_alerts_is_a_noop(self):
+        stop_loss_monitor._monitor_task = None
+
+        await stop_loss_monitor.stop_stop_loss_monitor()
+
+        self.assertIsNone(stop_loss_monitor._monitor_task)
+        self.assertEqual(stop_loss_monitor._price_alert_tasks, set())
 
 
 if __name__ == "__main__":

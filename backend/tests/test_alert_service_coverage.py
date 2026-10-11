@@ -17,6 +17,7 @@ import socket
 import time
 import unittest
 from collections import deque
+from types import SimpleNamespace
 from unittest import mock
 
 from sqlalchemy import create_engine
@@ -584,6 +585,157 @@ class SingletonTests(unittest.TestCase):
         mock_service.dispatch.assert_awaited_once_with(
             "fill", 1, {"a": 1}, db=None, background=False, channel_ids_override=None
         )
+
+
+class GtcEventTypeTests(unittest.IsolatedAsyncioTestCase):
+    """GTC lifecycle events must validate and reach users (plan 03).
+
+    ``gtc_order_cancelled`` / ``gtc_order_filled`` were dispatched by
+    ``trade_monitor._emit_alert`` while missing from the catalog, so
+    ``dispatch`` raised ``ValueError`` and the caller's bare ``except``
+    swallowed it: those alerts were never delivered. The catalog now
+    contains them and these tests pin the delivery.
+    """
+
+    def setUp(self):
+        self.factory = _session_factory()
+        self.session = self.factory()
+
+    def tearDown(self):
+        self.session.close()
+
+    async def test_both_gtc_types_are_catalog_entries_with_labels(self):
+        for event_type in ("gtc_order_cancelled", "gtc_order_filled"):
+            self.assertIn(event_type, alert_mod.ALERT_EVENT_TYPES)
+            self.assertIn(event_type, alert_mod.EVENT_TYPE_LABELS)
+
+    async def test_gtc_types_have_an_explicit_storm_limit(self):
+        # A post-outage orphaned-GTC sweep emits one alert per reclaimed
+        # order, so these must not ride the 60/min default: the burst would
+        # push alerts past it and get them dropped mid-sweep.
+        service = _make_service(self.factory)
+        for event_type in ("gtc_order_filled", "gtc_order_cancelled"):
+            limit = alert_mod.EVENT_TYPE_RATE_LIMITS.get(event_type)
+            self.assertIsNotNone(limit, event_type)
+            self.assertLess(limit, alert_mod.DEFAULT_EVENT_TYPE_LIMIT)
+            allowed = [service._event_type_allowed(1, event_type) for _ in range(limit + 1)]
+            self.assertEqual(sum(allowed), limit)
+            self.assertFalse(allowed[-1])
+
+    async def test_message_formatting_uses_the_gtc_labels(self):
+        self.assertEqual(
+            format_alert_message("gtc_order_cancelled", {"message": "orphan cancelled"}),
+            "[Alert] GTC Order Cancelled\nmessage: orphan cancelled",
+        )
+        self.assertEqual(
+            format_alert_message("gtc_order_filled", {"message": "orphan filled"}),
+            "[Alert] GTC Order Filled\nmessage: orphan filled",
+        )
+
+    async def test_dispatch_delivers_a_cancelled_gtc_alert(self):
+        _add_channel(self.session, 1, "telegram")
+        service = _make_service(self.factory)
+        message = "Cancelled orphaned GTC order 0xdeadbeef… (pending > 86400s)"
+
+        with _patched_settings(), _patched_http() as fake_client:
+            result = await service.dispatch(
+                "gtc_order_cancelled",
+                1,
+                {"message": message},
+                db=self.session,
+                background=False,
+            )
+
+        self.assertEqual(result["status"], "dispatched")
+        body = fake_client.post.await_args.kwargs["json"]
+        self.assertIn("GTC Order Cancelled", body["text"])
+        self.assertIn(message, body["text"])
+
+    async def test_dispatch_delivers_a_filled_gtc_alert(self):
+        _add_channel(self.session, 1, "telegram")
+        service = _make_service(self.factory)
+        message = "Orphaned GTC order 0xdeadbeef… filled (pending > 86400s)"
+
+        with _patched_settings(), _patched_http() as fake_client:
+            result = await service.dispatch(
+                "gtc_order_filled",
+                1,
+                {"message": message},
+                db=self.session,
+                background=False,
+            )
+
+        self.assertEqual(result["status"], "dispatched")
+        self.assertIn(message, fake_client.post.await_args.kwargs["json"]["text"])
+
+    async def test_trade_monitor_emits_both_gtc_events_through_dispatch(self):
+        """End to end: ``_emit_alert`` → the real catalog-aware dispatcher."""
+        from app.services import trade_monitor
+
+        _add_channel(self.session, 1, "telegram")
+        service = _make_service(self.factory)
+        with (
+            _patched_settings(),
+            _patched_http() as fake_client,
+            mock.patch.object(alert_mod, "_alert_service", service),
+            mock.patch.object(trade_monitor, "_alert_dispatch", alert_dispatch),
+        ):
+            for event_type, message in (
+                ("gtc_order_cancelled", "cancelled orphaned order"),
+                ("gtc_order_filled", "filled orphaned order"),
+            ):
+                await trade_monitor._emit_alert(1, event_type, message)
+            # ``dispatch`` defaults to background delivery, so drain the
+            # spawned delivery tasks before asserting on the HTTP calls.
+            for task in list(service._background_tasks):
+                await task
+
+        bodies = [c.kwargs["json"]["text"] for c in fake_client.post.await_args_list]
+        self.assertEqual(len(bodies), 2)
+        self.assertIn("cancelled orphaned order", bodies[0])
+        self.assertIn("filled orphaned order", bodies[1])
+
+    async def test_price_alert_event_types_accept_a_verdict_payload(self):
+        """The stop-loss / take-profit payloads plan 03 dispatches are valid."""
+        from app.services.price_alert_service import (
+            TAKE_PROFIT_EVENT,
+            build_trigger_payload,
+        )
+
+        payload = build_trigger_payload(
+            SimpleNamespace(
+                id=1,
+                user_id=1,
+                token_id="tok-1",
+                market_id="cond-1",
+                market_title="Will BTC hit $150k?",
+                outcome="Yes",
+                size=120.0,
+            ),
+            event_type=TAKE_PROFIT_EVENT,
+            live_price=0.9,
+            trigger_condition="price >= target 0.7500",
+            verdict={
+                "verdict": "exit",
+                "thesis_changed": True,
+                "confidence": 0.8,
+                "driver": "news",
+                "reasoning": "Thesis is broken.",
+            },
+        )
+        _add_channel(self.session, 1, "telegram")
+        service = _make_service(self.factory)
+
+        with _patched_settings(), _patched_http() as fake_client:
+            result = await service.dispatch(
+                TAKE_PROFIT_EVENT, 1, payload, db=self.session, background=False
+            )
+
+        self.assertEqual(result["status"], "dispatched")
+        text = fake_client.post.await_args.kwargs["json"]["text"]
+        self.assertIn("Take-profit triggered", text)
+        self.assertIn("AI verdict: EXIT", text)
+        self.assertIn("Thesis is broken.", text)
 
 
 if __name__ == "__main__":

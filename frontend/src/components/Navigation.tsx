@@ -25,6 +25,8 @@ type PageId =
   | "trades"
   | "whales"
   | "latency-arb"
+  | "calibration"
+  | "analytics-risk"
   | "ops"
   | "settings"
   | "debug";
@@ -49,6 +51,8 @@ const navItems: { id: PageId; label: string; path: string }[] = [
   { id: "trades", label: "Trades", path: "/trades" },
   { id: "whales", label: "🐋 Whales", path: "/whales" },
   { id: "latency-arb", label: "⚡ Latency Arb", path: "/latency-arb" },
+  { id: "calibration", label: "AI Calibration", path: "/analytics/calibration" },
+  { id: "analytics-risk", label: "Risk Report", path: "/analytics/risk" },
   { id: "ops", label: "Ops Center", path: "/ops" },
   { id: "settings", label: "Settings", path: "/settings" },
   { id: "debug", label: "\u{1F527} Debug", path: "/debug" },

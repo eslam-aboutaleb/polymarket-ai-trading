@@ -93,6 +93,100 @@ def _build_llm_config(llm_config: dict[str, Any] | None):
         return None
 
 
+def _parse_ai_json(raw: str, defaults: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Extract the first JSON object from a free-text LLM response.
+
+    Every structured-verdict path in this client smuggles a JSON-schema
+    prompt through ``AnalyzeMarket.market_description`` and parses the
+    object back out of the response text. This is the single shared
+    implementation of that idiom so parse behaviour stays identical
+    across call sites.
+
+    Args:
+        raw: Raw LLM response text (may contain prose around the JSON).
+        defaults: Fallback dict returned when parsing fails.
+
+    Returns:
+        The parsed dict, or a copy of ``defaults`` (empty when omitted).
+    """
+    if not raw:
+        return dict(defaults or {})
+    json_match = re.search(r"\{[\s\S]*\}", raw)
+    if not json_match:
+        return dict(defaults or {})
+    try:
+        parsed = json.loads(json_match.group())
+    except json.JSONDecodeError:
+        return dict(defaults or {})
+    if not isinstance(parsed, dict):
+        return dict(defaults or {})
+    return parsed
+
+
+# Sentinel verdict for a price-alert response that carried no usable
+# JSON. It is not one of the prompt's verdicts: it tells
+# ``price_alert_service`` the answer was a fail-open default, so the
+# failure is counted instead of being persisted as a real "hold".
+UNUSABLE_VERDICT = "unknown"
+
+
+def _opt_float(value: Any) -> float | None:
+    """Coerce to a float strictly inside (0, 1); ``None`` when unusable.
+
+    Used for ``ai_probability`` so a missing or malformed forecast stays
+    absent (and is excluded from calibration aggregates) instead of
+    silently defaulting to a fake probability.
+
+    The strict interval is deliberate: a stated certainty of 0 or 1 is a
+    model claiming knowledge of an unresolved market, which is not a
+    forecast and cannot be scored against a resolution, so it is dropped
+    rather than clamped. ``forecast_recorder`` shares this rule verbatim
+    and filters its aggregates on ``ai_probability IS NOT NULL`` instead
+    of backfilling a neutral 0.5.
+    """
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    if 0.0 < num < 1.0:
+        return num
+    return None
+
+
+def _response_metadata(response: Any) -> dict[str, str]:
+    """Read the proto metadata map off a response (model/provider echo)."""
+    try:
+        return {str(k): str(v) for k, v in dict(response.metadata or {}).items()}
+    except Exception:
+        return {}
+
+
+def _parse_trailing_probability(analysis_text: str, meta: dict[str, Any]) -> float | None:
+    """Extract ``AI Probability: <0-100>`` from a copy-trade evaluation.
+
+    The prompt ends with three parseable trailer lines
+    (Recommendation / Confidence / AI Probability). Returns a float in
+    (0, 1), or None when the model omitted the line — never a fake
+    default, so calibration aggregates can exclude it.
+    """
+    raw = meta.get("ai_probability") or meta.get("probability")
+    if raw is None and analysis_text:
+        match = re.search(r"AI Probability:\s*([0-9]+(?:\.[0-9]+)?)", analysis_text)
+        if match:
+            raw = match.group(1)
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if value > 1.0:  # prompt emits a 0-100 percentage
+        value = value / 100.0
+    if 0.0 < value < 1.0:
+        return value
+    return None
+
+
 class AnalysisClient:
     """
     gRPC client for AI analysis services.
@@ -573,6 +667,7 @@ class AnalysisClient:
             result["recommendation"] = meta.get("recommendation", "copy")
             result["confidence"] = float(meta.get("confidence", 50))
             result["risk_level"] = meta.get("risk_level", "medium")
+            result["ai_probability"] = _parse_trailing_probability(result.get("analysis", ""), meta)
             return result
         except grpc.RpcError as e:
             raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}") from e
@@ -870,26 +965,23 @@ class AnalysisClient:
 
         request = analysis_pb2.MarketAnalysisRequest(**request_kwargs)
 
+        raw = ""
+        metadata: dict[str, str] = {}
         try:
             response = await stub.AnalyzeMarket(request, timeout=settings.grpc_timeout * 2)
             raw = response.analysis if response.success else ""
+            metadata = _response_metadata(response)
         except Exception:
             raw = ""
 
         # Parse JSON from LLM response
-        scored = {}
-        if raw:
-            json_match = re.search(r"\{[\s\S]*\}", raw)
-            if json_match:
-                try:
-                    scored = json.loads(json_match.group())
-                except json.JSONDecodeError:
-                    scored = {}
+        scored = _parse_ai_json(raw)
 
         return {
             "condition_id": condition_id,
             "market_title": market_title,
             "ai_score": int(scored.get("ai_score", 50)),
+            "ai_probability": _opt_float(scored.get("ai_probability")),
             "risk_level": scored.get("risk_level", "medium"),
             "pnl_potential": float(scored.get("pnl_potential", pnl_potential)),
             "credibility_score": int(scored.get("credibility_score", 50)),
@@ -903,6 +995,8 @@ class AnalysisClient:
             "reasoning": scored.get("reasoning", raw[:300] if raw else "Analysis unavailable"),
             "search_summary": scored.get("search_summary", ""),
             "key_risks": scored.get("key_risks", []),
+            "model": metadata.get("model", ""),
+            "provider": metadata.get("provider", "") or metadata.get("backend", ""),
         }
 
     async def scan_event_opportunity(
@@ -983,24 +1077,21 @@ class AnalysisClient:
 
         request = analysis_pb2.MarketAnalysisRequest(**request_kwargs)
 
+        raw = ""
+        metadata: dict[str, str] = {}
         try:
             response = await stub.AnalyzeMarket(request, timeout=settings.grpc_timeout * 2)
             raw = response.analysis if response.success else ""
+            metadata = _response_metadata(response)
         except Exception:
             raw = ""
 
-        scored = {}
-        if raw:
-            json_match = re.search(r"\{[\s\S]*\}", raw)
-            if json_match:
-                try:
-                    scored = json.loads(json_match.group())
-                except json.JSONDecodeError:
-                    scored = {}
+        scored = _parse_ai_json(raw)
 
         return {
             "event_title": event_title,
             "ai_score": int(scored.get("ai_score", 50)),
+            "ai_probability": _opt_float(scored.get("ai_probability")),
             "risk_level": scored.get("risk_level", "medium"),
             "pnl_potential": float(scored.get("pnl_potential", 0.5)),
             "credibility_score": int(scored.get("credibility_score", 50)),
@@ -1012,6 +1103,8 @@ class AnalysisClient:
             "reasoning": scored.get("reasoning", raw[:300] if raw else "Analysis unavailable"),
             "search_summary": scored.get("search_summary", ""),
             "key_risks": scored.get("key_risks", []),
+            "model": metadata.get("model", ""),
+            "provider": metadata.get("provider", "") or metadata.get("backend", ""),
         }
 
     async def scan_easy_trades(
@@ -1104,51 +1197,46 @@ class AnalysisClient:
             raw = ""
 
         results = []
-        if raw:
-            json_match = re.search(r"\{[\s\S]*\}", raw)
-            if json_match:
-                try:
-                    parsed = json.loads(json_match.group())
-                    easy_trades = parsed.get("easy_trades", [])
-                    if isinstance(easy_trades, list):
-                        for trade in easy_trades:
-                            if not isinstance(trade, dict):
-                                continue
-                            results.append(
-                                {
-                                    "condition_id": trade.get("condition_id", ""),
-                                    "market_title": trade.get("market_title", ""),
-                                    "ai_score": int(trade.get("ease_score", 50)),
-                                    "ease_score": int(trade.get("ease_score", 50)),
-                                    "risk_level": trade.get("risk_level", "medium"),
-                                    "pnl_potential": abs(float(trade.get("edge_estimate", 0))),
-                                    "credibility_score": int(trade.get("confidence", 0.5) * 100),
-                                    "smart_money_signal": "neutral",
-                                    "smart_money_summary": "",
-                                    "recommendation": (
-                                        "strong_buy"
-                                        if trade.get("ease_score", 0) >= 80
-                                        else "buy"
-                                        if trade.get("ease_score", 0) >= 60
-                                        else "hold"
-                                        if trade.get("ease_score", 0) >= 40
-                                        else "avoid"
-                                    ),
-                                    "recommended_side": trade.get("recommended_side", "YES"),
-                                    "recommended_option": trade.get("recommended_option", ""),
-                                    "reasoning": trade.get("reasoning", ""),
-                                    "search_summary": parsed.get("scan_summary", ""),
-                                    "key_risks": [],
-                                    "expected_probability": float(
-                                        trade.get("expected_probability", 0.5)
-                                    ),
-                                    "edge_estimate": float(trade.get("edge_estimate", 0)),
-                                    "confidence": float(trade.get("confidence", 0.5)),
-                                    "category": trade.get("category", "other"),
-                                }
-                            )
-                except json.JSONDecodeError:
-                    logger.warning("Failed to parse easy trade JSON response")
+        parsed = _parse_ai_json(raw)
+        if raw and not parsed:
+            logger.warning("Failed to parse easy trade JSON response")
+        if parsed:
+            easy_trades = parsed.get("easy_trades", [])
+            if isinstance(easy_trades, list):
+                for trade in easy_trades:
+                    if not isinstance(trade, dict):
+                        continue
+                    results.append(
+                        {
+                            "condition_id": trade.get("condition_id", ""),
+                            "market_title": trade.get("market_title", ""),
+                            "ai_score": int(trade.get("ease_score", 50)),
+                            "ease_score": int(trade.get("ease_score", 50)),
+                            "risk_level": trade.get("risk_level", "medium"),
+                            "pnl_potential": abs(float(trade.get("edge_estimate", 0))),
+                            "credibility_score": int(trade.get("confidence", 0.5) * 100),
+                            "smart_money_signal": "neutral",
+                            "smart_money_summary": "",
+                            "recommendation": (
+                                "strong_buy"
+                                if trade.get("ease_score", 0) >= 80
+                                else "buy"
+                                if trade.get("ease_score", 0) >= 60
+                                else "hold"
+                                if trade.get("ease_score", 0) >= 40
+                                else "avoid"
+                            ),
+                            "recommended_side": trade.get("recommended_side", "YES"),
+                            "recommended_option": trade.get("recommended_option", ""),
+                            "reasoning": trade.get("reasoning", ""),
+                            "search_summary": parsed.get("scan_summary", ""),
+                            "key_risks": [],
+                            "expected_probability": float(trade.get("expected_probability", 0.5)),
+                            "edge_estimate": float(trade.get("edge_estimate", 0)),
+                            "confidence": float(trade.get("confidence", 0.5)),
+                            "category": trade.get("category", "other"),
+                        }
+                    )
 
         # Sort by ease_score descending
         results.sort(key=lambda x: x.get("ease_score", 0), reverse=True)
@@ -1243,23 +1331,18 @@ class AnalysisClient:
         request = analysis_pb2.MarketAnalysisRequest(**request_kwargs)
 
         raw = ""
+        metadata: dict[str, str] = {}
         try:
             response = await stub.AnalyzeMarket(
                 request,
                 timeout=settings.grpc_timeout * 2,
             )
             raw = response.analysis if response.success else ""
+            metadata = _response_metadata(response)
         except Exception:
             raw = ""
 
-        parsed = {}
-        if raw:
-            json_match = re.search(r"\{[\s\S]*\}", raw)
-            if json_match:
-                try:
-                    parsed = json.loads(json_match.group())
-                except json.JSONDecodeError:
-                    parsed = {}
+        parsed = _parse_ai_json(raw)
 
         analysis_text = str(parsed.get("analysis", "")).strip()
         if not analysis_text:
@@ -1269,6 +1352,9 @@ class AnalysisClient:
             "analysis": analysis_text,
             "recommended_option": str(parsed.get("recommended_option", "")).strip(),
             "recommended_side": str(parsed.get("recommended_side", "")).strip(),
+            "ai_probability": _opt_float(parsed.get("ai_probability")),
+            "model": metadata.get("model", ""),
+            "provider": metadata.get("provider", "") or metadata.get("backend", ""),
         }
 
     # ── NEW: Sentiment Analysis ────────────────────────────────
@@ -1412,6 +1498,444 @@ class AnalysisClient:
             }
         except grpc.RpcError as e:
             raise RuntimeError(f"gRPC error: {e.code()}: {e.details()}") from e
+
+    # ── Daily Portfolio Digest (plan 02) ─────────────────────────
+
+    async def generate_daily_digest(
+        self,
+        date: str,
+        start_value: str,
+        current_value: str,
+        positions_json: str,
+        events: str,
+        llm_config: dict[str, Any] | None = None,
+    ) -> str:
+        """
+        Render the daily portfolio digest prompt and return article prose.
+
+        One AnalyzeMarket call with include_research=False (the digest is
+        a summary product, not a research product) with the fully-rendered
+        prompt smuggled through market_description.
+
+        Tier note: like every other structured-verdict path here, the
+        prompt has no dedicated RPC and rides AnalyzeMarket, so it
+        currently runs at ``market_assessment``'s STRONG tier (see
+        ``TASK_TIERS``) until one exists.
+        """
+        from app.grpc_clients import analysis_pb2
+
+        prompts = _load_prompts()
+        template = prompts.get("monitoring", {}).get("daily_portfolio_summary", "")
+        if template:
+            enriched_desc = template.format(
+                date=date,
+                start_value=start_value,
+                current_value=current_value,
+                positions=positions_json,
+                events=events,
+            )
+        else:
+            enriched_desc = (
+                f"Date: {date}\n\nStart value: {start_value}\n"
+                f"Current value: {current_value}\n\nPositions:\n{positions_json}\n\n"
+                f"Events:\n{events}\n\n"
+                "Write a concise daily portfolio report: P&L summary, key movers, "
+                "upcoming catalysts, and 2-3 actionable points for tomorrow."
+            )
+
+        stub = await self._get_stub()
+        request_kwargs = {
+            "market_title": f"Daily Portfolio Digest — {date}",
+            "market_description": enriched_desc,
+            "yes_price": 0.5,
+            "no_price": 0.5,
+            "volume_24h": 0,
+            "end_date": "",
+            "include_research": False,
+        }
+        proto_llm_config = _build_llm_config(llm_config)
+        if proto_llm_config is not None:
+            request_kwargs["llm_config"] = proto_llm_config
+
+        request = analysis_pb2.MarketAnalysisRequest(**request_kwargs)
+
+        try:
+            response = await stub.AnalyzeMarket(
+                request,
+                timeout=settings.grpc_timeout * 2,
+            )
+            text = response.analysis if response.success else ""
+        except Exception:
+            text = ""
+        return text.strip()
+
+    # ── Price-Alert AI Verdicts (plan 03) ────────────────────────
+
+    async def analyze_price_alert(
+        self,
+        market_title: str,
+        position: str,
+        trigger_condition: str,
+        current_price: str,
+        price_change: str,
+        condition_id: str = "",
+        llm_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Generate an LLM verdict for a triggered price alert.
+
+        Renders the monitoring.price_alert_analysis prompt (JSON schema:
+        verdict / thesis_changed / confidence / driver / reasoning) through
+        AnalyzeMarket with include_research=True — the prompt needs news
+        context to distinguish a news-driven move from noise.
+
+        Tier note: with no dedicated RPC, the prompt is smuggled through
+        AnalyzeMarket's ``market_description`` like the other structured
+        verdict paths, so this call currently runs at ``market_assessment``'s
+        STRONG tier (see ``TASK_TIERS``) until a price-alert RPC exists.
+
+        Fail-open: on any error the caller receives verdict="hold" with
+        confidence 0.0 so the un-enriched alert still fires. When the
+        response carries no usable JSON at all, the verdict is
+        ``UNUSABLE_VERDICT`` instead, so ``price_alert_service`` counts a
+        failure rather than persisting the default "hold" as if the model
+        had actually recommended it.
+        """
+        from app.grpc_clients import analysis_pb2
+
+        prompts = _load_prompts()
+        template = prompts.get("monitoring", {}).get("price_alert_analysis", "")
+        if template:
+            enriched_desc = template.format(
+                market_title=market_title,
+                position=position,
+                trigger_condition=trigger_condition,
+                current_price=current_price,
+                price_change=price_change,
+            )
+        else:
+            enriched_desc = (
+                f"Market: {market_title}\nPosition: {position}\n"
+                f"Trigger: {trigger_condition}\nCurrent price: ${current_price}\n"
+                f"Price change: {price_change}%\n\n"
+                'Respond with ONLY JSON: {"verdict": "hold"|"add"|"reduce"|"exit", '
+                '"thesis_changed": false, "confidence": 0.0, '
+                '"driver": "news"|"technical"|"mixed", "reasoning": "..."}'
+            )
+
+        stub = await self._get_stub()
+        request_kwargs = {
+            "market_title": market_title,
+            "market_description": enriched_desc,
+            "yes_price": 0.5,
+            "no_price": 0.5,
+            "volume_24h": 0,
+            "end_date": "",
+            "include_research": True,
+        }
+        proto_llm_config = _build_llm_config(llm_config)
+        if proto_llm_config is not None:
+            request_kwargs["llm_config"] = proto_llm_config
+
+        request = analysis_pb2.MarketAnalysisRequest(**request_kwargs)
+
+        raw = ""
+        try:
+            response = await stub.AnalyzeMarket(
+                request,
+                timeout=settings.grpc_timeout * 2,
+            )
+            raw = response.analysis if response.success else ""
+        except Exception:
+            raw = ""
+
+        parsed = _parse_ai_json(raw)
+        if not parsed:
+            # Empty or unparseable answer: fail open with the documented
+            # defaults, but mark them unusable so the caller can tell a
+            # silent default from the model's own recommendation.
+            return {
+                "condition_id": condition_id,
+                "verdict": UNUSABLE_VERDICT,
+                "thesis_changed": False,
+                "confidence": 0.0,
+                "driver": "unknown",
+                "reasoning": "",
+            }
+        verdict = str(parsed.get("verdict", "hold")).lower()
+        if verdict not in ("hold", "add", "reduce", "exit"):
+            verdict = "hold"
+        return {
+            "condition_id": condition_id,
+            "verdict": verdict,
+            "thesis_changed": bool(parsed.get("thesis_changed", False)),
+            "confidence": float(parsed.get("confidence", 0.0) or 0.0),
+            "driver": str(parsed.get("driver", "mixed")),
+            "reasoning": str(parsed.get("reasoning", "")),
+        }
+
+    # ── Portfolio Risk Report (plan 04) ──────────────────────────
+
+    async def generate_risk_report(
+        self,
+        positions_json: str,
+        llm_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Generate the AI half of the portfolio risk report.
+
+        Renders risk_management.portfolio_risk_report (prose sections)
+        through AnalyzeMarket with include_research=False. Returns the
+        raw report text; deterministic metrics are computed by the caller.
+        """
+        from app.grpc_clients import analysis_pb2
+
+        prompts = _load_prompts()
+        template = prompts.get("risk_management", {}).get("portfolio_risk_report", "")
+        if template:
+            enriched_desc = template.format(positions_json=positions_json)
+        else:
+            enriched_desc = (
+                f"Analyze the user's portfolio risk:\n\nPositions: {positions_json}\n\n"
+                "Provide: overall risk rating, VaR estimate, concentration flags, "
+                "correlated exposure, upcoming catalysts, tail-risk scenarios, hedges."
+            )
+
+        stub = await self._get_stub()
+        request_kwargs = {
+            "market_title": "Portfolio Risk Report",
+            "market_description": enriched_desc,
+            "yes_price": 0.5,
+            "no_price": 0.5,
+            "volume_24h": 0,
+            "end_date": "",
+            "include_research": False,
+        }
+        proto_llm_config = _build_llm_config(llm_config)
+        if proto_llm_config is not None:
+            request_kwargs["llm_config"] = proto_llm_config
+
+        request = analysis_pb2.MarketAnalysisRequest(**request_kwargs)
+
+        try:
+            response = await stub.AnalyzeMarket(
+                request,
+                timeout=settings.grpc_timeout * 3,
+            )
+            text = response.analysis if response.success else ""
+        except Exception:
+            text = ""
+        return {"report": text.strip(), "success": bool(text.strip())}
+
+    # ── Event-group Easy Trades (plan 06) ───────────────────────
+
+    async def scan_event_easy_trades(
+        self,
+        events: list,
+        max_results: int = 10,
+        llm_config: dict[str, Any] | None = None,
+    ) -> list:
+        """
+        Batch-scan EVENT GROUPS to identify the easiest/most obvious
+        per-option trades (the event-level counterpart of
+        ``scan_easy_trades``).
+
+        Sends all event groups in ONE AnalyzeMarket call with
+        include_research=False (easy trades are common-knowledge scans,
+        not research products) and returns a ranked list. Each entry
+        keeps its sub-market ``condition_id`` so the frontend can merge
+        the score onto the specific option inside the group.
+        """
+        from app.grpc_clients import analysis_pb2
+
+        prompts = _load_prompts()
+        system_prompt = (
+            prompts.get("easy_trade_analysis", {}).get("system_prompt", "")
+            or "You are an expert prediction market analyst. Respond with ONLY valid JSON."
+        )
+        scoring_template = prompts.get("easy_trade_analysis", {}).get("event_batch_scoring", "")
+
+        # Build a markdown table of event groups (sub-markets as rows).
+        table_lines = [
+            "| Event | Option | Condition ID | YES Price | NO Price | 24h Volume | Liquidity |",
+            "|-------|--------|--------------|-----------|----------|------------|-----------|",
+        ]
+        for event in events[:20]:
+            title = str(event.get("event_title") or event.get("title") or "Unknown")[:70]
+            sub_markets = event.get("sub_markets") or []
+            for sm in sub_markets[:20]:
+                label = sm.get("label", sm.get("question", "Unknown"))
+                cid = sm.get("condition_id", "")
+                yes_p = float(sm.get("yes_price", 0.5) or 0.5)
+                no_p = float(sm.get("no_price", 0.5) or 0.5)
+                vol = float(sm.get("volume_24h", 0) or 0)
+                liq = float(sm.get("liquidity", 0) or 0)
+                table_lines.append(
+                    f"| {title} | {label} | {cid} | {yes_p * 100:.1f}¢ "
+                    f"| {no_p * 100:.1f}¢ | ${vol:,.0f} | ${liq:,.0f} |"
+                )
+        events_table = "\n".join(table_lines)
+
+        if scoring_template:
+            enriched_desc = scoring_template.format(
+                events_table=events_table,
+                max_results=max_results,
+            )
+        else:
+            enriched_desc = (
+                f"NEWEST EVENT GROUPS:\n{events_table}\n\n"
+                f"Return the top easiest trades (up to {max_results}) as JSON: "
+                '{"easy_trades": [{"condition_id": "", "market_title": "", '
+                '"recommended_option": "", "ease_score": 50, "recommended_side": "YES", '
+                '"ai_probability": 0.5, "expected_probability": 0.5, "edge_estimate": 0, '
+                '"confidence": 0.5, "reasoning": "", "risk_level": "medium", '
+                '"category": "other"}], "scan_summary": ""}'
+            )
+
+        full_description = f"{system_prompt}\n\n{enriched_desc}"
+
+        stub = await self._get_stub()
+        first_price = 0.5
+        for event in events:
+            for sm in event.get("sub_markets") or []:
+                first_price = float(sm.get("yes_price", 0.5) or 0.5)
+                break
+            break
+        request_kwargs = {
+            "market_title": f"Event Easy Trade Scan — {len(events)} event groups",
+            "market_description": full_description,
+            "yes_price": first_price,
+            "no_price": 1.0 - first_price,
+            "volume_24h": 0,
+            "end_date": "",
+            "include_research": False,
+        }
+        proto_llm_config = _build_llm_config(llm_config)
+        if proto_llm_config is not None:
+            request_kwargs["llm_config"] = proto_llm_config
+
+        request = analysis_pb2.MarketAnalysisRequest(**request_kwargs)
+
+        raw = ""
+        metadata: dict[str, str] = {}
+        try:
+            response = await stub.AnalyzeMarket(
+                request,
+                timeout=settings.grpc_timeout * 2,
+            )
+            raw = response.analysis if response.success else ""
+            metadata = _response_metadata(response)
+        except Exception as e:
+            logger.error("Event easy trade scan gRPC failed: %s", e)
+            raw = ""
+
+        results = []
+        parsed = _parse_ai_json(raw)
+        if raw and not parsed:
+            logger.warning("Failed to parse event easy trade JSON response")
+        if parsed:
+            easy_trades = parsed.get("easy_trades", [])
+            if isinstance(easy_trades, list):
+                for trade in easy_trades:
+                    if not isinstance(trade, dict):
+                        continue
+                    ease = int(trade.get("ease_score", 50))
+                    results.append(
+                        {
+                            "condition_id": trade.get("condition_id", ""),
+                            "market_title": trade.get("market_title", ""),
+                            "ai_score": ease,
+                            "ai_probability": _opt_float(trade.get("ai_probability")),
+                            "ease_score": ease,
+                            "risk_level": trade.get("risk_level", "medium"),
+                            "pnl_potential": abs(float(trade.get("edge_estimate", 0))),
+                            "credibility_score": int(trade.get("confidence", 0.5) * 100),
+                            "smart_money_signal": "neutral",
+                            "smart_money_summary": "",
+                            "recommendation": (
+                                "strong_buy"
+                                if ease >= 80
+                                else "buy"
+                                if ease >= 60
+                                else "hold"
+                                if ease >= 40
+                                else "avoid"
+                            ),
+                            "recommended_side": trade.get("recommended_side", "YES"),
+                            "recommended_option": trade.get("recommended_option", ""),
+                            "reasoning": trade.get("reasoning", ""),
+                            "search_summary": parsed.get("scan_summary", ""),
+                            "key_risks": [],
+                            "expected_probability": float(trade.get("expected_probability", 0.5)),
+                            "edge_estimate": float(trade.get("edge_estimate", 0)),
+                            "confidence": float(trade.get("confidence", 0.5)),
+                            "category": trade.get("category", "other"),
+                            "model": metadata.get("model", ""),
+                            "provider": metadata.get("provider", "") or metadata.get("backend", ""),
+                        }
+                    )
+
+        results.sort(key=lambda x: x.get("ease_score", 0), reverse=True)
+        return results[:max_results]
+
+    # ── Research Credibility Synthesis (plan 06) ────────────────
+
+    async def synthesize_research(
+        self,
+        market_question: str,
+        findings_json: str,
+        llm_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Synthesize a batch of research findings into a credibility-aware
+        analysis (consensus, disagreements, base-rate anchor, calibrated
+        probability).
+
+        One AnalyzeMarket call with include_research=False and the
+        fully-rendered prompt smuggled through market_description.
+        """
+        from app.grpc_clients import analysis_pb2
+
+        prompts = _load_prompts()
+        template = prompts.get("research", {}).get("synthesize_research", "")
+        if template:
+            enriched_desc = template.format(
+                market_question=market_question,
+                research_findings=findings_json,
+            )
+        else:
+            enriched_desc = (
+                f"Synthesize the research findings for: {market_question}\n\n"
+                f"Findings:\n{findings_json}\n\n"
+                "Provide: key consensus, disagreements, base-rate anchor, "
+                "calibrated probability, information gaps."
+            )
+
+        stub = await self._get_stub()
+        request_kwargs = {
+            "market_title": f"Research synthesis — {market_question[:80]}",
+            "market_description": enriched_desc,
+            "yes_price": 0.5,
+            "no_price": 0.5,
+            "volume_24h": 0,
+            "end_date": "",
+            "include_research": False,
+        }
+        proto_llm_config = _build_llm_config(llm_config)
+        if proto_llm_config is not None:
+            request_kwargs["llm_config"] = proto_llm_config
+
+        request = analysis_pb2.MarketAnalysisRequest(**request_kwargs)
+
+        try:
+            response = await stub.AnalyzeMarket(
+                request,
+                timeout=settings.grpc_timeout * 2,
+            )
+            text = response.analysis if response.success else ""
+        except Exception:
+            text = ""
+        return {"report": text.strip(), "success": bool(text.strip())}
 
 
 # Client factory for dependency injection

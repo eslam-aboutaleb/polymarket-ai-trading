@@ -20,6 +20,7 @@ from app.api.routes import (
     auth,
     backtesting,
     binance_signals,
+    calibration,
     credentials,
     debug,
     health,
@@ -30,6 +31,7 @@ from app.api.routes import (
     news,
     notifications,
     portfolio,
+    risk_report,
     trades,
     whales,
 )
@@ -266,6 +268,11 @@ async def lifespan(app: FastAPI):
 
         await start_news_generator()
 
+        # Start the daily portfolio digest scheduler (plan 02)
+        from app.services.daily_report_service import start_daily_report_service
+
+        await start_daily_report_service()
+
         # Start on-chain whale monitor (CTF events)
         from app.services.ctf_events_service import start_ctf_events_monitor
 
@@ -283,6 +290,16 @@ async def lifespan(app: FastAPI):
         )
 
         await start_latency_arb_engine()
+
+        # Start hourly equity-snapshot writer (plan 05)
+        from app.services.equity_snapshot_service import start_equity_snapshot_service
+
+        await start_equity_snapshot_service()
+
+        # Start the forecast-resolution job (plan 01)
+        from app.services.forecast_resolution import start_forecast_resolution
+
+        await start_forecast_resolution()
 
         # Dead-man's switch watchdog: alerts when a scheduler
         # heartbeat goes stale (e.g. a monitor crashed without
@@ -380,6 +397,17 @@ async def lifespan(app: FastAPI):
             "app.services.latency_arb_service",
             "stop_latency_arb_engine",
         ),
+        ("daily_report_service", "app.services.daily_report_service", "stop_daily_report_service"),
+        (
+            "equity_snapshot_service",
+            "app.services.equity_snapshot_service",
+            "stop_equity_snapshot_service",
+        ),
+        (
+            "forecast_resolution",
+            "app.services.forecast_resolution",
+            "stop_forecast_resolution",
+        ),
         ("analysis_client", "app.grpc_clients.analysis_client", "close_shared_channels"),
     ]
     for label, module_path, attr in shutdown_hooks:
@@ -454,7 +482,9 @@ app.add_middleware(RequestLogMiddleware)
 app.include_router(auth.router)
 app.include_router(credentials.router)
 app.include_router(analysis.router)
+app.include_router(calibration.router)
 app.include_router(portfolio.router)
+app.include_router(risk_report.router)
 app.include_router(settings_routes.router)
 app.include_router(trades.router)
 app.include_router(markets.router)

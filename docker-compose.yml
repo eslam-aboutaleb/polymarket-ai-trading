@@ -63,6 +63,9 @@ services:
       # ChromaDB RAG (vector search for market discovery)
       RAG_ENABLED: ${RAG_ENABLED:-true}
       CHROMA_PERSIST_DIR: /app/data/chroma
+      # Research MCP: Binance Skills enrichment is gated by this env var in
+      # the shared client, so it also covers cli-agent.
+      BINANCE_SKILLS_ENABLED: ${BINANCE_SKILLS_ENABLED:-true}
     volumes:
       - ./prompts:/app/prompts:ro
       - llm_chain_chroma:/app/data/chroma
@@ -82,16 +85,14 @@ services:
     environment:
       GRPC_PORT: 50052
       PROMPTS_PATH: /app/prompts/prompts.json
-      MCP_CONFIG_PATH: /app/mcp-config.json
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       # GitHub Models API (uses GITHUB_TOKEN for auth)
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GITHUB_MODEL: ${GITHUB_MODEL:-gpt-4o-mini}
       # Fallback: OpenAI API (if no GITHUB_TOKEN)
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      # MCP tool API keys
-      POLYMARKET_PRIVATE_KEY: ${POLYMARKET_PRIVATE_KEY:-}
-      POLYMARKET_CHAIN_ID: ${POLYMARKET_CHAIN_ID:-137}
+      # Research MCP: Binance Skills enrichment gate (shared with llm-chain)
+      BINANCE_SKILLS_ENABLED: ${BINANCE_SKILLS_ENABLED:-true}
     volumes:
       - ./prompts:/app/prompts:ro
     healthcheck:

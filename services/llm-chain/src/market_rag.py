@@ -10,6 +10,27 @@ Features:
 - Multi-query RAG: generate N paraphrased queries for better recall
 - Semantic filtering for opportunity discovery
 - TTL-based auto-refresh of the index
+
+Read path status (tracked gap)
+------------------------------
+RAG is currently **write-only**: the only consumer of this service is the
+``IndexMarketsRAG`` gRPC handler, which indexes. ``search()`` and
+``multi_query_search()`` have no call sites in the repo, so indexed vectors are
+written but never read. ``settings.rag_enabled`` now gates both directions, and
+both read entry points short-circuit on it *before* any LLM or embedding call,
+so a deployment with RAG disabled pays nothing on a future read path either.
+
+Follow-up (deliberately out of scope here): wire ``search()`` into a read path,
+e.g. RAG-augmented ``DiscoverBestTrade``. Call-site map for whoever picks that
+up:
+
+* ``services/llm-chain/src/server.py`` — gRPC servicer; ``IndexMarketsRAG``
+  (index write) and ``DiscoverBestTrade`` (candidate read path) both live here.
+* ``services/llm-chain/src/market_rag.py`` — this module; the two read
+  entry points plus ``get_collection_size`` / ``clear``.
+* ``services/llm-chain/src/analysis_chain.py`` — the analysis chain, which
+  builds its own research context and would be the natural place to inject
+  retrieved markets into a prompt.
 """
 
 from __future__ import annotations
@@ -208,6 +229,9 @@ class MarketRAGService:
         Returns:
             List of dicts with keys: condition_id, question, score, metadata.
         """
+        if not self.settings.rag_enabled:
+            return []
+
         if not self._init_chroma():
             return []
 
@@ -266,7 +290,14 @@ class MarketRAGService:
         then union the results for better recall.
 
         Inspired by Polymarket/agents multi-query technique.
+
+        Short-circuits on ``rag_enabled=false`` *before* the paraphrase LLM
+        call: widening to N queries only helps if there is an index to read,
+        so a disabled deployment must not pay for embeddings it will not use.
         """
+        if not self.settings.rag_enabled:
+            return []
+
         from src.analysis_chain import PromptManager
 
         prompts = PromptManager()

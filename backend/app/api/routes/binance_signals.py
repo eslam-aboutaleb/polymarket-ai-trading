@@ -1,11 +1,18 @@
 """Binance Skills Hub API routes — exposes smart money signals,
-social hype rankings, and token market data to the frontend dashboard."""
+social hype rankings, and token market data to the frontend dashboard.
+
+The chain map is the canonical one shipped in ``services/shared/binance_chains``
+so this dashboard path and the AI-path research module can never disagree again
+(they used to send different chain ids for Solana; see that module's docstring
+for the verified value and the upstream divergence still tracked there).
+"""
 
 import logging
 import time
 from typing import Any
 
 import httpx
+from binance_chains import chain_to_platform
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
@@ -36,52 +43,11 @@ def _cache_set(key: str, value: Any) -> None:
 
 
 # ── Supported chains ────────────────────────────────────────────────
-SUPPORTED_CHAINS = {
-    "ethereum": "1",
-    "polygon": "137",
-    "bsc": "56",
-    "arbitrum": "42161",
-    "base": "8453",
-    "solana": "501",
-}
-
+# Canonical map lives in services/shared/binance_chains (mounted at
+# /app/shared) so this dashboard path and the AI-path research module
+# agree on every chain id, Solana included.
 
 # ── Response schemas ────────────────────────────────────────────────
-
-
-class SmartMoneySignal(BaseModel):
-    token_address: str = ""
-    token_symbol: str = ""
-    token_name: str = ""
-    chain: str = ""
-    signal_type: str = ""
-    buy_count: int = 0
-    sell_count: int = 0
-    net_flow_usd: float = 0.0
-    smart_money_holders: int = 0
-    icon_url: str = ""
-
-
-class SocialHypeToken(BaseModel):
-    token_symbol: str = ""
-    token_name: str = ""
-    rank: int = 0
-    mentions: int = 0
-    sentiment_score: float = 0.0
-    price_change_24h: float = 0.0
-    icon_url: str = ""
-
-
-class TrendingToken(BaseModel):
-    token_symbol: str = ""
-    token_name: str = ""
-    rank: int = 0
-    chain: str = ""
-    price_usd: float = 0.0
-    price_change_24h: float = 0.0
-    volume_24h: float = 0.0
-    market_cap: float = 0.0
-    icon_url: str = ""
 
 
 class BinanceDashboardResponse(BaseModel):
@@ -167,7 +133,7 @@ async def get_smart_money_signals(
     if not settings.binance_skills_enabled:
         raise HTTPException(status_code=503, detail="Binance Skills integration is disabled")
 
-    chain_id = SUPPORTED_CHAINS.get(chain.lower(), "1")
+    chain_id = chain_to_platform(chain)
     payload = {
         "chainId": chain_id,
         "type": "ALL",
@@ -196,7 +162,7 @@ async def get_active_buy_signals(
     if not settings.binance_skills_enabled:
         raise HTTPException(status_code=503, detail="Binance Skills integration is disabled")
 
-    chain_id = SUPPORTED_CHAINS.get(chain.lower(), "1")
+    chain_id = chain_to_platform(chain)
     payload = {
         "chainId": chain_id,
         "type": "BUY",
@@ -331,7 +297,7 @@ async def get_token_data(
     if not settings.binance_skills_enabled:
         raise HTTPException(status_code=503, detail="Binance Skills integration is disabled")
 
-    chain_id = SUPPORTED_CHAINS.get(chain.lower(), "1")
+    chain_id = chain_to_platform(chain)
     data = await _binance_post(
         "/bapi/defi/v1/public/wallet-direct/buw/wallet/web/token/dynamic-data",
         {"chainId": chain_id, "address": address},

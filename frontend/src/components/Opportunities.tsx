@@ -246,6 +246,15 @@ function getPolymarketUrl(market: MarketWithAnalysis): string | null {
   return buildPolymarketEventUrl(market._event_slug || slug, slug);
 }
 
+/**
+ * The number a board card and the "ease" sort rank on: the batch
+ * easy-trade score when the backend produced one, otherwise the
+ * market/event-level score.
+ */
+function optionScore(score?: OpportunityScore | null): number {
+  return score?.ease_score ?? score?.ai_score ?? 0;
+}
+
 function getMarketWatchKey(market: MarketWithAnalysis): string {
   return (
     market._event_slug ||
@@ -1138,11 +1147,14 @@ export default function Opportunities() {
   }, [eventGroups]);
 
   const bestGroupScore = (group: EventGroup<MarketWithAnalysis>) => {
+    // Rank on the same field the default "ease" sort uses: the batch
+    // easy-trade score when the backend produced one, otherwise the
+    // event-level score.
     let best: OpportunityScore | undefined;
     for (const market of group.markets) {
       if (
         market.opportunityScore &&
-        (!best || (market.opportunityScore.ai_score ?? 0) > (best.ai_score ?? 0))
+        (!best || optionScore(market.opportunityScore) > optionScore(best))
       ) {
         best = market.opportunityScore;
       }
@@ -1204,11 +1216,12 @@ export default function Opportunities() {
           isFavorite,
           aiSummary: score
             ? {
-                score: score.ease_score ?? score.ai_score ?? 0,
+                score: optionScore(score),
                 recommendation: score.edge_estimate
                   ? `${recLabel(score.recommendation ?? "hold")} (${Math.round((score.edge_estimate ?? 0) * 100)}% edge)`
                   : recLabel(score.recommendation ?? "hold"),
                 risk: (score.risk_level || "unknown").toUpperCase(),
+                credibility: score.credibility_score,
               }
             : undefined,
         };
@@ -1234,6 +1247,7 @@ export default function Opportunities() {
         };
       });
 
+      const bestOptionLabel = groupBest?.recommended_option || primaryResolved?.label || undefined;
       const card: MarketBoardCardVM = {
         id: group.eventSlug,
         source: "opportunities",
@@ -1245,15 +1259,18 @@ export default function Opportunities() {
         probabilityLabel: "chance",
         rows,
         footerMeta: `${fmtCompactUSD(group.eventVolume || group.eventVolume24hr)} Vol.`,
-        footerSubMeta: `${group.markets.length} options`,
+        footerSubMeta: bestOptionLabel
+          ? `${group.markets.length} options · ${bestOptionLabel}`
+          : `${group.markets.length} options`,
         isFavorite,
         aiSummary: groupBest
           ? {
-              score: groupBest.ease_score ?? groupBest.ai_score ?? 0,
+              score: optionScore(groupBest),
               recommendation: groupBest.edge_estimate
                 ? `${recLabel(groupBest.recommendation ?? "hold")} (${Math.round((groupBest.edge_estimate ?? 0) * 100)}% edge)`
                 : recLabel(groupBest.recommendation ?? "hold"),
               risk: (groupBest.risk_level || "unknown").toUpperCase(),
+              credibility: groupBest.credibility_score,
             }
           : undefined,
       };
@@ -1703,8 +1720,13 @@ export default function Opportunities() {
             selectedGroupBest ? (
               <div className="flex flex-col items-end gap-1">
                 <span className="chip chip-success px-2 py-0.5 text-[10px]">
-                  AI {(selectedGroupBest.ai_score ?? 0).toFixed(0)}
+                  Ease {optionScore(selectedGroupBest).toFixed(0)}
                 </span>
+                {typeof selectedGroupBest.credibility_score === "number" && (
+                  <span className="chip chip-warning px-2 py-0.5 text-[10px]">
+                    Cred {selectedGroupBest.credibility_score}
+                  </span>
+                )}
                 {(selectedGroupPrimary?.label || selectedGroupBest.recommended_option) && (
                   <span className="text-[10px] text-emerald-300 max-w-[140px] truncate">
                     {selectedGroupPrimary?.label || selectedGroupBest.recommended_option}

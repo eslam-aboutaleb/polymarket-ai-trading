@@ -391,15 +391,8 @@ class TradingAnalysisChain:
 
     async def _get_binance_context(self, market_title: str) -> str:
         """Fetch Binance smart money signals and market data for crypto-related markets."""
-        try:
-            from binance_skills_client import BinanceSkillsClient
-
-            client = BinanceSkillsClient()
-            return await client.get_research_context(market_title)
-        except ImportError:
-            pass
-
-        # Fallback: use the MCP server tool
+        # Intended path: the shared research-MCP Binance tool (no binance_skills_client
+        # module exists anywhere in the repo, so this is the only path that runs).
         try:
             research = await self.research_mcp._gather_binance_context(market_title)
             formatted = research.get("formatted", "")

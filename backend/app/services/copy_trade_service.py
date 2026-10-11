@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from time import time
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -1081,7 +1081,15 @@ async def execute_copy_trade(
         if recommendation in ("avoid", "skip"):
             logger.info("AI gate rejected copy trade for user %d: %s", user_id, recommendation)
             if trade_history_id:
-                _save_assessment(db, trade_history_id, assessment)
+                _save_assessment(
+                    db,
+                    trade_history_id,
+                    assessment,
+                    price=price,
+                    ai_probability=assessment.get("ai_probability"),
+                    model_name=assessment.get("model", ""),
+                    provider=assessment.get("provider", ""),
+                )
             rejected = _record_copy_trade_attempt(
                 db=db,
                 user_id=user_id,
@@ -1106,7 +1114,15 @@ async def execute_copy_trade(
 
     # Save assessment regardless
     if trade_history_id and assessment:
-        _save_assessment(db, trade_history_id, assessment)
+        _save_assessment(
+            db,
+            trade_history_id,
+            assessment,
+            price=price,
+            ai_probability=assessment.get("ai_probability"),
+            model_name=assessment.get("model", ""),
+            provider=assessment.get("provider", ""),
+        )
 
     # 5 – Ensure credentials exist before placing order
     if not stored and not user_settings.simulation_mode:
@@ -1235,9 +1251,44 @@ async def execute_copy_trade(
     return response
 
 
-def _save_assessment(db: Session, trade_history_id: int, assessment: dict[str, Any]):
-    """Persist an AI assessment linked to a trade_history record."""
+def _coerce_probability(value: Any) -> float | None:
+    """Coerce a 0-100 (or 0-1) probability into a float in (0, 1).
+
+    Returns None for anything unusable so calibration aggregates can
+    exclude the row instead of treating it as a 50% forecast.
+    """
+    if value is None:
+        return None
     try:
+        p = float(value)
+    except (TypeError, ValueError):
+        return None
+    if p > 1.0:
+        p = p / 100.0
+    if 0.0 < p < 1.0:
+        return p
+    return None
+
+
+def _save_assessment(
+    db: Session,
+    trade_history_id: int,
+    assessment: dict[str, Any],
+    price: float | None = None,
+    ai_probability: float | None = None,
+    model_name: str = "",
+    provider: str = "",
+    task: str = "copy_trade_eval",
+):
+    """Persist an AI assessment linked to a trade_history record.
+
+    The optional calibration fields (market price at assessment time,
+    AI probability, model/provider attribution) are recorded when
+    available and left NULL otherwise — forecast scoring only counts
+    rows that carry them (plan 01).
+    """
+    try:
+        metadata = assessment.get("metadata") or {}
         record = Assessment(
             trade_history_id=trade_history_id,
             ai_score=float(assessment.get("ai_score", assessment.get("confidence", 50))),
@@ -1246,6 +1297,16 @@ def _save_assessment(db: Session, trade_history_id: int, assessment: dict[str, A
             risk_level=assessment.get("risk_level", "medium"),
             market_sentiment=assessment.get("market_sentiment"),
             confidence=float(assessment.get("confidence", 50)),
+            market_price_at_assessment=price,
+            ai_probability=_coerce_probability(
+                ai_probability if ai_probability is not None else assessment.get("ai_probability")
+            ),
+            # Model attribution arrives nested under "metadata" from
+            # evaluate_copy_trade (the gRPC response map), not as a
+            # top-level key — reading it there keeps by_model honest.
+            model_name=model_name or metadata.get("model", ""),
+            provider=provider or metadata.get("provider", ""),
+            task=task,
         )
         db.add(record)
         db.commit()
@@ -1457,3 +1518,213 @@ async def execute_aggregated_trade(aggregated: dict) -> dict:
         return {"success": False, "error": str(e)}
     finally:
         db.close()
+
+
+# ────────────── Per-trader copy attribution (plan 07) ──────────────
+
+# Only these statuses represent an order that reached the exchange. The
+# unreconciled-sell count reuses the same predicate as
+# ``pnl_reconciliation.unreconciled_sell_count`` so both modules report the
+# same population when they disagree.
+_ATTRIBUTION_REALISED_STATUSES = ("executed", "filled")
+
+# Window used when the setting is missing or unusable.
+DEFAULT_COPY_ATTRIBUTION_WINDOW_DAYS = 30
+
+
+def _attribution_window_days(window_days: int | None) -> int:
+    """Resolve the attribution window in days, floored at one.
+
+    ``None`` means "use the configured default"
+    (``settings.copy_attribution_window_days``), which the UI selector
+    mirrors.
+    """
+    if window_days is None:
+        try:
+            window_days = int(get_settings().copy_attribution_window_days)
+        except (TypeError, ValueError):
+            window_days = DEFAULT_COPY_ATTRIBUTION_WINDOW_DAYS
+    return max(1, int(window_days))
+
+
+def _short_wallet(wallet: str) -> str:
+    """``0x1234...abcd`` fallback label for a wallet without an alias."""
+    if len(wallet) >= 10:
+        return f"{wallet[:6]}...{wallet[-4:]}"
+    return wallet
+
+
+def _trader_win_rate(wins: int, losses: int) -> float | None:
+    """Win rate over closed trades, or ``None`` when nothing has closed yet."""
+    closed = wins + losses
+    if closed <= 0:
+        return None
+    return round(wins / closed, 4)
+
+
+def _trader_aliases(db: Session, user_id: int, wallets: list[str]) -> dict[str, str]:
+    """``{lowercased wallet: alias}`` for wallets the user has an alias for.
+
+    Matching is case-insensitive because ``copied_from_wallet`` keeps the
+    casing of the monitored source trade while ``followed_traders`` rows are
+    written lowercased.
+    """
+    lowered = sorted({w.lower() for w in wallets if w})
+    if not lowered:
+        return {}
+    rows = (
+        db.query(
+            func.lower(FollowedTrader.trader_wallet).label("wallet"),
+            FollowedTrader.trader_alias,
+        )
+        .filter(
+            FollowedTrader.user_id == user_id,
+            func.lower(FollowedTrader.trader_wallet).in_(lowered),
+            FollowedTrader.trader_alias.isnot(None),
+        )
+        .all()
+    )
+    return {
+        row.wallet: alias.strip() for row in rows if (alias := row.trader_alias) and alias.strip()
+    }
+
+
+def get_trader_copy_stats(
+    db: Session,
+    user_id: int,
+    window_days: int | None = None,
+) -> dict[str, Any]:
+    """Realized PnL and win rate per copied trader over a rolling window.
+
+    Read-only with respect to ``UserTrade.pnl``: that column is owned by
+    ``app.services.pnl_reconciliation`` (FIFO lot matching) and every loss
+    circuit breaker depends on its exact semantics, so this function never
+    writes it.
+
+    The cohort is every copy trade the user executed inside the window,
+    grouped by ``UserTrade.copied_from_wallet`` and aggregated in SQL
+    (``func.sum`` / ``group_by``), mirroring
+    ``execution_analytics.get_strategy_stats``. The window filters on
+    ``executed_at`` rather than ``created_at`` because realized PnL is written
+    on the *closing* sell: a buy still open at the edge of the window has no
+    PnL yet and must not read as a loss.
+
+    Rows whose ``pnl`` is NULL are excluded from the PnL sums, the wins and
+    the losses — never coerced to 0. Two such populations exist and are kept
+    apart: buys with no closing sell yet count as ``open_positions``, and
+    sells that reached the exchange but were never reconciled are counted in
+    ``data_quality.unreconciled_sells`` so the attribution gap stays visible
+    instead of silently under-reporting a trader.
+
+    A third population is invisible to the window itself: rows with
+    ``executed_at IS NULL`` (legacy copy trades, or rows whose fill was never
+    recorded). They match neither the cohort's ``executed_at >= cutoff`` nor
+    ``data_quality.unreconciled_sells``, so without the extra
+    ``data_quality.missing_executed_at`` counter a user with only such rows
+    would see an empty attribution table indistinguishable from "no copy
+    trades yet".
+
+    Returns a payload shaped for ``GET /copy-trades/pnl/by-trader``:
+    ``{window_days, generated_at, traders: [...], totals: {...},
+    data_quality: {...}}`` with ``traders`` sorted by realized PnL, best
+    first.
+    """
+    from datetime import timedelta
+
+    days = _attribution_window_days(window_days)
+    cutoff = utc_now() - timedelta(days=days)
+
+    closed_win = case((UserTrade.pnl > 0, 1), else_=0)
+    closed_loss = case((UserTrade.pnl < 0, 1), else_=0)
+    still_open = case(((UserTrade.pnl.is_(None)) & (UserTrade.action == "buy"), 1), else_=0)
+    realized_pnl = func.coalesce(func.sum(UserTrade.pnl), 0.0)
+    # A wallet address is case-insensitive (checksum casing is cosmetic),
+    # and ``copied_from_wallet`` keeps the casing of the monitored source
+    # trade, so the same trader must never split into two rows.
+    wallet_key = func.lower(UserTrade.copied_from_wallet)
+
+    rows = (
+        db.query(
+            wallet_key.label("wallet"),
+            func.count(UserTrade.id).label("trade_count"),
+            realized_pnl.label("realized_pnl"),
+            func.coalesce(func.sum(closed_win), 0).label("wins"),
+            func.coalesce(func.sum(closed_loss), 0).label("losses"),
+            func.coalesce(func.sum(UserTrade.amount), 0.0).label("volume_usdc"),
+            func.coalesce(func.sum(still_open), 0).label("open_positions"),
+            func.max(UserTrade.executed_at).label("last_trade_at"),
+        )
+        .filter(
+            UserTrade.user_id == user_id,
+            UserTrade.copied_from_wallet.isnot(None),
+            UserTrade.executed_at >= cutoff,
+        )
+        .group_by(wallet_key)
+        .order_by(realized_pnl.desc(), wallet_key.asc())
+        .all()
+    )
+
+    aliases = _trader_aliases(db, user_id, [row.wallet for row in rows])
+
+    traders = [
+        {
+            "wallet": row.wallet,
+            "label": aliases.get(row.wallet.lower()) or _short_wallet(row.wallet),
+            "realized_pnl": round(float(row.realized_pnl or 0.0), 6),
+            "trade_count": int(row.trade_count or 0),
+            "wins": int(row.wins or 0),
+            "losses": int(row.losses or 0),
+            "win_rate": _trader_win_rate(int(row.wins or 0), int(row.losses or 0)),
+            "volume_usdc": round(float(row.volume_usdc or 0.0), 6),
+            "open_positions": int(row.open_positions or 0),
+            "last_trade_at": (row.last_trade_at.isoformat() if row.last_trade_at else None),
+        }
+        for row in rows
+    ]
+
+    unreconciled_sells = (
+        db.query(func.count(UserTrade.id))
+        .filter(
+            UserTrade.user_id == user_id,
+            UserTrade.copied_from_wallet.isnot(None),
+            UserTrade.executed_at >= cutoff,
+            UserTrade.action == "sell",
+            UserTrade.status.in_(_ATTRIBUTION_REALISED_STATUSES),
+            UserTrade.pnl.is_(None),
+        )
+        .scalar()
+    )
+
+    # Rows with no ``executed_at`` never entered the window above, so the
+    # cohort cannot see them at all. They are counted separately (no status
+    # or side filter: a row whose fill timestamp was never recorded is a gap
+    # whichever way it traded) so the UI can say "N copy trades have no fill
+    # timestamp and are missing from every figure here" instead of showing
+    # an empty table.
+    missing_executed_at = (
+        db.query(func.count(UserTrade.id))
+        .filter(
+            UserTrade.user_id == user_id,
+            UserTrade.copied_from_wallet.isnot(None),
+            UserTrade.executed_at.is_(None),
+        )
+        .scalar()
+    )
+
+    total_wins = sum(t["wins"] for t in traders)
+    total_losses = sum(t["losses"] for t in traders)
+
+    return {
+        "window_days": days,
+        "generated_at": utc_now().isoformat(),
+        "traders": traders,
+        "totals": {
+            "realized_pnl": round(sum(t["realized_pnl"] for t in traders), 6),
+            "trade_count": sum(t["trade_count"] for t in traders),
+            "win_rate": _trader_win_rate(total_wins, total_losses),
+        },
+        "data_quality": {
+            "unreconciled_sells": int(unreconciled_sells or 0),
+            "missing_executed_at": int(missing_executed_at or 0),
+        },
+    }

@@ -231,6 +231,9 @@ polymarket/
 │   ├── llm-chain/                LangChain gRPC microservice
 │   ├── cli-agent/                CLI-agent gRPC microservice
 │   ├── mcps/research/            MCP research server
+│   ├── shared/                   packages shared by the AI services
+│   │                             (polymarket_mcp, polymarket_settings,
+│   │                              binance_chains)
 │   └── proto/analysis.proto      shared gRPC contract
 │
 ├── prompts/                      prompt templates (prompts.json)
@@ -354,6 +357,17 @@ committed templates; real `.env` files are gitignored.
 `POLYMARKET_PRIVATE_KEY`, `POLYMARKET_CHAIN_ID`, `LOG_LEVEL`,
 `DEBUG_ENDPOINTS_ENABLED`, `DEBUG_LOG_HASH_SALT`, `ADMIN_SYNC_ALLOW_EMPTY`.
 
+#### Research MCP (AI services)
+
+| Variable | Default | Purpose |
+| -------- | ------- | ------- |
+| `BINANCE_SKILLS_ENABLED` | `true` | Single gate for Binance Skills enrichment on the AI path. Read directly by the shared MCP client, so one switch covers `llm-chain` and `cli-agent` (the backend dashboard path keeps its own settings field). |
+| `RESEARCH_MCP_SERVER_PATH` | *(unset)* | Absolute path to the research MCP server script. Unset means the client falls back to the container/local layouts. |
+| `RESEARCH_MCP_BATCH_ENABLED` | `true` | Batches all tool calls of one research pass into a single MCP subprocess (3 spawns → 1). Set `false` to fall back to one subprocess per call if the batched transport ever misbehaves. |
+
+Both AI services get `BINANCE_SKILLS_ENABLED` from `docker-compose.yml` /
+`docker-compose.prod.yml`; the other two variables are optional overrides.
+
 ### Frontend variables
 
 | Variable                        | Notes                                                          |
@@ -427,7 +441,9 @@ Interactive documentation is served at `/docs` (Swagger UI) and `/redoc`.
 `POST /quick-group` · `POST /scan` · `POST /risk` · `POST /trade-plan` ·
 `POST /trader` · `POST /trader/stream` · `POST /copy-trade-eval` ·
 `POST /opportunities/analyze-markets` · `POST /opportunities/stream` ·
-`GET /health`
+`GET /health` · `GET /calibration/summary` ·
+`GET /calibration/forecasts` (AI forecast accuracy: Brier score,
+reliability buckets, per-model/per-task breakdown)
 
 ### Markets — `/api/markets`
 `GET /search` · `GET /categories` · `GET /browse` ·
@@ -441,6 +457,8 @@ Interactive documentation is served at `/docs` (Swagger UI) and `/redoc`.
 `DELETE /notification-follow/{wallet}` · `GET /following` ·
 `GET /following-feed` · `GET /copy-trades` · `GET /copy-trades/pnl` ·
 `GET /copy-evaluation/{wallet}` · `POST /copy-trade-eval` ·
+`GET /copy-trades/pnl/by-trader` (per-trader realized PnL & win rate,
+`?window_days=` 1–365, default 30) ·
 `GET/POST /stop-loss` · `DELETE /stop-loss/{stop_loss_id}` ·
 `GET/POST /take-profit` · `DELETE /take-profit/{take_profit_id}` ·
 `GET /arbitrage/opportunities` · `POST /arbitrage/scan` ·
@@ -452,7 +470,8 @@ Interactive documentation is served at `/docs` (Swagger UI) and `/redoc`.
 `GET /balance` · `GET /positions` · `GET /positions/prices` ·
 `GET /summary` · `GET /markets` · `GET /markets/newest` ·
 `GET /markets/combined` · `GET /markets/prices` · `GET /prices/stream` ·
-`POST /redeem` · `GET /redemptions`
+`POST /redeem` · `GET /redemptions` · `GET /risk-report` ·
+`GET /equity/snapshots` · `GET /equity/summary`
 
 ### Settings — `/api/settings`
 `GET/PUT /` · `GET/PUT /copy-trading` · `GET /paper-summary` ·
@@ -595,6 +614,8 @@ Current shared abstractions worth knowing before adding code:
 
 - `services/shared/polymarket_mcp/` — the research MCP client used by both AI
   services (it was duplicated and had drifted).
+- `services/shared/binance_chains/` — the canonical Binance web3 chain-id map,
+  shared by the research MCP server and the backend dashboard routes.
 - `frontend/src/services/sseStream.ts` — SSE consumption shared by the analysis,
   markets and news clients.
 - `frontend/src/components/PriceTriggerModal.tsx` — the stop-loss and take-profit

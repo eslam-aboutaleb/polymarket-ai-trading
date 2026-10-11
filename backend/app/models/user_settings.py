@@ -133,6 +133,9 @@ class UserSettings(Base):
         default=False,
         nullable=False,
     )
+    # Scheduled daily portfolio digest (plan 02). Opt-out flag: when
+    # false the report is neither emailed nor dispatched to channels.
+    daily_digest_enabled = Column(Boolean, server_default="1", default=True, nullable=False)
 
     # ── Multi-Layer Risk Protection ─────────────────────
     monthly_loss_limit = Column(Float, nullable=True)  # USDC rolling-30-day loss cap
