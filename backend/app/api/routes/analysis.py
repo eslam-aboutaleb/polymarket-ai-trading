@@ -1,6 +1,7 @@
 """AI Analysis API routes for trading recommendations."""
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections import OrderedDict
@@ -15,9 +16,15 @@ from app.api.routes.auth import get_current_user_from_token, get_optional_user_f
 from app.config import AIBackend, get_settings
 from app.grpc_clients.analysis_client import AnalysisClient
 from app.models.user_settings import AIBackendType, UserSettings
+from app.services.forecast_recorder import record_verdict
 from app.services.leaderboard_service import fetch_trader_trades
 from app.services.llm_gateway import get_llm_gateway
 from app.services.polymarket_service import get_polymarket_service
+from app.services.research_quality import (
+    BatchCredibility,
+    GroupEvidence,
+    score_batch_credibility,
+)
 from app.utils.cache import opportunity_cache
 from app.utils.database import get_db
 from app.utils.time import utc_now
@@ -714,6 +721,402 @@ def _group_markets_by_event(markets: list) -> list:
     return list(groups.values())
 
 
+# ────────────── Shared event-group scoring ──────────────────────
+
+#: Easy-trade entries returned by the batch pre-scan. Small on purpose:
+#: the board ranks by ease, and a long tail of near-identical options
+#: drowns the obvious one.
+_EASY_TRADE_MAX_RESULTS = 10
+
+#: Easy-trade fields merged onto a group's event score BEFORE the
+#: per-sub-market fan-out. The event scan keeps its event-level verdict
+#: (ai_score / risk_level / recommendation / reasoning); the batch call
+#: contributes the per-option view of the single best option, which is
+#: what the frontend board ranks on. ``ai_probability`` is the option's
+#: own forecast, so it replaces the event-wide one.
+_EASY_TRADE_FLOAT_FIELDS = (
+    "ai_probability",
+    "edge_estimate",
+    "expected_probability",
+    "confidence",
+)
+_EASY_TRADE_INT_FIELDS = ("ease_score",)
+_EASY_TRADE_TEXT_FIELDS = ("recommended_option", "category")
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    """Best-effort float coercion for Gamma values (str, None, junk)."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _first_condition_id(group: dict) -> str:
+    """Condition id of a group's first sub-market (the smart-money key)."""
+    markets = group.get("markets") or []
+    if not markets:
+        return ""
+    return markets[0].get("condition_id") or markets[0].get("conditionId") or ""
+
+
+def _event_sub_markets(group: dict) -> list[dict]:
+    """Flatten one event group into the sub-market rows the LLM sees.
+
+    Shared by the per-group event scoring and the batch easy-trade
+    pre-scan so both describe the same options in the same shape.
+    """
+    sub_markets: list[dict] = []
+    for m in group.get("markets") or []:
+        try:
+            prices = m.get("outcomePrices", [])
+            yes_p = float(prices[0]) if prices else 0.5
+            no_p = float(prices[1]) if len(prices) > 1 else (1 - yes_p)
+            vol24 = float(m.get("volume24hr") or 0)
+            liq = float(m.get("liquidityNum") or m.get("liquidity") or 0)
+        except (TypeError, ValueError):
+            yes_p, no_p, vol24, liq = 0.5, 0.5, 0.0, 0.0
+        sub_markets.append(
+            {
+                "label": m.get("groupItemTitle") or m.get("question", ""),
+                "question": m.get("question", ""),
+                "condition_id": m.get("condition_id") or m.get("conditionId") or "",
+                "yes_price": yes_p,
+                "no_price": no_p,
+                "volume_24h": vol24,
+                "liquidity": liq,
+            }
+        )
+    return sub_markets
+
+
+async def _fetch_smart_money_context(service: Any, condition_id: str) -> tuple[str, dict]:
+    """Smart-money prompt context for one group, plus the raw payload.
+
+    The payload is kept because the credibility pass scores the whale
+    fields (count, bias, order-book snapshot) that the flattened prompt
+    context never carries.
+    """
+    if not condition_id:
+        return "", {}
+    try:
+        sm = await service.get_smart_money_analysis(condition_id)
+    except Exception:
+        return "Smart-money data unavailable", {}
+    payload = sm if isinstance(sm, dict) else {}
+    # ``get_smart_money_analysis`` renders the order-book whale snapshot
+    # into ``context_text`` (plus ``whale_count`` / ``whale_bias`` for the
+    # credibility pass); reading any other key would send the model the
+    # literal "No smart-money data" on every single scan.
+    context = str(payload.get("context_text") or "").strip()
+    return context or "No smart-money data", payload
+
+
+async def _fetch_smart_money(event_groups: list[dict], service: Any) -> dict[str, tuple[str, dict]]:
+    """Fetch every group's smart-money context concurrently, keyed by slug."""
+    contexts = await asyncio.gather(
+        *(_fetch_smart_money_context(service, _first_condition_id(g)) for g in event_groups)
+    )
+    return {g["slug"]: ctx for g, ctx in zip(event_groups, contexts, strict=True)}
+
+
+async def _scan_event_easy_trades(
+    event_groups: list[dict],
+    client: AnalysisClient,
+    llm_config: dict[str, Any] | None,
+) -> dict[str, dict]:
+    """One batch easy-trade call over the multi-option event groups.
+
+    Returns a ``condition_id -> easy-trade entry`` index. An empty index
+    on any failure (or when there are no multi-option groups): easy
+    trades are a layer on top of the per-group event scoring, so a dead
+    batch call must never fail the scan.
+    """
+    multi_groups = [g for g in event_groups if len(g.get("markets") or []) > 1]
+    if not multi_groups:
+        return {}
+
+    events = [
+        {"event_title": group["title"], "sub_markets": _event_sub_markets(group)}
+        for group in multi_groups
+    ]
+    try:
+        trades = await client.scan_event_easy_trades(
+            events=events,
+            max_results=_EASY_TRADE_MAX_RESULTS,
+            llm_config=llm_config,
+        )
+    except Exception as exc:
+        logger.info("Event easy trade scan unavailable (%s); keeping event scores", exc)
+        return {}
+
+    index: dict[str, dict] = {}
+    if not isinstance(trades, list):
+        return {}
+    for trade in trades:
+        if not isinstance(trade, dict):
+            continue
+        condition_id = str(trade.get("condition_id") or "").strip()
+        if condition_id and condition_id not in index:
+            index[condition_id] = trade
+    return index
+
+
+def _best_group_easy_trade(sub_markets: list[dict], easy_index: dict[str, dict]) -> dict | None:
+    """Highest-ease easy-trade entry that belongs to this event group."""
+    best: dict | None = None
+    for sm in sub_markets:
+        entry = easy_index.get(sm["condition_id"])
+        if entry is None:
+            continue
+        if best is None or _as_float(entry.get("ease_score")) > _as_float(best.get("ease_score")):
+            best = entry
+    return best
+
+
+def _merge_event_easy_trade(event_scores: dict, entry: dict | None) -> dict:
+    """Layer one group-wide easy-trade verdict onto its event score.
+
+    Only the fields that describe the best option are taken, so a
+    group's event-level risk / reasoning survive untouched.
+    """
+    if not entry:
+        return event_scores
+    merged = dict(event_scores)
+    for field in _EASY_TRADE_FLOAT_FIELDS:
+        value = _as_float(entry.get(field), default=float("nan"))
+        if value == value:  # NaN/None/missing are all skipped
+            merged[field] = value
+    for field in _EASY_TRADE_INT_FIELDS:
+        value = entry.get(field)
+        if value is None:
+            continue
+        merged[field] = int(_as_float(value, default=0.0))
+    for field in _EASY_TRADE_TEXT_FIELDS:
+        value = entry.get(field)
+        if value:
+            merged[field] = str(value)
+    return merged
+
+
+def _apply_credibility(scores: dict, batch: BatchCredibility | None) -> dict:
+    """Overlay the batch credibility verdict on one (sub-)market score.
+
+    ``search_summary`` is only filled when the per-group LLM produced
+    none, so a market-level research summary always wins.
+    """
+    if batch is None:
+        return scores
+    merged = dict(scores)
+    merged["credibility_score"] = batch.credibility_score
+    if batch.search_summary and not str(merged.get("search_summary") or "").strip():
+        merged["search_summary"] = batch.search_summary
+    return merged
+
+
+async def _score_research_credibility(
+    event_groups: list[dict],
+    smart_by_key: dict[str, tuple[str, dict]],
+    client: AnalysisClient,
+    llm_config: dict[str, Any] | None,
+) -> dict[str, BatchCredibility]:
+    """Score the batch's research credibility: one synthesis call plus a
+    capped number of per-source evaluations, never a failed scan."""
+    if not event_groups:
+        return {}
+    evidence = [
+        GroupEvidence(
+            key=group["slug"],
+            question=str(group.get("title") or ""),
+            markets=group.get("markets") or [],
+            smart_money=smart_by_key.get(group["slug"], ("", {}))[1],
+            priority=_as_float(group.get("volume")),
+        )
+        for group in event_groups
+    ]
+    try:
+        return await score_batch_credibility(
+            client=client,
+            groups=evidence,
+            llm_config=llm_config,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.info("Research credibility scoring skipped: %s", exc)
+        return {}
+
+
+async def _score_event_groups(
+    *,
+    event_groups: list[dict],
+    client: AnalysisClient,
+    llm_config: dict[str, Any] | None,
+    service: Any,
+    label: str = "opportunity-scan",
+) -> tuple[list[asyncio.Task], asyncio.Queue]:
+    """Analyse every event group, streaming results onto a queue.
+
+    The single implementation of the per-group pipeline, shared by
+    ``stream_analyze_markets`` and ``stream_opportunity_scan`` so the two
+    endpoints cannot diverge. ``label`` only shapes log messages.
+
+    Three batch-level upgrades run before the per-group fan-out, all of
+    them non-fatal:
+
+    1. each group's smart-money context is fetched concurrently (same
+       fan-out as before, now up front so the credibility pass can read
+       the whale fields);
+    2. ONE ``scan_event_easy_trades`` call over the multi-option groups,
+       merged into each group's event score before its sub-markets are
+       fanned out (each sub-market keeps its own ``condition_id``);
+    3. ONE ``synthesize_research`` call plus capped per-source
+       ``source_evaluation`` calls, producing the batch's
+       ``credibility_score`` / ``search_summary``.
+    """
+    result_queue: asyncio.Queue = asyncio.Queue()
+    semaphore = asyncio.Semaphore(_SCAN_CONCURRENCY)
+
+    smart_by_key = await _fetch_smart_money(event_groups, service)
+    # The last two phases are independent of each other, so they run
+    # concurrently: the scan waits for the slower one, not for their sum.
+    # Both swallow their own failures and degrade to the per-group
+    # scores, so ``gather`` never raises here.
+    easy_index, credibility = await asyncio.gather(
+        _scan_event_easy_trades(event_groups, client, llm_config),
+        _score_research_credibility(event_groups, smart_by_key, client, llm_config),
+    )
+
+    async def _analyse_group(group: dict):
+        """Analyse one event group under the semaphore."""
+        group_markets = group["markets"]
+        event_title = group["title"]
+        event_vol = str(group.get("volume", "0"))
+        event_liq = str(group.get("liquidity", "0"))
+        smart_ctx = smart_by_key.get(group["slug"], ("", {}))[0]
+
+        is_single = len(group_markets) == 1
+
+        async with semaphore:
+            if is_single:
+                m = group_markets[0]
+                first_cid = m.get("condition_id") or m.get("conditionId") or ""
+                prices = m.get("outcomePrices", [])
+                try:
+                    yes_p = float(prices[0]) if prices else 0.5
+                    no_p = float(prices[1]) if len(prices) > 1 else (1 - yes_p)
+                    vol24 = float(m.get("volume24hr") or m.get("_event_volume_24hr") or 0)
+                    liq = float(m.get("liquidityNum") or m.get("liquidity") or 0)
+                except (ValueError, TypeError):
+                    yes_p, no_p = 0.5, 0.5
+                    vol24, liq = 0.0, 0.0
+
+                end_d = m.get("end_date_iso") or m.get("endDateIso") or ""
+                pnl = round(max(yes_p, no_p) - min(yes_p, no_p), 4)
+
+                try:
+                    scores = await client.scan_opportunity(
+                        market_title=m.get("question", "Unknown"),
+                        market_description=m.get("description", ""),
+                        yes_price=yes_p,
+                        no_price=no_p,
+                        volume_24h=vol24,
+                        end_date=end_d,
+                        pnl_potential=pnl,
+                        smart_money_context=smart_ctx,
+                        liquidity=liq,
+                        condition_id=first_cid,
+                        llm_config=llm_config,
+                    )
+                except Exception as exc:
+                    logger.error("[%s] scan_opportunity failed for %s: %s", label, first_cid, exc)
+                    scores = {
+                        "condition_id": first_cid,
+                        "market_title": m.get("question", "Unknown"),
+                        "ai_score": 30,
+                        "risk_level": "high",
+                        "pnl_potential": pnl,
+                        "credibility_score": 30,
+                        "smart_money_signal": "neutral",
+                        "smart_money_summary": "",
+                        "recommendation": "hold",
+                        "recommended_side": "YES" if yes_p < 0.5 else "NO",
+                        "reasoning": f"AI analysis failed: {exc}",
+                        "search_summary": "",
+                        "key_risks": [],
+                    }
+
+                await result_queue.put(
+                    (
+                        first_cid,
+                        _apply_credibility(scores, credibility.get(group["slug"])),
+                    )
+                )
+            else:
+                sub_markets = _event_sub_markets(group)
+
+                try:
+                    event_scores = await client.scan_event_opportunity(
+                        event_title=event_title,
+                        sub_markets=sub_markets,
+                        event_volume=event_vol,
+                        event_liquidity=event_liq,
+                        smart_money_context=smart_ctx,
+                        llm_config=llm_config,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "[%s] scan_event_opportunity failed for %s: %s", label, event_title, exc
+                    )
+                    event_scores = {
+                        "event_title": event_title,
+                        "ai_score": 30,
+                        "risk_level": "high",
+                        "pnl_potential": 0.5,
+                        "credibility_score": 30,
+                        "smart_money_signal": "neutral",
+                        "smart_money_summary": "",
+                        "recommendation": "hold",
+                        "recommended_side": "YES",
+                        "recommended_option": "",
+                        "reasoning": f"AI analysis failed: {exc}",
+                        "search_summary": "",
+                        "key_risks": [],
+                    }
+
+                # Easy trades describe the best option of the event; every
+                # other sub-market keeps the event-wide score but its own
+                # condition_id, which is what the frontend merges on.
+                best_easy_trade = _best_group_easy_trade(sub_markets, easy_index)
+                event_scores = _merge_event_easy_trade(event_scores, best_easy_trade)
+                event_scores = _apply_credibility(event_scores, credibility.get(group["slug"]))
+
+                # The merged probability fields describe exactly ONE option
+                # of the group: the easy trade's own sub-market (the event
+                # prompt asks for "the recommended option's" probability).
+                # Fanning them out verbatim would record that option's
+                # forecast under every other option's condition_id, so only
+                # the owning sub-market keeps them and record_verdict
+                # writes nothing for the rest (calibration poisoning).
+                probability_owner = (
+                    str(best_easy_trade.get("condition_id") or "").strip()
+                    if best_easy_trade
+                    else ""
+                )
+
+                # Fan out the event-level scores to each sub-market
+                for sm in sub_markets:
+                    cid = sm["condition_id"]
+                    per_market = {**event_scores}
+                    per_market["condition_id"] = cid
+                    per_market["market_title"] = sm.get("question") or sm.get("label", "")
+                    if cid != probability_owner:
+                        per_market["ai_probability"] = None
+                        per_market["expected_probability"] = None
+                    await result_queue.put((cid, per_market))
+
+    tasks = [asyncio.create_task(_analyse_group(g)) for g in event_groups]
+    return tasks, result_queue
+
+
 @router.post("/opportunities/analyze-markets")
 async def stream_analyze_markets(
     request: AnalyzeMarketsRequest,
@@ -742,155 +1145,66 @@ async def stream_analyze_markets(
         total = len(markets)
         client, llm_config = await get_analysis_client_for_user(user_id, db)
 
+        tasks: list = []
         result_queue: asyncio.Queue = asyncio.Queue()
-        semaphore = asyncio.Semaphore(_SCAN_CONCURRENCY)
 
-        async def _analyse_group(group: dict):
-            group_markets = group["markets"]
-            event_title = group["title"]
-            event_vol = str(group.get("volume", "0"))
-            event_liq = str(group.get("liquidity", "0"))
-
-            first_cid = (
-                group_markets[0].get("condition_id") or group_markets[0].get("conditionId") or ""
-            )
-            smart_ctx = ""
-            try:
-                if first_cid:
-                    sm = await service.get_smart_money_analysis(first_cid)
-                    parts = []
-                    if sm.get("whale_activity"):
-                        parts.append(f"Whale activity: {sm['whale_activity']}")
-                    if sm.get("trader_stats"):
-                        parts.append(f"Trader stats: {sm['trader_stats']}")
-                    if sm.get("market_signal"):
-                        parts.append(f"Signal: {sm['market_signal']}")
-                    smart_ctx = "\n".join(parts) if parts else "No smart-money data"
-            except Exception:
-                smart_ctx = "Smart-money data unavailable"
-
-            is_single = len(group_markets) == 1
-
-            async with semaphore:
-                if is_single:
-                    m = group_markets[0]
-                    prices = m.get("outcomePrices", [])
-                    try:
-                        yes_p = float(prices[0]) if prices else 0.5
-                        no_p = float(prices[1]) if len(prices) > 1 else (1 - yes_p)
-                        vol24 = float(m.get("volume24hr") or m.get("_event_volume_24hr") or 0)
-                        liq = float(m.get("liquidityNum") or m.get("liquidity") or 0)
-                    except (ValueError, TypeError):
-                        yes_p, no_p = 0.5, 0.5
-                        vol24, liq = 0.0, 0.0
-
-                    end_d = m.get("end_date_iso") or m.get("endDateIso") or ""
-                    pnl = round(max(yes_p, no_p) - min(yes_p, no_p), 4)
-
-                    try:
-                        scores = await client.scan_opportunity(
-                            market_title=m.get("question", "Unknown"),
-                            market_description=m.get("description", ""),
-                            yes_price=yes_p,
-                            no_price=no_p,
-                            volume_24h=vol24,
-                            end_date=end_d,
-                            pnl_potential=pnl,
-                            smart_money_context=smart_ctx,
-                            liquidity=liq,
-                            condition_id=first_cid,
-                            llm_config=llm_config,
-                        )
-                    except Exception as exc:
-                        logger.error(
-                            "analyze-markets scan_opportunity failed for %s: %s", first_cid, exc
-                        )
-                        scores = {
-                            "condition_id": first_cid,
-                            "market_title": m.get("question", "Unknown"),
-                            "ai_score": 30,
-                            "risk_level": "high",
-                            "pnl_potential": pnl,
-                            "credibility_score": 30,
-                            "smart_money_signal": "neutral",
-                            "smart_money_summary": "",
-                            "recommendation": "hold",
-                            "recommended_side": "YES" if yes_p < 0.5 else "NO",
-                            "reasoning": f"AI analysis failed: {exc}",
-                            "search_summary": "",
-                            "key_risks": [],
-                        }
-                    await result_queue.put((first_cid, scores))
-                else:
-                    sub_markets = []
-                    for m in group_markets:
-                        prices = m.get("outcomePrices", [])
-                        try:
-                            yes_p = float(prices[0]) if prices else 0.5
-                            no_p = float(prices[1]) if len(prices) > 1 else (1 - yes_p)
-                        except (ValueError, TypeError):
-                            yes_p, no_p = 0.5, 0.5
-                        sub_markets.append(
-                            {
-                                "label": m.get("groupItemTitle") or m.get("question", ""),
-                                "question": m.get("question", ""),
-                                "condition_id": m.get("condition_id") or m.get("conditionId") or "",
-                                "yes_price": yes_p,
-                                "no_price": no_p,
-                                "volume_24h": float(m.get("volume24hr") or 0),
-                                "liquidity": float(
-                                    m.get("liquidityNum") or m.get("liquidity") or 0
-                                ),
-                            }
-                        )
-
-                    try:
-                        event_scores = await client.scan_event_opportunity(
-                            event_title=event_title,
-                            sub_markets=sub_markets,
-                            event_volume=event_vol,
-                            event_liquidity=event_liq,
-                            smart_money_context=smart_ctx,
-                            llm_config=llm_config,
-                        )
-                    except Exception as exc:
-                        logger.error(
-                            "analyze-markets scan_event failed for %s: %s", event_title, exc
-                        )
-                        event_scores = {
-                            "event_title": event_title,
-                            "ai_score": 30,
-                            "risk_level": "high",
-                            "pnl_potential": 0.5,
-                            "credibility_score": 30,
-                            "smart_money_signal": "neutral",
-                            "smart_money_summary": "",
-                            "recommendation": "hold",
-                            "recommended_side": "YES",
-                            "recommended_option": "",
-                            "reasoning": f"AI analysis failed: {exc}",
-                            "search_summary": "",
-                            "key_risks": [],
-                        }
-
-                    for sm in sub_markets:
-                        cid = sm["condition_id"]
-                        per_market = {**event_scores}
-                        per_market["condition_id"] = cid
-                        per_market["market_title"] = sm.get("question") or sm.get("label", "")
-                        await result_queue.put((cid, per_market))
-
-        tasks = [asyncio.create_task(_analyse_group(g)) for g in event_groups]
-
-        all_results = []
-        done_count = 0
-
+        # ``BaseException`` (not just ``Exception``) is caught so a client
+        # disconnect mid-batch — which surfaces as ``CancelledError``
+        # inside ``_score_event_groups`` — still runs the ``finally`` and
+        # closes this request's channel instead of leaking it. The guard
+        # re-raises, so the existing SSE-error semantics are unchanged.
         try:
+            try:
+                tasks, result_queue = await _score_event_groups(
+                    event_groups=event_groups,
+                    client=client,
+                    llm_config=llm_config,
+                    service=service,
+                    label="analyze-markets",
+                )
+            except Exception as e:  # pragma: no cover - defensive
+                logger.error("analyze-markets failed to start: %s", e, exc_info=True)
+                yield f"data: {json.dumps({'error': f'Analysis failed: {str(e)}'})}\n\n"
+                return
+
+            all_results = []
+            done_count = 0
+
             while done_count < total:
                 try:
                     cid, scores = await asyncio.wait_for(result_queue.get(), timeout=2.0)
                     all_results.append(scores)
                     done_count += 1
+                    # ── Forecast calibration (plan 01) ──────────
+                    # Capture one verdict per emitted score with the
+                    # market price at decision time; a recorder failure
+                    # must never fail a scan.
+                    with contextlib.suppress(Exception):
+                        backend = (
+                            "cli_agent" if client.backend == AIBackend.CLI_AGENT else "llm_chain"
+                        )
+                        record_verdict(
+                            db,
+                            condition_id=cid,
+                            task="analyze-markets",
+                            model_name=scores.get("model")
+                            or ("unknown" if backend == "cli_agent" else ""),
+                            provider=scores.get("provider") or backend,
+                            ai_probability=scores.get("ai_probability"),
+                            market_price=next(
+                                (
+                                    (m.get("outcomePrices") or [None])[0]
+                                    for m in markets
+                                    if (m.get("condition_id") or m.get("conditionId") or "") == cid
+                                    and m.get("outcomePrices")
+                                ),
+                                None,
+                            ),
+                            ai_score=scores.get("ai_score"),
+                            confidence=scores.get("confidence"),
+                            recommendation=scores.get("recommendation"),
+                            source="analyze_markets",
+                        )
                     payload = json.dumps(
                         {
                             "market_id": cid,
@@ -909,6 +1223,11 @@ async def stream_analyze_markets(
         except Exception as e:
             logger.error("analyze-markets stream error: %s", e, exc_info=True)
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        except BaseException:
+            # Client disconnect / cancellation: close the channel below,
+            # then let the cancellation propagate so streaming shutdown
+            # behaves exactly as before.
+            raise
         finally:
             for t in tasks:
                 if not t.done():
@@ -1011,161 +1330,67 @@ async def stream_opportunity_scan(
         total = len(markets)
         client, llm_config = await get_analysis_client_for_user(user_id, db)
 
-        # Result queue for streaming back to the client
+        # Per-group analysis queue, populated by the shared scorer.
+        tasks: list = []
         result_queue: asyncio.Queue = asyncio.Queue()
-        semaphore = asyncio.Semaphore(_SCAN_CONCURRENCY)
 
-        async def _analyse_group(group: dict):
-            """Analyse one event group under the semaphore."""
-            group_markets = group["markets"]
-            event_title = group["title"]
-            event_vol = str(group.get("volume", "0"))
-            event_liq = str(group.get("liquidity", "0"))
-
-            # ── Fetch smart-money context for the first condition id ──
-            first_cid = (
-                group_markets[0].get("condition_id") or group_markets[0].get("conditionId") or ""
-            )
-            smart_ctx = ""
-            try:
-                if first_cid:
-                    sm = await service.get_smart_money_analysis(first_cid)
-                    parts = []
-                    if sm.get("whale_activity"):
-                        parts.append(f"Whale activity: {sm['whale_activity']}")
-                    if sm.get("trader_stats"):
-                        parts.append(f"Trader stats: {sm['trader_stats']}")
-                    if sm.get("market_signal"):
-                        parts.append(f"Signal: {sm['market_signal']}")
-                    smart_ctx = "\n".join(parts) if parts else "No smart-money data"
-            except Exception:
-                smart_ctx = "Smart-money data unavailable"
-
-            is_single = len(group_markets) == 1
-
-            async with semaphore:
-                if is_single:
-                    # ── Single-market event → scan_opportunity ────
-                    m = group_markets[0]
-                    prices = m.get("outcomePrices", [])
-                    try:
-                        yes_p = float(prices[0]) if prices else 0.5
-                        no_p = float(prices[1]) if len(prices) > 1 else (1 - yes_p)
-                        vol24 = float(m.get("volume24hr") or m.get("_event_volume_24hr") or 0)
-                        liq = float(m.get("liquidityNum") or m.get("liquidity") or 0)
-                    except (ValueError, TypeError):
-                        yes_p, no_p = 0.5, 0.5
-                        vol24, liq = 0.0, 0.0
-
-                    end_d = m.get("end_date_iso") or m.get("endDateIso") or ""
-                    pnl = round(max(yes_p, no_p) - min(yes_p, no_p), 4)
-
-                    try:
-                        scores = await client.scan_opportunity(
-                            market_title=m.get("question", "Unknown"),
-                            market_description=m.get("description", ""),
-                            yes_price=yes_p,
-                            no_price=no_p,
-                            volume_24h=vol24,
-                            end_date=end_d,
-                            pnl_potential=pnl,
-                            smart_money_context=smart_ctx,
-                            liquidity=liq,
-                            condition_id=first_cid,
-                            llm_config=llm_config,
-                        )
-                    except Exception as exc:
-                        logger.error("scan_opportunity failed for %s: %s", first_cid, exc)
-                        scores = {
-                            "condition_id": first_cid,
-                            "market_title": m.get("question", "Unknown"),
-                            "ai_score": 30,
-                            "risk_level": "high",
-                            "pnl_potential": pnl,
-                            "credibility_score": 30,
-                            "smart_money_signal": "neutral",
-                            "smart_money_summary": "",
-                            "recommendation": "hold",
-                            "recommended_side": "YES" if yes_p < 0.5 else "NO",
-                            "reasoning": f"AI analysis failed: {exc}",
-                            "search_summary": "",
-                            "key_risks": [],
-                        }
-
-                    await result_queue.put((first_cid, scores))
-                else:
-                    # ── Multi-option event → scan_event_opportunity ──
-                    sub_markets = []
-                    for m in group_markets:
-                        prices = m.get("outcomePrices", [])
-                        try:
-                            yes_p = float(prices[0]) if prices else 0.5
-                            no_p = float(prices[1]) if len(prices) > 1 else (1 - yes_p)
-                        except (ValueError, TypeError):
-                            yes_p, no_p = 0.5, 0.5
-                        sub_markets.append(
-                            {
-                                "label": m.get("groupItemTitle") or m.get("question", ""),
-                                "question": m.get("question", ""),
-                                "condition_id": m.get("condition_id") or m.get("conditionId") or "",
-                                "yes_price": yes_p,
-                                "no_price": no_p,
-                                "volume_24h": float(m.get("volume24hr") or 0),
-                                "liquidity": float(
-                                    m.get("liquidityNum") or m.get("liquidity") or 0
-                                ),
-                            }
-                        )
-
-                    try:
-                        event_scores = await client.scan_event_opportunity(
-                            event_title=event_title,
-                            sub_markets=sub_markets,
-                            event_volume=event_vol,
-                            event_liquidity=event_liq,
-                            smart_money_context=smart_ctx,
-                            llm_config=llm_config,
-                        )
-                    except Exception as exc:
-                        logger.error("scan_event_opportunity failed for %s: %s", event_title, exc)
-                        event_scores = {
-                            "event_title": event_title,
-                            "ai_score": 30,
-                            "risk_level": "high",
-                            "pnl_potential": 0.5,
-                            "credibility_score": 30,
-                            "smart_money_signal": "neutral",
-                            "smart_money_summary": "",
-                            "recommendation": "hold",
-                            "recommended_side": "YES",
-                            "recommended_option": "",
-                            "reasoning": f"AI analysis failed: {exc}",
-                            "search_summary": "",
-                            "key_risks": [],
-                        }
-
-                    # Fan out the event-level scores to each sub-market
-                    for sm in sub_markets:
-                        cid = sm["condition_id"]
-                        per_market = {**event_scores}
-                        per_market["condition_id"] = cid
-                        per_market["market_title"] = sm.get("question") or sm.get("label", "")
-                        await result_queue.put((cid, per_market))
-
-        # ── Launch all groups concurrently (bounded by semaphore) ──
-        tasks = [asyncio.create_task(_analyse_group(g)) for g in event_groups]
-
-        # ── Stream results as they arrive ────────────────────
-        all_results = []
-        done_count = 0
-
+        # ``BaseException`` (not just ``Exception``) is caught so a client
+        # disconnect mid-batch — which surfaces as ``CancelledError``
+        # inside ``_score_event_groups`` — still runs the ``finally`` and
+        # closes this request's channel instead of leaking it. The guard
+        # re-raises, so the existing SSE-error semantics are unchanged.
         try:
+            try:
+                tasks, result_queue = await _score_event_groups(
+                    event_groups=event_groups,
+                    client=client,
+                    llm_config=llm_config,
+                    service=service,
+                )
+            except Exception as e:  # pragma: no cover - defensive
+                logger.error("Easy trade scan failed to start: %s", e, exc_info=True)
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                return
+
+            all_results = []
+            done_count = 0
+
             while done_count < total:
                 # Wait for next result or check if all tasks done
                 try:
                     cid, scores = await asyncio.wait_for(result_queue.get(), timeout=2.0)
                     all_results.append(scores)
                     done_count += 1
+                    # ── Forecast calibration (plan 01) ──────────
+                    # Capture one verdict per emitted score with the
+                    # market price at decision time; a recorder failure
+                    # must never fail a scan.
+                    with contextlib.suppress(Exception):
+                        backend = (
+                            "cli_agent" if client.backend == AIBackend.CLI_AGENT else "llm_chain"
+                        )
+                        record_verdict(
+                            db,
+                            condition_id=cid,
+                            task="opportunity-scan",
+                            model_name=scores.get("model")
+                            or ("unknown" if backend == "cli_agent" else ""),
+                            provider=scores.get("provider") or backend,
+                            ai_probability=scores.get("ai_probability"),
+                            market_price=next(
+                                (
+                                    (m.get("outcomePrices") or [None])[0]
+                                    for m in markets
+                                    if (m.get("condition_id") or m.get("conditionId") or "") == cid
+                                    and m.get("outcomePrices")
+                                ),
+                                None,
+                            ),
+                            ai_score=scores.get("ai_score"),
+                            confidence=scores.get("confidence"),
+                            recommendation=scores.get("recommendation"),
+                            source="opportunity_scan",
+                        )
                     payload = json.dumps(
                         {
                             "market_id": cid,
@@ -1190,6 +1415,11 @@ async def stream_opportunity_scan(
         except Exception as e:
             logger.error("Easy trade scan stream error: %s", e, exc_info=True)
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        except BaseException:
+            # Client disconnect / cancellation: close the channel below,
+            # then let the cancellation propagate so streaming shutdown
+            # behaves exactly as before.
+            raise
         finally:
             # Cancel any remaining tasks
             for t in tasks:

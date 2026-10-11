@@ -54,18 +54,9 @@ FLAT_GETTERS = frozenset({"PROMPTS"})
 #: acknowledged decision -- a new unreferenced template fails the suite so dead
 #: entries cannot accumulate silently. Delete the entry when the template is
 #: either wired up or removed from the store.
-KNOWN_UNUSED_TEMPLATES = {
-    "research.source_evaluation",
-    "research.synthesize_research",
-    "trading.position_sizing",
-    "trading.portfolio_rebalance",
-    "risk_management.portfolio_risk_report",
-    "monitoring.price_alert_analysis",
-    "monitoring.daily_portfolio_summary",
-    "trader_analysis.pattern_evaluation",
-    "copy_trading.risk_check",
-    "easy_trade_analysis.event_batch_scoring",
-}
+#: Empty as of the value-expansion batch: every remaining template has a
+#: call site (the dead ones were wired up or deleted).
+KNOWN_UNUSED_TEMPLATES: set[str] = set()
 
 
 # --------------------------------------------------------------------------

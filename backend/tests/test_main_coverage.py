@@ -252,9 +252,12 @@ class LifespanTests(unittest.IsolatedAsyncioTestCase):
         ("start_aggregation_service", "app.services.trade_aggregation_service", True),
         ("start_arbitrage_monitor", "app.services.arbitrage_service", True),
         ("start_news_generator", "app.services.news_service", True),
+        ("start_daily_report_service", "app.services.daily_report_service", True),
         ("start_ctf_events_monitor", "app.services.ctf_events_service", True),
         ("start_redemption_manager", "app.services.redemption_service", True),
         ("start_latency_arb_engine", "app.services.latency_arb_service", True),
+        ("start_equity_snapshot_service", "app.services.equity_snapshot_service", True),
+        ("start_forecast_resolution", "app.services.forecast_resolution", True),
         ("add_watched_wallet", "app.services.trade_monitor", False),
     ]
 
@@ -271,9 +274,12 @@ class LifespanTests(unittest.IsolatedAsyncioTestCase):
         ("stop_aggregation_service", "app.services.trade_aggregation_service"),
         ("stop_arbitrage_monitor", "app.services.arbitrage_service"),
         ("stop_news_generator", "app.services.news_service"),
+        ("stop_daily_report_service", "app.services.daily_report_service"),
         ("stop_ctf_events_monitor", "app.services.ctf_events_service"),
         ("stop_redemption_manager", "app.services.redemption_service"),
         ("stop_latency_arb_engine", "app.services.latency_arb_service"),
+        ("stop_equity_snapshot_service", "app.services.equity_snapshot_service"),
+        ("stop_forecast_resolution", "app.services.forecast_resolution"),
         ("close_shared_channels", "app.grpc_clients.analysis_client"),
     ]
 

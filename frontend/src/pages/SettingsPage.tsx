@@ -549,6 +549,23 @@ export default function SettingsPage() {
     }
   };
 
+  const handleDailyDigestToggle = async (enabled: boolean) => {
+    if (!settings) return;
+    try {
+      setSaving(true);
+      setError(null);
+      setSuccessMessage(null);
+      const updated = await settingsService.updateDailyDigestSettings(enabled);
+      setSettings(updated);
+      setSuccessMessage("Daily digest preference saved!");
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (err: unknown) {
+      setError(getApiErrorMessage(err, "Failed to save daily digest preference"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleConnectTradingKey = async () => {
     try {
       setTradingKeySaving(true);
@@ -1457,6 +1474,33 @@ export default function SettingsPage() {
                 </table>
               </div>
             )}
+          </div>
+
+          {/* Daily portfolio digest opt-out (plan 02) */}
+          <div className="surface-panel p-6">
+            <h2 className="text-xl font-semibold mb-4">Daily Portfolio Digest</h2>
+            <p className="text-soft mb-6 text-sm">
+              Once a day you receive an AI-generated P&amp;L report with key movers, upcoming
+              catalysts, and suggested actions on this page&apos;s notification channels
+              {email ? " and by email" : ""}.
+            </p>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={settings?.daily_digest_enabled ?? true}
+                onChange={(e) => handleDailyDigestToggle(e.target.checked)}
+                disabled={saving}
+                className="w-4 h-4 accent-[var(--accent)]"
+              />
+              <div>
+                <p className="text-sm font-medium">Send me the daily portfolio digest</p>
+                <p className="text-xs text-muted">
+                  {email
+                    ? `Report delivered to ${email}.`
+                    : "Add an email in Profile to also receive it by email."}
+                </p>
+              </div>
+            </label>
           </div>
         </>
       )}

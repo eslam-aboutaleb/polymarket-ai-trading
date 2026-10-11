@@ -4,7 +4,8 @@
  * Covers the user's paginated trade history, leaderboard (sent with a 60s timeout because it is
  * expensive), trader profiles, follow/unfollow with sizing and copy-wallet configuration, email
  * notification follows, the followed-trader activity feed, copy-trade records and their evaluation
- * audit trail, and finally order placement via `executeTrade`/`cashOut` (cash-out always posts
+ * audit trail, per-trader copy attribution (realized PnL / win rate over a rolling window), and
+ * finally order placement via `executeTrade`/`cashOut` (cash-out always posts
  * `side: "SELL"`).
  *
  * @module services/tradesService
@@ -206,6 +207,36 @@ export interface CopyEvaluationResponse {
   updated_at: string;
 }
 
+// --- Per-Trader Copy Attribution ---
+
+export interface CopyAttributionTrader {
+  wallet: string;
+  label: string;
+  realized_pnl: number;
+  trade_count: number;
+  wins: number;
+  losses: number;
+  win_rate?: number | null;
+  volume_usdc: number;
+  open_positions: number;
+  last_trade_at?: string | null;
+}
+
+export interface CopyAttributionResponse {
+  window_days: number;
+  generated_at: string;
+  traders: CopyAttributionTrader[];
+  totals: {
+    realized_pnl: number;
+    trade_count: number;
+    win_rate?: number | null;
+  };
+  data_quality: {
+    unreconciled_sells: number;
+    missing_executed_at: number;
+  };
+}
+
 // --- Trade Execution ---
 
 export interface ExecuteTradeRequest {
@@ -318,6 +349,12 @@ export const tradesService = {
 
   async getCopyTradePnl(): Promise<{ daily_pnl: number }> {
     return apiClient.get<{ daily_pnl: number }>("/api/trades/copy-trades/pnl");
+  },
+
+  async getCopyAttribution(windowDays: number = 30): Promise<CopyAttributionResponse> {
+    return apiClient.get<CopyAttributionResponse>(
+      `/api/trades/copy-trades/pnl/by-trader?window_days=${windowDays}`,
+    );
   },
 
   async getCopyEvaluation(wallet: string, limit: number = 50): Promise<CopyEvaluationResponse> {

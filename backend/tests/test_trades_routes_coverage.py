@@ -33,6 +33,8 @@ Covered:
 * ``GET /copy-trades`` -- full and minimal rows, calculation_details
   JSON parsing.
 * ``GET /copy-evaluation/{wallet}`` and ``GET /copy-trades/pnl``.
+* ``GET /copy-trades/pnl/by-trader`` -- window default, forwarded window,
+  out-of-range 422, auth, and the unchanged daily-PnL response shape.
 * ``POST/GET/DELETE /stop-loss`` and ``/take-profit`` -- create, update,
   list (status filter + all), cancel (404 / non-active / success).
 * ``POST /emergency-stop`` -- halt with and without settings, SL/TP
@@ -2341,6 +2343,95 @@ class SizeSuggestionTests(_TradesRouteTestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertIsInstance(session.added[0], UserSettings)
+
+
+# ────────────── Per-trader copy attribution (plan 07) ──────────────
+
+
+class CopyAttributionTests(_TradesRouteTestCase):
+    def _attribution(self, **overrides):
+        payload = {
+            "window_days": 30,
+            "generated_at": "2026-01-01T00:00:00+00:00",
+            "traders": [
+                {
+                    "wallet": TRADER,
+                    "label": "Sharp Wallet",
+                    "realized_pnl": 20.0,
+                    "trade_count": 2,
+                    "wins": 1,
+                    "losses": 0,
+                    "win_rate": 1.0,
+                    "volume_usdc": 120.0,
+                    "open_positions": 1,
+                    "last_trade_at": "2026-01-01T00:00:00+00:00",
+                }
+            ],
+            "totals": {"realized_pnl": 20.0, "trade_count": 2, "win_rate": 1.0},
+            "data_quality": {"unreconciled_sells": 1},
+        }
+        payload.update(overrides)
+        return payload
+
+    def _get(self, params=""):
+        session = FakeSession()
+        app.dependency_overrides[get_db] = lambda: session
+        self.addCleanup(app.dependency_overrides.pop, get_db, None)
+        return self.client.get(f"/api/trades/copy-trades/pnl/by-trader{params}")
+
+    def test_attribution_defaults_to_30_days(self):
+        with patch(
+            "app.services.copy_trade_service.get_trader_copy_stats",
+            return_value=self._attribution(),
+        ) as stats:
+            resp = self._get()
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), self._attribution())
+        self.assertEqual(stats.call_args.args[1], 1)
+        self.assertEqual(stats.call_args.kwargs["window_days"], 30)
+
+    def test_attribution_window_days_forwarded(self):
+        empty_totals = {"realized_pnl": 0.0, "trade_count": 0, "win_rate": None}
+        with patch(
+            "app.services.copy_trade_service.get_trader_copy_stats",
+            return_value=self._attribution(window_days=90, traders=[], totals=empty_totals),
+        ):
+            resp = self._get("?window_days=90")
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["window_days"], 90)
+        self.assertEqual(data["traders"], [])
+        self.assertIsNone(data["totals"]["win_rate"])
+
+    def test_attribution_rejects_out_of_range_window(self):
+        self.assertEqual(self._get("?window_days=0").status_code, 422)
+        self.assertEqual(self._get("?window_days=366").status_code, 422)
+
+    def test_attribution_requires_authentication(self):
+        app.dependency_overrides.pop(get_current_user_from_token, None)
+        self.addCleanup(app.dependency_overrides.pop, get_current_user_from_token, None)
+        session = FakeSession()
+        app.dependency_overrides[get_db] = lambda: session
+        self.addCleanup(app.dependency_overrides.pop, get_db, None)
+        with patch(
+            "app.services.copy_trade_service.get_trader_copy_stats",
+            return_value=self._attribution(),
+        ):
+            resp = self.client.get("/api/trades/copy-trades/pnl/by-trader")
+
+        self.assertEqual(resp.status_code, 401)
+
+    def test_daily_copy_pnl_response_is_unchanged(self):
+        with patch(
+            "app.api.routes.trades.get_daily_copy_pnl",
+            AsyncMock(return_value=-12.5),
+        ):
+            resp = self.client.get("/api/trades/copy-trades/pnl")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"daily_pnl": -12.5})
 
 
 if __name__ == "__main__":

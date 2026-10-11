@@ -43,6 +43,7 @@ class UserSettingsResponse(BaseModel):
     )
     require_ai_approval: bool = True
     follow_email_notifications_enabled: bool = False
+    daily_digest_enabled: bool = True
     # Multi-layer risk protection
     monthly_loss_limit: float | None = None
     max_drawdown_pct: float = 25.0
@@ -144,6 +145,7 @@ class CopyTradingSettingsRequest(BaseModel):
     )
     require_ai_approval: bool | None = None
     follow_email_notifications_enabled: bool | None = None
+    daily_digest_enabled: bool | None = None
     # Multi-layer risk protection
     monthly_loss_limit: float | None = Field(None, ge=0)
     max_drawdown_pct: float | None = Field(None, gt=0, le=100)
@@ -223,6 +225,9 @@ def _build_settings_response(settings: UserSettings) -> UserSettingsResponse:
             settings.follow_email_notifications_enabled
             if settings.follow_email_notifications_enabled is not None
             else False
+        ),
+        daily_digest_enabled=(
+            settings.daily_digest_enabled if settings.daily_digest_enabled is not None else True
         ),
         monthly_loss_limit=settings.monthly_loss_limit,
         max_drawdown_pct=settings.max_drawdown_pct
@@ -358,6 +363,8 @@ async def update_copy_trading_settings(
         settings.require_ai_approval = request.require_ai_approval
     if request.follow_email_notifications_enabled is not None:
         settings.follow_email_notifications_enabled = request.follow_email_notifications_enabled
+    if request.daily_digest_enabled is not None:
+        settings.daily_digest_enabled = request.daily_digest_enabled
     # Multi-layer risk protection
     if request.monthly_loss_limit is not None:
         settings.monthly_loss_limit = request.monthly_loss_limit

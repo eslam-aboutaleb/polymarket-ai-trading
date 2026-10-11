@@ -37,6 +37,17 @@ def _send_email_sync(to_email: str, subject: str, body: str) -> None:
         smtp.send_message(msg)
 
 
+async def send_daily_digest_email(to_email: str, subject: str, body: str) -> None:
+    """Send the scheduled daily portfolio digest (plan 02).
+
+    The body is the AI-generated article, already assembled by
+    :mod:`app.services.daily_report_service`; this function only handles
+    SMTP delivery, mirroring ``send_follow_event_email``.
+    """
+    await asyncio.to_thread(_send_email_sync, to_email, subject, body)
+    logger.info("Daily digest email sent to %s", to_email)
+
+
 async def send_follow_event_email(
     to_email: str,
     trader_wallet: str,

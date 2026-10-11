@@ -51,6 +51,9 @@ SCHEDULER_INTERVALS: dict[str, int] = {
     "redemption": 300,
     "ctf_events": 300,
     "latency_arb": 5,
+    "forecast_resolution": 21600,
+    "daily_digest": 86400,
+    "equity_snapshots": 3600,
 }
 DEFAULT_INTERVAL_SECONDS = 300
 

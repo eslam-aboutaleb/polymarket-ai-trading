@@ -5,9 +5,9 @@ import json
 import logging
 import time
 from contextlib import suppress
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from py_clob_client.clob_types import BookParams
 from pydantic import BaseModel
@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.api.routes.auth import get_current_user_from_token
 from app.config import get_settings
 from app.security.credential_store import CredentialStoreError, load_wallet_credentials
+from app.services import equity_snapshot_service
 from app.services.clob_ws_manager import (
     get_clob_ws_manager,
     is_stale_tick,
@@ -578,3 +579,124 @@ async def get_redemptions(
         .all()
     )
     return [_attempt_response(row) for row in rows]
+
+
+# ── Equity curve / hourly portfolio snapshots (plan 05) ──────────
+
+
+class EquitySnapshotResponse(BaseModel):
+    """One hourly portfolio-equity sample (``PortfolioSnapshot`` row)."""
+
+    captured_at: datetime | None = None
+    bucket_hour: datetime | None = None
+    usdc_balance: float = 0.0
+    unrealized_pnl: float = 0.0
+    bankroll: float = 0.0
+    total_invested: float = 0.0
+    total_current_value: float = 0.0
+    positions_count: int = 0
+    is_paper: bool = False
+
+
+class EquitySummaryResponse(BaseModel):
+    """Period-change metrics over one user's equity series."""
+
+    period: str = "7d"
+    start: float = 0.0
+    end: float = 0.0
+    delta: float = 0.0
+    delta_pct: float = 0.0
+    max_drawdown_pct: float = 0.0
+    points: int = 0
+
+
+def _parse_moment(raw: str | None) -> datetime | None:
+    """Parse an ISO-8601 timestamp, assuming UTC when no offset is given.
+
+    Unparseable input is ignored rather than raised: a bad query string
+    must not turn a chart request into a 500.
+    """
+    if not raw or not str(raw).strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _equity_window(
+    from_value: str | None,
+    to_value: str | None,
+    date_value: str | None,
+) -> tuple[datetime | None, datetime | None]:
+    """Resolve the ``?from``/``?to``/``?date`` query into a bucket window.
+
+    ``date`` is a UTC calendar-day shorthand (``YYYY-MM-DD``); with no
+    window at all — or an unparseable one — the caller gets the default
+    last-7-days look-back, so a malformed chart request still renders.
+    """
+    if date_value:
+        day = _parse_moment(date_value)
+        if day is not None:
+            start = day.replace(hour=0, minute=0, second=0, microsecond=0)
+            return start, start + timedelta(days=1)
+    start = _parse_moment(from_value)
+    end = _parse_moment(to_value)
+    if start is None and end is None:
+        start = utc_now() - timedelta(days=equity_snapshot_service.DEFAULT_LOOKBACK_DAYS)
+    return start, end
+
+
+@router.get("/equity/snapshots", response_model=list[EquitySnapshotResponse])
+async def get_equity_snapshots(
+    # ``from``/``to`` are context-sensitive spellings, so the wire names are
+    # bound through aliases; the parameter names stay legal identifiers.
+    from_: str | None = Query(None, alias="from"),
+    to: str | None = None,
+    date: str | None = None,
+    limit: int = Query(equity_snapshot_service.DEFAULT_SNAPSHOT_LIMIT),
+    is_paper: bool | None = Query(None),
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """Equity curve points for the authenticated user, oldest first.
+
+    Defaults to the last 7 days. ``is_paper`` selects one account: ``true``
+    keeps only paper points, ``false`` only live ones, and omitting it
+    returns both (which would plot two bankrolls on one series, so the
+    Dashboard always sends the user's current mode).
+    """
+    start, end = _equity_window(from_, to, date)
+    rows = equity_snapshot_service.get_snapshots(
+        db,
+        current_user["user_id"],
+        start=start,
+        end=end,
+        limit=limit,
+        is_paper=is_paper,
+    )
+    return [equity_snapshot_service.serialize_snapshot(row) for row in rows]
+
+
+@router.get("/equity/summary", response_model=EquitySummaryResponse)
+async def get_equity_summary(
+    period: str = equity_snapshot_service.DEFAULT_PERIOD,
+    is_paper: bool | None = Query(None),
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """Period-change metrics: start/end bankroll, delta, max drawdown.
+
+    A user with no snapshot history gets zeros and ``points: 0`` — the
+    Dashboard renders an empty state rather than an error. ``is_paper``
+    keeps the summary over the one account being reported, so a delta
+    never spans a switch between the paper and the live series.
+    """
+    summary = equity_snapshot_service.summarize_snapshots(
+        db,
+        current_user["user_id"],
+        period,
+        is_paper=is_paper,
+    )
+    return EquitySummaryResponse(**summary)

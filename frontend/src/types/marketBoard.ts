@@ -16,6 +16,11 @@ export interface MarketBoardAiSummary {
   score: number;
   recommendation: string;
   risk: string;
+  /**
+   * Deterministic + LLM-adjusted credibility of the evidence behind the score (0-100).
+   * Absent on pages that do not score research credibility (e.g. markets browsing).
+   */
+  credibility?: number;
 }
 
 export interface MarketBoardRowVM {

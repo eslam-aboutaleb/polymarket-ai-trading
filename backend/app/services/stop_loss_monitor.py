@@ -13,6 +13,7 @@ import contextlib
 import logging
 from datetime import UTC, datetime
 from time import perf_counter
+from types import SimpleNamespace
 
 from py_clob_client.clob_types import BookParams
 from sqlalchemy.orm import Session, joinedload
@@ -26,6 +27,11 @@ from app.services.copy_trade_service import (
     _place_order_on_polymarket,
 )
 from app.services.polymarket_service import POLYMARKET_CLOB_API, get_polymarket_service
+from app.services.price_alert_service import (
+    STOP_LOSS_EVENT,
+    TAKE_PROFIT_EVENT,
+    enrich_trigger_alert,
+)
 from app.utils.database import SessionLocal
 from app.utils.scheduler_lock import (
     acquire_scheduler_lock,
@@ -44,6 +50,19 @@ except Exception:
 
 _monitor_task: asyncio.Task | None = None
 
+# Outstanding price-alert verdict tasks (plan 03). Kept as a strong
+# reference so the coroutine is not garbage-collected mid-flight and so
+# shutdown can cancel them; ``add_done_callback`` discards each task on
+# completion.
+_price_alert_tasks: set[asyncio.Task] = set()
+
+# Last observed price per token, used to report the move that triggered
+# an alert (the verdict needs a price change, not just a level).
+_LAST_PRICES: dict[str, float] = {}
+
+# Bound on the price cache: cancelled orders leave their token behind.
+_MAX_TRACKED_TOKENS = 10_000
+
 
 async def start_stop_loss_monitor():
     """Start the background stop-loss monitoring loop."""
@@ -56,14 +75,114 @@ async def start_stop_loss_monitor():
 
 
 async def stop_stop_loss_monitor():
-    """Cancel the background monitor."""
+    """Cancel the background monitor and any in-flight price-alert verdicts."""
     global _monitor_task
     if _monitor_task and not _monitor_task.done():
         _monitor_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await _monitor_task
     _monitor_task = None
+    await _cancel_price_alert_tasks()
     logger.info("Stop-loss monitor stopped")
+
+
+async def _cancel_price_alert_tasks():
+    """Cancel in-flight verdict tasks and drop their references."""
+    if not _price_alert_tasks:
+        return
+    pending = [task for task in _price_alert_tasks if not task.done()]
+    for task in pending:
+        task.cancel()
+    for task in pending:
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+    _price_alert_tasks.clear()
+    if pending:
+        logger.info("Cancelled %d in-flight price-alert verdict task(s)", len(pending))
+
+
+# Bounds the concurrent verdict fan-out: a flash crash breaching N orders
+# must not fire N STRONG-tier LLM calls (plus their research subprocesses)
+# at once. Past the cap the alert still fires, just un-enriched.
+MAX_PRICE_ALERT_VERDICTS = 8
+
+
+def _snapshot_order(order) -> SimpleNamespace:
+    """Copy the trigger fields off a live order while its session is open.
+
+    The enrichment task's first step runs after this cycle's session is
+    closed, and a rollback on the way out expires every loaded instance;
+    reading an attribute then raises ``DetachedInstanceError`` before the
+    alert is ever built. A plain namespace survives that untouched.
+    """
+    return SimpleNamespace(
+        id=getattr(order, "id", None),
+        user_id=getattr(order, "user_id", None),
+        token_id=getattr(order, "token_id", None),
+        market_id=getattr(order, "market_id", None),
+        market_title=getattr(order, "market_title", None),
+        outcome=getattr(order, "outcome", None),
+        size=getattr(order, "size", None),
+        stop_price=getattr(order, "stop_price", None),
+        take_profit_price=getattr(order, "take_profit_price", None),
+    )
+
+
+def _spawn_price_alert(
+    order,
+    *,
+    event_type: str,
+    live_price: float,
+    prev_price: float | None,
+    simulation_mode: bool = False,
+):
+    """Fire-and-forget the verdict + enriched alert for a trigger.
+
+    The 10-second price-order loop must never await an LLM call: a gRPC
+    round-trip plus one research subprocess can outlast the whole cycle,
+    so the verdict and the alert it enriches run in their own task.
+
+    The order is snapshotted before the task starts (see
+    ``_snapshot_order``) so the task never touches an expired instance.
+    Returns the task (``None`` when no loop is running).
+    """
+    snapshot = _snapshot_order(order)
+    if event_type == STOP_LOSS_EVENT:
+        operator, threshold = "<= stop", snapshot.stop_price
+    else:
+        operator, threshold = ">= target", snapshot.take_profit_price
+    trigger_condition = (
+        f"price {operator} {threshold:.4f}" if isinstance(threshold, (int, float)) else ""
+    )
+    # At the concurrency cap the LLM call is skipped, never the alert.
+    enrich = len(_price_alert_tasks) < MAX_PRICE_ALERT_VERDICTS
+    try:
+        task = asyncio.create_task(
+            enrich_trigger_alert(
+                snapshot,
+                event_type=event_type,
+                live_price=live_price,
+                trigger_condition=trigger_condition,
+                prev_price=prev_price,
+                simulation_mode=simulation_mode,
+                enrich=enrich,
+            )
+        )
+    except RuntimeError:
+        # No running event loop (direct call outside the monitor) — the
+        # trigger still executed; only the enrichment is skipped.
+        logger.debug("No event loop; skipping price-alert verdict for order=%s", snapshot.id)
+        return None
+    _price_alert_tasks.add(task)
+    task.add_done_callback(_price_alert_tasks.discard)
+    logger.info(
+        "Price-alert verdict spawned: order=%s event=%s price=%.4f%s",
+        snapshot.id,
+        event_type,
+        live_price,
+        "" if enrich else " (verdict cap reached; plain alert)",
+    )
+    return task
 
 
 async def _monitor_loop():
@@ -202,6 +321,13 @@ async def _check_user_price_orders(
         token_ids = list({o.token_id for o in sl_orders} | {o.token_id for o in tp_orders})
         prices = await _fetch_public_prices(token_ids)
 
+    # Reference prices from the previous cycle, so a triggered alert can
+    # report the move that caused it instead of just the level.
+    prev_prices = {token_id: _LAST_PRICES.get(token_id) for token_id in prices}
+    if len(_LAST_PRICES) > _MAX_TRACKED_TOKENS:
+        _LAST_PRICES.clear()
+    _LAST_PRICES.update(prices)
+
     triggered = 0
 
     # Check stop-losses: trigger SELL when price <= stop_price
@@ -218,6 +344,13 @@ async def _check_user_price_orders(
                 order.stop_price,
             )
             await _execute_stop_loss(db, order, pk, creds, live_price, simulation_mode)
+            _spawn_price_alert(
+                order,
+                event_type=STOP_LOSS_EVENT,
+                live_price=live_price,
+                prev_price=prev_prices.get(order.token_id),
+                simulation_mode=simulation_mode,
+            )
             triggered += 1
 
     # Check take-profits: trigger SELL when price >= take_profit_price
@@ -234,6 +367,13 @@ async def _check_user_price_orders(
                 order.take_profit_price,
             )
             await _execute_take_profit(db, order, pk, creds, live_price, simulation_mode)
+            _spawn_price_alert(
+                order,
+                event_type=TAKE_PROFIT_EVENT,
+                live_price=live_price,
+                prev_price=prev_prices.get(order.token_id),
+                simulation_mode=simulation_mode,
+            )
             triggered += 1
 
     return triggered

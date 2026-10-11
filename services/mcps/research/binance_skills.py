@@ -17,10 +17,14 @@ import time
 from typing import Any
 
 import httpx
+from binance_chains import SOLANA_CHAIN_ID, chain_to_platform
 
 logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────
+# Chain ids come from the shared services/binance_chains package, which every
+# deployment puts on PYTHONPATH, so this module and the backend dashboard
+# routes always agree (Solana is the verified "CT_501"; see that module).
 
 BINANCE_WEB3_BASE = "https://web3.binance.com"
 KLINE_BASE = "https://dquery.sintral.io"
@@ -28,13 +32,6 @@ KLINE_BASE = "https://dquery.sintral.io"
 COMMON_HEADERS = {
     "Accept-Encoding": "identity",
     "User-Agent": "PolymarketBot/1.0",
-}
-
-SUPPORTED_CHAINS = {
-    "bsc": "56",
-    "solana": "CT_501",
-    "base": "8453",
-    "ethereum": "1",
 }
 
 # In-memory TTL cache: key -> (expires_at_epoch, value)
@@ -139,7 +136,7 @@ async def get_smart_money_signals(
     Returns list of signals with: ticker, direction (buy/sell), alertPrice,
     currentPrice, maxGain, exitRate, smartMoneyCount, status.
     """
-    chain_id = SUPPORTED_CHAINS.get(chain.lower(), "CT_501")
+    chain_id = chain_to_platform(chain, default=SOLANA_CHAIN_ID)
     cache_key = f"smart_signals:{chain_id}:{page}:{page_size}:{signal_type}"
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -231,7 +228,7 @@ async def get_social_hype_ranking(
     time_range: 1 = 24 hours.
     Returns tokens ranked by social buzz with sentiment summaries.
     """
-    chain_id = SUPPORTED_CHAINS.get(chain.lower(), "CT_501")
+    chain_id = chain_to_platform(chain, default=SOLANA_CHAIN_ID)
     cache_key = f"social_hype:{chain_id}:{time_range}:{sentiment}"
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -288,7 +285,7 @@ async def get_trending_tokens(
     rank_type: 10=Trending, 11=TopSearch, 20=Alpha, 40=Stock
     period: 10=1m, 20=5m, 30=1h, 40=4h, 50=24h
     """
-    chain_id = SUPPORTED_CHAINS.get(chain.lower(), "CT_501")
+    chain_id = chain_to_platform(chain, default=SOLANA_CHAIN_ID)
     cache_key = f"trending:{chain_id}:{rank_type}:{period}:{size}"
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -338,7 +335,7 @@ async def get_smart_money_inflow(
     Get tokens ranked by smart money net inflow (USD).
     Shows which tokens professional wallets are accumulating.
     """
-    chain_id = SUPPORTED_CHAINS.get(chain.lower(), "CT_501")
+    chain_id = chain_to_platform(chain, default=SOLANA_CHAIN_ID)
     cache_key = f"smart_inflow:{chain_id}:{period}"
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -386,7 +383,7 @@ async def get_pnl_leaderboard(
     Get top trader addresses ranked by PnL.
     Useful to cross-reference with Polymarket trader wallets.
     """
-    chain_id = SUPPORTED_CHAINS.get(chain.lower(), "CT_501")
+    chain_id = chain_to_platform(chain, default=SOLANA_CHAIN_ID)
     cache_key = f"pnl_board:{chain_id}:{period}"
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -624,7 +621,7 @@ async def get_crypto_market_context(
         trending_tokens, token_data (if query_tokens provided)
     """
     context: dict[str, Any] = {}
-    chain_id = SUPPORTED_CHAINS.get(chain.lower(), "CT_501")
+    chain_id = chain_to_platform(chain, default=SOLANA_CHAIN_ID)
 
     # The four ranking sources are independent — fetch them concurrently so
     # a slow endpoint cannot multiply the total latency.

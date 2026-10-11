@@ -33,13 +33,6 @@ class Settings(SharedLLMSettings):
     # Fallback: OpenAI direct (if GITHUB_TOKEN is missing)
     openai_api_key: str = ""
 
-    # MCP Configuration
-    mcp_config_path: str = "/app/mcp-config.json"
-
-    # Polymarket MCP
-    polymarket_private_key: str = ""
-    polymarket_chain_id: int = 137
-
     # Prompts
     prompts_path: str = "/app/prompts/prompts.json"
 

@@ -47,8 +47,10 @@ class Settings(SharedLLMSettings):
     newsapi_api_key: str = ""
     newsapi_enabled: bool = False
 
-    # Binance Skills Hub (public APIs, no auth required)
-    binance_skills_enabled: bool = True
+    # Binance enrichment is gated by the BINANCE_SKILLS_ENABLED environment
+    # variable read inside the shared research-MCP client, so it applies to
+    # this service and cli-agent with a single switch. (A mirrored settings
+    # field used to live here; it was dead — nothing ever read it.)
 
     # Logging
     log_level: str = "INFO"

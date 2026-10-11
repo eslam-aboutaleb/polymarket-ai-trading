@@ -27,6 +27,8 @@ export interface UserSettings {
   fixed_trade_amount: number;
   require_ai_approval: boolean;
   follow_email_notifications_enabled: boolean;
+  /** Daily portfolio digest opt-out flag (plan 02). */
+  daily_digest_enabled: boolean;
   // Multi-layer risk protection
   monthly_loss_limit: number | null;
   max_drawdown_pct: number;
@@ -62,6 +64,8 @@ export interface CopyTradingSettingsUpdate {
   fixed_trade_amount?: number;
   require_ai_approval?: boolean;
   follow_email_notifications_enabled?: boolean;
+  /** Daily portfolio digest opt-out flag (plan 02). */
+  daily_digest_enabled?: boolean;
   simulation_mode?: boolean;
   paper_balance?: number;
   inverse_bot_enabled?: boolean;
@@ -222,6 +226,16 @@ export async function updateCopyTradingSettings(
 }
 
 /**
+ * Enable or disable the daily portfolio digest (plan 02).
+ *
+ * The flag governs the whole scheduled report — both the notification-channel
+ * dispatch and the direct email — so turning it off stops the digest entirely.
+ */
+export async function updateDailyDigestSettings(enabled: boolean): Promise<UserSettings> {
+  return updateCopyTradingSettings({ daily_digest_enabled: enabled });
+}
+
+/**
  * Get user profile (name, avatar, contact)
  */
 export async function getUserProfile(): Promise<UserProfile> {
@@ -305,6 +319,7 @@ export const settingsService = {
   updateUserSettings,
   getBackendsStatus,
   updateCopyTradingSettings,
+  updateDailyDigestSettings,
   getUserProfile,
   updateUserProfile,
   getPaperSummary,

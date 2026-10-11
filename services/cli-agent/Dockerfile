@@ -23,8 +23,6 @@ RUN mkdir -p src && python -m grpc_tools.protoc -Iproto --python_out=src --grpc_
 
 # Copy source code
 COPY services/cli-agent/src/ ./src/
-COPY services/cli-agent/mcp-config.json .
-COPY services/cli-agent/mcps/ ./mcps/
 COPY services/mcps/research/ ./services/mcps/research/
 # Shared packages used by both AI services (polymarket_mcp and
 # polymarket_settings). Kept as a single implementation so

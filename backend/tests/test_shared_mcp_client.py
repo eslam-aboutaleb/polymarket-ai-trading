@@ -8,13 +8,26 @@ stubbed throughout — no subprocess is ever spawned.
 import importlib
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "services" / "shared"))
 
-from polymarket_mcp import ResearchMCPClient  # noqa: E402
+from polymarket_mcp import ResearchMCPClient, _env_flag  # noqa: E402
+
+# Transport doubles shared with test_mcp_transport.py so the two modules do not
+# each keep their own copy of the same stub (duplication budget).
+SERVER_PATH = "/app/services/mcps/research/server.py"
+
+
+def make_proc(stdout: bytes, returncode: int = 0):
+    """Build a subprocess double whose ``communicate`` returns ``stdout``."""
+    proc = MagicMock()
+    proc.returncode = returncode
+    proc.communicate = AsyncMock(return_value=(stdout, b""))
+    return proc
 
 
 class ServerPathResolutionTests(unittest.TestCase):
@@ -50,6 +63,53 @@ class ServerPathResolutionTests(unittest.TestCase):
             patch("pathlib.Path.exists", return_value=False),
         ):
             self.assertEqual(ResearchMCPClient().server_path, "")
+
+    def test_source_relative_candidate_lands_inside_the_repo(self):
+        # ``parents[3]`` used to point one level above the repo, so that
+        # candidate was dead and only the cwd fallback covered local dev.
+        # ``parents[2]`` is ``services``, where the server really lives.
+        expected = (
+            Path(__file__).resolve().parents[2] / "services" / "mcps" / "research" / "server.py"
+        )
+        self.assertTrue(expected.exists(), f"{expected} missing")
+        with (
+            patch.dict(os.environ, {"RESEARCH_MCP_SERVER_PATH": ""}),
+            patch(
+                "polymarket_mcp.Path.cwd",
+                return_value=Path(tempfile.gettempdir(), "not-this-repo"),
+            ),
+        ):
+            self.assertEqual(ResearchMCPClient().server_path, str(expected))
+
+
+class EnvGateTests(unittest.TestCase):
+    """Both env gates share one truthy rule instead of drifting apart."""
+
+    GATES = (
+        ("BINANCE_SKILLS_ENABLED", ResearchMCPClient._binance_enabled),
+        ("RESEARCH_MCP_BATCH_ENABLED", ResearchMCPClient._batch_enabled),
+    )
+
+    def test_common_truthy_spellings_enable_every_gate(self):
+        for raw in ("1", "true", "TRUE", "yes", "on", " on "):
+            for env_name, gate in self.GATES:
+                with patch.dict(os.environ, {env_name: raw}):
+                    self.assertTrue(gate(), f"{env_name}={raw!r} should enable")
+
+    def test_falsy_spellings_disable_every_gate(self):
+        for raw in ("0", "false", "False", "no", "off", "", "   "):
+            for env_name, gate in self.GATES:
+                with patch.dict(os.environ, {env_name: raw}):
+                    self.assertFalse(gate(), f"{env_name}={raw!r} should disable")
+
+    def test_unset_gate_defaults_to_enabled(self):
+        with patch.dict(os.environ):
+            for env_name, gate in self.GATES:
+                os.environ.pop(env_name, None)
+                self.assertTrue(gate(), f"{env_name} should default to on")
+            os.environ.pop("SOME_UNSET_FLAG", None)
+            self.assertTrue(_env_flag("SOME_UNSET_FLAG"))
+            self.assertFalse(_env_flag("SOME_UNSET_FLAG", default=False))
 
 
 class CryptoTokenExtractionTests(unittest.TestCase):
@@ -174,6 +234,7 @@ class GatherBinanceContextTests(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         ResearchMCPClient._cache.clear()
+        ResearchMCPClient._binance_cache.clear()
         self.client = ResearchMCPClient()
         self.client.server_path = "/app/services/mcps/research/server.py"
 
@@ -238,13 +299,7 @@ class CallToolTests(unittest.IsolatedAsyncioTestCase):
         self.client = ResearchMCPClient()
         # Without a resolved server path the transport short-circuits before
         # spawning anything, so point it at a plausible location.
-        self.client.server_path = "/app/services/mcps/research/server.py"
-
-    def _proc(self, stdout: bytes, returncode: int = 0):
-        proc = MagicMock()
-        proc.returncode = returncode
-        proc.communicate = AsyncMock(return_value=(stdout, b""))
-        return proc
+        self.client.server_path = SERVER_PATH
 
     async def test_no_server_path_short_circuits(self):
         self.client.server_path = ""
@@ -253,7 +308,7 @@ class CallToolTests(unittest.IsolatedAsyncioTestCase):
     async def _run(self, stdout, returncode=0):
         with patch(
             "asyncio.create_subprocess_exec",
-            new=AsyncMock(return_value=self._proc(stdout, returncode)),
+            new=AsyncMock(return_value=make_proc(stdout, returncode)),
         ):
             return await self.client._call_tool("web_search", {"query": "x"})
 
@@ -290,7 +345,9 @@ class CallToolTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertEqual(await self.client._call_tool("web_search", {}), [])
 
-    async def test_uses_last_line_of_output(self):
+    async def test_uses_first_json_frame_of_output(self):
+        # The transport decodes the first JSON frame on stdout; leading noise
+        # (a stray import warning) is skipped, trailing lines are ignored.
         payload = b'noise\n{"ok": true, "result": {"final": true}}\n'
         self.assertEqual(await self._run(payload), {"final": True})
 
@@ -300,47 +357,62 @@ class GatherMarketResearchTests(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         ResearchMCPClient._cache.clear()
+        ResearchMCPClient._binance_cache.clear()
         self.client = ResearchMCPClient()
 
     async def test_returns_all_four_sections(self):
         with (
-            patch.object(self.client, "_call_tool", new=AsyncMock(return_value=[{"title": "T"}])),
+            patch.dict(os.environ, {"BINANCE_SKILLS_ENABLED": "true"}),
             patch.object(
                 self.client,
-                "_gather_binance_context",
-                new=AsyncMock(return_value={"formatted": "b"}),
+                "call_tools",
+                new=AsyncMock(
+                    return_value=[
+                        [{"title": "T"}],
+                        [{"title": "T"}],
+                        {"social_hype_summary": "hype"},
+                    ]
+                ),
             ),
         ):
             result = await self.client.gather_market_research("cid", "Will BTC rise?", "Yes", "No")
         for key in ("web_results", "x_results", "web_summary", "x_summary", "binance_context"):
             self.assertIn(key, result)
-        self.assertEqual(result["binance_summary"], "b")
+        self.assertIn("hype", result["binance_summary"])
 
     async def test_second_call_is_cached(self):
-        call = AsyncMock(return_value=[{"title": "T"}])
+        batch = AsyncMock(
+            return_value=[[{"title": "T"}], [{"title": "T"}], {"social_hype_summary": "hype"}]
+        )
         with (
-            patch.object(self.client, "_call_tool", new=call),
-            patch.object(self.client, "_gather_binance_context", new=AsyncMock(return_value={})),
+            patch.dict(os.environ, {"BINANCE_SKILLS_ENABLED": "true"}),
+            patch.object(self.client, "call_tools", new=batch),
         ):
             first = await self.client.gather_market_research("cid", "T", "Yes", "No")
             second = await self.client.gather_market_research("cid", "T", "Yes", "No")
         self.assertIs(first, second)
-        # Two tools per miss, and no further calls on the cache hit.
-        self.assertEqual(call.await_count, 2)
+        # One batch on the miss, and no further call on the cache hit.
+        self.assertEqual(batch.await_count, 1)
 
     async def test_cache_keyed_on_condition_id(self):
+        batch = AsyncMock(
+            return_value=[[{"title": "T"}], [{"title": "T"}], {"social_hype_summary": "hype"}]
+        )
         with (
-            patch.object(self.client, "_call_tool", new=AsyncMock(return_value=[])),
-            patch.object(self.client, "_gather_binance_context", new=AsyncMock(return_value={})),
+            patch.dict(os.environ, {"BINANCE_SKILLS_ENABLED": "true"}),
+            patch.object(self.client, "call_tools", new=batch),
         ):
             await self.client.gather_market_research("cid-a", "T", "Yes", "No")
             await self.client.gather_market_research("cid-b", "T", "Yes", "No")
         self.assertEqual(len(ResearchMCPClient._cache), 2)
 
     async def test_falls_back_to_title_when_no_condition_id(self):
+        batch = AsyncMock(
+            return_value=[[{"title": "T"}], [{"title": "T"}], {"social_hype_summary": "hype"}]
+        )
         with (
-            patch.object(self.client, "_call_tool", new=AsyncMock(return_value=[])),
-            patch.object(self.client, "_gather_binance_context", new=AsyncMock(return_value={})),
+            patch.dict(os.environ, {"BINANCE_SKILLS_ENABLED": "true"}),
+            patch.object(self.client, "call_tools", new=batch),
         ):
             await self.client.gather_market_research("", "Unique title", "Yes", "No")
         self.assertEqual(len(ResearchMCPClient._cache), 1)
@@ -348,13 +420,10 @@ class GatherMarketResearchTests(unittest.IsolatedAsyncioTestCase):
     async def test_all_empty_research_is_not_cached(self):
         # A transient outage (both searches empty, Binance failure sentinel)
         # must not poison the cache: the next identical call re-runs.
+        batch = AsyncMock(return_value=[[], [], {"formatted": ""}])
         with (
-            patch.object(self.client, "_call_tool", new=AsyncMock(return_value=[])),
-            patch.object(
-                self.client,
-                "_gather_binance_context",
-                new=AsyncMock(return_value={"formatted": ""}),
-            ),
+            patch.dict(os.environ, {"BINANCE_SKILLS_ENABLED": "true"}),
+            patch.object(self.client, "call_tools", new=batch),
         ):
             await self.client.gather_market_research("cid", "T", "Yes", "No")
             await self.client.gather_market_research("cid", "T", "Yes", "No")
@@ -362,35 +431,95 @@ class GatherMarketResearchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_timed_out_research_is_not_cached(self):
         # A subprocess timeout returns an error payload; it must not be cached.
+        batch = AsyncMock(return_value=[[], [], {"ok": False, "error": "research timed out"}])
         with (
-            patch.object(self.client, "_call_tool", new=AsyncMock(return_value=[])),
-            patch.object(
-                self.client,
-                "_gather_binance_context",
-                new=AsyncMock(return_value={"ok": False, "error": "research timed out"}),
-            ),
+            patch.dict(os.environ, {"BINANCE_SKILLS_ENABLED": "true"}),
+            patch.object(self.client, "call_tools", new=batch),
         ):
             await self.client.gather_market_research("cid", "T", "Yes", "No")
         self.assertEqual(len(ResearchMCPClient._cache), 0)
 
     async def test_both_searches_share_query_args(self):
-        call = AsyncMock(return_value=[])
+        batch = AsyncMock(return_value=[[], [], {"formatted": ""}])
         with (
-            patch.object(self.client, "_call_tool", new=call),
-            patch.object(self.client, "_gather_binance_context", new=AsyncMock(return_value={})),
+            patch.dict(os.environ, {"BINANCE_SKILLS_ENABLED": "true"}),
+            patch.object(self.client, "call_tools", new=batch),
         ):
             await self.client.gather_market_research(
                 "cid", "Title", "Held", "Alt", recency_hours=6, max_results=3
             )
-        self.assertEqual(call.await_count, 2)
-        web_args = call.await_args_list[0].args[1]
-        alt_args = call.await_args_list[1].args[1]
+        # One batch for the cold market, carrying both searches in order.
+        self.assertEqual(batch.await_count, 1)
+        requested = batch.await_args.args[0]
+        self.assertEqual([tool for tool, _ in requested][:2], ["web_search", "x_posts_search"])
+        web_args = requested[0][1]
+        alt_args = requested[1][1]
         self.assertEqual(web_args, alt_args)
         self.assertEqual(web_args["recency_hours"], 6)
         self.assertEqual(web_args["max_results"], 3)
         # The query folds in both outcomes.
         self.assertIn("Held", web_args["query"])
         self.assertIn("Alt", web_args["query"])
+
+    async def test_binance_context_rides_in_the_same_batch(self):
+        batch = AsyncMock(return_value=[[], [], {"social_hype_summary": "hype"}])
+        with (
+            patch.dict(os.environ, {"BINANCE_SKILLS_ENABLED": "true"}),
+            patch.object(self.client, "call_tools", new=batch),
+        ):
+            await self.client.gather_market_research("cid", "Will BTC rise?", "Yes", "No")
+        requested = batch.await_args.args[0]
+        self.assertEqual(
+            [tool for tool, _ in requested],
+            ["web_search", "x_posts_search", "binance_market_context"],
+        )
+        binance_args = requested[2][1]
+        self.assertEqual(binance_args["query_tokens"], ["BTC"])
+        self.assertEqual(binance_args["chain"], "solana")
+
+    async def test_binance_context_is_cached_across_markets(self):
+        batch = AsyncMock(
+            return_value=[[{"title": "T"}], [{"title": "T"}], {"social_hype_summary": "hype"}]
+        )
+        with (
+            patch.dict(os.environ, {"BINANCE_SKILLS_ENABLED": "true"}),
+            patch.object(self.client, "call_tools", new=batch),
+        ):
+            await self.client.gather_market_research("cid-a", "Will BTC rise?", "Yes", "No")
+            await self.client.gather_market_research("cid-b", "Will Bitcoin rise?", "Yes", "No")
+        # Both markets name BTC, so the second one skips the Binance request.
+        self.assertEqual(batch.await_count, 2)
+        self.assertEqual(
+            [tool for tool, _ in batch.await_args_list[1].args[0]],
+            ["web_search", "x_posts_search"],
+        )
+
+    async def test_binance_context_disabled_skips_its_request(self):
+        batch = AsyncMock(return_value=[[{"title": "T"}], [{"title": "T"}]])
+        with (
+            patch.dict(os.environ, {"BINANCE_SKILLS_ENABLED": "false"}),
+            patch.object(self.client, "call_tools", new=batch),
+        ):
+            result = await self.client.gather_market_research("cid", "Will BTC rise?", "Yes", "No")
+        self.assertEqual(
+            [tool for tool, _ in batch.await_args.args[0]], ["web_search", "x_posts_search"]
+        )
+        self.assertEqual(result["binance_context"], {"formatted": ""})
+
+    async def test_batch_flag_off_uses_per_call_transport(self):
+        calls = AsyncMock(return_value=[{"title": "T"}])
+        with (
+            patch.dict(os.environ, {"BINANCE_SKILLS_ENABLED": "true"}),
+            patch.dict(os.environ, {"RESEARCH_MCP_BATCH_ENABLED": "false"}),
+            patch.object(self.client, "_call_tool", new=calls),
+        ):
+            await self.client.gather_market_research("cid", "Will BTC rise?", "Yes", "No")
+        # Three tools → three per-call transports, as before the batching.
+        self.assertEqual(calls.await_count, 3)
+        self.assertEqual(
+            [call.args[0] for call in calls.await_args_list],
+            ["web_search", "x_posts_search", "binance_market_context"],
+        )
 
 
 class ShimModuleTests(unittest.TestCase):

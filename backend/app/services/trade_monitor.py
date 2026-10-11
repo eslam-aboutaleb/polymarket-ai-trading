@@ -956,7 +956,14 @@ async def _create_follow_notifications(
 
 
 async def _emit_alert(user_id: int, event_type: str, message: str) -> None:
-    """Emit an alert event (plan 09) when the service is available."""
+    """Emit an alert event (plan 09) when the service is available.
+
+    ``gtc_order_cancelled`` / ``gtc_order_filled`` are catalog entries in
+    ``alert_service.ALERT_EVENT_TYPES`` (plan 03) — before that they were
+    unknown event types and the ``ValueError`` from ``dispatch`` was
+    swallowed here, so those alerts never reached users. Fail-open stays
+    deliberate: reconciliation must never break because alerting did.
+    """
     if _alert_dispatch is None:
         logger.debug(
             "Alert service unavailable; skipping %s alert for user %s",
@@ -968,8 +975,9 @@ async def _emit_alert(user_id: int, event_type: str, message: str) -> None:
         await _alert_dispatch(event_type, user_id, {"message": message})
     except Exception:
         logger.warning(
-            "Alert emission failed for user %s",
+            "Alert emission failed for user %s event=%s",
             user_id,
+            event_type,
             exc_info=True,
         )
 

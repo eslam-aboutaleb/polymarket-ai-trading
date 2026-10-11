@@ -167,6 +167,28 @@ class Settings(BaseSettings):
     latency_arb_symbols: str = "BTC,ETH,SOL"
     latency_arb_windows: str = "5,15,60"
 
+    # AI forecast calibration (plan 01): nightly job that resolves
+    # pending forecasts and writes Brier scores.
+    forecast_resolution_interval_seconds: int = 21600
+    calibration_default_window_days: int = 30
+
+    # Daily portfolio digest (plan 02): UTC hour the report is sent.
+    daily_digest_hour_utc: int = 8
+    daily_digest_enabled_default: bool = True
+
+    # Price-alert AI verdicts (plan 03): kill switch for LLM
+    # enrichment of stop-loss / take-profit alerts.
+    price_alert_llm_enabled: bool = True
+
+    # Portfolio risk report (plan 04): max positions scored per report.
+    risk_report_max_positions: int = 25
+
+    # Equity curve (plan 05): hourly bankroll snapshot cadence.
+    equity_snapshot_interval_seconds: int = 3600
+
+    # Per-trader copy attribution (plan 07): default window (days).
+    copy_attribution_window_days: int = 30
+
     @field_validator("jwt_secret_key")
     @classmethod
     def validate_jwt_secret_key(cls, value: str) -> str:

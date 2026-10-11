@@ -80,7 +80,6 @@ ignore = [
 "backend/app/services/position_lifecycle_service.py" = ["ARG001"]
 "backend/app/services/stop_loss_monitor.py" = ["ARG001"]
 "backend/app/services/leaderboard_service.py" = ["ARG001"]
-"backend/app/llm/assessment_chain.py" = ["ARG002"]
 # Safety-cap helper takes a session for interface symmetry with its callers but
 # reads caps from the already-loaded UserSettings row.
 "backend/app/services/copy_trade_service.py" = ["ARG001"]

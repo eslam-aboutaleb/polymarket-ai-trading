@@ -26,6 +26,8 @@ import TradeHistory from "./components/TradeHistory";
 import CopyTrading from "./components/CopyTrading";
 import WhaleFeed from "./components/WhaleFeed";
 import ExecutionAnalytics from "./components/ExecutionAnalytics";
+import CalibrationPanel from "./components/CalibrationPanel";
+import RiskReportPage from "./pages/RiskReportPage";
 import MarketMaking from "./components/MarketMaking";
 import Backtesting from "./components/Backtesting";
 import News from "./components/News";
@@ -146,6 +148,8 @@ function App() {
               <Route path="trades" element={<TradeHistory />} />
               <Route path="whales" element={<WhaleFeed />} />
               <Route path="analytics/execution" element={<ExecutionAnalytics />} />
+              <Route path="analytics/calibration" element={<CalibrationPanel />} />
+              <Route path="analytics/risk" element={<RiskReportPage />} />
               <Route path="latency-arb" element={<LatencyArb />} />
               <Route path="ops" element={<OpsCenter />} />
               <Route path="settings" element={<SettingsPage />} />

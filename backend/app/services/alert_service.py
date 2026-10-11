@@ -60,6 +60,9 @@ ALERT_EVENT_TYPES = frozenset(
         "system_halt",
         "dead_man_switch",
         "drawdown_warning",
+        "daily_digest",
+        "gtc_order_cancelled",
+        "gtc_order_filled",
     }
 )
 
@@ -76,6 +79,9 @@ EVENT_TYPE_LABELS = {
     "system_halt": "System Halt",
     "dead_man_switch": "Dead Man Switch",
     "drawdown_warning": "Drawdown Warning",
+    "daily_digest": "Daily Portfolio Digest",
+    "gtc_order_cancelled": "GTC Order Cancelled",
+    "gtc_order_filled": "GTC Order Filled",
 }
 
 # High-volume event types buffered into a periodic digest instead
@@ -90,6 +96,12 @@ EVENT_TYPE_RATE_LIMITS = {
     "system_halt": 10,
     "dead_man_switch": 5,
     "drawdown_warning": 20,
+    # Orphaned-GTC reconciliation fires one alert per reclaimed order, so a
+    # post-outage sweep is a genuine burst: these need an explicit ceiling
+    # below the 60/min default, or the storm counter starts dropping alerts
+    # mid-sweep while the reconciliation loop keeps going.
+    "gtc_order_filled": 20,
+    "gtc_order_cancelled": 20,
 }
 
 # Per-channel token buckets: (capacity, refill tokens per second).
