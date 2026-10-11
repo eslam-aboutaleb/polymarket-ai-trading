@@ -55,6 +55,7 @@ class NotificationEventResponse(BaseModel):
     side: str
     size: float
     price: float
+    message: str | None = None
     read_at: str | None = None
     created_at: str
     unread: bool
@@ -110,6 +111,7 @@ def _event_response(event: NotificationFeedEvent) -> NotificationEventResponse:
         side=event.side or "",
         size=event.size or 0.0,
         price=event.price or 0.0,
+        message=event.message,
         read_at=event.read_at.isoformat() if event.read_at else None,
         created_at=event.created_at.isoformat() if event.created_at else "",
         unread=event.read_at is None,

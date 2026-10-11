@@ -153,6 +153,21 @@ def _opt_float(value: Any) -> float | None:
     return None
 
 
+def _entry_number(value: Any, default: float) -> float:
+    """Coerce one numeric field of a parsed LLM entry.
+
+    ``None`` (the model omitted the field, or emitted an explicit
+    ``null``) takes the field's documented default. Anything else that
+    is not a number raises: the caller drops the whole entry rather
+    than letting a fabricated value reach the ranking or the route's
+    merge. A numeric string is accepted, because the model is free to
+    quote ``"85"`` inside its JSON.
+    """
+    if value is None:
+        return default
+    return float(value)
+
+
 def _response_metadata(response: Any) -> dict[str, str]:
     """Read the proto metadata map off a response (model/provider echo)."""
     try:
@@ -1761,15 +1776,26 @@ class AnalysisClient:
             "|-------|--------|--------------|-----------|----------|------------|-----------|",
         ]
         for event in events[:20]:
+            if not isinstance(event, dict):
+                continue
             title = str(event.get("event_title") or event.get("title") or "Unknown")[:70]
             sub_markets = event.get("sub_markets") or []
             for sm in sub_markets[:20]:
+                if not isinstance(sm, dict):
+                    continue
                 label = sm.get("label", sm.get("question", "Unknown"))
                 cid = sm.get("condition_id", "")
-                yes_p = float(sm.get("yes_price", 0.5) or 0.5)
-                no_p = float(sm.get("no_price", 0.5) or 0.5)
-                vol = float(sm.get("volume_24h", 0) or 0)
-                liq = float(sm.get("liquidity", 0) or 0)
+                # Defensive coercion: a malformed price or volume must
+                # not abort the whole scan, so the row falls back to
+                # the same neutral defaults ``scan_easy_trades`` uses.
+                try:
+                    yes_p = float(sm.get("yes_price", 0.5) or 0.5)
+                    no_p = float(sm.get("no_price", 0.5) or 0.5)
+                    vol = float(sm.get("volume_24h", 0) or 0)
+                    liq = float(sm.get("liquidity", 0) or 0)
+                except (TypeError, ValueError):
+                    logger.debug("Event easy-trade scan: skipping malformed row %r", sm)
+                    yes_p, no_p, vol, liq = 0.5, 0.5, 0.0, 0.0
                 table_lines.append(
                     f"| {title} | {label} | {cid} | {yes_p * 100:.1f}¢ "
                     f"| {no_p * 100:.1f}¢ | ${vol:,.0f} | ${liq:,.0f} |"
@@ -1797,8 +1823,13 @@ class AnalysisClient:
         stub = await self._get_stub()
         first_price = 0.5
         for event in events:
+            if not isinstance(event, dict):
+                continue
             for sm in event.get("sub_markets") or []:
-                first_price = float(sm.get("yes_price", 0.5) or 0.5)
+                try:
+                    first_price = float(sm.get("yes_price", 0.5) or 0.5)
+                except (TypeError, ValueError, AttributeError):
+                    first_price = 0.5
                 break
             break
         request_kwargs = {
@@ -1839,7 +1870,27 @@ class AnalysisClient:
                 for trade in easy_trades:
                     if not isinstance(trade, dict):
                         continue
-                    ease = int(trade.get("ease_score", 50))
+                    # One malformed entry must not abort the scan row (the
+                    # route swallows the exception and loses every other
+                    # group's score), so each numeric coercion is guarded.
+                    # Junk drops the entry: ``ease_score`` is the ranking key
+                    # and the value the route merges onto the option, so
+                    # defaulting it would inject a fabricated middle-ranked
+                    # row. A missing or null field still takes its default.
+                    try:
+                        ease = int(_entry_number(trade.get("ease_score"), 50))
+                        edge = _entry_number(trade.get("edge_estimate"), 0)
+                        confidence = _entry_number(trade.get("confidence"), 0.5)
+                        expected_probability = _entry_number(
+                            trade.get("expected_probability"),
+                            0.5,
+                        )
+                    except (TypeError, ValueError):
+                        logger.warning(
+                            "Event easy trade scan: skipping entry with a non-numeric field (%r)",
+                            trade,
+                        )
+                        continue
                     results.append(
                         {
                             "condition_id": trade.get("condition_id", ""),
@@ -1848,8 +1899,8 @@ class AnalysisClient:
                             "ai_probability": _opt_float(trade.get("ai_probability")),
                             "ease_score": ease,
                             "risk_level": trade.get("risk_level", "medium"),
-                            "pnl_potential": abs(float(trade.get("edge_estimate", 0))),
-                            "credibility_score": int(trade.get("confidence", 0.5) * 100),
+                            "pnl_potential": abs(edge),
+                            "credibility_score": int(confidence * 100),
                             "smart_money_signal": "neutral",
                             "smart_money_summary": "",
                             "recommendation": (
@@ -1866,9 +1917,9 @@ class AnalysisClient:
                             "reasoning": trade.get("reasoning", ""),
                             "search_summary": parsed.get("scan_summary", ""),
                             "key_risks": [],
-                            "expected_probability": float(trade.get("expected_probability", 0.5)),
-                            "edge_estimate": float(trade.get("edge_estimate", 0)),
-                            "confidence": float(trade.get("confidence", 0.5)),
+                            "expected_probability": expected_probability,
+                            "edge_estimate": edge,
+                            "confidence": confidence,
                             "category": trade.get("category", "other"),
                             "model": metadata.get("model", ""),
                             "provider": metadata.get("provider", "") or metadata.get("backend", ""),

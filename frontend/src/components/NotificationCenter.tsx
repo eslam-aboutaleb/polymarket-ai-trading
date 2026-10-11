@@ -32,6 +32,9 @@ const EVENT_LABELS: Record<string, string> = {
   system_halt: "System Halt",
   dead_man_switch: "Dead Man Switch",
   drawdown_warning: "Drawdown Warning",
+  daily_digest: "Daily Portfolio Digest",
+  gtc_order_cancelled: "GTC Order Cancelled",
+  gtc_order_filled: "GTC Order Filled",
 };
 
 const POLL_INTERVAL_MS = 30_000;
@@ -224,6 +227,11 @@ export default function NotificationCenter() {
                             {new Date(event.created_at).toLocaleString()}
                           </span>
                         </div>
+                        {event.message && (
+                          <p className="text-xs text-soft mt-0.5 whitespace-pre-line">
+                            {event.message}
+                          </p>
+                        )}
                         {eventSummary(event) && (
                           <p className="text-xs text-soft mt-0.5 truncate">{eventSummary(event)}</p>
                         )}

@@ -8,13 +8,20 @@ multiplier rejection, edge-source resolution against a
 real in-memory database, and the paper-mode copy-trade
 integration (calculation_details records p, price,
 f*, multiplier and the final size).
+
+``ResolveEdgeProbabilityTests`` pins both probability
+semantics the resolver reads: the direction-aware
+``ai_probability`` (P(profit), used verbatim — never
+mirrored for a NO-side position) and the legacy
+``confidence`` reading (P(YES resolves true)).
 """
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (register models on Base.metadata)
@@ -152,7 +159,14 @@ class ResolveEdgeProbabilityTests(unittest.TestCase):
     def tearDown(self):
         self.db.close()
 
-    def _add_assessment(self, confidence: float, recommendation: str = "copy"):
+    def _add_assessment(
+        self,
+        confidence: float,
+        recommendation: str = "copy",
+        ai_probability: float | None = None,
+        db: Session | None = None,
+    ):
+        session = db if db is not None else self.db
         history = TradeHistory(
             market_id=MARKET_ID,
             wallet_address=TRADER_WALLET,
@@ -161,9 +175,9 @@ class ResolveEdgeProbabilityTests(unittest.TestCase):
             price=0.5,
             timestamp=utc_now(),
         )
-        self.db.add(history)
-        self.db.flush()
-        self.db.add(
+        session.add(history)
+        session.flush()
+        session.add(
             Assessment(
                 trade_history_id=history.id,
                 ai_score=confidence,
@@ -171,9 +185,10 @@ class ResolveEdgeProbabilityTests(unittest.TestCase):
                 recommendation=recommendation,
                 risk_level="medium",
                 confidence=confidence,
+                ai_probability=ai_probability,
             )
         )
-        self.db.commit()
+        session.commit()
 
     def test_no_estimates_returns_none(self):
         p, source = kelly_service.resolve_edge_probability(self.db, USER_ID, MARKET_ID)
@@ -191,6 +206,105 @@ class ResolveEdgeProbabilityTests(unittest.TestCase):
         p, source = kelly_service.resolve_edge_probability(self.db, USER_ID, MARKET_ID)
         self.assertIsNone(p)
         self.assertIsNone(source)
+
+    # ── ai_probability: the direction-aware P(profit) ──────────
+
+    def test_ai_probability_drives_p(self):
+        self._add_assessment(confidence=72.0, ai_probability=0.66)
+        p, source = kelly_service.resolve_edge_probability(self.db, USER_ID, MARKET_ID)
+        self.assertEqual(p, 0.66)
+        self.assertEqual(source, "ai_assessment")
+
+    def test_ai_probability_is_not_negated_for_a_no_side_trade(self):
+        # The copy-trade evaluation's ai_probability is "the
+        # probability THIS TRADE is profitable", so it is already
+        # direction-aware: a NO-side trade worth copying at 0.4
+        # must keep p=0.4, not become 1 - 0.4 = 0.6.
+        self._add_assessment(confidence=20.0, ai_probability=0.4)
+        p, source = kelly_service.resolve_edge_probability(self.db, USER_ID, MARKET_ID)
+        self.assertEqual(p, 0.4)
+        self.assertEqual(source, "ai_assessment")
+
+    def test_ai_probability_beats_confidence(self):
+        self._add_assessment(confidence=95.0, ai_probability=0.51)
+        p, source = kelly_service.resolve_edge_probability(self.db, USER_ID, MARKET_ID)
+        self.assertEqual(p, 0.51)
+        self.assertEqual(source, "ai_assessment")
+
+    def test_out_of_range_ai_probability_falls_back_to_confidence(self):
+        # A stated certainty (0 / 1) is not a forecast, and a value
+        # above 1 is a percentage the caller never scaled; both fall
+        # back to the legacy confidence reading.
+        for bad in (0.0, 1.0, -0.5, 42.0, None):
+            with self.subTest(ai_probability=bad):
+                factory = _make_db()
+                db = factory()
+                db.add(User(id=USER_ID, wallet_address=WALLET))
+                db.commit()
+                try:
+                    self._add_assessment(72.0, ai_probability=bad, db=db)
+                    p, source = kelly_service.resolve_edge_probability(db, USER_ID, MARKET_ID)
+                    self.assertEqual(p, 0.72)
+                    self.assertEqual(source, "ai_assessment")
+                finally:
+                    db.close()
+
+    def test_non_numeric_ai_probability_falls_back_to_confidence(self):
+        # Junk in the column coerces to no probability rather than
+        # raising: the legacy confidence reading still sizes the trade.
+        latest = SimpleNamespace(
+            recommendation="copy",
+            ai_probability="high",
+            confidence=72.0,
+            ai_score=72.0,
+        )
+        query = MagicMock()
+        query.join.return_value.filter.return_value.order_by.return_value.first.return_value = (
+            latest
+        )
+        db = MagicMock()
+        db.query.return_value = query
+
+        p, source = kelly_service.resolve_edge_probability(db, USER_ID, MARKET_ID)
+
+        self.assertEqual(p, 0.72)
+        self.assertEqual(source, "ai_assessment")
+
+    def test_ai_probability_wins_over_trader_win_rate(self):
+        self._add_assessment(confidence=72.0, ai_probability=0.44)
+        self.db.add(
+            Winner(
+                wallet_address=TRADER_WALLET,
+                win_rate=64.0,
+                trade_count=50,
+            )
+        )
+        self.db.commit()
+        p, source = kelly_service.resolve_edge_probability(
+            self.db,
+            USER_ID,
+            MARKET_ID,
+            trader_wallet=TRADER_WALLET,
+        )
+        self.assertEqual(p, 0.44)
+        self.assertEqual(source, "ai_assessment")
+
+    def test_avoid_skips_the_ai_probability(self):
+        # An avoid carries no edge for a long position even when the
+        # model still stated a probability.
+        self._add_assessment(confidence=90.0, recommendation="skip", ai_probability=0.9)
+        p, source = kelly_service.resolve_edge_probability(self.db, USER_ID, MARKET_ID)
+        self.assertIsNone(p)
+        self.assertIsNone(source)
+
+    def test_ai_probability_sizes_kelly_without_side_mirroring(self):
+        # p=0.4 at price 0.5 → b=1.0, q=0.6, f*=max(0, 0.4-0.6)=0:
+        # the NO-side verdict has no edge at that price. Mirroring
+        # (1 - 0.4 = 0.6) would have sized it instead.
+        self._add_assessment(confidence=20.0, ai_probability=0.4)
+        p, _ = kelly_service.resolve_edge_probability(self.db, USER_ID, MARKET_ID)
+        self.assertEqual(kelly_service.kelly_fraction(p, 0.5), 0.0)
+        self.assertEqual(kelly_service.size(1000, p, 0.5, 0.25), 0.0)
 
     def test_trader_win_rate_fallback(self):
         self.db.add(
@@ -377,8 +491,75 @@ class KellyCopyTradeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(details["trade_size_final"], 100.0)  # capped by max_position_size
         self.assertEqual(trade.amount, 100.0)
 
-    async def test_no_edge_copy_trade_is_skipped(self):
-        # Win rate 50% at price 0.5 → f*=0 → no size.
+    async def test_assessment_ai_probability_sizes_the_copy_trade(self):
+        # The copy-trade verdict's P(profit) is the Kelly edge: it
+        # beats the assessment's confidence (10%) and the trader's
+        # historical win rate (80%), and is used unmirrored.
+        history = TradeHistory(
+            market_id=MARKET_ID,
+            wallet_address=TRADER_WALLET,
+            order_type="buy",
+            amount=100.0,
+            price=0.5,
+            timestamp=utc_now(),
+        )
+        self.db.add(history)
+        self.db.flush()
+        self.db.add(
+            Assessment(
+                trade_history_id=history.id,
+                ai_score=10.0,
+                reasoning="test",
+                recommendation="copy",
+                risk_level="medium",
+                confidence=10.0,
+                ai_probability=0.62,
+            )
+        )
+        self.db.commit()
+
+        service = MagicMock()
+        service.get_wallet_balance = AsyncMock(return_value={"usdc_balance": 1000.0})
+        service.get_positions = AsyncMock(return_value=[])
+
+        with patch.object(
+            copy_trade_service,
+            "get_polymarket_service",
+            return_value=service,
+        ):
+            result = await copy_trade_service.execute_copy_trade(
+                self.db,
+                USER_ID,
+                TRADER_WALLET,
+                MARKET_ID,
+                "0xtoken",
+                "BUY",
+                0.5,
+                100.0,
+            )
+
+        self.assertTrue(result["executed"])
+
+        trade = (
+            self.db.query(UserTrade)
+            .filter(UserTrade.user_id == USER_ID)
+            .order_by(UserTrade.id.desc())
+            .first()
+        )
+        import json
+
+        details = json.loads(trade.calculation_details)
+        self.assertEqual(details["kelly_p"], 0.62)
+        self.assertEqual(details["kelly_price"], 0.5)
+        self.assertEqual(details["kelly_edge_source"], "ai_assessment")
+        self.assertAlmostEqual(details["kelly_f_star"], 0.24)
+        # 0.24 × 0.25 × 1000 bankroll = 60 USDC (under the 100 cap).
+        self.assertEqual(details["trade_size_final"], 60.0)
+        self.assertEqual(trade.amount, 60.0)
+
+    async def test_no_edge_copy_trade_is_skipped(
+        self,
+    ):  # Win rate 50% at price 0.5 → f*=0 → no size.
         self.db.query(Winner).update({"win_rate": 50.0})
         self.db.commit()
 

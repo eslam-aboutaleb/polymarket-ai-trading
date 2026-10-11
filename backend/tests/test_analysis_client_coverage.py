@@ -1606,6 +1606,108 @@ class AnalysisClientCoverageTests(_FakeAnalysisClientMixin, unittest.IsolatedAsy
         self.assertIn("Option 19", description)
         self.assertNotIn("Option 20", description)
 
+    async def test_scan_event_easy_trades_malformed_entry_does_not_abort_the_scan(self):
+        # A single entry the LLM emitted with a non-numeric field used
+        # to raise inside the loop, so the route's blanket except lost
+        # every group's score. Now the bad entry is skipped and the
+        # rest of the batch survives.
+        raw = json.dumps(
+            {
+                "easy_trades": [
+                    {"condition_id": "good", "ease_score": 88, "confidence": 0.9},
+                    {"condition_id": "bad-ease", "ease_score": "very"},
+                    {"condition_id": "bad-edge", "ease_score": 70, "edge_estimate": "n/a"},
+                    {"condition_id": "bad-confidence", "ease_score": 66, "confidence": "strong"},
+                    {
+                        "condition_id": "bad-expected",
+                        "ease_score": 62,
+                        "expected_probability": None,
+                    },
+                    {"ease_score": 40},
+                    {"ease_score": 60, "condition_id": "sparse"},
+                ],
+                "scan_summary": "scanned",
+            }
+        )
+        self.stub.AnalyzeMarket = AsyncMock(return_value=_ok_response(analysis=raw))
+        events = [
+            {
+                "event_title": "Election 2028",
+                "sub_markets": [
+                    {"label": "Democrat", "condition_id": "good", "yes_price": 0.4},
+                    {"label": "Republican", "condition_id": "bad-ease", "yes_price": 0.6},
+                ],
+            }
+        ]
+
+        results = await self.client.scan_event_easy_trades(events, max_results=10)
+
+        # ranked 88 > 62 > 60 > 40; the three junk entries are gone
+        self.assertEqual(
+            [r["condition_id"] for r in results],
+            ["good", "bad-expected", "sparse", ""],
+        )
+        self.assertEqual([r["ease_score"] for r in results], [88, 62, 60, 40])
+        first = results[0]
+        self.assertEqual(first["ai_score"], 88)
+        self.assertEqual(first["credibility_score"], 90)
+        self.assertEqual(first["recommendation"], "strong_buy")
+        self.assertEqual(first["pnl_potential"], 0.0)
+        # an explicit null keeps the documented default instead of
+        # dropping the entry
+        self.assertEqual(results[1]["expected_probability"], 0.5)
+        self.assertEqual(results[1]["recommendation"], "buy")
+        # sparse entry defaults are unchanged
+        self.assertEqual(results[2]["pnl_potential"], 0.0)
+        self.assertEqual(results[2]["confidence"], 0.5)
+        self.assertEqual(results[2]["expected_probability"], 0.5)
+        self.assertEqual(results[3]["recommendation"], "hold")
+
+    async def test_scan_event_easy_trades_accepts_numeric_strings(self):
+        # A stringified number is a numeric answer, not a malformed one.
+        raw = json.dumps({"easy_trades": [{"condition_id": "c1", "ease_score": "85.6"}]})
+        self.stub.AnalyzeMarket = AsyncMock(return_value=_ok_response(analysis=raw))
+        events = [{"event_title": "E", "sub_markets": [{"label": "A", "yes_price": "0.5"}]}]
+
+        results = await self.client.scan_event_easy_trades(events)
+
+        self.assertEqual([r["ease_score"] for r in results], [85])
+
+    async def test_scan_event_easy_trades_malformed_sub_market_prices(self):
+        # Malformed input rows fall back to neutral defaults instead of
+        # raising before the RPC is even issued.
+        self.stub.AnalyzeMarket = AsyncMock(return_value=_ok_response(analysis="{}"))
+        events = [
+            {
+                "event_title": "E",
+                "sub_markets": [
+                    {"label": "A", "yes_price": "not-a-number", "volume_24h": "n/a"},
+                    {"label": "B", "yes_price": None, "no_price": None},
+                ],
+            },
+            "not-a-dict",
+        ]
+
+        results = await self.client.scan_event_easy_trades(events)
+
+        self.assertEqual(results, [])
+        request = self.stub.AnalyzeMarket.await_args.args[0]
+        # flawed rows rendered with the neutral defaults (50¢ / $0)
+        self.assertIn("| E | A |  | 50.0¢ | 50.0¢ | $0 | $0 |", request.market_description)
+        self.assertIn("| E | B |  | 50.0¢ | 50.0¢ | $0 | $0 |", request.market_description)
+        self.assertAlmostEqual(request.yes_price, 0.5)
+        self.assertAlmostEqual(request.no_price, 0.5)
+
+    async def test_scan_event_easy_trades_missing_sub_market_keys(self):
+        # Empty sub-market dicts and an empty group must not raise.
+        self.stub.AnalyzeMarket = AsyncMock(return_value=_ok_response(analysis="{}"))
+        events = [
+            {"event_title": "No options", "sub_markets": []},
+            {"sub_markets": [{}]},
+        ]
+
+        self.assertEqual(await self.client.scan_event_easy_trades(events), [])
+
     async def test_synthesize_research_success(self):
         self.stub.AnalyzeMarket = AsyncMock(
             return_value=_ok_response(

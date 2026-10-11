@@ -16,9 +16,9 @@ inputs are estimates, not certainties.
 
 **Kelly input quality drives sizing quality.**  The
 probability ``p`` resolved by :func:`resolve_edge_probability`
-comes from an LLM confidence score or a historical win rate;
-neither is a calibrated probability.  An over-confident edge
-estimate makes Kelly over-bet, so the default multiplier is
+comes from an LLM probability/confidence estimate or a historical
+win rate; neither is a calibrated probability.  An over-confident
+edge estimate makes Kelly over-bet, so the default multiplier is
 0.25 (quarter Kelly): a mis-estimated edge costs at most a
 quarter of the full-Kelly wager while retaining most of the
 long-run bankroll growth.  Every Kelly-sized order logs the
@@ -160,12 +160,32 @@ def resolve_edge_probability(
 ) -> tuple[float | None, str | None]:
     """Resolve the estimated win probability for a market.
 
+    **Two probability semantics reach this function and they are
+    not interchangeable.**
+
+    * ``Assessment.confidence`` (0-100) is the model's assessment
+      strength for the market — a rough ``P(YES resolves true)``.
+      Callers map it onto a side themselves
+      (``effective_trade_params`` mirrors it for a SELL / NO
+      position), so it must stay side-agnostic here.
+    * ``Assessment.ai_probability`` is the copy-trade evaluation's
+      "your calibrated probability THIS TRADE is profitable". It is
+      already direction-aware — the probability of *profit*, not of
+      the YES outcome — so it is used verbatim and must never be
+      negated, mirrored or re-based for a NO-side position: reading
+      a 70% chance of profit as ``1 - 0.70`` would size a NO-side
+      copy of the same verdict at a 30% edge.
+
     Preference order:
 
-      1. ``ai_assessment`` — the confidence (0-100) of the
-         latest ``Assessment`` for the market, used only when
-         its recommendation is not "avoid"/"skip" (an avoid
-         carries no positive edge for a long position).
+      1. ``ai_assessment`` — ``ai_probability`` of the latest
+         ``Assessment`` for the market when it is present and in
+         ``(0, 1)`` (a stated certainty of 0 or 1 is not a
+         forecast, and a value above 1 is a percentage that was
+         never scaled), otherwise the confidence (0-100) of that
+         assessment. Both are used only when the recommendation is
+         not "avoid"/"skip" (an avoid carries no positive edge for
+         a long position).
       2. ``trader_win_rate`` — the followed trader's
          historical win rate (``Winner.win_rate``) when
          ``trader_wallet`` is given; otherwise the user's own
@@ -188,6 +208,20 @@ def resolve_edge_probability(
         if latest is not None:
             recommendation = str(latest.recommendation or "").lower()
             if recommendation not in NO_EDGE_RECOMMENDATIONS:
+                # Preferred estimate: the direction-aware P(profit).
+                ai_probability = (
+                    _to_float(latest.ai_probability) if latest.ai_probability is not None else 0.0
+                )
+                if 0.0 < ai_probability < 1.0:
+                    p = round(ai_probability, 4)
+                    logger.info(
+                        "Kelly edge source=ai_assessment (ai_probability) user=%d market=%s p=%.4f",
+                        user_id,
+                        market_id,
+                        p,
+                    )
+                    return (p, "ai_assessment")
+                # Legacy fallback: confidence read as P(YES).
                 confidence = _to_float(
                     latest.confidence if latest.confidence is not None else latest.ai_score,
                 )

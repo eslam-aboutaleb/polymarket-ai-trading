@@ -106,6 +106,7 @@ class NotificationsRouteTests(unittest.TestCase):
         event_type="fill",
         created_at=None,
         read_at=None,
+        message=None,
     ):
         event = NotificationFeedEvent(
             user_id=user_id,
@@ -116,6 +117,7 @@ class NotificationsRouteTests(unittest.TestCase):
             side="BUY",
             size=1.5,
             price=0.5,
+            message=message,
             created_at=created_at or datetime(2026, 1, 1, tzinfo=UTC),
             read_at=read_at,
         )
@@ -494,6 +496,29 @@ class NotificationsRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["detail"], "Notification channel not found")
         self.alert_service.send_test_alert.assert_not_awaited()
+
+    # ── Feed message body ─────────────────────────
+
+    def test_list_notifications_includes_the_message_body(self):
+        body = "Stop-loss triggered: Will BTC hit $150k? (Yes)\nAI verdict: REDUCE"
+        enriched = self._add_event(event_type="stop_loss_hit", message=body)
+        plain = self._add_event(event_type="fill")
+
+        response = self.client.get("/api/notifications")
+
+        self.assertEqual(response.status_code, 200)
+        by_id = {item["id"]: item for item in response.json()}
+        self.assertEqual(by_id[enriched.id]["message"], body)
+        self.assertIsNone(by_id[plain.id]["message"])
+
+    def test_mark_notification_read_returns_the_message_body(self):
+        event = self._add_event(message="Daily Portfolio Digest - 2026-10-11")
+
+        response = self.client.patch(f"/api/notifications/{event.id}/read")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["message"], "Daily Portfolio Digest - 2026-10-11")
+        self.assertFalse(response.json()["unread"])
 
 
 class ResponseHelperTests(unittest.TestCase):

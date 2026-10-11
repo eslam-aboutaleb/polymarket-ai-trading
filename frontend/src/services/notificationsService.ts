@@ -44,6 +44,7 @@ export interface NotificationEvent {
   side: string;
   size: number;
   price: number;
+  message: string | null;
   read_at: string | null;
   created_at: string;
   unread: boolean;

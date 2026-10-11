@@ -738,5 +738,115 @@ class GtcEventTypeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Thesis is broken.", text)
 
 
+class FeedEventMessageTests(unittest.IsolatedAsyncioTestCase):
+    """Feed events persist the payload's chat body (plan 03 follow-up)."""
+
+    def setUp(self):
+        self.factory = _session_factory()
+        self.session = self.factory()
+
+    def tearDown(self):
+        self.session.close()
+
+    async def test_create_feed_event_persists_the_payload_message(self):
+        service = _make_service(self.factory)
+        message = "Stop-loss triggered: Will BTC hit $150k? (Yes)\nAI verdict: REDUCE"
+
+        event_id = service._create_feed_event(
+            self.session, 1, "stop_loss_hit", {"message": message}
+        )
+
+        event = self.session.get(NotificationFeedEvent, event_id)
+        self.assertEqual(event.message, message)
+
+    async def test_create_feed_event_without_a_body_stays_null(self):
+        service = _make_service(self.factory)
+
+        missing = service._create_feed_event(self.session, 1, "fill", {"market_id": "m1"})
+        empty = service._create_feed_event(self.session, 1, "fill", {"message": ""})
+
+        self.assertIsNone(self.session.get(NotificationFeedEvent, missing).message)
+        self.assertIsNone(self.session.get(NotificationFeedEvent, empty).message)
+
+    async def test_dispatch_creates_feed_event_with_the_message(self):
+        _add_channel(self.session, 1, "telegram")
+        service = _make_service(self.factory)
+        message = "Daily Portfolio Digest - 2026-10-11\nCurrent value: $1,000.00"
+
+        with _patched_settings(), _patched_http():
+            result = await service.dispatch("daily_digest", 1, {"message": message})
+
+        self.assertEqual(result["status"], "dispatched")
+        events = self.session.query(NotificationFeedEvent).all()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].event_type, "daily_digest")
+        self.assertEqual(events[0].message, message)
+
+    async def test_dispatch_backfills_the_message_on_a_precreated_event(self):
+        """The daily-digest marker path: the row exists before dispatch."""
+        marker = NotificationFeedEvent(
+            user_id=1,
+            trader_wallet="",
+            event_type="daily_digest",
+            email_status="skipped",
+        )
+        self.session.add(marker)
+        self.session.commit()
+        _add_channel(self.session, 1, "telegram")
+        service = _make_service(self.factory)
+        message = "Daily Portfolio Digest - 2026-10-11\nCurrent value: $1,000.00"
+
+        with _patched_settings(), _patched_http():
+            result = await service.dispatch(
+                "daily_digest",
+                1,
+                {"message": message, "feed_event_id": marker.id, "skip_feed": True},
+                db=self.session,
+                background=False,
+            )
+
+        self.assertEqual(result["status"], "dispatched")
+        self.session.refresh(marker)
+        self.assertEqual(marker.message, message)
+        # The marker is reused, not duplicated, and deliveries link to it.
+        self.assertEqual(self.session.query(NotificationFeedEvent).count(), 1)
+        delivery = self.session.query(NotificationDelivery).one()
+        self.assertEqual(delivery.event_id, str(marker.id))
+
+    async def test_dispatch_never_overwrites_an_existing_message(self):
+        marker = NotificationFeedEvent(
+            user_id=1,
+            trader_wallet="",
+            event_type="daily_digest",
+            message="original body",
+            email_status="skipped",
+        )
+        self.session.add(marker)
+        self.session.commit()
+        _add_channel(self.session, 1, "telegram")
+        service = _make_service(self.factory)
+
+        with _patched_settings(), _patched_http():
+            await service.dispatch(
+                "daily_digest",
+                1,
+                {"message": "new body", "feed_event_id": marker.id, "skip_feed": True},
+                db=self.session,
+                background=False,
+            )
+
+        self.session.refresh(marker)
+        self.assertEqual(marker.message, "original body")
+
+    async def test_attach_feed_message_tolerates_missing_or_malformed_events(self):
+        service = _make_service(self.factory)
+
+        service._attach_feed_message(self.session, 4242, {"message": "body"})
+        service._attach_feed_message(self.session, "not-an-id", {"message": "body"})
+        service._attach_feed_message(self.session, 4242, {})
+
+        self.assertEqual(self.session.query(NotificationFeedEvent).count(), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
