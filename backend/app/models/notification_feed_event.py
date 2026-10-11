@@ -34,6 +34,7 @@ class NotificationFeedEvent(Base):
         default="pending",  # pending | sent | failed | skipped
     )
     email_error = Column(Text, nullable=True)
+    message = Column(Text, nullable=True)
     emailed_at = Column(DateTime(timezone=True), nullable=True)
     read_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)

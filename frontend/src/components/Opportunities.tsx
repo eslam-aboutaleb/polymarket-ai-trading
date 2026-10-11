@@ -1735,10 +1735,15 @@ export default function Opportunities() {
               </div>
             ) : null
           }
-          renderSubMarket={(market, subLabel) => {
+          renderSubMarket={(market, subLabel, index) => {
             const prices = parseOutcomePrices(market);
             const score = market.opportunityScore;
             const endDate = market.endDate || market.end_date_iso;
+            const isMainOptionRow = index === selectedGroupPrimary?.index;
+            const searchSummary =
+              isMainOptionRow && typeof score?.search_summary === "string"
+                ? score.search_summary.trim()
+                : "";
             return (
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-2">
@@ -1764,6 +1769,15 @@ export default function Opportunities() {
                     <span className="chip chip-danger px-2 py-0.5">
                       {(score.risk_level || "unknown").toUpperCase()} risk
                     </span>
+                  </div>
+                )}
+
+                {searchSummary && (
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wide text-muted">Research</p>
+                    <p className="mt-0.5 text-xs text-soft whitespace-pre-line leading-relaxed">
+                      {searchSummary}
+                    </p>
                   </div>
                 )}
 

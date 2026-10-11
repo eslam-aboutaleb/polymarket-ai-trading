@@ -173,6 +173,18 @@ def validate_webhook_url(url: str) -> None:
             )
 
 
+def _payload_message(payload: dict[str, Any]) -> str | None:
+    """The payload's chat body, or ``None`` when it carries none.
+
+    A missing or empty ``message`` collapses to ``None`` so the feed
+    column stays NULL for the event types that have no body text.
+    """
+    message = payload.get("message")
+    if message is None or message == "":
+        return None
+    return str(message)
+
+
 def format_alert_message(event_type: str, payload: dict[str, Any]) -> str:
     """Render a human-readable alert message for chat-style channels."""
     label = EVENT_TYPE_LABELS.get(event_type, event_type.replace("_", " ").title())
@@ -348,7 +360,12 @@ class AlertService:
                 return {"status": "skipped", "reason": "no_channels"}
 
             feed_event_id = payload.get("feed_event_id")
-            if not feed_event_id and not payload.get("skip_feed"):
+            if feed_event_id:
+                # The event already exists (daily-digest marker, price-alert
+                # verdict): the body text rides along only when that caller
+                # committed the row without one.
+                self._attach_feed_message(session, feed_event_id, payload)
+            elif not payload.get("skip_feed"):
                 feed_event_id = self._create_feed_event(session, user_id, event_type, payload)
 
             channels = (
@@ -498,11 +515,35 @@ class AlertService:
             side=str(payload.get("side") or ""),
             size=float(payload.get("size") or 0.0),
             price=float(payload.get("price") or 0.0),
+            message=_payload_message(payload),
             email_status="skipped",
         )
         session.add(event)
         session.flush()
         return event.id
+
+    def _attach_feed_message(
+        self, session: Session, feed_event_id: Any, payload: dict[str, Any]
+    ) -> None:
+        """Store the payload body on a pre-created feed event.
+
+        Callers that write their own event first (the daily-digest
+        marker, a price-alert verdict) dispatch with ``feed_event_id``;
+        without this the row they committed keeps an empty body and the
+        in-app feed shows the event without its text. Backfills only:
+        an event that already carries a body is never overwritten.
+        """
+        message = _payload_message(payload)
+        if message is None:
+            return
+        try:
+            event_id = int(feed_event_id)
+        except (TypeError, ValueError):
+            return
+        event = session.get(NotificationFeedEvent, event_id)
+        if event is None or event.message:
+            return
+        event.message = message
 
     async def _maybe_digest(self, event_type: str, user_id: int, payload: dict[str, Any]) -> bool:
         """Buffer high-volume events; returns True when buffered."""

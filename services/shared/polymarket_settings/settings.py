@@ -112,8 +112,6 @@ TASK_TIERS: dict[str, ModelTier] = {
     # ── STANDARD: everyday analysis ────────────────────────────
     "risk_assessment": ModelTier.STANDARD,
     "trade_execution_plan": ModelTier.STANDARD,
-    "position_sizing": ModelTier.STANDARD,
-    "portfolio_rebalance": ModelTier.STANDARD,
     "price_alert_analysis": ModelTier.STANDARD,
     # ── STRONG: forecasting, trading decisions ─────────────────
     "market_assessment": ModelTier.STRONG,

@@ -18,13 +18,15 @@ Two invariants shape the design:
   (``price_alert_llm_enabled=False``) or unreachable, the alert still
   fires with the plain factual message.
 
-The in-app feed cannot render the verdict: ``NotificationFeedEvent`` has
-no text column, so only label + summary + verdict metadata reach the
-app. Chat and email carry the full message.
+The in-app feed carries the verdict too: ``record_feed_event``
+writes one user-scoped ``NotificationFeedEvent`` per trigger whose
+``message`` column holds the verdict text, which the dispatcher then
+reuses (``feed_event_id``) instead of writing a second row.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
@@ -32,6 +34,7 @@ from sqlalchemy.orm import Session
 
 from app.config import AIBackend, get_settings
 from app.grpc_clients.analysis_client import UNUSABLE_VERDICT, AnalysisClient
+from app.models.notification_feed_event import NotificationFeedEvent
 from app.models.user_settings import AIBackendType, UserSettings
 from app.services.alert_service import dispatch as alert_dispatch
 from app.services.simulation import average_entry_price
@@ -329,6 +332,48 @@ async def dispatch_trigger_alert(
         return None
 
 
+def record_feed_event(
+    order: Any,
+    event_type: str,
+    payload: dict[str, Any],
+    db: Session,
+) -> int | None:
+    """Write the in-app feed row for a triggered price order.
+
+    The verdict text reaches the web app only through this row:
+    ``AlertService.dispatch`` records a feed event only when the user
+    has chat channels, so the row is created here and handed to the
+    dispatcher through the payload's ``feed_event_id`` (the
+    daily-digest marker idiom) — exactly one row per trigger whether
+    or not channels exist, and never a duplicate when they do.
+
+    ``db`` is the verdict task's own short-lived session: the monitor's
+    was closed before the task ran and a snapshot namespace cannot
+    outlive it. Every failure is suppressed — the alert itself must
+    never be blocked by the in-app write.
+    """
+    with contextlib.suppress(Exception):
+        body = payload.get("message") or getattr(order, "market_title", "") or None
+        event = NotificationFeedEvent(
+            user_id=order.user_id,
+            trader_wallet="",
+            event_type=event_type,
+            market_id=str(getattr(order, "market_id", "") or ""),
+            token_id=str(getattr(order, "token_id", "") or ""),
+            side=str(payload.get("side") or ""),
+            size=float(payload.get("size") or 0.0),
+            price=float(payload.get("price") or 0.0),
+            message=str(body) if body else None,
+            email_status="skipped",
+        )
+        db.add(event)
+        db.flush()
+        feed_event_id = event.id
+        db.commit()
+        return feed_event_id
+    return None
+
+
 async def enrich_trigger_alert(
     order: Any,
     *,
@@ -347,15 +392,20 @@ async def enrich_trigger_alert(
     return. Never raises — a failed verdict or dispatch degrades to the
     plain alert and a log line.
 
+    That one session also writes the in-app feed row for the trigger
+    (:func:`record_feed_event`) and is closed exactly once on the way
+    out, so the verdict is visible in the NotificationCenter as well as
+    in the chat channels.
+
     ``simulation_mode`` marks paper trading (no real fill happened) and
     ``enrich=False`` skips the LLM verdict when the monitor is already
     running its allowed quota of verdict tasks; the alert still fires,
     just un-enriched.
     """
     verdict: dict[str, Any] | None = None
-    if enrich and verdicts_enabled():
-        db: Session | None = None
-        try:
+    db: Session | None = None
+    try:
+        if enrich and verdicts_enabled():
             db = SessionLocal()
             verdict = await evaluate_trigger(
                 user_id=order.user_id,
@@ -369,19 +419,16 @@ async def enrich_trigger_alert(
                 prev_price=prev_price,
                 db=db,
             )
-        except Exception:
-            # ``evaluate_trigger`` already degrades its own failures; this
-            # guards everything around it (session, backend lookup) so the
-            # plain alert still fires.
-            _metric_inc("verdicts_failed")
-            logger.warning(
-                "Price-alert verdict attempt failed for order=%s",
-                getattr(order, "id", None),
-                exc_info=True,
-            )
-        finally:
-            if db is not None:
-                db.close()
+    except Exception:
+        # ``evaluate_trigger`` already degrades its own failures; this
+        # guards everything around it (session, backend lookup) so the
+        # plain alert still fires.
+        _metric_inc("verdicts_failed")
+        logger.warning(
+            "Price-alert verdict attempt failed for order=%s",
+            getattr(order, "id", None),
+            exc_info=True,
+        )
 
     try:
         payload = build_trigger_payload(
@@ -403,6 +450,17 @@ async def enrich_trigger_alert(
         )
         return None
 
-    result = await dispatch_trigger_alert(event_type, order.user_id, payload)
+    if db is not None:
+        feed_event_id = record_feed_event(order, event_type, payload, db)
+        if feed_event_id is not None:
+            # The dispatcher links deliveries to the row written above
+            # instead of recording a second feed event.
+            payload["feed_event_id"] = feed_event_id
+
+    try:
+        result = await dispatch_trigger_alert(event_type, order.user_id, payload)
+    finally:
+        if db is not None:
+            db.close()
     _metric_inc("alerts_enriched" if verdict else "alerts_plain")
     return result

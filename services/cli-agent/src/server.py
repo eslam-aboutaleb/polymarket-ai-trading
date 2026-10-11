@@ -272,6 +272,14 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 metadata={
                     "backend": "cli-agent",
                     "type": "copy_trade_eval",
+                    # Echo the model the agent actually ran with so the
+                    # calibration rows can attribute accuracy per model
+                    # (mirrors AnalyzeMarket's metadata).
+                    "model": (
+                        _get_request_model(request)
+                        or getattr(self.agent, "model", "")
+                        or "cli-agent"
+                    ),
                     "recommendation": result.get("recommendation", ""),
                     "confidence": str(result.get("confidence", 0)),
                     "risk_level": result.get("risk_level", ""),
