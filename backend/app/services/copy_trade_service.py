@@ -766,8 +766,9 @@ async def _plan_copy_trade_size(
         max_pos = _to_float(followed_trader.max_position_size) if followed_trader else 0.0
         if max_pos <= 0:
             max_pos = _to_float(settings.max_position_size)
-        p, kelly_price = kelly_service.effective_trade_params(
+        p, kelly_price = kelly_service.kelly_trade_params(
             p_market or 0.0,
+            edge_source,
             side,
             price,
         )

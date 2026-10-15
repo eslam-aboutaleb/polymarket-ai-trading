@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_active_account
 from app.api.routes.auth import get_current_user_from_token
+from app.config import get_settings
 from app.models.account import Account
 from app.models.subscription import PlanTier
 from app.models.user import User
@@ -119,10 +120,16 @@ def _provider() -> StripeBillingProvider:
 def _frontend_origin(request: Request) -> str:
     """The origin to return the browser to after checkout.
 
-    Derived from the request rather than configuration so a preview
-    deployment returns to itself instead of to production. The path is
-    appended by the caller; only the scheme + host are taken.
+    Prefers the configured ``PUBLIC_APP_ORIGIN`` so the redirect target is a
+    trusted origin and not derived from the client-supplied ``Host`` header
+    (which is attacker-controlled and would defeat
+    :func:`_same_origin_redirect`). Falls back to the request only for
+    local/dev where nothing is configured. The path is appended by the
+    caller; only the scheme + host are taken.
     """
+    configured = (get_settings().public_app_origin or "").strip()
+    if configured:
+        return configured.rstrip("/")
     return f"{request.url.scheme}://{request.url.netloc}"
 
 

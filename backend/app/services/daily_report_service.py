@@ -261,9 +261,14 @@ def _realized_pnl_today(db: Session, user_id: int, day_start: datetime, *, paper
     Live users aggregate every strategy's closed trades; paper users count
     simulated trades only, mirroring ``get_paper_summary``.
     """
+    # Simulated (paper) rows never get ``executed_at`` (only the trade
+    # monitor fills that for live pending→executed hashes), so filter the
+    # paper sum on ``created_at``; live sums keep ``executed_at``. Without
+    # this the paper digest's realized PnL is structurally always 0.
+    ts_column = UserTrade.created_at if paper else UserTrade.executed_at
     query = db.query(func.coalesce(func.sum(UserTrade.pnl), 0.0)).filter(
         UserTrade.user_id == user_id,
-        UserTrade.executed_at >= day_start,
+        ts_column >= day_start,
     )
     if paper:
         query = query.filter(UserTrade.status == "simulated")

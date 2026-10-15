@@ -474,7 +474,7 @@ def get_consensus(
         viewer_key = str(viewer_user_id)
 
     if use_cache:
-        cached = _consensus_cache.get(_cache_key(market_key, viewer_key))
+        cached = _consensus_cache.get(_cache_key(market_key, viewer_key, window_days))
         if cached is not None:
             payload = dict(cached)
             payload["cached"] = True
@@ -532,16 +532,21 @@ def get_consensus(
 
     if use_cache:
         _consensus_cache.set(
-            _cache_key(market_key, viewer_key),
+            _cache_key(market_key, viewer_key, window_days),
             payload,
             CONSENSUS_CACHE_TTL_SECONDS,
         )
     return payload
 
 
-def _cache_key(condition_id: str, viewer_key: str) -> str:
-    """Cache key: one entry per market per viewer variant."""
-    return f"{condition_id}:{viewer_key}"
+def _cache_key(condition_id: str, viewer_key: str, window_days: int) -> str:
+    """Cache key: one entry per market per viewer variant per accuracy window.
+
+    ``window_days`` participates so a consensus computed for one window is
+    never served for a different window (the weights and the echoed
+    ``window_days`` both depend on it).
+    """
+    return f"{condition_id}:{viewer_key}:{window_days}"
 
 
 def reset_consensus_cache() -> None:
@@ -563,9 +568,11 @@ def invalidate_consensus(condition_id: str, user_id: int | None = None) -> None:
     within the 60s TTL rather than being reachable by key pattern, which
     is the trade-off that keeps the cache backend-agnostic.
     """
-    _consensus_cache.delete(_cache_key(condition_id, "shared"))
+    # Votes most often request the default window, so drop that entry
+    # proactively; other windows expire within the short TTL.
+    _consensus_cache.delete(_cache_key(condition_id, "shared", DEFAULT_WINDOW_DAYS))
     if user_id is not None:
-        _consensus_cache.delete(_cache_key(condition_id, str(user_id)))
+        _consensus_cache.delete(_cache_key(condition_id, str(user_id), DEFAULT_WINDOW_DAYS))
 
 
 # ── forecaster board ────────────────────────────────────────────

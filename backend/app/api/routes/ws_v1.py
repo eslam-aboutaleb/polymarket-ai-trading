@@ -38,10 +38,11 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 
 from app.api.deps import API_KEY_HEADER
+from app.config import get_settings
 from app.security.credential_store import CredentialStoreError, load_wallet_credentials
 from app.services.api_key_service import (
     SCOPE_READ,
@@ -79,6 +80,15 @@ WS_CLOSE_FORBIDDEN_SCOPE = 4403
 #: CLOB manager's own subscription cap.
 MAX_SUBSCRIBED_TOKENS = 50
 
+#: Per-process cap on concurrent live sockets for a single API key. Each
+#: socket runs credential decryption plus an outbound exchange call every
+#: few seconds, so an uncapped holder could fan out an unauthenticated
+#: credential-store and exchange load. In-process by design (cheap, no
+#: shared state on the hot path); cross-worker enforcement would move the
+#: counter into the shared cache.
+MAX_WS_CONNECTIONS_PER_KEY = 5
+_active_ws_connections: dict[str, int] = {}
+
 
 def _resolve_handshake_key(websocket: WebSocket, api_key: str | None) -> str | None:
     """Read the API key from the handshake header or the query string.
@@ -91,6 +101,10 @@ def _resolve_handshake_key(websocket: WebSocket, api_key: str | None) -> str | N
     raw_header = (websocket.headers.get(API_KEY_HEADER) or "").strip()
     if raw_header:
         return raw_header
+    if not get_settings().ws_allow_query_key:
+        # Query-parameter keys ride in URLs (access/proxy logs, Referer,
+        # browser history). Locked to the header unless explicitly enabled.
+        return None
     raw_query = (api_key or "").strip()
     if raw_query:
         logger.info("WebSocket handshake used the %s query fallback", API_KEY_QUERY_PARAM)
@@ -193,17 +207,18 @@ async def _positions_loop(websocket: WebSocket, context: AuthContext, db: Sessio
 
 async def _fills_loop(websocket: WebSocket, context: AuthContext, db: Session) -> None:
     """Poll newly observed fills and emit each one once."""
+    from app.api.routes.external import _auth_scoped_trade_query
     from app.models.user_trade import UserTrade
 
-    last_seen_id = _latest_trade_id(db, context)
+    try:
+        last_seen_id = _latest_trade_id(db, context)
+    except HTTPException:
+        # Same refusal as REST: a key scoped to an account the owner no
+        # longer holds is not served over the socket.
+        return
     while True:
         await asyncio.sleep(FILLS_POLL_SECONDS)
-        query = db.query(UserTrade).filter(
-            UserTrade.user_id == context.user_id,
-            UserTrade.status.in_(_FILLED_STATUSES),
-        )
-        if context.account_id is not None:
-            query = query.filter(UserTrade.account_id == context.account_id)
+        query = _auth_scoped_trade_query(db, context, _FILLED_STATUSES)
         if last_seen_id is not None:
             query = query.filter(UserTrade.id > last_seen_id)
         rows = query.order_by(UserTrade.id.asc()).limit(50).all()
@@ -231,14 +246,17 @@ async def _fills_loop(websocket: WebSocket, context: AuthContext, db: Session) -
 
 
 def _latest_trade_id(db: Session, context: AuthContext) -> int | None:
-    """Baseline id so a subscriber gets new fills, not the whole history."""
-    from app.models.user_trade import UserTrade
+    """Baseline id so a subscriber gets new fills, not the whole history.
 
-    query = db.query(UserTrade.id).filter(UserTrade.user_id == context.user_id)
-    if context.account_id is not None:
-        query = query.filter(UserTrade.account_id == context.account_id)
-    latest = query.order_by(UserTrade.id.desc()).first()
-    return int(latest[0]) if latest else None
+    Uses the same ownership-checked, account-scoped query the REST
+    ``/fills`` endpoint uses, so a key scoped to an account the owner no
+    longer holds is refused here exactly as it is over REST instead of
+    being served over the socket.
+    """
+    from app.api.routes.external import _auth_scoped_trade_query
+
+    latest = _auth_scoped_trade_query(db, context, _FILLED_STATUSES).first()
+    return int(latest.id) if latest is not None else None
 
 
 async def _prices_loop(
@@ -317,6 +335,16 @@ async def external_websocket(
             _prices_loop(websocket, context, token_ids, prices_stop)
         )
 
+    # Per-process concurrent-connection cap for this API key (see
+    # ``MAX_WS_CONNECTIONS_PER_KEY``).
+    conn_key = f"{context.user_id}:{context.key_prefix}"
+    if _active_ws_connections.get(conn_key, 0) >= MAX_WS_CONNECTIONS_PER_KEY:
+        await websocket.close(
+            code=WS_CLOSE_FORBIDDEN_SCOPE,
+            reason="Too many concurrent connections for this API key",
+        )
+        return
+    _active_ws_connections[conn_key] = _active_ws_connections.get(conn_key, 0) + 1
     try:
         while True:
             message = await websocket.receive()
@@ -391,6 +419,9 @@ async def external_websocket(
     except WebSocketDisconnect:
         logger.info("External WebSocket disconnected (user_id=%s)", context.user_id)
     finally:
+        _active_ws_connections[conn_key] = _active_ws_connections.get(conn_key, 0) - 1
+        if _active_ws_connections.get(conn_key, 0) <= 0:
+            _active_ws_connections.pop(conn_key, None)
         prices_stop.set()
         for task in tasks.values():
             task.cancel()
