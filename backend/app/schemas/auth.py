@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 WALLET_ADDRESS_PATTERN = r"^0x[a-fA-F0-9]{40}$"
+PRIVATE_KEY_PATTERN = r"^0x[a-fA-F0-9]{64}$"
 
 
 class LoginRequest(BaseModel):
@@ -52,20 +53,25 @@ class SignatureVerification(BaseModel):
 
 
 class TokenResponse(BaseModel):
-    """Token response on successful authentication"""
+    """Token response on successful authentication.
+
+    Tokens are delivered via httpOnly cookies only — no endpoint
+    returns them in the JSON body, where any XSS could exfiltrate the
+    long-lived refresh token.
+    """
 
     access_token: str | None = Field(
         None,
         description=(
-            "JWT access token (15 min expiry). Login endpoints omit this and "
-            "set an httpOnly cookie instead; only /refresh returns it."
+            "Always null: the access token is delivered via an httpOnly "
+            "cookie only, never in the response body."
         ),
     )
     refresh_token: str | None = Field(
         None,
         description=(
-            "Refresh token (7 or 90 day expiry). Login endpoints omit this and "
-            "set an httpOnly cookie instead; only /refresh returns it."
+            "Always null: the refresh token is delivered via an httpOnly "
+            "cookie only, never in the response body."
         ),
     )
     token_type: str = Field(default="bearer")
@@ -107,7 +113,11 @@ class LogoutRequest(BaseModel):
 class PrivateKeyLoginRequest(BaseModel):
     """Login request using private key directly"""
 
-    private_key: str = Field(..., description="Ethereum private key (0x... or hex string)")
+    private_key: str = Field(
+        ...,
+        pattern=PRIVATE_KEY_PATTERN,
+        description="Ethereum private key (0x followed by 64 hex characters)",
+    )
     keep_logged_in: bool = Field(
         default=False, description="If True, refresh token expires in 90 days; else 7 days"
     )

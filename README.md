@@ -49,7 +49,7 @@ stop-loss/take-profit strategies on a user's Polygon wallet.
 └──────────────────────────────────────┬───────────────────────────────────────┘
                                        │
 ┌──────────────────────────────────────▼───────────────────────────────────────┐
-│                          FastAPI backend  ·  :8000                            │
+│                          FastAPI backend  ·  :8002                            │
 │                                                                              │
 │  api/routes/     auth · analysis · markets · trades · portfolio · settings    │
 │                  news · backtesting · inverse-bot · market-maker · binance   │
@@ -68,7 +68,7 @@ stop-loss/take-profit strategies on a user's Polygon wallet.
         │ gRPC :50051 / :50052             │ SQL
 ┌───────▼──────────────────────┐  ┌────────▼─────────────────────────────────┐
 │  llm-chain  ·  cli-agent      │  │  PostgreSQL :5432   ·   Redis :6379     │
-│  Python AI microservices      │  │  27 SQLAlchemy models · 14 migrations    │
+│  Python AI microservices      │  │  36 SQLAlchemy models · 25 migrations    │
 │  LLM providers + MCP research │  │  token/credential cache · rate limiting  │
 └───────────────────────────────┘  └──────────────────────────────────────────┘
 ```
@@ -172,6 +172,34 @@ The backend keeps a **pooled, shared gRPC channel** per address
   data; run management and strategy catalog
 - **News generation** — LLM-generated news items and feeds, streamed over SSE
 
+### Platform, accounts & intelligence
+
+- **Accounts & workspaces** — multiple accounts per user with per-account
+  settings and an `X-Account-Id` isolation context threaded through every
+  internal route
+- **API keys** — hashed, scope-gated (`read` / `trade` / `admin`) keys with a
+  separate *management* surface that an API key can never use to mint another key
+- **External REST API** — `/api/v1/external/*`, API-key authenticated and
+  rate-limited per key; its order route mirrors the internal manual path
+  including the pre-trade gate, safety caps and audit event
+- **Billing & subscriptions** — Stripe Checkout, customer portal and a
+  signature-verified webhook; plan tiers with entitlements and usage quotas
+- **Collaborative forecasting** — shared forecasts, consensus building and
+  contributor attribution
+- **Experiments (A/B)** — experiment definitions, variant assignment and results
+- **Orchestration engine** — multi-step agentic plans with a live execution
+  timeline (Orchestrator page)
+- **Cross-venue arbitrage** — opportunity discovery across venues
+- **Wallet clustering** — co-occurrence graph over whale events, surfaced as a
+  *labelled signal* for review (never an automatic action)
+- **Venues & venue markets** — venue registry, market sync and mismatch detection
+- **Model governance & drift** — model registry, approval workflow and drift
+  monitoring with in-app alerts
+- **Prompt versioning** — versioned prompt management for the AI services
+- **Event log & audit** — append-only `AppEvent` audit trail plus the
+  entitlement service that backs plan limits
+- **Live WebSocket API** — `/ws/v1` streaming positions and fills for API clients
+
 ### Authentication & security
 
 - **Wallet-signature login** (EIP-191 `personal_sign`) and **private-key login**
@@ -201,8 +229,8 @@ polymarket/
 │   ├── app/
 │   │   ├── main.py               application entry point, lifespan, middleware
 │   │   ├── config.py             pydantic-settings configuration
-│   │   ├── api/routes/           17 routers
-│   │   ├── models/               27 SQLAlchemy models
+│   │   ├── api/routes/           27 routers
+│   │   ├── models/               36 SQLAlchemy models
 │   │   ├── schemas/              Pydantic request/response models
 │   │   ├── security/             auth.py · crypto.py · credential_store.py
 │   │   ├── services/             trading, monitoring and data services
@@ -211,14 +239,14 @@ polymarket/
 │   │   ├── repositories/         data-access helpers
 │   │   ├── middleware/           request logging
 │   │   └── utils/                cache · database · indicators · time
-│   ├── migrations/               Alembic (14 revisions)
+│   ├── migrations/               Alembic (25 revisions)
 │   ├── tests/                    pytest suite
 │   ├── pyproject.toml            dependencies + ruff + pytest config
 │   └── Dockerfile / .prod
 │
 ├── frontend/                     React 18 + Vite SPA
 │   ├── src/
-│   │   ├── components/           36 components
+│   │   ├── components/           48 components
 │   │   ├── pages/                route-level pages
 │   │   ├── services/             typed API clients
 │   │   ├── store/authStore.ts    in-memory Zustand session state
@@ -289,9 +317,9 @@ docker compose up --build
 | Service       | URL                            |
 | ------------- | ------------------------------ |
 | Frontend      | http://localhost:5173          |
-| Backend API   | http://localhost:8000          |
-| OpenAPI docs  | http://localhost:8000/docs     |
-| PostgreSQL    | `localhost:5432`               |
+| Backend API   | http://localhost:8002          |
+| OpenAPI docs  | http://localhost:8002/docs     |
+| PostgreSQL    | `localhost:5435`               |
 | Redis         | `127.0.0.1:6379`               |
 | llm-chain     | gRPC `localhost:50051`         |
 | cli-agent     | gRPC `localhost:50052`         |
@@ -519,6 +547,35 @@ reliability buckets, per-model/per-task breakdown)
 ### Trading key — `/api/auth`
 `POST /trading-key` · `GET /trading-key` · `DELETE /trading-key`
 
+### Accounts — `/api/accounts`
+`GET /` · `GET /{account_id}` · `GET/PUT /{account_id}/settings` · `POST /` (account-switching context)
+
+### API keys (management) — `/api/settings/api-keys`
+`GET` · `POST` · `DELETE /{key_id}` — mint, list and revoke scoped API keys.
+
+### External REST API — `/api/v1/external`
+`X-API-Key` authenticated, rate-limited per key, scope-gated.
+`GET /markets` · `GET /portfolio` · `POST /orders` (requires `trade` scope).
+
+### Billing — `/api/billing`
+`GET /subscription` · `GET /plans` · `POST /checkout-session` ·
+`POST /portal-session` · `POST /webhook` (signature-verified, no auth).
+
+### Orchestration — `/api/orchestration`
+`GET /plans` · `POST /plans` · `GET /plans/{plan_id}` · `POST /plans/{plan_id}/run`
+
+### Venues — `/api/venues`
+`GET /` · `GET /markets` · `GET /mismatches` · `POST /sync`
+
+### Experiments — `/api/experiments`
+`GET /` · `POST /` · `GET /{experiment_id}` · `POST /{experiment_id}/assign`
+
+### Collaboration — `/api/collaboration`
+`GET /forecasts` · `POST /forecasts` · `POST /forecasts/{id}/consensus` · `GET /contributors`
+
+### WebSocket — `/ws/v1`
+Streaming positions and fills for API-key clients (query/header key, throttled).
+
 ### Debug (admin only, disabled unless `DEBUG_ENDPOINTS_ENABLED=true`)
 `GET /health` · `GET /stats` · `GET/DELETE /logs`
 
@@ -531,7 +588,7 @@ reliability buckets, per-model/per-task breakdown)
 ```bash
 cd backend
 uv sync
-uv run uvicorn app.main:app --reload     # http://localhost:8000
+uv run uvicorn app.main:app --reload     # http://localhost:8002
 ```
 
 Add a database change with Alembic:
@@ -645,8 +702,10 @@ npx prettier --check "frontend/**/*.{ts,tsx,css,json,html}"
 
 ## Testing
 
-Coverage is produced by `pytest-cov` and written to `backend/coverage.xml` for
-SonarQube.
+The backend suite is large and hermetic (all I/O is mocked) — roughly **4,300
+tests across ~120 modules at ~96% statement coverage** of `app/`, comfortably
+above the 80% SonarQube gate. Coverage is produced by `pytest-cov` and written to
+`backend/coverage.xml` for SonarQube.
 
 ```bash
 cd backend
@@ -736,7 +795,7 @@ watchdog in the lifespan alerts if the scheduler loop stops heartbeating.
 completed, and that `DATABASE_URL` and `JWT_SECRET_KEY` are set.
 
 **Frontend cannot reach the API in development** — the backend must be listening
-on `http://localhost:8000`, `VITE_API_URL` must be set in `frontend/.env`, and
+on `http://localhost:8002`, `VITE_API_URL` must be set in `frontend/.env`, and
 `CORS_ALLOWED_ORIGINS` must include the frontend origin. In development Vite
 proxies `/api` to the backend.
 

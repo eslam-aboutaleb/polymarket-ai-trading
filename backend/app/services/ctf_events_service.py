@@ -12,6 +12,13 @@ followed traders ∪ the user's configured watchlist. Events that
 match a followed trader or watchlist entry also dispatch an alert
 (plan 09) and, when enabled, route into the copy-trade path.
 
+On top of the per-event threshold, ``build_wallet_clusters`` reads the
+same ``whale_events`` rows as a co-occurrence graph (wallets that
+traded the same market and side inside a window) and returns connected
+components — a *cluster* label for a human to review, never a follow or
+copy instruction. Its graph lives in ``wallet_clustering`` and is pure;
+the DB read, the window bound and the whale-set annotation live here.
+
 Failure modes are deliberately non-fatal: undecodable logs are
 logged and skipped, WS RPC failures rotate to the next public
 endpoint with backoff, and the positions-API poll remains the
@@ -23,7 +30,7 @@ import contextlib
 import json
 import logging
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +41,12 @@ from web3.datastructures import AttributeDict
 from app.models.followed_trader import FollowedTrader
 from app.models.whale_config import WhaleConfig
 from app.models.whale_event import WhaleEvent
+from app.services.wallet_clustering import (
+    DEFAULT_MIN_CO_OCCURRENCE,
+    DEFAULT_WINDOW_HOURS,
+    MAX_EVENTS,
+    clusters_from_events,
+)
 from app.utils.cache import get_cache
 from app.utils.database import SessionLocal
 from app.utils.scheduler_lock import (
@@ -409,6 +422,97 @@ def invalidate_config_cache(user_id: int | None = None) -> None:
         _config_cache.clear()
     else:
         _config_cache.pop(user_id, None)
+
+
+# ── Wallet clustering (plan 05 Phase B) ──────────────────────
+# Cluster results are cached in the same namespace the dedup TTL uses,
+# so the page polls a 5-minute answer instead of rebuilding the graph.
+CLUSTER_CACHE_TTL_SECONDS = 300
+
+
+def _wallet_cluster_cache_key(window_hours: float, min_co_occurrence: int) -> str:
+    return f"clusters:{float(window_hours):g}:{int(min_co_occurrence)}"
+
+
+def _cluster_events(rows: list[WhaleEvent]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for row in rows:
+        events.append(
+            {
+                "wallet": row.wallet,
+                "market_id": row.market_id,
+                "side": row.side,
+                "token_id": row.token_id,
+                "event_type": row.event_type,
+                "notional": row.notional,
+                "detected_at": row.detected_at,
+            }
+        )
+    return events
+
+
+def build_wallet_clusters(
+    window_hours: float = DEFAULT_WINDOW_HOURS,
+    min_co_occurrence: int = DEFAULT_MIN_CO_OCCURRENCE,
+    db: Session | None = None,
+) -> list[dict[str, Any]]:
+    """Co-occurrence clusters of whale wallets over the last window.
+
+    Wallets that traded the same market **and side** in at least
+    ``min_co_occurrence`` distinct markets inside ``window_hours`` share
+    an edge; connected components of those edges are the clusters. The
+    graph itself lives in ``wallet_clustering`` and is pure — this
+    wrapper only reads ``whale_events`` (bounded by ``MAX_EVENTS``) and
+    annotates each cluster with the wallets the whale-set refresh
+    already tracks.
+
+    A cluster is a label for a human, never a follow/copy instruction.
+    """
+    owns_session = db is None
+    if owns_session:
+        db = SessionLocal()
+    try:
+        cutoff = utc_now() - timedelta(hours=max(0.0, float(window_hours)))
+        rows = (
+            db.query(WhaleEvent)
+            .filter(WhaleEvent.detected_at >= cutoff)
+            .order_by(WhaleEvent.detected_at.desc())
+            .limit(MAX_EVENTS)
+            .all()
+        )
+        clusters = clusters_from_events(
+            _cluster_events(rows),
+            min_co_occurrence=min_co_occurrence,
+            window_hours=0.0,
+            now=utc_now(),
+        )
+    except Exception as exc:
+        logger.warning("Wallet cluster build failed: %s", exc)
+        return []
+    finally:
+        if owns_session:
+            db.close()
+
+    for cluster in clusters:
+        cluster["is_tracked_whale"] = [
+            wallet for wallet in cluster["wallets"] if wallet in _whale_wallets
+        ]
+    return clusters
+
+
+def get_wallet_clusters(
+    window_hours: float = DEFAULT_WINDOW_HOURS,
+    min_co_occurrence: int = DEFAULT_MIN_CO_OCCURRENCE,
+    db: Session | None = None,
+) -> list[dict[str, Any]]:
+    """``build_wallet_clusters`` behind a short TTL cache (route read path)."""
+    key = _wallet_cluster_cache_key(window_hours, min_co_occurrence)
+    cached = _cache.get(key)
+    if cached is not None:
+        return cached
+    clusters = build_wallet_clusters(window_hours, min_co_occurrence, db)
+    _cache.set(key, clusters, CLUSTER_CACHE_TTL_SECONDS)
+    return clusters
 
 
 # ── Event handling ───────────────────────────────────────────

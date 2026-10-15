@@ -1,5 +1,7 @@
 """Backtesting API routes."""
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -12,6 +14,8 @@ from app.services.backtesting_service import (
     get_backtest_runs,
 )
 from app.utils.database import get_db
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/backtesting", tags=["backtesting"])
 
@@ -137,7 +141,8 @@ async def create_backtest_run(
             parameters=body.parameters,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        logger.exception("Rejected backtest run request for user %s", user_id)
+        raise HTTPException(status_code=400, detail="Invalid backtest request") from e
 
     if not run:
         raise HTTPException(status_code=500, detail="Failed to create backtest run")

@@ -24,6 +24,7 @@ import {
 } from "../services/latencyArbService";
 import { useTradingKeyStatus } from "../hooks/useTradingKeyStatus";
 import TradingKeyPrompt from "./TradingKeyPrompt";
+import { Banner, InfoTooltip, useToast } from "./ui";
 
 const POLL_INTERVAL_MS = 5000;
 const DEFAULT_EDGE_THRESHOLD = 0.03;
@@ -78,8 +79,8 @@ function ms(value: number | null | undefined): string {
 
 export default function LatencyArb() {
   const { hasTradingKey } = useTradingKeyStatus();
+  const toast = useToast();
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [tradingKeyPrompt, setTradingKeyPrompt] = useState(false);
@@ -172,7 +173,6 @@ export default function LatencyArb() {
       return;
     }
     setSaving(true);
-    setSuccess(null);
     setError(null);
     try {
       const result = await latencyArbService.updateConfig({
@@ -186,7 +186,7 @@ export default function LatencyArb() {
         alert_on_opportunity: config.alert_on_opportunity,
       });
       setConfig(result);
-      setSuccess("Latency-arb settings saved");
+      toast.success("Latency-arb settings saved");
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -221,7 +221,7 @@ export default function LatencyArb() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Latency Arbitrage</h1>
+        <h1 className="text-3xl font-bold">Latency Arb</h1>
         <p className="text-soft text-sm mt-1">
           BTC/ETH/SOL 5m/15m/1h up-down mispricings detected from the Binance feed before Polymarket
           odds adjust. Paper-first: simulated fills never touch the exchange.
@@ -229,19 +229,14 @@ export default function LatencyArb() {
       </div>
 
       {error && (
-        <div className="rounded border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-400">
+        <Banner variant="error" onDismiss={() => setError(null)} onRetry={fetchBoard}>
           {error}
-        </div>
-      )}
-      {success && (
-        <div className="rounded border border-green-500/40 bg-green-500/10 p-3 text-sm text-green-400">
-          {success}
-        </div>
+        </Banner>
       )}
 
       {tradingKeyPrompt && <TradingKeyPrompt strategy="Latency arbitrage" />}
 
-      <section className="surface-panel p-5 space-y-4">
+      <section className="surface-panel p-5 space-y-4" data-tutorial="latency-arb">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h2 className="text-lg font-semibold">
             Live Edge Board{" "}
@@ -302,12 +297,44 @@ export default function LatencyArb() {
                   <th className="pb-2 pr-4">Symbol</th>
                   <th className="pb-2 pr-4">Window</th>
                   <th className="pb-2 pr-4">Side</th>
-                  <th className="pb-2 pr-4 text-right">Model P</th>
-                  <th className="pb-2 pr-4 text-right">Market P</th>
-                  <th className="pb-2 pr-4 text-right">Edge</th>
+                  <th className="pb-2 pr-4 text-right">
+                    Model P
+                    <InfoTooltip term="Model P">
+                      The model&apos;s own probability that the outcome happens, computed from the
+                      Binance spot feed. It is the number the engine believes is correct.
+                    </InfoTooltip>
+                  </th>
+                  <th className="pb-2 pr-4 text-right">
+                    Market P
+                    <InfoTooltip term="Market P">
+                      The price Polymarket is showing right now for that outcome — what the crowd
+                      currently believes the probability is.
+                    </InfoTooltip>
+                  </th>
+                  <th className="pb-2 pr-4 text-right">
+                    Edge
+                    <InfoTooltip term="Edge">
+                      The gap between the model&apos;s probability and the market price. A positive
+                      edge means the model thinks the outcome is underpriced, and only rows above
+                      your edge threshold are listed.
+                    </InfoTooltip>
+                  </th>
                   <th className="pb-2 pr-4 text-right">Price move</th>
-                  <th className="pb-2 pr-4 text-right">Feed lag</th>
-                  <th className="pb-2 text-right">Countdown</th>
+                  <th className="pb-2 pr-4 text-right">
+                    Feed lag
+                    <InfoTooltip term="Feed lag">
+                      How stale the Binance reading behind this row is — the time between the spot
+                      price the model used and the engine cycle. Shorter lag means the edge is more
+                      likely still open.
+                    </InfoTooltip>
+                  </th>
+                  <th className="pb-2 text-right">
+                    Countdown
+                    <InfoTooltip term="Countdown">
+                      Time left in the market&apos;s 5/15/60-minute window. When it reaches zero the
+                      market resolves and any position settles at the final price.
+                    </InfoTooltip>
+                  </th>
                 </tr>
               </thead>
               <tbody>

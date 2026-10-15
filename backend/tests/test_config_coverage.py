@@ -5,7 +5,9 @@ model validators, the local-environment / debug-endpoint properties,
 CORS origin parsing, the AIBackend enum, and settings caching.
 """
 
+import os
 import unittest
+from unittest.mock import patch
 
 from app.config import AIBackend, Settings, get_settings
 
@@ -143,6 +145,45 @@ class PositiveIntValidatorTests(unittest.TestCase):
     def test_accepts_valid_positive_ints(self):
         settings = Settings(**_valid_kwargs(trade_poll_max_concurrency=10))
         self.assertEqual(settings.trade_poll_max_concurrency, 10)
+
+
+class EnvironmentDefaultTests(unittest.TestCase):
+    def test_environment_defaults_to_production(self):
+        # _env_file=None keeps backend/.env (ENVIRONMENT=development)
+        # from masking the field default, and ENVIRONMENT is removed
+        # from os.environ so the default itself is observed.
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ENVIRONMENT", None)
+            settings = Settings(_env_file=None, **_valid_kwargs())
+            self.assertEqual(settings.environment, "production")
+            self.assertFalse(settings.is_local_environment)
+
+    def test_explicit_environment_still_wins(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ENVIRONMENT", None)
+            settings = Settings(_env_file=None, **_valid_kwargs(environment="development"))
+            self.assertEqual(settings.environment, "development")
+            self.assertTrue(settings.is_local_environment)
+
+
+class CookieSecureSettingTests(unittest.TestCase):
+    def test_cookie_secure_defaults_to_none(self):
+        # None preserves the derived behaviour (secure outside local).
+        settings = Settings(**_valid_kwargs())
+        self.assertIsNone(settings.cookie_secure)
+
+    def test_cookie_secure_can_be_forced_on(self):
+        settings = Settings(**_valid_kwargs(cookie_secure=True))
+        self.assertTrue(settings.cookie_secure)
+
+    def test_cookie_secure_can_be_forced_off(self):
+        settings = Settings(**_valid_kwargs(cookie_secure=False))
+        self.assertFalse(settings.cookie_secure)
+
+    def test_cookie_secure_reads_environment_variable(self):
+        with patch.dict(os.environ, {"COOKIE_SECURE": "true"}):
+            settings = Settings(**_valid_kwargs())
+            self.assertTrue(settings.cookie_secure)
 
 
 class SettingsPropertyTests(unittest.TestCase):

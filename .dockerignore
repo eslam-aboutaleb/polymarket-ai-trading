@@ -1,22 +1,69 @@
 # Build-context hygiene for services that build from the repo root
 # (services/llm-chain, services/cli-agent). Keeps secrets, VCS data
 # and heavy local artefacts out of the context sent to the daemon.
-# Patterns without a slash match at the root only; nested source
-# under services/ is always included.
+#
+# Docker .dockerignore matches paths from the context ROOT: a pattern without a
+# slash only matches the top level. Recursive `**/` patterns are required to
+# keep nested files (backend/.venv, services/llm-chain/.env, nested
+# __pycache__) out of the context that is uploaded to the Docker daemon.
+
+# ── VCS / tooling ─────────────────────────────────────────────
 .git
 .kilo
+.mypy_cache
+.DS_Store
+
+# ── Secrets — never upload real env files (root-level and nested) ─
 .env
 .env.*
+**/.env
+**/.env.*
+# Example/template envs are safe and may be COPYied by a Dockerfile.
 !.env.example
 !.env.prod.example
+!**/.env.example
+!**/.env.prod.example
+
+# ── Virtualenvs / dependencies / build output ──────────────────
 .venv
 venv
 node_modules
+dist
+**/.venv
+**/venv
+**/node_modules
+**/dist
+
+# ── Python bytecode & caches ───────────────────────────────────
+__pycache__
+**/__pycache__
+*.py[cod]
+**/*.py[cod]
 .pytest_cache
+**/.pytest_cache
 .ruff_cache
+**/.ruff_cache
 .coverage
+**/.coverage
 coverage.xml
+**/coverage.xml
 htmlcov
+**/htmlcov
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# ── Frontend test artefacts ────────────────────────────────────
+playwright-report
+**/playwright-report
+test-results
+**/test-results
+e2e/.auth
+**/e2e/.auth
+
+# ── Local-only trees & logs ────────────────────────────────────
 docs
 study-app
+**/docs
+**/study-app
 *.log
+**/*.log

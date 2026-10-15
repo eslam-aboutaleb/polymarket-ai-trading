@@ -7,15 +7,18 @@ import logging
 from collections import OrderedDict
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.api.deps import optional_plan_quota
 from app.api.routes.auth import get_current_user_from_token, get_optional_user_from_token
 from app.config import AIBackend, get_settings
 from app.grpc_clients.analysis_client import AnalysisClient
 from app.models.user_settings import AIBackendType, UserSettings
+from app.security.rate_limit import limiter
+from app.services.entitlement_service import CAP_OPPORTUNITY_SCAN
 from app.services.forecast_recorder import record_verdict
 from app.services.leaderboard_service import fetch_trader_trades
 from app.services.llm_gateway import get_llm_gateway
@@ -37,6 +40,27 @@ _SCAN_CONCURRENCY = 4
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+
+# Every analysis route spends an LLM call (gRPC to llm-chain / cli-agent),
+# and the public ones accept an anonymous caller, so a single client could
+# otherwise consume the whole global 100/minute budget on them — starving
+# the authenticated routes that share it. The budget rides on a stub
+# dependency (the auth.py pattern): it takes the starlette Request, so the
+# limiter keys off the client IP without touching the handler signatures.
+@limiter.limit("10/minute")
+def _analysis_rate_limit(request: Request) -> None:
+    """Rate-limit the public analysis routes: 10/minute per IP."""
+
+
+@limiter.limit("20/minute")
+def _analysis_scan_rate_limit(request: Request) -> None:
+    """Rate-limit the bulk opportunity scans: 20/minute per IP.
+
+    Higher than a single analysis because one call already fans out over
+    every market the caller asked for — the point is to bound how often
+    that fan-out starts, not each of its internal calls.
+    """
 
 
 # Request/Response schemas
@@ -230,12 +254,13 @@ async def analyze_market(
             success=True, data=result, timestamp=utc_now().isoformat(), backend=client.backend.value
         )
     except Exception as e:
+        logger.exception("Market analysis failed for %s", request.market_title)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Analysis failed: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Market analysis failed"
         ) from e
 
 
-@router.post("/market/stream")
+@router.post("/market/stream", dependencies=[Depends(_analysis_rate_limit)])
 async def analyze_market_stream(
     request: MarketAnalysisRequest,
     current_user: dict | None = Depends(get_optional_user_from_token),
@@ -266,7 +291,7 @@ async def analyze_market_stream(
             yield f"data: {json.dumps({'done': True})}\n\n"
         except Exception as e:
             logger.error(f"Streaming analysis error: {e}", exc_info=True)
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            yield f"data: {json.dumps({'error': 'Market analysis failed'})}\n\n"
         finally:
             await client.close()
 
@@ -281,7 +306,9 @@ async def analyze_market_stream(
     )
 
 
-@router.post("/quick", response_model=AnalysisResponse)
+@router.post(
+    "/quick", response_model=AnalysisResponse, dependencies=[Depends(_analysis_rate_limit)]
+)
 async def quick_analysis(
     request: QuickAnalysisRequest,
     current_user: dict | None = Depends(get_optional_user_from_token),
@@ -310,13 +337,16 @@ async def quick_analysis(
             backend=client.backend.value,
         )
     except Exception as e:
+        logger.exception("Quick analysis failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Quick analysis failed: {str(e)}",
+            detail="Quick analysis failed",
         ) from e
 
 
-@router.post("/quick-group", response_model=AnalysisResponse)
+@router.post(
+    "/quick-group", response_model=AnalysisResponse, dependencies=[Depends(_analysis_rate_limit)]
+)
 async def quick_group_analysis(
     request: QuickGroupAnalysisRequest,
     current_user: dict | None = Depends(get_optional_user_from_token),
@@ -364,13 +394,14 @@ async def quick_group_analysis(
             backend=client.backend.value,
         )
     except Exception as e:
+        logger.exception("Quick group analysis failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Quick group analysis failed: {str(e)}",
+            detail="Quick group analysis failed",
         ) from e
 
 
-@router.post("/scan", response_model=AnalysisResponse)
+@router.post("/scan", response_model=AnalysisResponse, dependencies=[Depends(_analysis_rate_limit)])
 async def scan_markets(
     request: MarketScanRequest,
     current_user: dict | None = Depends(get_optional_user_from_token),
@@ -397,9 +428,10 @@ async def scan_markets(
             success=True, data=result, timestamp=utc_now().isoformat(), backend=client.backend.value
         )
     except Exception as e:
+        logger.exception("Market scan failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Market scan failed: {str(e)}",
+            detail="Market scan failed",
         ) from e
 
 
@@ -432,9 +464,10 @@ async def assess_risk(
             success=True, data=result, timestamp=utc_now().isoformat(), backend=client.backend.value
         )
     except Exception as e:
+        logger.exception("Risk assessment failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Risk assessment failed: {str(e)}",
+            detail="Risk assessment failed",
         ) from e
 
 
@@ -467,9 +500,10 @@ async def generate_trade_plan(
             success=True, data=result, timestamp=utc_now().isoformat(), backend=client.backend.value
         )
     except Exception as e:
+        logger.exception("Trade plan generation failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Trade plan generation failed: {str(e)}",
+            detail="Trade plan generation failed",
         ) from e
 
 
@@ -526,7 +560,7 @@ async def _enrich_trader_request(request: TraderAnalysisRequest) -> dict:
     return enriched
 
 
-@router.post("/trader/stream")
+@router.post("/trader/stream", dependencies=[Depends(_analysis_rate_limit)])
 async def analyze_trader_stream(
     request: TraderAnalysisRequest,
     current_user: dict | None = Depends(get_optional_user_from_token),
@@ -565,7 +599,7 @@ async def analyze_trader_stream(
             yield f"data: {json.dumps({'done': True})}\n\n"
         except Exception as e:
             logger.error(f"Streaming trader analysis error: {e}", exc_info=True)
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            yield f"data: {json.dumps({'error': 'Trader analysis failed'})}\n\n"
         finally:
             await client.close()
 
@@ -617,9 +651,10 @@ async def analyze_trader(
             backend=client.backend.value,
         )
     except Exception as e:
+        logger.exception("Trader analysis failed for %s", request.wallet_address[:10])
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Trader analysis failed: {str(e)}",
+            detail="Trader analysis failed",
         ) from e
 
 
@@ -659,9 +694,10 @@ async def evaluate_copy_trade(
             backend=client.backend.value,
         )
     except Exception as e:
+        logger.exception("Copy trade evaluation failed for %s", request.trader_wallet[:10])
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Copy trade evaluation failed: {str(e)}",
+            detail="Copy trade evaluation failed",
         ) from e
 
 
@@ -1039,7 +1075,7 @@ async def _score_event_groups(
                         "smart_money_summary": "",
                         "recommendation": "hold",
                         "recommended_side": "YES" if yes_p < 0.5 else "NO",
-                        "reasoning": f"AI analysis failed: {exc}",
+                        "reasoning": "AI analysis failed",
                         "search_summary": "",
                         "key_risks": [],
                     }
@@ -1077,7 +1113,7 @@ async def _score_event_groups(
                         "recommendation": "hold",
                         "recommended_side": "YES",
                         "recommended_option": "",
-                        "reasoning": f"AI analysis failed: {exc}",
+                        "reasoning": "AI analysis failed",
                         "search_summary": "",
                         "key_risks": [],
                     }
@@ -1117,7 +1153,13 @@ async def _score_event_groups(
     return tasks, result_queue
 
 
-@router.post("/opportunities/analyze-markets")
+@router.post(
+    "/opportunities/analyze-markets",
+    dependencies=[
+        Depends(_analysis_scan_rate_limit),
+        Depends(optional_plan_quota(CAP_OPPORTUNITY_SCAN)),
+    ],
+)
 async def stream_analyze_markets(
     request: AnalyzeMarketsRequest,
     current_user: dict | None = Depends(get_optional_user_from_token),
@@ -1164,7 +1206,7 @@ async def stream_analyze_markets(
                 )
             except Exception as e:  # pragma: no cover - defensive
                 logger.error("analyze-markets failed to start: %s", e, exc_info=True)
-                yield f"data: {json.dumps({'error': f'Analysis failed: {str(e)}'})}\n\n"
+                yield f"data: {json.dumps({'error': 'Analysis failed'})}\n\n"
                 return
 
             all_results = []
@@ -1222,7 +1264,7 @@ async def stream_analyze_markets(
             yield f"data: {json.dumps({'all_done': True, 'total': len(all_results)})}\n\n"
         except Exception as e:
             logger.error("analyze-markets stream error: %s", e, exc_info=True)
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            yield f"data: {json.dumps({'error': 'Analysis failed'})}\n\n"
         except BaseException:
             # Client disconnect / cancellation: close the channel below,
             # then let the cancellation propagate so streaming shutdown
@@ -1245,7 +1287,13 @@ async def stream_analyze_markets(
     )
 
 
-@router.post("/opportunities/stream")
+@router.post(
+    "/opportunities/stream",
+    dependencies=[
+        Depends(_analysis_scan_rate_limit),
+        Depends(optional_plan_quota(CAP_OPPORTUNITY_SCAN)),
+    ],
+)
 async def stream_opportunity_scan(
     request: OpportunityScanRequest,
     current_user: dict | None = Depends(get_optional_user_from_token),
@@ -1322,7 +1370,7 @@ async def stream_opportunity_scan(
             yield f"data: {json.dumps({'status': 'markets_loaded', 'total': len(markets)})}\n\n"
         except Exception as e:
             logger.error("Failed to fetch markets: %s", e)
-            yield f"data: {json.dumps({'error': f'Failed to fetch markets: {str(e)}'})}\n\n"
+            yield f"data: {json.dumps({'error': 'Failed to fetch markets'})}\n\n"
             return
 
         # ── Group by event & create analysis client ──────────
@@ -1349,7 +1397,7 @@ async def stream_opportunity_scan(
                 )
             except Exception as e:  # pragma: no cover - defensive
                 logger.error("Easy trade scan failed to start: %s", e, exc_info=True)
-                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                yield f"data: {json.dumps({'error': 'Analysis failed'})}\n\n"
                 return
 
             all_results = []
@@ -1414,7 +1462,7 @@ async def stream_opportunity_scan(
 
         except Exception as e:
             logger.error("Easy trade scan stream error: %s", e, exc_info=True)
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            yield f"data: {json.dumps({'error': 'Analysis failed'})}\n\n"
         except BaseException:
             # Client disconnect / cancellation: close the channel below,
             # then let the cancellation propagate so streaming shutdown

@@ -149,8 +149,9 @@ async def _check_postgres() -> ServiceHealth:
             )
         finally:
             db.close()
-    except Exception as e:
-        return ServiceHealth(name="PostgreSQL", status="unhealthy", detail=str(e)[:200])
+    except Exception:
+        logger.exception("PostgreSQL health check failed")
+        return ServiceHealth(name="PostgreSQL", status="unhealthy", detail="Check failed")
 
 
 async def _check_redis() -> ServiceHealth:
@@ -167,8 +168,9 @@ async def _check_redis() -> ServiceHealth:
         latency = round((time.perf_counter() - start) * 1000, 2)
         r.close()
         return ServiceHealth(name="Redis", status="healthy", latency_ms=latency, detail="Connected")
-    except Exception as e:
-        return ServiceHealth(name="Redis", status="unhealthy", detail=str(e)[:200])
+    except Exception:
+        logger.exception("Redis health check failed")
+        return ServiceHealth(name="Redis", status="unhealthy", detail="Check failed")
 
 
 async def _check_grpc_service(name: str, host: str, port: int) -> ServiceHealth:
@@ -183,11 +185,11 @@ async def _check_grpc_service(name: str, host: str, port: int) -> ServiceHealth:
             name=name, status="healthy", latency_ms=latency, detail=f"{host}:{port}"
         )
     except TimeoutError:
-        return ServiceHealth(
-            name=name, status="unhealthy", detail=f"Timeout connecting to {host}:{port}"
-        )
-    except Exception as e:
-        return ServiceHealth(name=name, status="unhealthy", detail=str(e)[:200])
+        logger.warning("gRPC check for %s:%s timed out", host, port)
+        return ServiceHealth(name=name, status="unhealthy", detail="Connection timed out")
+    except Exception:
+        logger.exception("gRPC health check failed for %s", name)
+        return ServiceHealth(name=name, status="unhealthy", detail="Check failed")
 
 
 async def _check_background_tasks() -> ServiceHealth:
@@ -207,8 +209,9 @@ async def _check_background_tasks() -> ServiceHealth:
             status=status,
             detail=f"{alive}/{total} tasks running",
         )
-    except Exception as e:
-        return ServiceHealth(name="Background Tasks", status="unknown", detail=str(e)[:200])
+    except Exception:
+        logger.exception("Background tasks health check failed")
+        return ServiceHealth(name="Background Tasks", status="unknown", detail="Check failed")
 
 
 async def _check_inverse_bot_monitor() -> ServiceHealth:
@@ -224,8 +227,9 @@ async def _check_inverse_bot_monitor() -> ServiceHealth:
             f"reversals={m.get('reversals_total', 0)}, inflight={m.get('inflight', 0)}"
         )
         return ServiceHealth(name="Inverse Bot Monitor", status=status, detail=detail)
-    except Exception as e:
-        return ServiceHealth(name="Inverse Bot Monitor", status="unknown", detail=str(e)[:200])
+    except Exception:
+        logger.exception("Inverse bot monitor health check failed")
+        return ServiceHealth(name="Inverse Bot Monitor", status="unknown", detail="Check failed")
 
 
 async def _check_research_mcp() -> ServiceHealth:
@@ -258,8 +262,9 @@ async def _check_research_mcp() -> ServiceHealth:
             status="healthy",
             detail="Managed by AI service containers (llm-chain / cli-agent).",
         )
-    except Exception as e:
-        return ServiceHealth(name="Research MCP", status="unhealthy", detail=str(e)[:200])
+    except Exception:
+        logger.exception("Research MCP health check failed")
+        return ServiceHealth(name="Research MCP", status="unhealthy", detail="Check failed")
 
 
 # ────────────────────────── Endpoints ──────────────────────────

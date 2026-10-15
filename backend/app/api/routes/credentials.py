@@ -8,11 +8,13 @@ store a key for another wallet.
 """
 
 import logging
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from app.api.routes.auth import get_current_user_from_token
+from app.schemas.auth import PRIVATE_KEY_PATTERN
 from app.security.credential_store import (
     CredentialStoreError,
     delete_wallet_credentials,
@@ -33,6 +35,15 @@ class TradingKeyRequest(BaseModel):
         None,
         description="Optional CLOB API credentials (api_key/api_secret/api_passphrase)",
     )
+
+
+def _validate_private_key_format(private_key: str) -> None:
+    """Reject malformed keys before they reach the credential store."""
+    if not re.fullmatch(PRIVATE_KEY_PATTERN, private_key):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid private key format",
+        )
 
 
 # Applied as a FastAPI dependency (rather than a decorator on the handler)
@@ -57,6 +68,8 @@ def store_trading_key(
     request body. Used by the explicit "enable auto-trading" step.
     """
     wallet_address = current_user["wallet_address"]
+    # Reject a malformed key before it is encrypted and persisted.
+    _validate_private_key_format(request.private_key)
     try:
         store_wallet_credentials(
             wallet_address=wallet_address,

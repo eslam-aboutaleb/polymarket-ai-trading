@@ -23,7 +23,9 @@ Covered:
   article cache.
 * ``_resolve_news_backend`` -- news always routes to llm-chain, whatever
   the provider override.
-* ``get_news_service`` and the background generator's start/stop/loop lifecycle.
+* ``get_news_service`` and the background generator's start/stop/loop lifecycle,
+  including the advisory-lock release that must happen when ``stop`` cancels
+  the generator task.
 * ``AnalysisClient`` news contract -- the article dict carries both
   ``question`` and ``market_question``, and the batch RPC parses every
   article and forwards the per-request LLM config.
@@ -512,6 +514,82 @@ class BackgroundGeneratorTests(_NewsServiceTestCase):
         self.assertTrue(
             any("News background generator stopped" in line for line in captured.output)
         )
+
+
+class GeneratorLockLifecycleTests(_NewsServiceTestCase):
+    """The generator's Postgres advisory lock must not outlive its task.
+
+    ``start_news_generator`` acquires ``news_generator`` before creating the
+    loop task, so every way the task can end — the cancellation
+    ``stop_news_generator`` delivers, or a crash — has to put the lock back,
+    otherwise the entry (and its dedicated connection) lingers in
+    ``scheduler_lock._held_locks`` until process exit and a restarted
+    generator can never re-acquire it.
+    """
+
+    def _patch_locks(self, acquired=True):
+        acquire = MagicMock(return_value=acquired)
+        release = MagicMock()
+        acquire_patcher = patch.object(news_mod, "acquire_scheduler_lock", acquire)
+        release_patcher = patch.object(news_mod, "release_scheduler_lock", release)
+        acquire_patcher.start()
+        release_patcher.start()
+        self.addCleanup(acquire_patcher.stop)
+        self.addCleanup(release_patcher.stop)
+        return acquire, release
+
+    async def test_start_acquires_the_named_scheduler_lock(self):
+        acquire, release = self._patch_locks()
+
+        await start_news_generator()
+
+        acquire.assert_called_once_with("news_generator")
+        release.assert_not_called()
+        self.assertEqual(news_mod._generator_task.get_coro().__name__, "_news_generation_loop")
+
+    async def test_start_skips_the_task_when_another_worker_holds_the_lock(self):
+        acquire, release = self._patch_locks(acquired=False)
+
+        await start_news_generator()
+
+        self.assertIsNone(news_mod._generator_task)
+        acquire.assert_called_once_with("news_generator")
+        release.assert_not_called()
+
+    async def test_stop_releases_the_scheduler_lock(self):
+        # start/stop run without an intervening yield, so the task is
+        # cancelled before its first step and its coroutine body (try
+        # block included) never runs: only stop_news_generator's own
+        # release can put the lock back here.
+        _acquire, release = self._patch_locks()
+
+        await start_news_generator()
+        await stop_news_generator()
+
+        release.assert_called_once_with("news_generator")
+
+    async def test_stop_releases_the_scheduler_lock_even_without_a_task(self):
+        _acquire, release = self._patch_locks()
+        news_mod._generator_task = None
+
+        await stop_news_generator()
+
+        release.assert_called_once_with("news_generator")
+
+    async def test_cancelled_loop_releases_the_scheduler_lock_before_propagating(self):
+        # Cancellation inside the loop (here the interval sleep) must
+        # propagate out through the loop's finally, releasing the lock
+        # exactly once on the way.
+        _acquire, release = self._patch_locks()
+        sleep = AsyncMock(side_effect=asyncio.CancelledError("stop"))
+
+        with (
+            patch.object(asyncio, "sleep", sleep),
+            self.assertRaises(asyncio.CancelledError),
+        ):
+            await news_mod._news_generation_loop()
+
+        release.assert_called_once_with("news_generator")
 
 
 class NewsGenerationLoopTests(_NewsServiceTestCase):

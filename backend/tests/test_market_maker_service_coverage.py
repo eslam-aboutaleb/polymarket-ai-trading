@@ -329,7 +329,7 @@ class PaperSyncImplementationTests(unittest.IsolatedAsyncioTestCase):
         market = {"best_bid": 0.48, "best_ask": 0.52, "book_depth": 25.0}
 
         with (
-            patch("app.models.user_trade.UserTrade") as user_trade_cls,
+            patch("app.services.trade_recorder.UserTrade") as user_trade_cls,
             patch(
                 "app.services.simulation.simulate_market_maker_fill",
                 return_value=fill,
@@ -340,7 +340,10 @@ class PaperSyncImplementationTests(unittest.IsolatedAsyncioTestCase):
             )
 
         # Each expected order is filled against the book and
-        # recorded as a simulated UserTrade row.
+        # recorded as a simulated UserTrade row. Since plan 03 Phase A
+        # every strategy records through the shared
+        # ``app.services.trade_recorder``, so that is the patched
+        # symbol now — and the row carries its strategy source.
         self.assertEqual(
             simulate.call_args_list,
             [
@@ -357,6 +360,11 @@ class PaperSyncImplementationTests(unittest.IsolatedAsyncioTestCase):
             amount=10.0,
             price=0.485,
             status="simulated",
+            order_hash=None,
+            expected_price=0.48,
+            expected_size=10.0,
+            strategy_source="market_maker",
+            pnl=None,
         )
         user_trade_cls.assert_any_call(
             user_id=7,
@@ -366,8 +374,16 @@ class PaperSyncImplementationTests(unittest.IsolatedAsyncioTestCase):
             amount=10.0,
             price=0.485,
             status="simulated",
+            order_hash=None,
+            expected_price=0.52,
+            expected_size=10.0,
+            strategy_source="market_maker",
+            pnl=None,
         )
-        self.assertEqual(db.add.call_count, 2)
+        # 2 trades + 2 app_events (one per trade, plan 10 Phase A). The
+        # events are appended on the same session so a rollback removes
+        # the trade and its description together.
+        self.assertEqual(db.add.call_count, 4)
 
         # Counters and status are persisted exactly like a live cycle.
         self.assertEqual(config.total_orders_placed, 2)
@@ -395,7 +411,7 @@ class PaperSyncImplementationTests(unittest.IsolatedAsyncioTestCase):
         book = {"best_bid": 0.48, "best_ask": 0.52, "depth": 25.0}
 
         with (
-            patch("app.models.user_trade.UserTrade") as user_trade_cls,
+            patch("app.services.trade_recorder.UserTrade") as user_trade_cls,
             patch("app.services.simulation.simulate_market_maker_fill") as simulate,
         ):
             result = await market_maker_service._sync_market_maker_paper(db, config, 0.5, [], book)

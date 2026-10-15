@@ -6,8 +6,10 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_plan
 from app.api.routes.auth import get_current_user_from_token
 from app.models.user_trade import UserTrade
+from app.services.entitlement_service import CAP_LATENCY_ARB
 from app.services.latency_arb_service import (
     STRATEGY_SOURCE,
     get_config,
@@ -174,7 +176,11 @@ async def get_latency_arb_config(
     return _config_to_response(config)
 
 
-@router.post("/config", response_model=LatencyArbConfigResponse)
+@router.post(
+    "/config",
+    response_model=LatencyArbConfigResponse,
+    dependencies=[Depends(require_plan(CAP_LATENCY_ARB))],
+)
 async def update_latency_arb_config(
     body: LatencyArbConfigUpdate,
     current_user: dict = Depends(get_current_user_from_token),

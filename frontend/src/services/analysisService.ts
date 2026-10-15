@@ -11,6 +11,7 @@
 
 import { apiClient } from "./apiClient";
 import { streamSSE } from "./sseStream";
+import { getApiErrorMessage } from "../utils/apiError";
 
 // --- Request Types ---
 
@@ -219,7 +220,7 @@ export const analysisService = {
       { path: "/api/analysis/trader/stream", body: request, signal: controller.signal },
       callbacks,
     ).catch((err: unknown) => {
-      callbacks.onError(err instanceof Error ? err.message : "Stream failed");
+      callbacks.onError(getApiErrorMessage(err, "Stream failed"));
     });
 
     return controller;
@@ -244,7 +245,7 @@ export const analysisService = {
       { path: "/api/analysis/market/stream", body: request, signal: controller.signal },
       callbacks,
     ).catch((err: unknown) => {
-      callbacks.onError(err instanceof Error ? err.message : "Stream failed");
+      callbacks.onError(getApiErrorMessage(err, "Stream failed"));
     });
 
     return controller;
@@ -290,7 +291,7 @@ export const analysisService = {
         onError: callbacks.onError,
       },
     ).catch((err: unknown) => {
-      callbacks.onError(err instanceof Error ? err.message : "Stream failed");
+      callbacks.onError(getApiErrorMessage(err, "Stream failed"));
     });
 
     return controller;
@@ -339,7 +340,7 @@ export const analysisService = {
         onError: callbacks.onError,
       },
     ).catch((err: unknown) => {
-      callbacks.onError(err instanceof Error ? err.message : "Stream failed");
+      callbacks.onError(getApiErrorMessage(err, "Stream failed"));
     });
 
     return controller;

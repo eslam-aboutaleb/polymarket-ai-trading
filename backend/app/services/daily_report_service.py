@@ -103,6 +103,18 @@ def get_daily_report_metrics() -> dict[str, int]:
     return dict(_metrics)
 
 
+def reset_daily_report_metrics() -> None:
+    """Zero the digest counters.
+
+    They are module-level, so a digest count observed by a later test is
+    the sum of every earlier test that ran a cycle. Resetting per test
+    makes the assertion "this cycle counted exactly one failure" true
+    regardless of execution order.
+    """
+    for key in _metrics:
+        _metrics[key] = 0
+
+
 # ── small helpers ──────────────────────────────────────────────
 
 

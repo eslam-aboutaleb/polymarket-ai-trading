@@ -19,9 +19,11 @@ import { Outlet } from "react-router-dom";
 import { useAuthStore } from "../store/authStore";
 import { authService } from "../services/authService";
 import { settingsService } from "../services/settingsService";
+import { getApiErrorMessage } from "../utils/apiError";
 import Navigation from "./Navigation";
-import TutorialOverlay, { useTutorialState } from "./TutorialOverlay";
+import TutorialLauncher from "./TutorialLauncher";
 import { FOCUS_MARKET_SEARCH_EVENT } from "../utils/tradingWorkspace";
+import { Banner } from "./ui";
 
 function isEditableTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
@@ -34,14 +36,21 @@ function isEditableTarget(target: EventTarget | null): boolean {
 
 export default function AppLayout() {
   const { walletAddress, isAuthenticated, clearSession } = useAuthStore();
-  const { showTutorial, startTutorial, completeTutorial, dismissTutorial } = useTutorialState();
   const [simulationMode, setSimulationMode] = useState<boolean | null>(null);
   const [paperBalance, setPaperBalance] = useState<number>(1000);
   const [paperBusy, setPaperBusy] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [paperModeError, setPaperModeError] = useState<string | null>(null);
+  const [settingsReloadKey, setSettingsReloadKey] = useState(0);
 
   const handleLogout = async () => {
     try {
       await authService.logout();
+    } catch (err) {
+      // The server-side cookie may fail to clear, but the session is dropped
+      // below regardless — a failed logout must not become an unhandled
+      // rejection or leave the confirm modal stuck open.
+      console.warn("Logout request failed; clearing session anyway", err);
     } finally {
       clearSession();
     }
@@ -59,28 +68,38 @@ export default function AppLayout() {
         if (!cancelled) {
           setSimulationMode(settings.simulation_mode);
           setPaperBalance(settings.paper_balance);
+          setSettingsError(null);
         }
-      } catch {
-        // Settings unavailable — the toggle stays hidden.
+      } catch (err: unknown) {
+        // Settings unavailable — the toggle stays hidden, so say why instead
+        // of leaving the user to guess whether they are trading paper or live.
+        if (!cancelled) {
+          setSettingsError(getApiErrorMessage(err, "Failed to load your trading mode"));
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [walletAddress, isAuthenticated]);
+  }, [walletAddress, isAuthenticated, settingsReloadKey]);
+
+  const reloadSettings = useCallback(() => setSettingsReloadKey((k) => k + 1), []);
 
   const togglePaperMode = useCallback(async () => {
     if (simulationMode === null || paperBusy) return;
     const next = !simulationMode;
     setPaperBusy(true);
+    setPaperModeError(null);
     try {
       const updated = await settingsService.updateCopyTradingSettings({
         simulation_mode: next,
       });
+      // The badge only reflects server-confirmed state — a failed switch
+      // must never silently look like it took effect.
       setSimulationMode(updated.simulation_mode);
       setPaperBalance(updated.paper_balance);
-    } catch {
-      // Keep the current mode when the update fails.
+    } catch (err: unknown) {
+      setPaperModeError(getApiErrorMessage(err, "Failed to switch trading mode"));
     } finally {
       setPaperBusy(false);
     }
@@ -105,30 +124,49 @@ export default function AppLayout() {
       <Navigation walletAddress={walletAddress || ""} onLogout={handleLogout} />
 
       {/* Persistent Paper/Live mode toggle */}
-      {simulationMode !== null && (
+      {(simulationMode !== null || settingsError || paperModeError) && (
         <div className="relative z-0 max-w-7xl mx-auto px-4 pt-4">
-          <div className="flex items-center justify-end gap-2 flex-wrap">
-            <span
-              className={`chip text-[10px] ${simulationMode ? "chip-warning" : "chip-success"}`}
-              title={
-                simulationMode
-                  ? "Paper mode: strategies record simulated fills, no real orders"
-                  : "Live mode: strategies submit real orders"
-              }
+          {settingsError && (
+            <Banner
+              variant="error"
+              className="mb-2"
+              onDismiss={() => setSettingsError(null)}
+              onRetry={reloadSettings}
             >
-              {simulationMode ? "PAPER" : "LIVE"}
-            </span>
-            {simulationMode && (
-              <span className="text-xs text-muted">Paper balance: ${paperBalance.toFixed(2)}</span>
-            )}
-            <button
-              onClick={() => void togglePaperMode()}
-              disabled={paperBusy}
-              className="btn-muted text-xs px-3 py-1.5"
-            >
-              {paperBusy ? "Switching…" : simulationMode ? "Switch to Live" : "Switch to Paper"}
-            </button>
-          </div>
+              {settingsError}
+            </Banner>
+          )}
+          {simulationMode !== null && (
+            <div className="flex items-center justify-end gap-2 flex-wrap">
+              <span
+                className={`chip text-[10px] ${simulationMode ? "chip-warning" : "chip-success"}`}
+                title={
+                  simulationMode
+                    ? "Paper mode: strategies record simulated fills, no real orders"
+                    : "Live mode: strategies submit real orders"
+                }
+              >
+                {simulationMode ? "PAPER" : "LIVE"}
+              </span>
+              {simulationMode && (
+                <span className="text-xs text-muted">
+                  Paper balance: ${paperBalance.toFixed(2)}
+                </span>
+              )}
+              <button
+                onClick={() => void togglePaperMode()}
+                disabled={paperBusy}
+                className="btn-muted text-xs px-3 py-1.5"
+              >
+                {paperBusy ? "Switching…" : simulationMode ? "Switch to Live" : "Switch to Paper"}
+              </button>
+            </div>
+          )}
+          {paperModeError && (
+            <Banner variant="error" className="mt-2" onDismiss={() => setPaperModeError(null)}>
+              {paperModeError}
+            </Banner>
+          )}
         </div>
       )}
 
@@ -136,27 +174,8 @@ export default function AppLayout() {
         <Outlet />
       </main>
 
-      {/* Floating tutorial button */}
-      <button
-        onClick={startTutorial}
-        className="fixed bottom-6 right-6 z-50 w-12 h-12 rounded-full btn-accent flex items-center justify-center shadow-lg hover:scale-110 transition-transform"
-        title="Start Tutorial"
-        aria-label="Start guided tutorial"
-      >
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
-          />
-        </svg>
-      </button>
-
-      {/* Tutorial overlay */}
-      {showTutorial && (
-        <TutorialOverlay onComplete={completeTutorial} onDismiss={dismissTutorial} />
-      )}
+      {/* Floating tutorial launcher + overlay */}
+      <TutorialLauncher />
     </div>
   );
 }

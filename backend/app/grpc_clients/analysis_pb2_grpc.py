@@ -105,6 +105,16 @@ class AnalysisServiceStub(object):
                 request_serializer=analysis__pb2.GenerateNewsBatchRequest.SerializeToString,
                 response_deserializer=analysis__pb2.GenerateNewsBatchResponse.FromString,
                 _registered_method=True)
+        self.OrchestrateAnalysis = channel.unary_unary(
+                '/polymarket.analysis.AnalysisService/OrchestrateAnalysis',
+                request_serializer=analysis__pb2.OrchestrateRequest.SerializeToString,
+                response_deserializer=analysis__pb2.OrchestrateResponse.FromString,
+                _registered_method=True)
+        self.OrchestrateAnalysisStream = channel.unary_stream(
+                '/polymarket.analysis.AnalysisService/OrchestrateAnalysisStream',
+                request_serializer=analysis__pb2.OrchestrateRequest.SerializeToString,
+                response_deserializer=analysis__pb2.AnalysisChunk.FromString,
+                _registered_method=True)
         self.HealthCheck = channel.unary_unary(
                 '/polymarket.analysis.AnalysisService/HealthCheck',
                 request_serializer=analysis__pb2.HealthRequest.SerializeToString,
@@ -220,6 +230,24 @@ class AnalysisServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def OrchestrateAnalysis(self, request, context):
+        """── NEW: Orchestration ───────────────────────────────────
+
+        Coordinate a multi-step analysis plan (deterministic planner) and
+        synthesise one answer. Implemented by llm-chain only.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def OrchestrateAnalysisStream(self, request, context):
+        """Streaming variant — emits one AnalysisChunk per executed step
+        (chunk_type="step"), then the synthesis (chunk_type="recommendation").
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def HealthCheck(self, request, context):
         """Health check
         """
@@ -299,6 +327,16 @@ def add_AnalysisServiceServicer_to_server(servicer, server):
                     servicer.GenerateNewsBatch,
                     request_deserializer=analysis__pb2.GenerateNewsBatchRequest.FromString,
                     response_serializer=analysis__pb2.GenerateNewsBatchResponse.SerializeToString,
+            ),
+            'OrchestrateAnalysis': grpc.unary_unary_rpc_method_handler(
+                    servicer.OrchestrateAnalysis,
+                    request_deserializer=analysis__pb2.OrchestrateRequest.FromString,
+                    response_serializer=analysis__pb2.OrchestrateResponse.SerializeToString,
+            ),
+            'OrchestrateAnalysisStream': grpc.unary_stream_rpc_method_handler(
+                    servicer.OrchestrateAnalysisStream,
+                    request_deserializer=analysis__pb2.OrchestrateRequest.FromString,
+                    response_serializer=analysis__pb2.AnalysisChunk.SerializeToString,
             ),
             'HealthCheck': grpc.unary_unary_rpc_method_handler(
                     servicer.HealthCheck,
@@ -685,6 +723,60 @@ class AnalysisService(object):
             '/polymarket.analysis.AnalysisService/GenerateNewsBatch',
             analysis__pb2.GenerateNewsBatchRequest.SerializeToString,
             analysis__pb2.GenerateNewsBatchResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def OrchestrateAnalysis(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/polymarket.analysis.AnalysisService/OrchestrateAnalysis',
+            analysis__pb2.OrchestrateRequest.SerializeToString,
+            analysis__pb2.OrchestrateResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def OrchestrateAnalysisStream(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/polymarket.analysis.AnalysisService/OrchestrateAnalysisStream',
+            analysis__pb2.OrchestrateRequest.SerializeToString,
+            analysis__pb2.AnalysisChunk.FromString,
             options,
             channel_credentials,
             insecure,

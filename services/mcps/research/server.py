@@ -20,6 +20,7 @@ Tools:
 - binance_token_search(keyword)                               — Search tokens by name/symbol
 - binance_token_data(chain_id, contract_address)              — Real-time token market data
 - binance_market_context(query_tokens, chain)                 — Aggregated Binance context for LLM
+- cross_venue_markets(query, limit)                           — Cached cross-venue rows (backend)
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ import os
 import sys
 from typing import Any
 
+import httpx
 from ddgs import DDGS
 
 # ── Binance Skills Hub integration ────────────────────────
@@ -43,6 +45,17 @@ try:
 except ImportError:
     _BINANCE_AVAILABLE = False
     binance_skills = None  # type: ignore
+
+
+# ── Cross-venue market cache ─────────────────────────────
+# The venue cache lives in the backend: this server runs as a stdio
+# subprocess of the AI services, which carry no database driver and no
+# backend code. The tool therefore reads the same cached rows over HTTP
+# and degrades to an empty list — never a raise — exactly like
+# ``binance_skills._get`` when the backend is unreachable or the call is
+# unauthorized. Both variables are opt-in: unset means no venue signal.
+VENUE_API_BASE = os.environ.get("VENUE_API_BASE", "http://backend:8002").strip().rstrip("/")
+VENUE_API_TOKEN = os.environ.get("VENUE_API_TOKEN", "").strip()
 
 
 def _run_async(coro):
@@ -169,6 +182,41 @@ def x_posts_search(
     ][: max(1, min(20, int(max_results)))]
 
 
+async def cross_venue_markets(query: str, limit: int = 50) -> list[dict[str, Any]]:
+    """Cached cross-venue market groups matching a query (read-only signal).
+
+    Returns the groups served by ``GET /api/venues/markets/cross``: rows
+    grouped by normalized question, each carrying the venue prices, both
+    venues' questions and the yes-price gap. Signal only — nothing here
+    is executable without manual confirmation.
+
+    Degrades to ``[]`` when the venue API base is unset, the backend is
+    unreachable, or the call is unauthorized (no ``VENUE_API_TOKEN``
+    configured for a route that requires one).
+    """
+    if not query.strip() or not VENUE_API_BASE:
+        return []
+    headers = {"Accept": "application/json"}
+    if VENUE_API_TOKEN:
+        headers["Authorization"] = f"Bearer {VENUE_API_TOKEN}"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{VENUE_API_BASE}/api/venues/markets/cross",
+                params={"q": query.strip(), "limit": max(1, min(int(limit or 50), 100))},
+                headers=headers,
+            )
+        if resp.status_code != 200:
+            return []
+        payload = resp.json()
+    except Exception:
+        return []
+    groups = payload.get("groups") if isinstance(payload, dict) else None
+    if not isinstance(groups, list):
+        return []
+    return [group for group in groups if isinstance(group, dict)]
+
+
 def _run_one(payload: dict[str, Any]) -> dict[str, Any]:
     tool = str(payload.get("tool") or "").strip()
     args = payload.get("args") or {}
@@ -263,8 +311,15 @@ def _run_one(payload: dict[str, Any]) -> dict[str, Any]:
     elif tool == "binance_pnl_leaderboard":
         result = _run_async(
             binance_skills.get_pnl_leaderboard(
-                chain=str(args.get("chain", "solana")),
                 period=str(args.get("period", "30d")),
+                page_size=int(args.get("page_size", 25) or 25),
+            )
+        )
+    elif tool == "cross_venue_markets":
+        result = _run_async(
+            cross_venue_markets(
+                query=str(args.get("query") or ""),
+                limit=int(args.get("limit", 50) or 50),
             )
         )
     else:

@@ -15,6 +15,8 @@ import {
   type NewsArticle,
   type GenerateNewsPayload,
 } from "../services/newsService";
+import { getApiErrorMessage } from "../utils/apiError";
+import { Modal } from "./ui";
 
 // ── Helpers ────────────────────────────────────────────────
 
@@ -83,73 +85,57 @@ function NewsCard({ article, onExpand }: { article: NewsArticle; onExpand: () =>
 
 function ArticleModal({ article, onClose }: { article: NewsArticle; onClose: () => void }) {
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4"
-      onClick={onClose}
-    >
-      <div
-        className="surface-panel max-w-2xl w-full max-h-[85vh] overflow-y-auto rounded-xl p-6 relative"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button
-          onClick={onClose}
-          className="absolute top-3 right-3 text-muted hover:text-heading text-lg"
-        >
-          ×
-        </button>
-
-        <div className="flex items-center gap-2 mb-1">
-          <SentimentBadge sentiment={article.sentiment} />
-          <ConfidenceMeter value={article.confidence} />
-        </div>
-
-        <h2 className="text-lg font-bold text-heading mt-2 mb-1">{article.headline}</h2>
-        <p className="text-xs text-muted mb-4">
-          {article.question} • {new Date(article.generated_at).toLocaleString()}
-        </p>
-
-        <p className="text-sm text-soft mb-4 italic">{article.summary}</p>
-
-        <div className="prose prose-invert prose-sm max-w-none text-soft whitespace-pre-line">
-          {article.body}
-        </div>
-
-        {article.key_insights?.length > 0 && (
-          <div className="mt-5">
-            <h4 className="text-xs font-semibold text-heading mb-2">Key Insights</h4>
-            <ul className="list-disc list-inside space-y-1 text-xs text-soft">
-              {article.key_insights.map((ins, i) => (
-                <li key={i}>{ins}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {article.trader_behavior_summary && (
-          <div className="mt-4">
-            <h4 className="text-xs font-semibold text-heading mb-1">Trader Behavior</h4>
-            <p className="text-xs text-soft">{article.trader_behavior_summary}</p>
-          </div>
-        )}
-
-        {article.market_outlook && (
-          <div className="mt-4">
-            <h4 className="text-xs font-semibold text-heading mb-1">Market Outlook</h4>
-            <p className="text-xs text-soft">{article.market_outlook}</p>
-          </div>
-        )}
-
-        {article.tags?.length > 0 && (
-          <div className="flex flex-wrap gap-1 mt-4">
-            {article.tags.map((t) => (
-              <span key={t} className="text-[10px] px-2 py-0.5 rounded bg-white/5 text-muted">
-                {t}
-              </span>
-            ))}
-          </div>
-        )}
+    <Modal open onClose={onClose} title={article.headline} size="lg">
+      <div className="flex items-center gap-2 mb-1">
+        <SentimentBadge sentiment={article.sentiment} />
+        <ConfidenceMeter value={article.confidence} />
       </div>
-    </div>
+
+      <p className="text-xs text-muted mb-4">
+        {article.question} • {new Date(article.generated_at).toLocaleString()}
+      </p>
+
+      <p className="text-sm text-soft mb-4 italic">{article.summary}</p>
+
+      <div className="prose prose-invert prose-sm max-w-none text-soft whitespace-pre-line">
+        {article.body}
+      </div>
+
+      {article.key_insights?.length > 0 && (
+        <div className="mt-5">
+          <h4 className="text-xs font-semibold text-heading mb-2">Key Insights</h4>
+          <ul className="list-disc list-inside space-y-1 text-xs text-soft">
+            {article.key_insights.map((ins, i) => (
+              <li key={i}>{ins}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {article.trader_behavior_summary && (
+        <div className="mt-4">
+          <h4 className="text-xs font-semibold text-heading mb-1">Trader Behavior</h4>
+          <p className="text-xs text-soft">{article.trader_behavior_summary}</p>
+        </div>
+      )}
+
+      {article.market_outlook && (
+        <div className="mt-4">
+          <h4 className="text-xs font-semibold text-heading mb-1">Market Outlook</h4>
+          <p className="text-xs text-soft">{article.market_outlook}</p>
+        </div>
+      )}
+
+      {article.tags?.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-4">
+          {article.tags.map((t) => (
+            <span key={t} className="text-[10px] px-2 py-0.5 rounded bg-white/5 text-muted">
+              {t}
+            </span>
+          ))}
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -174,8 +160,7 @@ export default function News() {
       setFeed(res.articles);
       setFeedError(null);
     } catch (err) {
-      console.error("Failed to load news feed", err);
-      setFeedError("Failed to load the news feed.");
+      setFeedError(getApiErrorMessage(err, "Failed to load the news feed."));
     } finally {
       setLoading(false);
     }
@@ -196,8 +181,7 @@ export default function News() {
       setFeed(res.articles);
       setFeedError(null);
     } catch (err) {
-      console.error("Feed refresh failed", err);
-      setFeedError("Feed refresh failed.");
+      setFeedError(getApiErrorMessage(err, "Feed refresh failed."));
     } finally {
       setRefreshing(false);
     }
@@ -240,7 +224,7 @@ export default function News() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-heading">AI Market News</h1>
+          <h1 className="text-xl font-bold text-heading">News</h1>
           <p className="text-xs text-muted mt-0.5">
             AI-generated articles from market data, trader behavior &amp; social signals
           </p>
@@ -255,7 +239,7 @@ export default function News() {
       </div>
 
       {/* On-demand generator */}
-      <div className="surface-panel p-4 rounded-lg">
+      <div className="surface-panel p-4 rounded-lg" data-tutorial="news">
         <h2 className="text-sm font-semibold text-heading mb-3">Generate Article</h2>
         <div className="flex flex-col sm:flex-row gap-2">
           <input

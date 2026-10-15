@@ -409,7 +409,7 @@ export default function AnalysisDisplay({ text, streaming }: AnalysisDisplayProp
   }
 
   return (
-    <div className="analysis-grid">
+    <div className="analysis-grid" aria-live="polite">
       {sections.map((s, i) => (
         <SectionCard key={i} section={s} />
       ))}

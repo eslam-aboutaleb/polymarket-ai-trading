@@ -28,6 +28,7 @@ class UserNotificationPreference(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    account_id = Column(Integer, nullable=True, index=True)
     event_type = Column(String(length=40), nullable=False)
     channel_ids = Column(Text, nullable=False, default="[]")
     enabled = Column(Boolean, nullable=False, default=True)

@@ -235,6 +235,30 @@ const sections: GuideSection[] = [
     ],
   },
   {
+    id: "kelly-sizing",
+    icon: "🧮",
+    title: "Kelly Sizing & Edge",
+    description: "How the trade ticket turns a probability advantage into a suggested stake.",
+    items: [
+      {
+        heading: "What Kelly Sizing Means",
+        body: "Kelly sizing is a formula that converts your estimated edge into a stake size. The larger your edge — how far the model's probability sits from the market price — the more the formula suggests you stake, and when the edge is small or negative it shrinks the stake toward zero. It exists so you do not bet too much on a thin advantage, or too little on a real one.",
+      },
+      {
+        heading: "Where You See It",
+        body: "The trade ticket shows a 'Kelly suggestion' line with the current edge, for example 'edge 12% · model'. It pre-fills the amount field only while you have not typed an amount yourself, and stays fully editable afterwards. Treat it as a starting point, never as an instruction.",
+      },
+      {
+        heading: "Edge in Plain English",
+        body: "Edge is the difference between the model's probability and the market's price. A market trading at 60¢ is the crowd saying '60% likely'; if the model computes 72%, the edge is 12 percentage points. A positive edge means the model thinks the outcome is underpriced, and 'no edge' appears when there is nothing to act on.",
+      },
+      {
+        heading: "Caps and Limits",
+        body: "Suggestions are capped by your risk settings — per-trade cap, daily loss limit and exposure ceiling — so a large Kelly number never becomes an oversized order. The Kelly fraction itself is configurable in Settings → Risk Management, and a smaller fraction scales every suggestion down proportionally.",
+      },
+    ],
+  },
+  {
     id: "simulation-mode",
     icon: "🧪",
     title: "Simulation / Dry-Run Mode",
@@ -291,6 +315,50 @@ const sections: GuideSection[] = [
       {
         heading: "Background Monitor",
         body: "The arbitrage scanner runs automatically every 2 minutes in the background. View detected opportunities via GET /api/trades/arbitrage/opportunities, or trigger an immediate scan with POST /api/trades/arbitrage/scan.",
+      },
+    ],
+  },
+  {
+    id: "latency-arbitrage",
+    icon: "⚡",
+    title: "Latency Arbitrage",
+    description: "Trading the gap between the model's price and Polymarket's slower one.",
+    items: [
+      {
+        heading: "How It Works",
+        body: "Latency arbitrage compares two prices for the same thing: the model's probability for BTC/ETH/SOL up-down markets, computed from the Binance spot feed, and the price Polymarket is showing right now. When the spot feed has already moved and Polymarket has not caught up, that gap is the edge.",
+      },
+      {
+        heading: "Reading the Board",
+        body: "'Model P' is the model's probability, 'Market P' is Polymarket's current price, 'Edge' is the gap between them, 'Feed lag' is how old the Binance reading behind the row is, and 'Countdown' is the time left in the market's window. Only rows above your edge threshold are listed.",
+      },
+      {
+        heading: "Paper First",
+        body: "The engine ships paper-first. With simulation mode on, fills are simulated and no real orders are ever submitted; watch simulated trades settle before turning simulation mode off.",
+      },
+      {
+        heading: "Tuning the Engine",
+        body: "Set the edge threshold, max notional per trade and daily loss limit in Engine Settings. A higher edge threshold means fewer, safer entries, while a higher max notional means larger positions on the entries you do take.",
+      },
+    ],
+  },
+  {
+    id: "breakeven-probability",
+    icon: "⚖️",
+    title: "Breakeven Probability",
+    description: "The win rate a price needs before a trade stops losing money.",
+    items: [
+      {
+        heading: "What Breakeven Means",
+        body: "A share pays $1 when the outcome happens and $0 when it does not, so buying at 62.1¢ needs the outcome to be true more than 62.1% of the time to break even. Below that percentage the trade loses on average, even though any single trade can still win.",
+      },
+      {
+        heading: "On the Trade Ticket",
+        body: "The 'Breakeven framing' line shows this as 'Need > 62.1%' when you are buying and 'Selling near 62.1%' when you are selling — in both cases the current price is the fair value you are trading against.",
+      },
+      {
+        heading: "Using It as a Filter",
+        body: "Compare breakeven against your own confidence before entering: if you believe the true chance is below the breakeven probability, a buy is a negative-expectancy bet, and above it the bet has an edge. Breakeven ignores fees, so leave a margin.",
       },
     ],
   },
@@ -383,6 +451,105 @@ const sections: GuideSection[] = [
       {
         heading: "Security",
         body: "Your private key is encrypted with Fernet encryption and stored securely. JWT tokens expire after 15 minutes and refresh automatically. All API requests are rate-limited to 100/minute.",
+      },
+    ],
+  },
+  {
+    id: "model-governance",
+    icon: "🧪",
+    title: "Model Drift, Prompt Versions & Verdict Feedback",
+    description:
+      "How the AI's own forecast quality is measured, versioned and rated on the Calibration page.",
+    items: [
+      {
+        heading: "Model Drift",
+        body: "The Calibration page tracks mean Brier score per model and task over the selected window and draws the 0.25 coin-flip baseline as a reference line. A pair is flagged DRIFT only when it has at least 20 resolved verdicts and either sits more than 0.02 above that baseline or is rising by more than 0.002 Brier per day; pairs below the sample gate show LOW SAMPLES rather than being flagged on noise. Drift covers every verdict on the instance, so the section is admin-only.",
+      },
+      {
+        heading: "Prompt Versions",
+        body: "Every verdict records the 12-character content hash of the prompt store that produced it, so calibration can be grouped by prompt version and answer 'did the last prompt change help?'. Versions are listed best mean Brier first, and verdicts written before prompt versioning are grouped under (unversioned) instead of being backfilled into a version that never produced them.",
+      },
+      {
+        heading: "Rate a Verdict",
+        body: "Each row of the recent-forecasts table carries a five-star rating with an optional comment. Use the arrow keys to move between stars and Enter to save, or click them directly; Withdraw removes your rating. Your rating stays private to you while the community mean and rating count are shown beside it. Ratings are a prompt-authoring signal only — nothing retrains or reconfigures the bot automatically.",
+      },
+      {
+        heading: "A/B Experiments (Admins)",
+        body: "Admins get an experiment panel on the Calibration page: create an experiment with a name, task, variant traffic percentage and JSON configs for each arm, then pause, resume or retire it. 'Compare arms' aggregates the resolved verdicts written under each arm over the window and reports whether the variant is better, the control is better, there is no difference, or there are insufficient samples (20 resolved verdicts per arm). Only one experiment per task can be active at a time; a conflicting create or resume is rejected.",
+      },
+    ],
+  },
+  {
+    id: "cross-venue-signals",
+    icon: "🌐",
+    title: "Cross-Venue Signals",
+    description:
+      "Compare the same question's price across prediction venues — read-only, signal-only.",
+    items: [
+      {
+        heading: "What the Page Shows",
+        body: "The Venues page lists the questions that more than one venue prices, each venue's yes price and the gap between them, plus every cached market with its 24-hour volume and when it was last fetched. Kalshi is the first adapter: it is US-regulated, has a public API and trades real money, which is why it was chosen first.",
+      },
+      {
+        heading: "Signal-Only, Never Executable",
+        body: "Every row is a comparison, not an instruction. The page carries a permanent warning to that effect and no order button exists — acting on a mismatch means opening the venue itself and placing the trade manually after confirming the two questions really describe the same event.",
+      },
+      {
+        heading: "Adapters Are Off By Default",
+        body: "Each venue has its own feature flag and ships disabled, and an enabled adapter only reads that venue's documented public endpoint once every five minutes. An adapter that is enabled but has never fetched is called out as a data-quality warning, so a stale or empty table is never mistaken for 'the venues agree'.",
+      },
+      {
+        heading: "Why Prices Can Differ",
+        body: "A gap can be a real difference in information between venues, a difference in fees or settlement rules, or a stale row — which is why each mismatch shows both venues' questions and the data age. Treat a small gap on a thin market as noise rather than an opportunity.",
+      },
+    ],
+  },
+  {
+    id: "orchestrator",
+    icon: "\u{1F916}",
+    title: "AI Orchestrator",
+    description: "Run several analysis steps as one plan and get a single merged verdict.",
+    items: [
+      {
+        heading: "Pick an Intent",
+        body: "The Orchestrator page ships three plans. Market Deep Dive analyses one market with web research, assesses its risk and builds a trade plan. Opportunity Sweep scans the markets you paste in, deep-dives the three busiest and assesses the top one. Trader Diligence profiles a trader, evaluates whether to copy the trade, then assesses the risk of doing it.",
+      },
+      {
+        heading: "Read the Timeline",
+        body: "Each step reports its status, how long it took and which backend ran it — the LLM chain for most providers, the CLI agent when your provider resolves to GitHub Models. Independent steps (the three deep dives in a sweep) run at the same time, which is why their durations overlap.",
+      },
+      {
+        heading: "Partial Results",
+        body: "A step that fails or times out does not abort the plan: it is marked failed, the steps that depended only on it are skipped, and you still get a synthesis with a partial badge. When the LLM cannot produce the merged prose, the synthesis falls back to the raw step outputs so you can see exactly what each step returned.",
+      },
+    ],
+  },
+  {
+    id: "command-palette",
+    icon: "\u{1F4AC}",
+    title: "Ask the AI (Command Palette)",
+    description:
+      "Ask a question in plain language and watch the orchestrator answer it step by step.",
+    items: [
+      {
+        heading: "Opening It",
+        body: "On the Ask the AI page, press the Open palette button or the keyboard shortcut (\u2318K on macOS, Ctrl+K elsewhere) while that page is open. The input, the microphone button and the Ask button are all keyboard reachable; arrow keys move through the recent and example questions, Enter runs the highlighted one, Escape closes the palette and returns focus to the button that opened it. Your last five questions are remembered on this device and offered above the examples.",
+      },
+      {
+        heading: "How a Question Is Routed",
+        body: "The palette adds no natural-language model of its own. It reads the question for a wallet address, a price, a position size and the market it names, then picks one of the Orchestrator's three plans — Market Deep Dive for a single market, Trader Diligence when a wallet address appears, Opportunity Sweep when you ask for several markets at once — and streams that plan. The planner it chose is shown as a chip beside the answer, so a surprising route is always explainable.",
+      },
+      {
+        heading: "Reading a Streaming Answer",
+        body: "Each analysis step appears as it completes, so a slow plan shows its progress rather than a spinner, and a step that fails is marked failed while the others continue. The merged answer arrives at the end, with a partial badge whenever a step failed and the prose is degraded. If the connection drops mid-run, everything received so far stays on screen with an error and a Try again button instead of disappearing.",
+      },
+      {
+        heading: "Voice Input",
+        body: "The microphone button is optional and only appears where your browser implements the Web Speech API: Chrome and Edge support it, Safari 14.1 and later support it on HTTPS pages and only after a tap, and Firefox on desktop has no recognition API, so the button stays disabled there. Recognition runs on the browser vendor's service, so treat it as a convenience for short questions rather than something to dictate into a sensitive field.",
+      },
+      {
+        heading: "What the Palette Cannot Do",
+        body: "It is read-only by design. The palette never places, sizes, cancels or approves an order — every action it suggests is a link to an existing page such as Markets, AI Opportunities, the Leaderboard or the Orchestrator, where you decide what to do next. An answer is analysis, not an instruction, and the trade plan inside one is still only a plan.",
       },
     ],
   },
@@ -495,7 +662,7 @@ export default function UserGuide() {
   const [search, setSearch] = useState("");
   const {
     showTutorial,
-    completed: tutorialCompleted,
+    seen: tutorialSeen,
     startTutorial,
     completeTutorial,
     dismissTutorial,
@@ -523,7 +690,10 @@ export default function UserGuide() {
   return (
     <div className="page-enter max-w-7xl mx-auto p-6 space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div
+        className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
+        data-tutorial="guide"
+      >
         <div>
           <h1 className="text-2xl font-bold text-white">📖 Your Guide</h1>
           <p className="text-soft text-sm mt-1">
@@ -554,7 +724,7 @@ export default function UserGuide() {
                 d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
               />
             </svg>
-            {tutorialCompleted ? "Restart Tutorial" : "Start Tutorial"}
+            {tutorialSeen ? "Restart Tutorial" : "Start Tutorial"}
           </button>
 
           {/* Search */}

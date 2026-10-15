@@ -56,6 +56,12 @@ from app.utils.time import utc_now
 logger = logging.getLogger(__name__)
 
 # Order-submission strategies that can appear in strategy_source.
+# ``emergency`` is the emergency-stop panic sell: a portfolio-level
+# liquidation, tracked separately so an operator can see how much
+# realized P&L came from emergency closes rather than a strategy.
+# ``external`` is the external REST/WS API (plan 06 Phase B): the same
+# manual-order safety path, attributed separately so an operator can
+# see how much volume arrived through an API key.
 STRATEGY_SOURCES = (
     "copy",
     "manual",
@@ -64,6 +70,8 @@ STRATEGY_SOURCES = (
     "stop_loss",
     "take_profit",
     "latency_arb",
+    "emergency",
+    "external",
 )
 
 # Only these statuses represent an order that actually reached the
@@ -297,6 +305,69 @@ def get_strategy_stats(
         _absorb(stats, row)
 
     return {strategy: _finalize(stats) for strategy, stats in sorted(by_strategy.items())}
+
+
+def get_strategy_breakdown(
+    db: Session,
+    user_id: int,
+    window_days: int = DEFAULT_WINDOW_DAYS,
+) -> dict[str, Any]:
+    """Flat per-strategy realized performance, best net P&L first.
+
+    The portfolio-optimizer and strategy-marketplace plans need a
+    single auditable table of "what did each strategy actually make",
+    which is why this returns realized P&L alongside the execution
+    quality metrics rather than only the edge score.
+
+    ``data_quality.unattributed_trades`` counts in-window trades that
+    carry no ``strategy_source`` — rows written before plan 03 Phase A
+    (and any strategy that still forgets to set it). It is the
+    attribution gap and is reported, never hidden, because every loss
+    limit derived from ``UserTrade.pnl`` depends on this attribution.
+    """
+    window = max(1, int(window_days))
+    per_strategy = get_strategy_stats(db, user_id, window)
+
+    rows: list[dict[str, Any]] = []
+    for strategy, stats in per_strategy.items():
+        rows.append(
+            {
+                "strategy": strategy,
+                "submissions": stats.submissions,
+                "filled": stats.filled,
+                "closed_trades": stats.closed_trades,
+                "wins": stats.wins,
+                "losses": stats.losses,
+                "win_rate": _round_opt(stats.win_rate, 4),
+                "gross_realized_pnl": round(stats.gross_realized_pnl, 6),
+                "net_realized_pnl": round(stats.net_realized_pnl, 6),
+                "total_fees": round(stats.total_fees, 6),
+                "avg_slippage_bps": _round_opt(stats.avg_slippage_bps, 2),
+                "edge_score": _round_opt(stats.edge_score, 2),
+            }
+        )
+    rows.sort(key=lambda r: -r["net_realized_pnl"])
+
+    cutoff = utc_now() - timedelta(days=window)
+    unattributed = (
+        db.query(UserTrade.id)
+        .filter(
+            UserTrade.user_id == user_id,
+            UserTrade.created_at >= cutoff,
+            UserTrade.strategy_source.is_(None),
+        )
+        .count()
+    )
+
+    return {
+        "window_days": window,
+        "generated_at": utc_now().isoformat(),
+        "strategies": rows,
+        "data_quality": {
+            "unattributed_trades": int(unattributed),
+            "strategies": len(rows),
+        },
+    }
 
 
 def get_execution_summary(

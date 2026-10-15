@@ -33,6 +33,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.assessment import Assessment
+from app.services.prompt_version import current_prompt_version
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,10 @@ def record_verdict(
     confidence: Any = None,
     recommendation: str | None = None,
     source: str = "scan",
+    prompt_version: str | None = None,
+    experiment_id: str | None = None,
+    variant: str | None = None,
+    llm_tier: str | None = None,
 ) -> Assessment | None:
     """Persist one AI verdict for later forecast scoring.
 
@@ -140,6 +145,12 @@ def record_verdict(
         confidence: Legacy 0-100 confidence (informational only).
         recommendation: Verdict label (``buy``/``hold``/…).
         source: Emitting call site, recorded in ``reasoning``.
+        prompt_version: Hash of the prompt store that produced this
+            verdict (plan 04). When omitted it is resolved here, so an
+            existing caller keeps recording without changing.
+        experiment_id: A/B experiment this verdict belongs to, if any.
+        variant: ``control`` or ``variant`` arm of that experiment.
+        llm_tier: Model tier that produced the verdict, when known.
 
     Returns:
         The persisted :class:`Assessment`, or ``None`` when the verdict
@@ -185,6 +196,10 @@ def record_verdict(
         market_price_at_assessment=price_key,
         model_name=model,
         provider=provider_name,
+        prompt_version=(prompt_version or current_prompt_version()),
+        experiment_id=(experiment_id or "").strip() or None,
+        variant=(variant or "").strip() or None,
+        llm_tier=(llm_tier or "").strip() or None,
     )
     try:
         db.add(record)

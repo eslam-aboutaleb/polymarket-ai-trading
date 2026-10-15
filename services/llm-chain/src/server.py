@@ -19,6 +19,13 @@ from grpc_reflection.v1alpha import reflection
 from src.analysis_chain import get_chain_for_request, get_trading_chain
 from src.config import get_settings
 from src.llm_factory import get_available_providers, parse_llm_config_from_proto
+from src.orchestrator import (
+    OrchestrationError,
+    build_plan,
+    get_orchestration_metrics,
+    run_plan,
+    stream_plan,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -615,6 +622,90 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             return analysis_pb2.GenerateNewsBatchResponse(
                 success=False,
                 error=str(e),
+            )
+
+    # ── Orchestration ──────────────────────────────────────────
+
+    def _parse_orchestrate_request(self, request):
+        """Decode the JSON payload and build the plan for ``request``."""
+        try:
+            payload = json.loads(request.payload_json) if request.payload_json else {}
+        except json.JSONDecodeError as exc:
+            raise OrchestrationError(f"invalid payload_json: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise OrchestrationError("payload_json must decode to a JSON object")
+        return build_plan(
+            request.intent,
+            payload,
+            steps=list(request.steps) or None,
+        )
+
+    async def OrchestrateAnalysis(self, request, context):
+        """Coordinate a multi-step plan and synthesise one answer."""
+        try:
+            plan = self._parse_orchestrate_request(request)
+        except OrchestrationError as exc:
+            logger.warning(f"OrchestrateAnalysis rejected: {exc}")
+            return analysis_pb2.OrchestrateResponse(
+                success=False,
+                metadata={"error": str(exc), "intent": request.intent},
+            )
+
+        chain = _get_chain_for_request(request)
+        outcome = await run_plan(
+            plan,
+            llm_config=request.llm_config,
+            chain=chain,
+            user_id=request.user_id,
+        )
+        logger.info(
+            f"Orchestrated {request.intent}: {len(outcome.steps)} steps, "
+            f"partial={outcome.partial}, metrics={get_orchestration_metrics()}"
+        )
+        return analysis_pb2.OrchestrateResponse(
+            success=outcome.success,
+            synthesis=outcome.synthesis,
+            steps=[
+                analysis_pb2.OrchestrateStepResult(
+                    step=result.step,
+                    ok=result.ok,
+                    output_json=json.dumps(result.output, default=str) if result.ok else "",
+                    error=result.error,
+                    backend=result.backend,
+                    duration_ms=result.duration_ms,
+                )
+                for result in outcome.steps
+            ],
+            partial=outcome.partial,
+            metadata=outcome.metadata,
+        )
+
+    async def OrchestrateAnalysisStream(self, request, context):
+        """Streaming orchestration: one chunk per step, then the synthesis."""
+        try:
+            plan = self._parse_orchestrate_request(request)
+        except OrchestrationError as exc:
+            logger.warning(f"OrchestrateAnalysisStream rejected: {exc}")
+            yield analysis_pb2.AnalysisChunk(
+                chunk=json.dumps({"error": str(exc), "intent": request.intent}),
+                chunk_type="error",
+                is_final=True,
+            )
+            return
+
+        chain = _get_chain_for_request(request)
+        async for event in stream_plan(
+            plan,
+            llm_config=request.llm_config,
+            chain=chain,
+            user_id=request.user_id,
+        ):
+            # Every chunk carries its event as JSON so the streaming route
+            # loses nothing on the way to the SSE envelope.
+            yield analysis_pb2.AnalysisChunk(
+                chunk=json.dumps(event, default=str),
+                chunk_type=event["type"],
+                is_final=event["type"] == "recommendation",
             )
 
 

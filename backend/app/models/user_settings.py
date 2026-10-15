@@ -91,6 +91,7 @@ class UserSettings(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False, index=True)
+    account_id = Column(Integer, nullable=True, index=True)
 
     # AI Backend preference (legacy - service-level selection)
     ai_backend = Column(String(20), default=AIBackendType.LLM_CHAIN.value, nullable=False)

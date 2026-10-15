@@ -524,6 +524,11 @@ class ExecuteReversalTests(unittest.TestCase):
                 "buy_order_hash": "0xbuy",
                 # 100 shares * 0.5 = $50 of notional, less the 1.5% slippage guard.
                 "buy_notional": 49.25,
+                # Leg prices are echoed for the attributable UserTrade rows
+                # (plan 03 Phase A), which is how the reversal lands in
+                # per-strategy P&L instead of only in InverseBotAction.
+                "sell_price": 0.5,
+                "buy_price": 0.6089999999999999,
             },
         )
         self.assertEqual(
@@ -574,6 +579,8 @@ class ExecuteReversalTests(unittest.TestCase):
                 "sell_order_hash": "s",
                 "buy_order_hash": None,
                 "buy_notional": None,
+                "sell_price": 0.5,
+                "buy_price": None,
             },
         )
         self.assertEqual(self.place.call_count, 1)
@@ -667,6 +674,8 @@ class ExecuteReversalTests(unittest.TestCase):
                 "sell_order_hash": "s",
                 "buy_order_hash": None,
                 "buy_notional": 49.25,
+                "sell_price": 0.5,
+                "buy_price": 0.6089999999999999,
             },
         )
 

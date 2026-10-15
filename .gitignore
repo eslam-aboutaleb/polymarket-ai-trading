@@ -116,3 +116,8 @@ study-app/
 # OS noise
 # ─────────────────────────────────────────────────────────────────────────────
 .DS_Store
+
+# Playwright e2e
+frontend/test-results/
+frontend/playwright-report/
+frontend/e2e/.auth/

@@ -6,8 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_plan
 from app.api.routes.auth import get_current_user_from_token
 from app.models.inverse_bot_position import InverseBotPosition
+from app.services.entitlement_service import CAP_INVERSE_BOT
 from app.services.inverse_bot_monitor import (
     get_inverse_bot_metrics,
     manual_evaluate_inverse_position,
@@ -109,7 +111,11 @@ async def list_inverse_bot_positions(
     return [_to_response(r) for r in rows]
 
 
-@router.post("/positions", response_model=InverseBotPositionResponse)
+@router.post(
+    "/positions",
+    response_model=InverseBotPositionResponse,
+    dependencies=[Depends(require_plan(CAP_INVERSE_BOT))],
+)
 async def upsert_inverse_bot_position(
     body: InverseBotPositionRequest,
     current_user: dict = Depends(get_current_user_from_token),
@@ -175,7 +181,11 @@ async def disable_inverse_bot_position(
     return {"status": "disabled", "id": position_id}
 
 
-@router.post("/positions/{position_id}/evaluate", response_model=ManualEvaluateResponse)
+@router.post(
+    "/positions/{position_id}/evaluate",
+    response_model=ManualEvaluateResponse,
+    dependencies=[Depends(require_plan(CAP_INVERSE_BOT))],
+)
 async def evaluate_inverse_bot_position(
     position_id: int,
     current_user: dict = Depends(get_current_user_from_token),

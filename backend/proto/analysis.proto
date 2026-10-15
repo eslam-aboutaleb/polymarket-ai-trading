@@ -73,6 +73,16 @@ service AnalysisService {
   // Generate news articles for multiple markets (batch)
   rpc GenerateNewsBatch(GenerateNewsBatchRequest) returns (GenerateNewsBatchResponse);
 
+  // ── NEW: Orchestration ───────────────────────────────────
+
+  // Coordinate a multi-step analysis plan (deterministic planner) and
+  // synthesise one answer. Implemented by llm-chain only.
+  rpc OrchestrateAnalysis(OrchestrateRequest) returns (OrchestrateResponse);
+
+  // Streaming variant — emits one AnalysisChunk per executed step
+  // (chunk_type="step"), then the synthesis (chunk_type="recommendation").
+  rpc OrchestrateAnalysisStream(OrchestrateRequest) returns (stream AnalysisChunk);
+
   // Health check
   rpc HealthCheck(HealthRequest) returns (HealthResponse);
 }
@@ -274,4 +284,32 @@ message GenerateNewsBatchResponse {
   bool success = 1;
   repeated GenerateNewsResponse articles = 2;
   string error = 3;
+}
+
+// ── NEW: Orchestration ─────────────────────────────────────
+
+message OrchestrateRequest {
+  string intent = 1;          // planner key, e.g. "market_deep_dive"
+  string payload_json = 2;    // JSON payload the planner reads
+  repeated string steps = 3;  // optional explicit step names (subset, in order)
+  string user_id = 4;
+  LLMConfig llm_config = 5;   // per-request provider/model; drives step routing
+  bool stream = 6;            // hint for the caller; the streaming RPC ignores it
+}
+
+message OrchestrateStepResult {
+  string step = 1;
+  bool ok = 2;
+  string output_json = 3;     // JSON-encoded step output ("" when the step failed)
+  string error = 4;           // typed StepError message ("" when the step succeeded)
+  string backend = 5;         // backend that executed the step
+  int32 duration_ms = 6;
+}
+
+message OrchestrateResponse {
+  bool success = 1;
+  string synthesis = 2;                        // one merged answer (strict JSON)
+  repeated OrchestrateStepResult steps = 3;
+  bool partial = 4;                            // true when any step failed
+  map<string, string> metadata = 5;
 }

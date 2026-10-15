@@ -9,10 +9,11 @@
  * modals supply only their direction-specific copy, bounds and service calls.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { getApiErrorMessage } from "../utils/apiError";
 import { getTradingKeyStatus } from "../services/tradingKeyService";
 import TradingKeyPrompt from "./TradingKeyPrompt";
+import { Banner, Modal } from "./ui";
 
 /** The position fields the trigger modals read. */
 export interface TriggerPosition {
@@ -142,6 +143,7 @@ export default function PriceTriggerModal({
   const [success, setSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tradingKeyRequired, setTradingKeyRequired] = useState(false);
+  const [tradingKeyError, setTradingKeyError] = useState<string | null>(null);
 
   // Signed impact of the trigger, in dollars and percent of the current price.
   const triggerDecimal = cents / 100;
@@ -175,8 +177,10 @@ export default function PriceTriggerModal({
       try {
         const status = await getTradingKeyStatus();
         hasTradingKey = status.has_trading_key;
-      } catch {
+        setTradingKeyError(null);
+      } catch (err: unknown) {
         hasTradingKey = false;
+        setTradingKeyError(getApiErrorMessage(err, "Failed to check trading key status"));
       }
       if (!hasTradingKey) {
         setTradingKeyRequired(true);
@@ -222,15 +226,6 @@ export default function PriceTriggerModal({
     }
   };
 
-  // Escape closes the modal.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   // The slider only spans the reachable side of the current price.
   const currentCents = Math.round(curPrice * 100);
   const sliderMin =
@@ -240,187 +235,172 @@ export default function PriceTriggerModal({
   const sign = config.direction === 1 ? "+" : "−";
 
   return (
-    <div
-      className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
-      onClick={onClose}
+    <Modal
+      open
+      onClose={onClose}
+      title={existingOrder ? `Edit ${config.label}` : `Set ${config.label}`}
     >
-      <div
-        className="surface-panel w-full max-w-md p-0 overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="p-5 border-b border-[var(--line)]">
-          <div className="flex justify-between items-start">
-            <div className="flex-1 min-w-0 pr-4">
-              <h2 className="text-lg font-bold text-white">
-                {existingOrder ? `Edit ${config.label}` : `Set ${config.label}`}
-              </h2>
-              <p className="text-sm text-soft mt-1 truncate">{title}</p>
+      {/* Body */}
+      <div className="space-y-5">
+        <p className="truncate">{title}</p>
+
+        {tradingKeyError && (
+          <Banner variant="error" onDismiss={() => setTradingKeyError(null)}>
+            {tradingKeyError}
+          </Banner>
+        )}
+
+        {/* Position summary */}
+        <div className="surface-soft p-4 rounded-lg space-y-2">
+          {position.outcome && (
+            <div className="flex justify-between items-center">
+              <span className="text-muted text-sm">Outcome</span>
+              <span className="chip chip-accent text-xs">{position.outcome}</span>
             </div>
-            <button
-              onClick={onClose}
-              aria-label="Close"
-              className="text-muted hover:text-white transition text-xl leading-none"
-            >
-              ✕
-            </button>
+          )}
+          <div className="flex justify-between">
+            <span className="text-muted text-sm">Size</span>
+            <span className="text-white mono text-sm">
+              {size >= 1 ? size.toFixed(2) : size.toFixed(4)} shares
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted text-sm">Entry</span>
+            <span className="text-soft mono text-sm">{(avgPrice * 100).toFixed(1)}¢</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted text-sm">Current</span>
+            <span className="text-white mono text-sm">{(curPrice * 100).toFixed(1)}¢</span>
           </div>
         </div>
 
-        {/* Body */}
-        <div className="p-5 space-y-5">
-          {/* Position summary */}
-          <div className="surface-soft p-4 rounded-lg space-y-2">
-            {position.outcome && (
-              <div className="flex justify-between items-center">
-                <span className="text-muted text-sm">Outcome</span>
-                <span className="chip chip-accent text-xs">{position.outcome}</span>
-              </div>
-            )}
-            <div className="flex justify-between">
-              <span className="text-muted text-sm">Size</span>
-              <span className="text-white mono text-sm">
-                {size >= 1 ? size.toFixed(2) : size.toFixed(4)} shares
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted text-sm">Entry</span>
-              <span className="text-soft mono text-sm">{(avgPrice * 100).toFixed(1)}¢</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted text-sm">Current</span>
-              <span className="text-white mono text-sm">{(curPrice * 100).toFixed(1)}¢</span>
-            </div>
-          </div>
-
-          {/* Trigger price slider */}
-          <div>
-            <label className="block text-sm text-soft mb-2">{config.label} Price</label>
-            <div className="flex items-center gap-3">
+        {/* Trigger price slider */}
+        <div>
+          <label className="block text-sm text-soft mb-2">{config.label} Price</label>
+          <div className="flex items-center gap-3">
+            <input
+              type="range"
+              min={sliderMin}
+              max={sliderMax}
+              step={1}
+              value={cents}
+              onChange={handleSlider}
+              className={`flex-1 ${config.accentClass} h-5 rounded-full appearance-none range-thumb bg-[var(--bg-soft)] cursor-pointer`}
+            />
+            <div className="relative w-20">
               <input
-                type="range"
-                min={sliderMin}
-                max={sliderMax}
-                step={1}
+                type="number"
+                min={0.1}
+                max={99.9}
+                step={0.1}
                 value={cents}
-                onChange={handleSlider}
-                className={`flex-1 ${config.accentClass} h-2 rounded-full appearance-none bg-[var(--bg-soft)] cursor-pointer`}
+                onChange={handleInputChange}
+                className={`w-full px-3 py-2 min-h-[44px] rounded-lg bg-[var(--bg-soft)] border border-[var(--line)] text-white text-center mono text-sm focus:outline-none transition ${config.accentClass}`}
               />
-              <div className="relative w-20">
-                <input
-                  type="number"
-                  min={0.1}
-                  max={99.9}
-                  step={0.1}
-                  value={cents}
-                  onChange={handleInputChange}
-                  className={`w-full px-3 py-2 rounded-lg bg-[var(--bg-soft)] border border-[var(--line)] text-white text-center mono text-sm focus:outline-none transition ${config.accentClass}`}
-                />
-                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-muted text-xs">
-                  ¢
-                </span>
-              </div>
-            </div>
-
-            {/* Visual scale */}
-            <div className="flex justify-between mt-1 text-xs text-muted">
-              <span>
-                {config.direction === 1 ? `Current: ${(curPrice * 100).toFixed(1)}¢` : "1¢"}
-              </span>
-              <span>
-                {config.direction === 1 ? "99¢" : `Current: ${(curPrice * 100).toFixed(1)}¢`}
+              <span className="absolute right-2 top-1/2 -translate-y-1/2 text-muted text-xs">
+                ¢
               </span>
             </div>
           </div>
 
-          {/* Impact summary */}
-          <div className="surface-soft p-4 rounded-lg space-y-2">
-            <div className="flex justify-between">
-              <span className="text-muted text-sm">Trigger Price</span>
-              <span className="text-white font-semibold mono">{cents.toFixed(0)}¢</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted text-sm">Distance from Current</span>
-              <span className={`${config.statusClass} mono text-sm`}>
-                {sign}
-                {(Math.abs(perShare) * 100).toFixed(1)}¢ ({pct.toFixed(1)}%)
-              </span>
-            </div>
-            <div className="border-t border-[var(--line)] pt-2 flex justify-between">
-              <span className="text-muted text-sm">{config.impactLabel}</span>
-              <span className={`${config.statusClass} font-semibold mono`}>
-                {sign}${Math.abs(total).toFixed(2)}
-              </span>
-            </div>
+          {/* Visual scale */}
+          <div className="flex justify-between mt-1 text-xs text-muted">
+            <span>
+              {config.direction === 1 ? `Current: ${(curPrice * 100).toFixed(1)}¢` : "1¢"}
+            </span>
+            <span>
+              {config.direction === 1 ? "99¢" : `Current: ${(curPrice * 100).toFixed(1)}¢`}
+            </span>
           </div>
-
-          {/* How it works */}
-          <div
-            className={`p-3 rounded-lg border text-xs flex items-start gap-2 ${config.calloutClass}`}
-          >
-            <span className="text-base leading-none mt-0.5">{config.calloutIcon}</span>
-            <span>{config.howItWorks}</span>
-          </div>
-
-          {/* Error */}
-          {error && (
-            <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
-              {error}
-            </div>
-          )}
-
-          {/* Trading key required */}
-          {tradingKeyRequired && <TradingKeyPrompt strategy={config.label} />}
-
-          {/* Success */}
-          {success && (
-            <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-sm font-medium">
-              {success}
-            </div>
-          )}
-
-          {/* Actions */}
-          {!success ? (
-            <div className="space-y-2">
-              <div className="flex gap-3">
-                <button onClick={onClose} className="flex-1 btn-muted py-3 text-sm">
-                  Cancel
-                </button>
-                <button
-                  onClick={handleConfirm}
-                  disabled={loading || !tokenId}
-                  className={`flex-1 py-3 text-sm font-bold flex items-center justify-center gap-2 ${config.actionClass}`}
-                >
-                  {loading && (
-                    <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full inline-block" />
-                  )}
-                  {loading
-                    ? "Setting..."
-                    : existingOrder
-                      ? `Update ${config.label}`
-                      : `Set ${config.label}`}
-                </button>
-              </div>
-              {existingOrder && (
-                <button
-                  onClick={handleRemove}
-                  disabled={removing}
-                  className="w-full py-2 text-sm text-muted hover:text-red-400 transition flex items-center justify-center gap-1.5"
-                >
-                  {removing && (
-                    <span className="animate-spin h-3 w-3 border-2 border-current border-t-transparent rounded-full inline-block" />
-                  )}
-                  Remove {config.label}
-                </button>
-              )}
-            </div>
-          ) : (
-            <button onClick={onClose} className="w-full btn-muted py-3 text-sm font-bold">
-              Done
-            </button>
-          )}
         </div>
+
+        {/* Impact summary */}
+        <div className="surface-soft p-4 rounded-lg space-y-2">
+          <div className="flex justify-between">
+            <span className="text-muted text-sm">Trigger Price</span>
+            <span className="text-white font-semibold mono">{cents.toFixed(0)}¢</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted text-sm">Distance from Current</span>
+            <span className={`${config.statusClass} mono text-sm`}>
+              {sign}
+              {(Math.abs(perShare) * 100).toFixed(1)}¢ ({pct.toFixed(1)}%)
+            </span>
+          </div>
+          <div className="border-t border-[var(--line)] pt-2 flex justify-between">
+            <span className="text-muted text-sm">{config.impactLabel}</span>
+            <span className={`${config.statusClass} font-semibold mono`}>
+              {sign}${Math.abs(total).toFixed(2)}
+            </span>
+          </div>
+        </div>
+
+        {/* How it works */}
+        <div
+          className={`p-3 rounded-lg border text-xs flex items-start gap-2 ${config.calloutClass}`}
+        >
+          <span className="text-base leading-none mt-0.5">{config.calloutIcon}</span>
+          <span>{config.howItWorks}</span>
+        </div>
+
+        {/* Error */}
+        {error && (
+          <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
+            {error}
+          </div>
+        )}
+
+        {/* Trading key required */}
+        {tradingKeyRequired && <TradingKeyPrompt strategy={config.label} />}
+
+        {/* Success */}
+        {success && (
+          <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-sm font-medium">
+            {success}
+          </div>
+        )}
+
+        {/* Actions */}
+        {!success ? (
+          <div className="space-y-2">
+            <div className="flex gap-3">
+              <button onClick={onClose} className="flex-1 btn-muted py-3 text-sm">
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirm}
+                disabled={loading || !tokenId}
+                className={`flex-1 py-3 text-sm font-bold flex items-center justify-center gap-2 ${config.actionClass}`}
+              >
+                {loading && (
+                  <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full inline-block" />
+                )}
+                {loading
+                  ? "Setting..."
+                  : existingOrder
+                    ? `Update ${config.label}`
+                    : `Set ${config.label}`}
+              </button>
+            </div>
+            {existingOrder && (
+              <button
+                onClick={handleRemove}
+                disabled={removing}
+                className="w-full py-2 text-sm text-muted hover:text-red-400 transition flex items-center justify-center gap-1.5"
+              >
+                {removing && (
+                  <span className="animate-spin h-3 w-3 border-2 border-current border-t-transparent rounded-full inline-block" />
+                )}
+                Remove {config.label}
+              </button>
+            )}
+          </div>
+        ) : (
+          <button onClick={onClose} className="w-full btn-muted py-3 text-sm font-bold">
+            Done
+          </button>
+        )}
       </div>
-    </div>
+    </Modal>
   );
 }

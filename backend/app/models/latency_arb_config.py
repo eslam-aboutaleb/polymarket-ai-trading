@@ -12,6 +12,7 @@ class LatencyArbConfig(Base):
     __tablename__ = "latency_arb_configs"
 
     user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    account_id = Column(Integer, nullable=True, index=True)
     enabled = Column(Boolean, nullable=False, default=False)
     edge_threshold = Column(Float, nullable=False, default=0.03)
     max_notional = Column(Float, nullable=False, default=50.0)

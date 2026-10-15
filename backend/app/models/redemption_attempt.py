@@ -26,6 +26,7 @@ class RedemptionAttempt(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    account_id = Column(Integer, nullable=True, index=True)
     market_id = Column(String(200), nullable=False, index=True)  # conditionId
     collection_id = Column(String(66), nullable=False)  # bytes32 hex
     tx_hash = Column(String(66), nullable=True)  # bytes32 hex

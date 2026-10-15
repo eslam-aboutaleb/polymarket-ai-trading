@@ -19,7 +19,8 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
+from sqlalchemy.pool import NullPool
 
 from app.utils.cache import get_cache
 from app.utils.database import engine
@@ -28,6 +29,55 @@ logger = logging.getLogger(__name__)
 
 # name -> dedicated DBAPI connection holding the session-level lock
 _held_locks: dict[str, Any] = {}
+
+# Count of lock acquisitions that failed open (database error). A
+# non-zero value means a monitor is running on the process-local guard
+# only — with more than one worker that is exactly the duplicate-order
+# hazard the advisory locks exist to prevent, so the watchdog surfaces
+# it (plan 10 Phase A).
+_lock_fail_open_total = 0
+
+_metrics = {"fail_open_total": 0}
+
+
+def _lock_engine():
+    """A connection factory for advisory-lock sessions.
+
+    Advisory locks are *session-level* in Postgres, so a lock lives as
+    long as the connection that took it. The application's pooled engine
+    hands the same session back after ``close()``, which meant an
+    acquire/release pair could leave the lock held on a session the pool
+    still owns — and the next acquire of that name then failed as "held
+    by another worker" even though this process was the only caller.
+    ``NullPool`` closes the DBAPI connection for real, so release means
+    release.
+
+    Built lazily and cached: importing this module must not open a
+    connection (a web-only process that never runs a scheduler would
+    otherwise pay for one on import).
+    """
+    global _lock_engine_cached
+    if _lock_engine_cached is None:
+        _lock_engine_cached = create_engine(str(engine.url), poolclass=NullPool)
+    return _lock_engine_cached
+
+
+_lock_engine_cached = None
+
+
+def _metric_inc(key: str, by: int = 1) -> None:
+    _metrics[key] = _metrics.get(key, 0) + by
+
+
+def get_scheduler_lock_metrics() -> dict[str, int]:
+    """Lock metrics for the watchdog and /api/health.
+
+    ``fail_open_total`` is the number of schedulers now running with
+    no cross-process guard. It must stay 0 in any multi-worker
+    deployment.
+    """
+    return dict(_metrics)
+
 
 _heartbeat_cache = get_cache("scheduler")
 
@@ -52,8 +102,10 @@ SCHEDULER_INTERVALS: dict[str, int] = {
     "ctf_events": 300,
     "latency_arb": 5,
     "forecast_resolution": 21600,
+    "model_drift": 3600,
     "daily_digest": 86400,
     "equity_snapshots": 3600,
+    "venue_markets": 300,
 }
 DEFAULT_INTERVAL_SECONDS = 300
 
@@ -64,20 +116,18 @@ def acquire_scheduler_lock(name: str) -> bool:
     Returns True when this process now owns (or already held) the lock.
     Returns False when another worker holds it — the caller must skip
     starting its loop. On a database error the lock fails open with a
-    WARNING: the shipped deployment runs a single worker, so a
-    transient database outage must not permanently disable a monitor.
+    WARNING and an ERROR log plus a metric increment: the shipped
+    deployment runs a single worker, so a transient database outage
+    must not permanently disable a monitor, but a silent fail-open in a
+    multi-worker deployment is how duplicate stop-loss orders happen.
     """
     if name in _held_locks:
         return True
 
     try:
-        connection = engine.connect()
+        connection = _lock_engine().connect()
     except Exception:
-        logger.warning(
-            "Could not acquire scheduler lock '%s' (database error); "
-            "proceeding with process-local guard only",
-            name,
-        )
+        _fail_open(name)
         return True
 
     try:
@@ -89,11 +139,7 @@ def acquire_scheduler_lock(name: str) -> bool:
         )
     except Exception:
         connection.close()
-        logger.warning(
-            "Could not acquire scheduler lock '%s' (database error); "
-            "proceeding with process-local guard only",
-            name,
-        )
+        _fail_open(name)
         return True
 
     if acquired:
@@ -104,6 +150,19 @@ def acquire_scheduler_lock(name: str) -> bool:
     connection.close()
     logger.warning("Scheduler lock '%s' is held by another worker; skipping start", name)
     return False
+
+
+def _fail_open(name: str) -> None:
+    """Record a lock that could not be acquired because of a DB error."""
+    global _lock_fail_open_total
+    _lock_fail_open_total += 1
+    _metric_inc("fail_open_total")
+    logger.error(
+        "Could not acquire scheduler lock '%s' (database error); proceeding with the "
+        "process-local guard ONLY. With more than one worker running this monitor "
+        "may now duplicate orders — fix the database before scaling workers.",
+        name,
+    )
 
 
 def release_scheduler_lock(name: str) -> None:

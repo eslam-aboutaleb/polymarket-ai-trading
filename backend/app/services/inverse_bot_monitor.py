@@ -482,6 +482,20 @@ async def evaluate_inverse_position_row(
         row.last_error = execution.get("error")
         _metric_inc("reversals_failed")
 
+    # Attributable trade rows for both legs (plan 03 Phase A). The
+    # action row above records the decision; these rows are what the
+    # FIFO P&L matcher and the execution-analytics endpoints read.
+    _record_reversal_trades(
+        db,
+        user_id=user.id,
+        condition_id=row.condition_id,
+        from_token_id=row.token_id,
+        from_size=size,
+        execution=execution,
+        to_token_id=reverse_token["token_id"],
+        buy_notional=execution.get("buy_notional"),
+    )
+
     db.commit()
     db.refresh(action)
 
@@ -583,12 +597,13 @@ def _execute_reversal(
     private_key = stored_creds.get("private_key")
     clob_creds = stored_creds.get("clob_creds")
 
+    sell_price = max(0.001, min(0.999, from_price))
     sell = _place_order_on_polymarket(
         private_key=private_key,
         clob_creds=clob_creds,
         token_id=row.token_id,
         side="SELL",
-        price=max(0.001, min(0.999, from_price)),
+        price=sell_price,
         size=from_size,
     )
     if not sell.get("success"):
@@ -598,6 +613,8 @@ def _execute_reversal(
             "sell_order_hash": sell.get("order_hash"),
             "buy_order_hash": None,
             "buy_notional": None,
+            "sell_price": sell_price,
+            "buy_price": None,
         }
 
     size_mode = _resolve_size_mode(row, settings)
@@ -617,6 +634,8 @@ def _execute_reversal(
             "sell_order_hash": sell.get("order_hash"),
             "buy_order_hash": None,
             "buy_notional": buy_notional,
+            "sell_price": sell_price,
+            "buy_price": None,
         }
 
     best_ask = _best_ask_for_token(to_token_id)
@@ -638,6 +657,8 @@ def _execute_reversal(
             "sell_order_hash": sell.get("order_hash"),
             "buy_order_hash": buy.get("order_hash"),
             "buy_notional": buy_notional,
+            "sell_price": sell_price,
+            "buy_price": marketable_price,
         }
 
     return {
@@ -646,6 +667,8 @@ def _execute_reversal(
         "sell_order_hash": sell.get("order_hash"),
         "buy_order_hash": buy.get("order_hash"),
         "buy_notional": buy_notional,
+        "sell_price": sell_price,
+        "buy_price": marketable_price,
     }
 
 
@@ -692,6 +715,8 @@ def _simulate_reversal(
             "buy_notional": buy_notional,
             "simulated": True,
             "sell_fill_price": sell_fill["fill_price"],
+            "sell_price": from_price,
+            "buy_price": None,
         }
 
     buy_fill = simulate_fill(alt_market, "BUY", buy_notional)
@@ -716,7 +741,79 @@ def _simulate_reversal(
         "simulated": True,
         "sell_fill_price": sell_fill["fill_price"],
         "buy_fill_price": buy_fill["fill_price"],
+        "sell_price": from_price,
+        "buy_price": to_price,
     }
+
+
+def _record_reversal_trades(
+    db: Session,
+    *,
+    user_id: int,
+    condition_id: str,
+    from_token_id: str,
+    from_size: float,
+    execution: dict[str, Any],
+    to_token_id: str,
+    buy_notional: float | None,
+) -> None:
+    """Record both reversal legs as attributable UserTrades (plan 03 Phase A).
+
+    Before this, a reversal was recorded only as an ``InverseBotAction``,
+    so neither leg reached the FIFO matcher in
+    ``app.services.pnl_reconciliation`` and the inverse strategy's
+    realized P&L — and therefore every loss limit derived from
+    ``UserTrade.pnl`` — stayed at zero.
+
+    The caller owns the transaction: rows added here become durable
+    only when the surrounding action commit succeeds.
+    """
+    from app.services.trade_recorder import record_user_trade
+
+    simulated = bool(execution.get("simulated"))
+    sell_hash = execution.get("sell_order_hash")
+    buy_hash = execution.get("buy_order_hash")
+    sell_price = float(execution.get("sell_price") or 0.0) or None
+
+    if sell_price is not None and sell_price > 0:
+        sell_status = "simulated" if simulated else ("pending" if sell_hash else "failed")
+        record_user_trade(
+            db,
+            user_id=user_id,
+            market_id=condition_id,
+            token_id=from_token_id,
+            action="sell",
+            amount=from_size,
+            price=sell_price,
+            status=sell_status,
+            strategy_source="inverse",
+            order_hash=sell_hash,
+            expected_price=sell_price,
+            expected_size=from_size,
+        )
+
+    buy_price = execution.get("buy_price")
+    notional = float(buy_notional or 0.0)
+    if buy_price is None or notional <= 0:
+        # No buy leg reached the order book (min-notional guard, or a
+        # sell that failed outright) — nothing further to attribute.
+        return
+
+    buy_status = "simulated" if simulated else ("pending" if buy_hash else "failed")
+    record_user_trade(
+        db,
+        user_id=user_id,
+        market_id=condition_id,
+        token_id=to_token_id,
+        action="buy",
+        amount=notional,
+        price=float(buy_price),
+        status=buy_status,
+        strategy_source="inverse",
+        order_hash=buy_hash,
+        expected_price=float(buy_price),
+        expected_size=notional,
+    )
 
 
 async def _evaluate_with_ai(

@@ -26,6 +26,26 @@ interface AuthActions {
 
 type AuthStore = AuthState & AuthActions;
 
+/**
+ * Clear the Workbox `api-cache` (see vite.config.ts) so authenticated API
+ * responses stored by the service worker are not served to the next user of
+ * the same device after logout. Fire-and-forget: a cache failure must never
+ * block the logout path.
+ */
+function clearAuthenticatedApiCache(): void {
+  if (typeof window === "undefined" || !("caches" in window)) return;
+  void (async () => {
+    try {
+      const keys = await window.caches.keys();
+      await Promise.all(
+        keys.filter((key) => key.startsWith("api-")).map((key) => window.caches.delete(key)),
+      );
+    } catch {
+      // Cache cleanup is best-effort; never surface it to the user.
+    }
+  })();
+}
+
 export const useAuthStore = create<AuthStore>()((set) => ({
   walletAddress: null,
   isAuthenticated: false,
@@ -45,6 +65,7 @@ export const useAuthStore = create<AuthStore>()((set) => ({
   },
 
   clearSession: () => {
+    clearAuthenticatedApiCache();
     set({
       walletAddress: null,
       isAuthenticated: false,
@@ -53,6 +74,7 @@ export const useAuthStore = create<AuthStore>()((set) => ({
   },
 
   logout: () => {
+    clearAuthenticatedApiCache();
     set({
       walletAddress: null,
       isAuthenticated: false,

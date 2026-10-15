@@ -11,6 +11,7 @@
 import { useState } from "react";
 import { tradesService, ExecuteTradeResponse } from "../services/tradesService";
 import { getApiErrorMessage } from "../utils/apiError";
+import { Banner, Modal } from "./ui";
 
 export interface CashOutModalProps {
   position: {
@@ -91,116 +92,100 @@ export default function CashOutModal({ position, onClose, onSuccess }: CashOutMo
   };
 
   return (
-    <div
-      className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
-      onClick={onClose}
+    <Modal
+      open
+      onClose={onClose}
+      dismissOnBackdrop={false}
+      title="Cash Out"
+      closeLabel="Close cash out"
     >
-      <div
-        className="surface-panel w-full max-w-md p-0 overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="p-5 border-b border-[var(--line)]">
-          <div className="flex justify-between items-start">
-            <div className="flex-1 min-w-0 pr-4">
-              <h2 className="text-lg font-bold text-white">Cash Out</h2>
-              <p className="text-sm text-soft mt-1 truncate">{title}</p>
+      {/* Body */}
+      <div className="space-y-4">
+        <p className="truncate">{title}</p>
+
+        {/* Summary card */}
+        <div className="surface-soft p-4 rounded-lg space-y-3">
+          {position.outcome && (
+            <div className="flex justify-between items-center">
+              <span className="text-muted text-sm">Outcome</span>
+              <span className="chip chip-accent text-xs">{position.outcome}</span>
             </div>
-            <button
-              onClick={onClose}
-              className="text-muted hover:text-white transition text-xl leading-none"
-            >
-              ✕
-            </button>
+          )}
+          <div className="flex justify-between">
+            <span className="text-muted text-sm">Position Size</span>
+            <span className="text-white mono text-sm">
+              {size >= 1 ? size.toFixed(2) : size.toFixed(4)} shares
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted text-sm">Entry Price</span>
+            <span className="text-soft mono text-sm">{(avgPrice * 100).toFixed(1)}¢</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted text-sm">Current Price</span>
+            <span className="text-white mono text-sm">{(curPrice * 100).toFixed(1)}¢</span>
+          </div>
+          <div className="border-t border-[var(--line)] pt-3 flex justify-between">
+            <span className="text-muted text-sm">Est. Proceeds</span>
+            <span className="text-white font-semibold mono">${proceeds.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted text-sm">P&L</span>
+            <span className={`font-semibold mono ${pnl >= 0 ? "status-good" : "status-bad"}`}>
+              {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)} ({pnlPct >= 0 ? "+" : ""}
+              {pnlPct.toFixed(1)}%)
+            </span>
           </div>
         </div>
 
-        {/* Body */}
-        <div className="p-5 space-y-4">
-          {/* Summary card */}
-          <div className="surface-soft p-4 rounded-lg space-y-3">
-            {position.outcome && (
-              <div className="flex justify-between items-center">
-                <span className="text-muted text-sm">Outcome</span>
-                <span className="chip chip-accent text-xs">{position.outcome}</span>
-              </div>
+        {/* Warning */}
+        <div className="p-3 rounded-lg bg-[var(--accent-soft)] border border-[var(--accent)]/30 text-sm text-[var(--accent-strong)]">
+          This will sell your entire position at the current market price.
+        </div>
+
+        {/* Error */}
+        {error && (
+          <Banner variant="error" onDismiss={() => setError(null)}>
+            {error}
+          </Banner>
+        )}
+
+        {/* Success */}
+        {result?.success && (
+          <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-sm">
+            <p className="font-semibold">Position closed!</p>
+            <p className="text-xs mt-1 mono">
+              Sold {size} shares @ {(curPrice * 100).toFixed(1)}¢
+            </p>
+            {result.order_hash && (
+              <p className="text-xs mt-1 text-muted truncate">Hash: {result.order_hash}</p>
             )}
-            <div className="flex justify-between">
-              <span className="text-muted text-sm">Position Size</span>
-              <span className="text-white mono text-sm">
-                {size >= 1 ? size.toFixed(2) : size.toFixed(4)} shares
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted text-sm">Entry Price</span>
-              <span className="text-soft mono text-sm">{(avgPrice * 100).toFixed(1)}¢</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted text-sm">Current Price</span>
-              <span className="text-white mono text-sm">{(curPrice * 100).toFixed(1)}¢</span>
-            </div>
-            <div className="border-t border-[var(--line)] pt-3 flex justify-between">
-              <span className="text-muted text-sm">Est. Proceeds</span>
-              <span className="text-white font-semibold mono">${proceeds.toFixed(2)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted text-sm">P&L</span>
-              <span className={`font-semibold mono ${pnl >= 0 ? "status-good" : "status-bad"}`}>
-                {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)} ({pnlPct >= 0 ? "+" : ""}
-                {pnlPct.toFixed(1)}%)
-              </span>
-            </div>
           </div>
+        )}
 
-          {/* Warning */}
-          <div className="p-3 rounded-lg bg-[var(--accent-soft)] border border-[var(--accent)]/30 text-sm text-[var(--accent-strong)]">
-            This will sell your entire position at the current market price.
-          </div>
-
-          {/* Error */}
-          {error && (
-            <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
-              {error}
-            </div>
-          )}
-
-          {/* Success */}
-          {result?.success && (
-            <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-sm">
-              <p className="font-semibold">Position closed!</p>
-              <p className="text-xs mt-1 mono">
-                Sold {size} shares @ {(curPrice * 100).toFixed(1)}¢
-              </p>
-              {result.order_hash && (
-                <p className="text-xs mt-1 text-muted truncate">Hash: {result.order_hash}</p>
-              )}
-            </div>
-          )}
-
-          {/* Buttons */}
-          {!result?.success ? (
-            <div className="flex gap-3">
-              <button onClick={onClose} className="flex-1 btn-muted py-3 text-sm">
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirm}
-                disabled={loading || !tokenId}
-                className="flex-1 btn-success py-3 text-sm font-bold flex items-center justify-center gap-2"
-              >
-                {loading && (
-                  <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full inline-block" />
-                )}
-                {loading ? "Selling..." : "Confirm Cash Out"}
-              </button>
-            </div>
-          ) : (
-            <button onClick={onClose} className="w-full btn-muted py-3 text-sm font-bold">
-              Done
+        {/* Buttons */}
+        {!result?.success ? (
+          <div className="flex gap-3">
+            <button onClick={onClose} className="flex-1 btn-muted py-3 text-sm">
+              Cancel
             </button>
-          )}
-        </div>
+            <button
+              onClick={handleConfirm}
+              disabled={loading || !tokenId}
+              className="flex-1 btn-success py-3 text-sm font-bold flex items-center justify-center gap-2"
+            >
+              {loading && (
+                <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full inline-block" />
+              )}
+              {loading ? "Selling..." : "Confirm Cash Out"}
+            </button>
+          </div>
+        ) : (
+          <button onClick={onClose} className="w-full btn-muted py-3 text-sm font-bold">
+            Done
+          </button>
+        )}
       </div>
-    </div>
+    </Modal>
   );
 }

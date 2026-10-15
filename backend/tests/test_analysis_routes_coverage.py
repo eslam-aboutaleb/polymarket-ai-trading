@@ -38,6 +38,7 @@ from app.main import app
 from app.models.assessment import Assessment
 from app.models.base import Base
 from app.models.user_settings import AIBackendType
+from app.security.rate_limit import limiter
 from app.services.llm_gateway import LLMConfig, LLMProviderType
 from app.utils.database import get_db
 
@@ -133,6 +134,12 @@ class _AnalysisRouteMixin:
         app.dependency_overrides[get_optional_user_from_token] = lambda: self.user
         app.dependency_overrides[get_db] = lambda: MagicMock()
         self.addCleanup(app.dependency_overrides.clear)
+        # The public analysis routes carry a per-IP budget (plan B3); the
+        # counters live in the shared in-memory limiter, so they are
+        # cleared between tests instead of letting an earlier test 429
+        # the next one.
+        limiter.reset()
+        self.addCleanup(limiter.reset)
 
         self.mock_client = self._make_client()
         self.factory = AsyncMock(return_value=(self.mock_client, None))
@@ -227,7 +234,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
         self.mock_client.analyze_market = AsyncMock(side_effect=RuntimeError("boom"))
         response = self.client.post("/api/analysis/market", json=MARKET_PAYLOAD)
         self.assertEqual(response.status_code, 500)
-        self.assertIn("Analysis failed: boom", response.json()["detail"])
+        self.assertEqual(response.json()["detail"], "Market analysis failed")
 
     def test_analyze_market_requires_auth(self):
         app.dependency_overrides.pop(get_current_user_from_token, None)
@@ -273,7 +280,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
         status, body = self._stream("/api/analysis/market/stream", MARKET_PAYLOAD)
         self.assertEqual(status, 200)
         self.assertIn('"error"', body)
-        self.assertIn("stream boom", body)
+        self.assertIn('"error": "Market analysis failed"', body)
         self.mock_client.close.assert_awaited_once()
 
     def test_analyze_market_stream_anonymous_user(self):
@@ -315,7 +322,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
         self.mock_client.quick_analysis = AsyncMock(side_effect=RuntimeError("boom"))
         response = self.client.post("/api/analysis/quick", json=QUICK_PAYLOAD)
         self.assertEqual(response.status_code, 500)
-        self.assertIn("Quick analysis failed: boom", response.json()["detail"])
+        self.assertEqual(response.json()["detail"], "Quick analysis failed")
 
     # ── POST /api/analysis/quick-group ──────────────────
 
@@ -344,7 +351,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
         self.mock_client.quick_group_analysis = AsyncMock(side_effect=RuntimeError("boom"))
         response = self.client.post("/api/analysis/quick-group", json=GROUP_PAYLOAD)
         self.assertEqual(response.status_code, 500)
-        self.assertIn("Quick group analysis failed: boom", response.json()["detail"])
+        self.assertEqual(response.json()["detail"], "Quick group analysis failed")
 
     def test_quick_group_analysis_requires_two_sub_markets(self):
         payload = {**GROUP_PAYLOAD, "sub_markets": GROUP_PAYLOAD["sub_markets"][:1]}
@@ -373,11 +380,22 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
         self.assertIn("Maximum 20 markets", response.json()["detail"])
         self.mock_client.scan_markets.assert_not_awaited()
 
+    def test_public_analysis_routes_carry_their_own_budget(self):
+        """The public LLM routes stop at 10/minute per IP (plan B3)."""
+        for _ in range(10):
+            response = self.client.post("/api/analysis/quick", json=QUICK_PAYLOAD)
+            self.assertEqual(response.status_code, 200)
+
+        eleventh = self.client.post("/api/analysis/quick", json=QUICK_PAYLOAD)
+        self.assertEqual(eleventh.status_code, 429)
+        # The endpoint budget is what stopped us, not the global 100/minute.
+        self.assertNotEqual(self.client.get("/api/analysis/health").status_code, 429)
+
     def test_scan_markets_error_returns_500(self):
         self.mock_client.scan_markets = AsyncMock(side_effect=RuntimeError("boom"))
         response = self.client.post("/api/analysis/scan", json=SCAN_PAYLOAD)
         self.assertEqual(response.status_code, 500)
-        self.assertIn("Market scan failed: boom", response.json()["detail"])
+        self.assertEqual(response.json()["detail"], "Market scan failed")
 
     # ── POST /api/analysis/risk ─────────────────────────
 
@@ -406,7 +424,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
         self.mock_client.assess_risk = AsyncMock(side_effect=RuntimeError("boom"))
         response = self.client.post("/api/analysis/risk", json=RISK_PAYLOAD)
         self.assertEqual(response.status_code, 500)
-        self.assertIn("Risk assessment failed: boom", response.json()["detail"])
+        self.assertEqual(response.json()["detail"], "Risk assessment failed")
 
     # ── POST /api/analysis/trade-plan ─────────────────────
 
@@ -439,7 +457,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
         self.mock_client.generate_trade_plan = AsyncMock(side_effect=RuntimeError("boom"))
         response = self.client.post("/api/analysis/trade-plan", json=PLAN_PAYLOAD)
         self.assertEqual(response.status_code, 500)
-        self.assertIn("Trade plan generation failed: boom", response.json()["detail"])
+        self.assertEqual(response.json()["detail"], "Trade plan generation failed")
 
     # ── POST /api/analysis/trader ────────────────────────
 
@@ -483,7 +501,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
         ):
             response = self.client.post("/api/analysis/trader", json=TRADER_PAYLOAD)
         self.assertEqual(response.status_code, 500)
-        self.assertIn("Trader analysis failed: boom", response.json()["detail"])
+        self.assertEqual(response.json()["detail"], "Trader analysis failed")
 
     # ── POST /api/analysis/trader/stream ────────────────
 
@@ -514,7 +532,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
             status, body = self._stream("/api/analysis/trader/stream", TRADER_PAYLOAD)
         self.assertEqual(status, 200)
         self.assertIn('"error"', body)
-        self.assertIn("trader boom", body)
+        self.assertIn('"error": "Trader analysis failed"', body)
 
     # ── POST /api/analysis/copy-trade-eval ────────────────
 
@@ -543,7 +561,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
         self.mock_client.evaluate_copy_trade = AsyncMock(side_effect=RuntimeError("boom"))
         response = self.client.post("/api/analysis/copy-trade-eval", json=COPY_PAYLOAD)
         self.assertEqual(response.status_code, 500)
-        self.assertIn("Copy trade evaluation failed: boom", response.json()["detail"])
+        self.assertEqual(response.json()["detail"], "Copy trade evaluation failed")
 
     # ── GET /api/analysis/health ────────────────────────
 
@@ -850,7 +868,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
         self.assertIn('"market_id": "cid-1"', body)
         self.assertIn('"ai_score": 30', body)
         self.assertIn('"risk_level": "high"', body)
-        self.assertIn("AI analysis failed: ai down", body)
+        self.assertIn('"reasoning": "AI analysis failed"', body)
 
     def test_analyze_markets_stream_scan_event_error(self):
         service = MagicMock()
@@ -866,7 +884,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertIn('"ai_score": 30', body)
-        self.assertIn("AI analysis failed: ai down", body)
+        self.assertIn('"reasoning": "AI analysis failed"', body)
 
     def test_analyze_markets_stream_bad_prices_fall_back(self):
         service = MagicMock()
@@ -1182,7 +1200,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
 
         status, body = self._stream_marks(markets=[SINGLE_MARKET])
         self.assertEqual(status, 200)
-        self.assertIn("AI analysis failed: ai down", body)
+        self.assertIn('"reasoning": "AI analysis failed"', body)
         # the deterministic credibility replaces the 30 in the scan
         # failure fallback, and the verdict hook still fires
         self.assertIn('"credibility_score": 50', body)
@@ -1329,8 +1347,9 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
         ):
             status, body = self._stream("/api/analysis/opportunities/stream", {"limit": 10})
         self.assertEqual(status, 200)
-        self.assertIn("Failed to fetch markets", body)
-        self.assertIn("fetch down", body)
+        self.assertIn('"error": "Failed to fetch markets"', body)
+        # the underlying exception is logged server-side, never streamed
+        self.assertNotIn("fetch down", body)
 
     def test_opportunity_stream_smart_money_full(self):
         cache = MagicMock()
@@ -1498,7 +1517,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
             status, body = self._stream("/api/analysis/opportunities/stream", {"limit": 10})
         self.assertEqual(status, 200)
         self.assertIn('"ai_score": 30', body)
-        self.assertIn("AI analysis failed: ai down", body)
+        self.assertIn('"reasoning": "AI analysis failed"', body)
         cache.set.assert_called_once()
 
     def test_opportunity_stream_scan_event_error(self):
@@ -1521,7 +1540,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
             status, body = self._stream("/api/analysis/opportunities/stream", {"limit": 10})
         self.assertEqual(status, 200)
         self.assertIn('"ai_score": 30', body)
-        self.assertIn("AI analysis failed: ai down", body)
+        self.assertIn('"reasoning": "AI analysis failed"', body)
 
     def test_opportunity_stream_markets_without_condition_id_skipped(self):
         cache = MagicMock()

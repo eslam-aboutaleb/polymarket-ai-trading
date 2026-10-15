@@ -12,13 +12,13 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 
 # Copy project files
-COPY pyproject.toml .
+COPY pyproject.toml uv.lock ./
 COPY app ./app
 COPY database ./database
 COPY proto ./proto
 
-# Install dependencies
-RUN uv sync
+# Install dependencies (locked)
+RUN uv sync --frozen
 
 # Generate gRPC stubs from proto
 RUN uv run python3 -m grpc_tools.protoc \

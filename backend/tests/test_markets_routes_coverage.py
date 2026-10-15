@@ -20,6 +20,7 @@ from app.config import AIBackend
 from app.grpc_clients.analysis_client import AnalysisClient
 from app.main import app
 from app.models.user_settings import AIBackendType
+from app.security.rate_limit import limiter
 from app.utils.database import get_db
 
 WALLET = "0x" + "ab" * 20
@@ -301,6 +302,13 @@ class TraderAnalysisStreamTests(unittest.TestCase):
         client_patcher.start()
         self.addCleanup(client_patcher.stop)
 
+        # The route carries a 5/minute per-IP budget (plan B3); its
+        # counters live in the shared in-memory limiter, so they are
+        # cleared between tests instead of letting an earlier test 429
+        # the next one.
+        limiter.reset()
+        self.addCleanup(limiter.reset)
+
     def _stream(self, payload):
         with self.client.stream(
             "POST",
@@ -338,6 +346,18 @@ class TraderAnalysisStreamTests(unittest.TestCase):
         self.assertIn("0xab..cd", kwargs["market_description"])
         self.mock_client.close.assert_awaited_once()
 
+    def test_stream_is_rate_limited_below_the_global_budget(self):
+        """The public LLM stream gets its own 5/minute budget (plan B3)."""
+        for _ in range(5):
+            status, _body = self._stream(STREAM_PAYLOAD)
+            self.assertEqual(status, 200)
+
+        sixth = self.client.post(
+            "/api/markets/trader-analysis/stream",
+            json=STREAM_PAYLOAD,
+        )
+        self.assertEqual(sixth.status_code, 429)
+
     def test_stream_stats_event_shape(self):
         status, body = self._stream(STREAM_PAYLOAD)
         self.assertEqual(status, 200)
@@ -361,7 +381,8 @@ class TraderAnalysisStreamTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn('"trader_stats"', body)
         self.assertIn('"error"', body)
-        self.assertIn("stream boom", body)
+        self.assertIn('"error": "Trader analysis failed"', body)
+        self.assertNotIn("stream boom", body)
         self.assertNotIn('"done": true', body)
         self.mock_client.close.assert_awaited_once()
 

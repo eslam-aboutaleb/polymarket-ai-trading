@@ -37,6 +37,7 @@ import EventGroupDetailDrawer from "./EventGroupDetailDrawer";
 import MarketBoardCard from "./MarketBoardCard";
 import { buildPolymarketEventUrl } from "../utils/urlSafety";
 import { useRafBufferedText } from "../hooks/useRafBufferedText";
+import { Banner, Modal } from "./ui";
 import {
   FOCUS_MARKET_SEARCH_EVENT,
   loadMarketWatchlist,
@@ -237,6 +238,7 @@ function parseOutcomePrices(market: MarketWithAnalysis): {
       no: Number(prices?.[1] || 0.5),
     };
   } catch {
+    console.warn("Failed to parse outcome prices", market.outcomePrices);
     return { yes: 0.5, no: 0.5 };
   }
 }
@@ -291,6 +293,7 @@ function marketTokenPair(market: MarketWithAnalysis): { yes: string; no: string 
         yes = arr[0] || "";
         no = arr[1] || "";
       } catch {
+        console.warn("Failed to parse clobTokenIds", clob);
         yes = clob;
       }
     }
@@ -341,8 +344,6 @@ export default function Opportunities() {
   const [streamDone, setStreamDone] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  /** Y-position (viewport %) where the user clicked Full Analysis */
-  const [popupOriginY, setPopupOriginY] = useState(50);
   const [lastPriceUpdate, setLastPriceUpdate] = useState<Date | null>(null);
   /** Store previous yes-prices keyed by market question for flash detection */
   const prevPricesRef = useRef<Map<string, number>>(new Map());
@@ -362,6 +363,8 @@ export default function Opportunities() {
     total: 0,
   });
   const [aiScanError, setAiScanError] = useState<string | null>(null);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+  const [pricePollError, setPricePollError] = useState<string | null>(null);
   const [sortMode, setSortMode] = useState<SortMode>("ease");
   const [searchInput, setSearchInput] = useState("");
   const [categories, setCategories] = useState<MarketCategory[]>([]);
@@ -411,6 +414,7 @@ export default function Opportunities() {
           yesTokenId = arr[0] || "";
           noTokenId = arr[1] || "";
         } catch {
+          console.warn("Failed to parse clobTokenIds", clob);
           yesTokenId = clob;
         }
       }
@@ -620,8 +624,9 @@ export default function Opportunities() {
       if (newMarkets.length > 0) {
         analyzeNewMarkets(newMarkets);
       }
-    } catch {
-      // Silently fail — user can scroll down again to retry
+    } catch (err: unknown) {
+      // A silently dropped page hides markets — surface it with a retry.
+      setLoadMoreError(getApiErrorMessage(err, "Failed to load more markets"));
     } finally {
       setLoadingMore(false);
     }
@@ -744,8 +749,11 @@ export default function Opportunities() {
         if (yes) result[yes] = parsed.yes;
       }
       return result;
-    } catch {
-      // Silently ignore poll errors — retried on the next tick.
+    } catch (err: unknown) {
+      // Stale opportunity prices are money-adjacent — surface the failure.
+      setPricePollError(
+        getApiErrorMessage(err, "Live prices are temporarily unavailable — prices may be stale"),
+      );
       return {};
     }
   }, []);
@@ -922,18 +930,9 @@ export default function Opportunities() {
   };
 
   /** Open popup immediately and stream the analysis */
-  const handleDetailAnalysis = (market: MarketWithAnalysis, e?: React.MouseEvent) => {
+  const handleDetailAnalysis = (market: MarketWithAnalysis) => {
     // Cancel any previous stream
     abortRef.current?.abort();
-
-    // Record click position so the popup appears near it
-    if (e) {
-      const yPct = Math.round((e.clientY / window.innerHeight) * 100);
-      // Clamp between 15% and 75% so the panel doesn't go offscreen
-      setPopupOriginY(Math.max(15, Math.min(75, yPct)));
-    } else {
-      setPopupOriginY(50);
-    }
 
     // Open popup right away with empty content
     setSelectedMarket(market);
@@ -1282,8 +1281,8 @@ export default function Opportunities() {
   return (
     <div className="pm-board space-y-4">
       <section className="pm-board-surface space-y-4">
-        <div className="pm-board-header">
-          <h1 className="pm-board-title">Easy Trades</h1>
+        <div className="pm-board-header" data-tutorial="opportunities">
+          <h1 className="pm-board-title">Opportunities</h1>
           <div className="pm-board-tools">
             <button
               type="button"
@@ -1484,8 +1483,8 @@ export default function Opportunities() {
             className="h-[2.7rem] rounded-xl border border-[var(--pm-border)] bg-[var(--pm-card)] px-4 text-sm font-semibold text-[var(--pm-text)] transition hover:border-[var(--pm-border-strong)] disabled:opacity-60"
           >
             {aiScanning
-              ? `Finding easy trades ${aiProgress.done}/${aiProgress.total || "…"}`
-              : "Find Easy Trades"}
+              ? `Scanning opportunities ${aiProgress.done}/${aiProgress.total || "…"}`
+              : "Scan opportunities"}
           </button>
         </div>
 
@@ -1541,15 +1540,25 @@ export default function Opportunities() {
         )}
 
         {aiScanError && (
-          <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          <Banner
+            variant="error"
+            onDismiss={() => setAiScanError(null)}
+            onRetry={() => triggerAiScan(false)}
+          >
             AI scan error: {aiScanError}
-          </div>
+          </Banner>
         )}
 
         {error && (
-          <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          <Banner variant="error" onDismiss={() => setError(null)} onRetry={() => fetchMarkets()}>
             {error}
-          </div>
+          </Banner>
+        )}
+
+        {pricePollError && (
+          <Banner variant="error" onDismiss={() => setPricePollError(null)}>
+            {pricePollError}
+          </Banner>
         )}
 
         {loading ? (
@@ -1618,6 +1627,18 @@ export default function Opportunities() {
                   Loading more markets…
                 </div>
               )}
+              {loadMoreError && (
+                <Banner
+                  variant="error"
+                  onDismiss={() => setLoadMoreError(null)}
+                  onRetry={() => {
+                    setLoadMoreError(null);
+                    loadMoreMarkets();
+                  }}
+                >
+                  {loadMoreError}
+                </Banner>
+              )}
               {!hasMore && markets.length > 0 && (
                 <p className="text-xs text-[var(--pm-text-soft)]">
                   All {markets.length} markets loaded
@@ -1629,50 +1650,37 @@ export default function Opportunities() {
       </section>
 
       {selectedMarket && (
-        <div
-          className="fixed inset-0 modal-overlay z-50 flex justify-center p-4"
-          style={{
-            alignItems: "flex-start",
-            paddingTop: `${popupOriginY * 0.55}vh`,
-          }}
-          onClick={closeDetailPopup}
+        <Modal
+          open
+          onClose={closeDetailPopup}
+          title={selectedMarket.question || "Market analysis"}
+          size="lg"
+          dismissOnBackdrop
         >
-          <div
-            ref={modalBodyRef}
-            className="surface-panel max-w-3xl w-full max-h-[82vh] overflow-y-auto p-6 scroll-soft"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="flex justify-between items-start gap-3 mb-4">
-              <h2 className="text-xl font-bold pr-3 leading-snug">
-                {selectedMarket.question || "Market analysis"}
-              </h2>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <button
-                  onClick={openInNewWindow}
-                  className="btn-muted !px-3 !py-1.5 text-xs flex items-center gap-1.5"
-                  title="Open in new window"
-                >
-                  <svg
-                    className="w-3.5 h-3.5"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
-                    />
-                  </svg>
-                  New Window
-                </button>
-                <button onClick={closeDetailPopup} className="btn-muted !px-3 !py-1.5 text-xs">
-                  Close
-                </button>
-              </div>
-            </div>
+          <div className="mb-3 flex justify-end">
+            <button
+              onClick={openInNewWindow}
+              className="btn-muted !px-3 !py-1.5 text-xs flex items-center gap-1.5"
+              title="Open in new window"
+            >
+              <svg
+                className="w-3.5 h-3.5"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
+                />
+              </svg>
+              New Window
+            </button>
+          </div>
 
+          <div ref={modalBodyRef} className="scroll-soft overflow-y-auto max-h-[70vh]">
             <div className="mb-3">
               {!streamDone ? (
                 <span className="text-sm px-3 py-1.5 rounded inline-flex items-center gap-2 chip chip-warning">
@@ -1691,7 +1699,15 @@ export default function Opportunities() {
             </div>
 
             {streamError ? (
-              <div className="p-4 alert-error rounded text-sm">{streamError}</div>
+              <Banner
+                variant="error"
+                onDismiss={() => setStreamError(null)}
+                onRetry={() => {
+                  if (selectedMarket) handleDetailAnalysis(selectedMarket);
+                }}
+              >
+                {streamError}
+              </Banner>
             ) : streamedText ? (
               <AnalysisDisplay text={streamedText} streaming={!streamDone} />
             ) : (
@@ -1701,11 +1717,11 @@ export default function Opportunities() {
               </div>
             )}
           </div>
-        </div>
+        </Modal>
       )}
 
       {lastPriceUpdate && (
-        <p className="text-xs text-[var(--pm-text-soft)]">
+        <p className="text-xs text-[var(--pm-text-soft)]" aria-live="polite">
           Prices {priceStreamStatus === "live" ? "streaming live" : "delayed · polling"}
           {" · "}last update {lastPriceUpdate.toLocaleTimeString()}
         </p>
@@ -1788,7 +1804,7 @@ export default function Opportunities() {
                   </div>
                   <div className="flex gap-2">
                     <button
-                      onClick={(event) => handleDetailAnalysis(market, event)}
+                      onClick={() => handleDetailAnalysis(market)}
                       className="btn-accent text-xs px-2 py-1"
                     >
                       AI Analysis

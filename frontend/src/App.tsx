@@ -1,8 +1,8 @@
 /**
  * Root React component: bootstraps the wallet session and defines all app routes.
  *
- * On mount it drops any persisted auth store, calls `GET /api/auth/me` via `authService`, and
- * holds `sessionReady` false until that settles so guarded routes never flash. Public routes render
+ * On mount it calls `GET /api/auth/me` via `authService`, and holds `sessionReady` false until
+ * that settles so guarded routes never flash. Public routes render
  * under `PublicAppLayout`; authenticated routes require a session, and `/debug` additionally
  * requires `isAdmin`.
  *
@@ -13,6 +13,8 @@ import { useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useAuthStore } from "./store/authStore";
 import { LoginModalProvider } from "./context/LoginModalContext";
+import { ToastProvider } from "./components/ui";
+import ErrorBoundary from "./components/ErrorBoundary";
 import LoginPage from "./pages/LoginPage";
 import SettingsPage from "./pages/SettingsPage";
 import AnalysisPage from "./pages/AnalysisPage";
@@ -27,7 +29,10 @@ import CopyTrading from "./components/CopyTrading";
 import WhaleFeed from "./components/WhaleFeed";
 import ExecutionAnalytics from "./components/ExecutionAnalytics";
 import CalibrationPanel from "./components/CalibrationPanel";
+import NotFound from "./components/NotFound";
 import RiskReportPage from "./pages/RiskReportPage";
+import OrchestratorPage from "./pages/OrchestratorPage";
+import CommandPalette from "./components/CommandPalette";
 import MarketMaking from "./components/MarketMaking";
 import Backtesting from "./components/Backtesting";
 import News from "./components/News";
@@ -35,6 +40,7 @@ import UserGuide from "./components/UserGuide";
 import DebugDashboard from "./components/DebugDashboard";
 import OpsCenter from "./components/OpsCenter";
 import LatencyArb from "./components/LatencyArb";
+import VenuesPage from "./pages/VenuesPage";
 import { authService } from "./services/authService";
 
 function SessionLoadingScreen() {
@@ -73,12 +79,6 @@ function App() {
   useEffect(() => {
     let cancelled = false;
 
-    try {
-      localStorage.removeItem("authStore");
-    } catch {
-      // Ignore private mode/localStorage restrictions.
-    }
-
     setSessionReady(false);
 
     authService
@@ -106,68 +106,75 @@ function App() {
   }, [setSession, setSessionReady, clearSession]);
 
   return (
-    <LoginModalProvider>
-      <BrowserRouter>
-        <div className="app-shell">
-          <Routes>
-            <Route
-              path="/login"
-              element={
-                !sessionReady ? (
-                  <SessionLoadingScreen />
-                ) : isAuthenticated ? (
-                  <Navigate to="/" replace />
-                ) : (
-                  <LoginPage />
-                )
-              }
-            />
+    <ToastProvider>
+      <LoginModalProvider>
+        <BrowserRouter>
+          <div className="app-shell">
+            <ErrorBoundary>
+              <Routes>
+                <Route
+                  path="/login"
+                  element={
+                    !sessionReady ? (
+                      <SessionLoadingScreen />
+                    ) : isAuthenticated ? (
+                      <Navigate to="/" replace />
+                    ) : (
+                      <LoginPage />
+                    )
+                  }
+                />
 
-            {/* Public pages — accessible without login */}
-            <Route element={<PublicAppLayout />}>
-              <Route path="markets" element={<Markets />} />
-              <Route path="opportunities" element={<Opportunities />} />
-              <Route path="leaderboard" element={<Leaderboard />} />
-              <Route path="copy-trading" element={<CopyTrading />} />
-              <Route path="guide" element={<UserGuide />} />
-              <Route path="analysis" element={<AnalysisPage />} />
-            </Route>
+                {/* Public pages — accessible without login */}
+                <Route element={<PublicAppLayout />}>
+                  <Route path="markets" element={<Markets />} />
+                  <Route path="opportunities" element={<Opportunities />} />
+                  <Route path="leaderboard" element={<Leaderboard />} />
+                  <Route path="copy-trading" element={<CopyTrading />} />
+                  <Route path="guide" element={<UserGuide />} />
+                  <Route path="analysis" element={<AnalysisPage />} />
+                </Route>
 
-            {/* Authenticated pages — require wallet login */}
-            <Route
-              element={
-                <ProtectedRoute>
-                  <AppLayout />
-                </ProtectedRoute>
-              }
-            >
-              <Route index element={<Dashboard />} />
-              <Route path="market-making" element={<MarketMaking />} />
-              <Route path="backtesting" element={<Backtesting />} />
-              <Route path="news" element={<News />} />
-              <Route path="trades" element={<TradeHistory />} />
-              <Route path="whales" element={<WhaleFeed />} />
-              <Route path="analytics/execution" element={<ExecutionAnalytics />} />
-              <Route path="analytics/calibration" element={<CalibrationPanel />} />
-              <Route path="analytics/risk" element={<RiskReportPage />} />
-              <Route path="latency-arb" element={<LatencyArb />} />
-              <Route path="ops" element={<OpsCenter />} />
-              <Route path="settings" element={<SettingsPage />} />
-              <Route
-                path="debug"
-                element={
-                  <AdminRoute>
-                    <DebugDashboard />
-                  </AdminRoute>
-                }
-              />
-            </Route>
+                {/* Authenticated pages — require wallet login */}
+                <Route
+                  element={
+                    <ProtectedRoute>
+                      <AppLayout />
+                    </ProtectedRoute>
+                  }
+                >
+                  <Route index element={<Dashboard />} />
+                  <Route path="market-making" element={<MarketMaking />} />
+                  <Route path="backtesting" element={<Backtesting />} />
+                  <Route path="news" element={<News />} />
+                  <Route path="trades" element={<TradeHistory />} />
+                  <Route path="whales" element={<WhaleFeed />} />
+                  <Route path="analytics/execution" element={<ExecutionAnalytics />} />
+                  <Route path="analytics/calibration" element={<CalibrationPanel />} />
+                  <Route path="analytics/risk" element={<RiskReportPage />} />
+                  <Route path="latency-arb" element={<LatencyArb />} />
+                  <Route path="venues" element={<VenuesPage />} />
+                  <Route path="orchestrator" element={<OrchestratorPage />} />
+                  <Route path="command-palette" element={<CommandPalette />} />
+                  <Route path="ops" element={<OpsCenter />} />
+                  <Route path="settings" element={<SettingsPage />} />
+                  <Route
+                    path="debug"
+                    element={
+                      <AdminRoute>
+                        <DebugDashboard />
+                      </AdminRoute>
+                    }
+                  />
+                </Route>
 
-            <Route path="*" element={<Navigate to="/markets" replace />} />
-          </Routes>
-        </div>
-      </BrowserRouter>
-    </LoginModalProvider>
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </ErrorBoundary>
+          </div>
+        </BrowserRouter>
+      </LoginModalProvider>
+    </ToastProvider>
   );
 }
 

@@ -494,8 +494,8 @@ async def _sync_market_maker_paper(
     (the same pattern the copy-trade path uses). No order is ever
     submitted, cancelled or queried on the CLOB.
     """
-    from app.models.user_trade import UserTrade
     from app.services.simulation import simulate_market_maker_fill
+    from app.services.trade_recorder import record_user_trade
 
     market = {
         "best_bid": book["best_bid"],
@@ -511,16 +511,23 @@ async def _sync_market_maker_paper(
             order_price=order_spec["price"],
             midpoint=midpoint,
         )
-        db.add(
-            UserTrade(
-                user_id=config.user_id,
-                market_id=config.condition_id,
-                token_id=order_spec["token_id"],
-                action=order_spec["side"].lower(),
-                amount=order_spec["size"],
-                price=fill["fill_price"],
-                status="simulated",
-            )
+        # Attributable row: the strategy source drives per-strategy
+        # P&L and the execution-analytics endpoints (plan 03 Phase A).
+        # Before this, market-maker fills had no strategy attribution
+        # at all, so they were invisible to every loss limit derived
+        # from UserTrade.pnl.
+        record_user_trade(
+            db,
+            user_id=config.user_id,
+            market_id=config.condition_id,
+            token_id=order_spec["token_id"],
+            action=order_spec["side"].lower(),
+            amount=order_spec["size"],
+            price=fill["fill_price"],
+            status="simulated",
+            strategy_source="market_maker",
+            expected_price=order_spec["price"],
+            expected_size=order_spec["size"],
         )
         placed += 1
         config.total_volume_usdc += order_spec["size"]
@@ -553,33 +560,42 @@ async def _maker_loop(config_id: int):
     if not acquire_scheduler_lock(lock_name):
         return
     logger.info("Market maker loop started for config_id=%d", config_id)
-    while True:
-        try:
-            db = SessionLocal()
-            config = db.query(MarketMakerConfig).filter(MarketMakerConfig.id == config_id).first()
-            interval = config.sync_interval_seconds if config else 30
-            enabled = config.enabled if config else False
-            db.close()
+    try:
+        while True:
+            try:
+                db = SessionLocal()
+                config = (
+                    db.query(MarketMakerConfig).filter(MarketMakerConfig.id == config_id).first()
+                )
+                interval = config.sync_interval_seconds if config else 30
+                enabled = config.enabled if config else False
+                db.close()
 
-            if not enabled:
-                logger.info("Market maker config %d disabled, stopping loop", config_id)
+                if not enabled:
+                    logger.info("Market maker config %d disabled, stopping loop", config_id)
+                    break
+
+                result = await _sync_market_maker(config_id)
+                logger.info("Market maker sync (config=%d): %s", config_id, result)
+                scheduler_heartbeat(lock_name)
+
+            except asyncio.CancelledError:
                 break
+            except Exception as e:
+                logger.error("Market maker loop error (config=%d): %s", config_id, e)
+                interval = 30
 
-            result = await _sync_market_maker(config_id)
-            logger.info("Market maker sync (config=%d): %s", config_id, result)
-            scheduler_heartbeat(lock_name)
-
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            logger.error("Market maker loop error (config=%d): %s", config_id, e)
-            interval = 30
-
-        await asyncio.sleep(interval)
-
-    # The loop only exits via break (disabled config or cancellation);
-    # release the advisory lock before the graceful-shutdown block.
-    release_scheduler_lock(lock_name)
+            await asyncio.sleep(interval)
+    finally:
+        # Released on EVERY exit path: a disabled-config break, a cancellation
+        # caught inside the loop body, and — the leak this fixes — a
+        # cancellation landing during the interval sleep, which sits outside
+        # the inner try and used to skip this release, holding the advisory
+        # lock until process exit (breaking the single-worker scheduler-lock
+        # design for the next worker). release_scheduler_lock is a no-op when
+        # the lock is no longer held, and a CancelledError still propagates
+        # out through the finally instead of being swallowed.
+        release_scheduler_lock(lock_name)
 
     # Graceful shutdown: cancel all open orders (paper mode never
     # places real orders, so there is nothing to cancel on the CLOB)

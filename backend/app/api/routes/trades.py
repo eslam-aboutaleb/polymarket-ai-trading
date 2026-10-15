@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_plan
 from app.api.routes.auth import get_current_user_from_token, get_optional_user_from_token
 from app.models.followed_trader import FollowedTrader
 from app.models.notification_feed_event import NotificationFeedEvent
@@ -30,6 +31,7 @@ from app.services.copy_trade_service import (
     get_copy_trade_history,
     get_daily_copy_pnl,
 )
+from app.services.entitlement_service import CAP_COPY_TRADING
 from app.services.leaderboard_service import (
     fetch_leaderboard,
     fetch_trader_profile,
@@ -44,6 +46,7 @@ from app.services.pre_trade_gate import (
     get_idempotent_order_result,
     store_idempotent_order_result,
 )
+from app.services.trade_recorder import record_user_trade
 from app.utils.database import get_db
 from app.utils.time import utc_now
 
@@ -334,9 +337,10 @@ async def execute_trade(
     try:
         stored = load_wallet_credentials(wallet_address)
     except CredentialStoreError as exc:
+        logger.exception("Credential store unavailable for user %s", user_id)
         raise HTTPException(
             status_code=503,
-            detail=f"Credential storage is unavailable: {exc}",
+            detail="Trading credentials are temporarily unavailable",
         ) from exc
     if not stored:
         raise HTTPException(
@@ -649,7 +653,11 @@ def _wallet_has_any_active_watchers(
     return copy_q.first() is not None or notif_q.first() is not None
 
 
-@router.post("/follow/{wallet}", response_model=FollowedTraderResponse)
+@router.post(
+    "/follow/{wallet}",
+    response_model=FollowedTraderResponse,
+    dependencies=[Depends(require_plan(CAP_COPY_TRADING))],
+)
 async def follow_trader(
     wallet: str,
     body: FollowTraderRequest = FollowTraderRequest(),
@@ -1405,9 +1413,10 @@ async def emergency_stop(
                         private_key=pk,
                         clob_creds=creds,
                     )
-                except Exception as e:
+                except Exception:
+                    logger.exception("Emergency stop: could not fetch positions")
                     positions = []
-                    errors.append(f"Failed to fetch positions: {e}")
+                    errors.append("Failed to fetch positions")
 
                 for pos in positions:
                     try:
@@ -1434,15 +1443,40 @@ async def emergency_stop(
                             price=sell_price,
                             size=size,
                         )
+                        # Attributable row (plan 03 Phase A): a panic
+                        # sell that is not recorded leaves the position's
+                        # realized P&L at zero forever, understating the
+                        # loss that triggered the emergency stop.
+                        # A market sell (price 0) has no reference price
+                        # at submission, so the last observed position
+                        # price is the best available expectation; when
+                        # even that is unknown the row carries 0 and no
+                        # slippage is computed rather than a fake zero.
+                        ref_price = float(pos.get("curPrice") or pos.get("price") or 0.0) or 0.0
+                        record_user_trade(
+                            db,
+                            user_id=user_id,
+                            market_id=pos.get("condition_id") or token_id,
+                            token_id=token_id,
+                            action="sell",
+                            amount=size,
+                            price=ref_price,
+                            status="pending" if result.get("success") else "failed",
+                            strategy_source="emergency",
+                            order_hash=result.get("order_hash"),
+                            expected_price=ref_price or None,
+                        )
+                        db.commit()
                         if result.get("success"):
                             positions_closed += 1
                         else:
                             errors.append(
                                 f"Failed to sell {token_id[:12]}…: {result.get('error', 'unknown')}"
                             )
-                    except Exception as e:
+                    except Exception:
                         # One bad position must not abort the remaining sells.
-                        errors.append(f"Exception selling position: {e}")
+                        logger.exception("Emergency stop: failed to close position")
+                        errors.append("Exception selling position")
 
     return EmergencyStopResponse(
         halted=True,
@@ -1694,6 +1728,61 @@ async def get_execution_edge_scores(
         window_days=window_days,
         generated_at=utc_now().isoformat(),
         strategies=[EdgeScoreRow(**row) for row in rows],
+    )
+
+
+class StrategyBreakdownRow(BaseModel):
+    """One strategy's realized performance over the window (plan 03 Phase A).
+
+    A flat row per strategy, ordered best net realized P&L first, with
+    the attribution coverage that makes the numbers auditable.
+    """
+
+    strategy: str
+    submissions: int = 0
+    filled: int = 0
+    closed_trades: int = 0
+    wins: int = 0
+    losses: int = 0
+    win_rate: float | None = None
+    gross_realized_pnl: float = 0.0
+    net_realized_pnl: float = 0.0
+    total_fees: float = 0.0
+    avg_slippage_bps: float | None = None
+    edge_score: float | None = None
+
+
+class StrategyBreakdownResponse(BaseModel):
+    user_id: int
+    window_days: int
+    generated_at: str
+    strategies: list[StrategyBreakdownRow] = []
+    data_quality: dict[str, int] = {}
+
+
+@router.get("/analytics/by-strategy", response_model=StrategyBreakdownResponse)
+async def get_strategy_breakdown(
+    window_days: int = Query(default=30, ge=1, le=365),
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """Per-strategy realized P&L attribution (plan 03 Phase A).
+
+    Flat, best-first list of every strategy the user traded in the
+    window, plus the count of trades that still carry no
+    ``strategy_source`` — the attribution gap this endpoint exists to
+    make visible.
+    """
+    from app.services.execution_analytics import get_strategy_breakdown
+
+    user_id = current_user.get("user_id")
+    payload = get_strategy_breakdown(db, user_id, window_days=window_days)
+    return StrategyBreakdownResponse(
+        user_id=user_id,
+        window_days=payload["window_days"],
+        generated_at=payload["generated_at"],
+        strategies=[StrategyBreakdownRow(**row) for row in payload["strategies"]],
+        data_quality=payload["data_quality"],
     )
 
 

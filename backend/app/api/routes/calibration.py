@@ -24,12 +24,14 @@ import logging
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.routes.auth import get_current_user_from_token
 from app.config import get_settings
 from app.models.assessment import Assessment
+from app.models.governance import VerdictFeedback
 from app.models.user_trade import UserTrade
 from app.services.forecast_resolution import outcome_value
 from app.utils.database import get_db
@@ -237,10 +239,16 @@ async def get_calibration_forecasts(
         probability = row.ai_probability
         forecasts.append(
             {
+                # The assessment id is what the feedback endpoints key
+                # on, so a verdict row has to carry it or the rating UI
+                # has nothing to attach to.
+                "id": row.id,
                 "condition_id": row.condition_id,
                 "task": row.task,
                 "model": row.model_name,
                 "provider": row.provider,
+                "prompt_version": row.prompt_version,
+                "llm_tier": row.llm_tier,
                 "ai_probability": probability,
                 "market_price": price,
                 "edge": round(probability - price, 4)
@@ -252,3 +260,220 @@ async def get_calibration_forecasts(
             }
         )
     return {"count": len(forecasts), "forecasts": forecasts}
+
+
+# ── Model governance (plan 04) ────────────────────────────────
+
+
+@router.get("/summary/by-prompt-version")
+async def get_calibration_by_prompt_version(
+    window_days: int = Query(default=settings.calibration_default_window_days, ge=1, le=365),
+    scope: str = Query(default="global", pattern="^(user|global)$"),
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """Calibration grouped by prompt version, so prompt impact is visible.
+
+    Answers "did the last prompt change help?", which is unanswerable
+    without recording which prompt produced each verdict. Rows recorded
+    before plan 04 have no ``prompt_version`` and appear under the
+    ``(unversioned)`` key rather than being forced into a version group.
+    """
+    if scope == "global" and not current_user.get("is_admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="scope=global requires an admin account",
+        )
+
+    rows = _scoped_rows(db, window_days, scope, current_user["user_id"]).all()
+    groups: dict[str, dict] = {}
+    for row in rows:
+        version = (row.prompt_version or "").strip() or "(unversioned)"
+        group = groups.setdefault(
+            version, {"prompt_version": version, "count": 0, "_sum": 0.0, "_resolved": 0}
+        )
+        group["count"] += 1
+        if row.brier_score is not None:
+            group["_resolved"] += 1
+            group["_sum"] += float(row.brier_score)
+
+    versions = [
+        {
+            "prompt_version": g["prompt_version"],
+            "count": g["count"],
+            "resolved": g["_resolved"],
+            "mean_brier": round(g["_sum"] / g["_resolved"], 4) if g["_resolved"] else None,
+        }
+        for g in sorted(groups.values(), key=lambda g: (-g["count"], g["prompt_version"]))
+    ]
+    # Best (lowest Brier) version first, unversioned always last.
+    versions.sort(key=lambda v: (v["mean_brier"] is None, v["mean_brier"] or 0.0))
+    return {
+        "window_days": window_days,
+        "scope": scope,
+        "baseline_brier": BASELINE_BRIER,
+        "versions": versions,
+    }
+
+
+@router.get("/summary/drift")
+async def get_calibration_drift(
+    window_days: int = Query(default=14, ge=3, le=365),
+    scope: str = Query(default="global", pattern="^(user|global)$"),
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """Per-model/task calibration drift with the degrading slope (plan 04).
+
+    A row is flagged only with at least ``min_samples_for_drift``
+    resolved verdicts: a handful of unlucky markets is not model decay.
+    """
+    if scope == "global" and not current_user.get("is_admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="scope=global requires an admin account",
+        )
+
+    from app.services.model_drift import detect_drift
+
+    report = detect_drift(db, window_days=window_days)
+    report["scope"] = scope
+    return report
+
+
+@router.get("/leaderboard/models")
+async def get_model_leaderboard(
+    window_days: int = Query(default=settings.calibration_default_window_days, ge=1, le=365),
+    scope: str = Query(default="global", pattern="^(user|global)$"),
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """Per-model accuracy, best-first, for the calibration panel."""
+    if scope == "global" and not current_user.get("is_admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="scope=global requires an admin account",
+        )
+
+    from app.services.model_drift import model_leaderboard
+
+    report = model_leaderboard(db, window_days=window_days)
+    report["scope"] = scope
+    return report
+
+
+class VerdictFeedbackRequest(BaseModel):
+    rating: int = Field(..., ge=1, le=5)
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+@router.post("/verdicts/{assessment_id}/feedback")
+async def submit_verdict_feedback(
+    assessment_id: int,
+    body: VerdictFeedbackRequest,
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """Rate an AI verdict 1–5 (human-in-the-loop signal, plan 04).
+
+    The rating never feeds back automatically; it is a prompt-authoring
+    signal, so the row is immutable once written and a second rating for
+    the same verdict replaces the previous one only through the delete
+    endpoint below.
+    """
+    assessment = db.query(Assessment.id).filter(Assessment.id == assessment_id).first()
+    if assessment is None:
+        raise HTTPException(status_code=404, detail="Verdict not found")
+
+    # One rating per (user, verdict): an update path keeps the aggregate
+    # stable instead of letting a user inflate the mean.
+    existing = (
+        db.query(VerdictFeedback)
+        .filter(
+            VerdictFeedback.assessment_id == assessment_id,
+            VerdictFeedback.user_id == current_user["user_id"],
+        )
+        .first()
+    )
+    if existing is not None:
+        existing.rating = body.rating
+        existing.comment = (body.comment or "").strip() or None
+        db.commit()
+        db.refresh(existing)
+        feedback = existing
+    else:
+        feedback = VerdictFeedback(
+            assessment_id=assessment_id,
+            user_id=current_user["user_id"],
+            rating=body.rating,
+            comment=(body.comment or "").strip() or None,
+        )
+        db.add(feedback)
+        db.commit()
+        db.refresh(feedback)
+
+    return {
+        "id": feedback.id,
+        "assessment_id": assessment_id,
+        "rating": feedback.rating,
+        "comment": feedback.comment,
+    }
+
+
+@router.delete("/verdicts/{assessment_id}/feedback")
+async def delete_verdict_feedback(
+    assessment_id: int,
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """Withdraw a rating (only the author's own)."""
+    deleted = (
+        db.query(VerdictFeedback)
+        .filter(
+            VerdictFeedback.assessment_id == assessment_id,
+            VerdictFeedback.user_id == current_user["user_id"],
+        )
+        .delete()
+    )
+    db.commit()
+    if not deleted:
+        raise HTTPException(status_code=404, detail="No feedback to withdraw")
+    return {"deleted": True}
+
+
+@router.get("/verdicts/{assessment_id}/feedback")
+async def get_verdict_feedback(
+    assessment_id: int,
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """The caller's own rating for a verdict, plus the community mean."""
+    mine = (
+        db.query(VerdictFeedback)
+        .filter(
+            VerdictFeedback.assessment_id == assessment_id,
+            VerdictFeedback.user_id == current_user["user_id"],
+        )
+        .first()
+    )
+    aggregate = (
+        db.query(
+            func.count(VerdictFeedback.id),
+            func.avg(VerdictFeedback.rating),
+        )
+        .filter(VerdictFeedback.assessment_id == assessment_id)
+        .first()
+    )
+    return {
+        "assessment_id": assessment_id,
+        "mine": {
+            "rating": mine.rating,
+            "comment": mine.comment,
+        }
+        if mine is not None
+        else None,
+        "community": {
+            "count": int(aggregate[0] or 0),
+            "mean_rating": round(float(aggregate[1]), 3) if aggregate[1] is not None else None,
+        },
+    }

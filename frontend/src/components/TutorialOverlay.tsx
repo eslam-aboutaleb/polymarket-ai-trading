@@ -3,12 +3,18 @@
  *
  * Renders through a portal (so transformed ancestors cannot break fixed positioning) with arrow,
  * Enter and Escape navigation and clickable step dots; onComplete fires only on the last step.
- * Step targetSelector/position metadata is currently unused beyond the plain dimming backdrop.
+ * Steps that declare a targetSelector resolve the element with `document.querySelector`, measure it
+ * with `getBoundingClientRect`, and render a fixed highlight ring plus the tooltip card placed next
+ * to it (honouring the step's `position`, clamped to the viewport). Because the tutorial is global
+ * while the user may sit on any route, a missing or off-screen target falls back to the centered
+ * card — the tour never renders nothing.
  *
  * @module components/TutorialOverlay
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
+import { useModalA11y } from "./ui/useModalA11y";
+import { resolveZ } from "../lib/zIndex";
 
 /* ─── Tutorial Step Definition ─── */
 
@@ -83,6 +89,23 @@ export const defaultTutorialSteps: TutorialStep[] = [
     position: "bottom",
   },
   {
+    id: "whales",
+    title: "Whale Watch",
+    description:
+      "The Whales page streams whale-sized position movements detected on-chain — typically 3–30 seconds ahead of the public positions API. Set a minimum notional, track the leaderboard whale set, and optionally auto-copy followed-whale trades.",
+    targetSelector: '[data-tutorial="whales"]',
+    position: "bottom",
+    tip: "Alerts fire only above your minimum notional — lower it to catch more wallets.",
+  },
+  {
+    id: "news",
+    title: "AI Market News",
+    description:
+      "News turns market data, trader behaviour and social signals into AI-generated articles. Refresh the feed to cover trending markets, or generate an article on demand for any market by pasting its condition id.",
+    targetSelector: '[data-tutorial="news"]',
+    position: "bottom",
+  },
+  {
     id: "market-making",
     title: "Market Making",
     description:
@@ -90,6 +113,14 @@ export const defaultTutorialSteps: TutorialStep[] = [
     targetSelector: '[data-tutorial="market-making"]',
     position: "bottom",
     tip: "Market making works best in liquid markets with consistent volume.",
+  },
+  {
+    id: "latency-arb",
+    title: "Latency Arbitrage",
+    description:
+      "Latency Arb watches BTC/ETH/SOL up-down markets and flags mispricings caught in the Binance feed before Polymarket odds adjust. The board shows Model P, Market P, edge, feed lag and a countdown — paper-first, so simulated fills never touch the exchange.",
+    targetSelector: '[data-tutorial="latency-arb"]',
+    position: "bottom",
   },
   {
     id: "backtesting",
@@ -106,6 +137,47 @@ export const defaultTutorialSteps: TutorialStep[] = [
     description:
       "The Trades page shows all executed trades, open positions, available stop-loss orders, and the Inverse Bot. Enable the Inverse Bot on any position to let AI automatically reverse positions when sentiment shifts.",
     targetSelector: '[data-tutorial="trades"]',
+    position: "bottom",
+  },
+  {
+    id: "calibration",
+    title: "Is the AI Actually Right?",
+    description:
+      "AI Calibration scores the AI's probability forecasts against what really happened. Watch the Brier score against the 0.25 coin-flip baseline, the reliability curve per model, and each recent verdict with its edge and resolution.",
+    targetSelector: '[data-tutorial="calibration"]',
+    position: "bottom",
+    tip: "A mean Brier below 0.25 beats a coin flip — treat anything above it as noise.",
+  },
+  {
+    id: "execution-analytics",
+    title: "Execution Analytics",
+    description:
+      "Execution Analytics grades how well your orders execute: fill rate, average slippage, and fee drag against gross realized PnL. The Edge Score per strategy runs 0–100, where 50 is break-even.",
+    targetSelector: '[data-tutorial="execution-analytics"]',
+    position: "bottom",
+  },
+  {
+    id: "risk",
+    title: "Risk Report",
+    description:
+      "The Risk Report grades your portfolio exposure: concentration per position, a worst-case loss bound, a VaR estimate, correlated clusters, suggested hedges and upcoming catalysts — computed from your wallet.",
+    targetSelector: '[data-tutorial="risk"]',
+    position: "bottom",
+  },
+  {
+    id: "analysis",
+    title: "Deep Dive on One Market",
+    description:
+      "Analysis streams an independent AI deep-dive on a single market — probability, confidence, recommended action and copy-worthiness. Open it from any market's Analyze button.",
+    targetSelector: '[data-tutorial="analysis"]',
+    position: "bottom",
+  },
+  {
+    id: "ops",
+    title: "Ops Center",
+    description:
+      "Ops Center is the control room: emergency stop, resume, trader rescoring, arbitrage scanning, Binance signal refresh and the analysis endpoints. Start here when something needs immediate intervention.",
+    targetSelector: '[data-tutorial="ops"]',
     position: "bottom",
   },
   {
@@ -133,12 +205,98 @@ export const defaultTutorialSteps: TutorialStep[] = [
   },
 ];
 
+/* ─── Spotlight geometry ─── */
+
+interface TargetRect {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+}
+
+const RING_GAP = 6;
+const TOOLTIP_GAP = 14;
+const VIEWPORT_MARGIN = 12;
+const FALLBACK_POSITION = "bottom" as const;
+
+function isOnScreen(rect: TargetRect): boolean {
+  if (rect.width <= 0 || rect.height <= 0) return false;
+  return (
+    rect.top + rect.height > 0 &&
+    rect.left + rect.width > 0 &&
+    rect.top < window.innerHeight &&
+    rect.left < window.innerWidth
+  );
+}
+
+type SpotlightSide = NonNullable<TutorialStep["position"]>;
+
+function placeTooltip(
+  rect: TargetRect,
+  preferred: TutorialStep["position"],
+  card: { width: number; height: number },
+): { top: number; left: number } {
+  const slots: Record<SpotlightSide, { top: number; left: number }> = {
+    top: {
+      top: rect.top - TOOLTIP_GAP - card.height,
+      left: rect.left + rect.width / 2 - card.width / 2,
+    },
+    bottom: {
+      top: rect.top + rect.height + TOOLTIP_GAP,
+      left: rect.left + rect.width / 2 - card.width / 2,
+    },
+    left: {
+      top: rect.top + rect.height / 2 - card.height / 2,
+      left: rect.left - TOOLTIP_GAP - card.width,
+    },
+    right: {
+      top: rect.top + rect.height / 2 - card.height / 2,
+      left: rect.left + rect.width + TOOLTIP_GAP,
+    },
+  };
+
+  const fits = (side: SpotlightSide): boolean => {
+    const slot = slots[side];
+    return (
+      slot.left >= VIEWPORT_MARGIN &&
+      slot.top >= VIEWPORT_MARGIN &&
+      slot.left + card.width <= window.innerWidth - VIEWPORT_MARGIN &&
+      slot.top + card.height <= window.innerHeight - VIEWPORT_MARGIN
+    );
+  };
+
+  const desired = preferred ?? FALLBACK_POSITION;
+  const order: SpotlightSide[] = [desired, "bottom", "top", "right", "left"];
+  const slot = slots[order.find(fits) ?? desired];
+
+  const clamp = (value: number, extent: number) =>
+    Math.round(Math.min(Math.max(VIEWPORT_MARGIN, value), Math.max(VIEWPORT_MARGIN, extent)));
+
+  return {
+    top: clamp(slot.top, window.innerHeight - card.height - VIEWPORT_MARGIN),
+    left: clamp(slot.left, window.innerWidth - card.width - VIEWPORT_MARGIN),
+  };
+}
+
 /* ─── Spotlight Overlay ─── */
 
-function SpotlightOverlay() {
+function SpotlightOverlay({ targetRect }: { targetRect: TargetRect | null }) {
   return (
-    <div className="fixed inset-0 z-[90] pointer-events-none">
+    <div className={`fixed inset-0 ${resolveZ("tutorial")} pointer-events-none`}>
       <div className="absolute inset-0 bg-black/60" />
+      {targetRect && (
+        <div
+          data-testid="tutorial-spotlight-ring"
+          className="absolute rounded-xl border-2 border-[var(--accent)]"
+          style={{
+            top: targetRect.top - RING_GAP,
+            left: targetRect.left - RING_GAP,
+            width: targetRect.width + RING_GAP * 2,
+            height: targetRect.height + RING_GAP * 2,
+            boxShadow: "0 0 0 4px rgba(247, 166, 0, 0.22), 0 0 28px rgba(247, 166, 0, 0.35)",
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -170,10 +328,16 @@ export default function TutorialOverlay({
   onComplete,
   onDismiss,
 }: TutorialOverlayProps) {
+  const { panelRef, titleId } = useModalA11y({
+    open: true,
+    onClose: onDismiss,
+    disableEscape: true,
+  });
   const [currentStep, setCurrentStep] = useState(0);
   const step = steps[currentStep];
   const isFirst = currentStep === 0;
   const isLast = currentStep === steps.length - 1;
+  const [targetRect, setTargetRect] = useState<TargetRect | null>(null);
 
   const handleNext = useCallback(() => {
     if (isLast) {
@@ -205,16 +369,77 @@ export default function TutorialOverlay({
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
 
+  const targetSelector = step.targetSelector;
+  useEffect(() => {
+    setTargetRect(null);
+    if (!targetSelector) return;
+    const measure = () => {
+      const el = document.querySelector(targetSelector);
+      if (!el) {
+        setTargetRect(null);
+        return;
+      }
+      const r = el.getBoundingClientRect();
+      const rect: TargetRect = { top: r.top, left: r.left, width: r.width, height: r.height };
+      if (!isOnScreen(rect)) {
+        setTargetRect(null);
+        return;
+      }
+      setTargetRect((prev) =>
+        prev &&
+        prev.top === rect.top &&
+        prev.left === rect.left &&
+        prev.width === rect.width &&
+        prev.height === rect.height
+          ? prev
+          : rect,
+      );
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
+  }, [targetSelector]);
+
+  const targetPosition = step.position;
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    if (!targetRect) {
+      panel.style.position = "";
+      panel.style.top = "";
+      panel.style.left = "";
+      panel.style.width = "";
+      return;
+    }
+    const width = panel.offsetWidth;
+    const height = panel.offsetHeight;
+    const placement = placeTooltip(targetRect, targetPosition, { width, height });
+    panel.style.position = "fixed";
+    panel.style.width = `${width}px`;
+    panel.style.top = `${placement.top}px`;
+    panel.style.left = `${placement.left}px`;
+  }, [panelRef, targetRect, targetPosition]);
+
   // Use a portal so the overlay is rendered directly in document.body,
   // escaping any ancestor with CSS transform (which breaks fixed positioning).
   return createPortal(
     <>
-      {/* Overlay backdrop */}
-      <SpotlightOverlay />
+      {/* Overlay backdrop + highlight ring */}
+      <SpotlightOverlay targetRect={targetRect} />
 
       {/* Modal card */}
-      <div className="fixed inset-0 z-[95] flex items-center justify-center p-4 pointer-events-none">
+      <div
+        className={`fixed inset-0 ${resolveZ("tutorial")} flex items-center justify-center p-4 pointer-events-none`}
+      >
         <div
+          ref={panelRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
           className="pointer-events-auto w-full max-w-lg surface-panel border border-[var(--line-strong)] shadow-2xl"
           style={{
             animation: "lift-in 0.35s ease both",
@@ -226,7 +451,9 @@ export default function TutorialOverlay({
               <span className="chip chip-accent text-xs">
                 {currentStep + 1} / {steps.length}
               </span>
-              <h3 className="text-base font-bold text-white">{step.title}</h3>
+              <h3 id={titleId} className="text-base font-bold text-white">
+                {step.title}
+              </h3>
             </div>
             <button
               onClick={onDismiss}
@@ -309,15 +536,41 @@ export default function TutorialOverlay({
 /* ─── Hook for tutorial state persistence ─── */
 
 const TUTORIAL_STORAGE_KEY = "polymarket_tutorial_completed";
+const TUTORIAL_VALUE_COMPLETED = "true";
+const TUTORIAL_VALUE_DISMISSED = "dismissed";
+
+function readTutorialValue(): string | null {
+  try {
+    return localStorage.getItem(TUTORIAL_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeTutorialValue(value: string): void {
+  try {
+    localStorage.setItem(TUTORIAL_STORAGE_KEY, value);
+  } catch {
+    // ignore
+  }
+}
+
+function clearTutorialValue(): void {
+  try {
+    localStorage.removeItem(TUTORIAL_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
 
 export function useTutorialState() {
   const [showTutorial, setShowTutorial] = useState(false);
-  const [completed, setCompleted] = useState(() => {
-    try {
-      return localStorage.getItem(TUTORIAL_STORAGE_KEY) === "true";
-    } catch {
-      return false;
-    }
+  const [completed, setCompleted] = useState(
+    () => readTutorialValue() === TUTORIAL_VALUE_COMPLETED,
+  );
+  const [seen, setSeen] = useState(() => {
+    const value = readTutorialValue();
+    return value === TUTORIAL_VALUE_COMPLETED || value === TUTORIAL_VALUE_DISMISSED;
   });
 
   const startTutorial = useCallback(() => setShowTutorial(true), []);
@@ -325,29 +578,28 @@ export function useTutorialState() {
   const completeTutorial = useCallback(() => {
     setShowTutorial(false);
     setCompleted(true);
-    try {
-      localStorage.setItem(TUTORIAL_STORAGE_KEY, "true");
-    } catch {
-      // ignore
-    }
+    setSeen(true);
+    writeTutorialValue(TUTORIAL_VALUE_COMPLETED);
   }, []);
 
   const dismissTutorial = useCallback(() => {
     setShowTutorial(false);
-  }, []);
+    setSeen(true);
+    if (!completed) {
+      writeTutorialValue(TUTORIAL_VALUE_DISMISSED);
+    }
+  }, [completed]);
 
   const resetTutorial = useCallback(() => {
     setCompleted(false);
-    try {
-      localStorage.removeItem(TUTORIAL_STORAGE_KEY);
-    } catch {
-      // ignore
-    }
+    setSeen(false);
+    clearTutorialValue();
   }, []);
 
   return {
     showTutorial,
     completed,
+    seen,
     startTutorial,
     completeTutorial,
     dismissTutorial,

@@ -21,6 +21,7 @@ class NotificationChannel(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    account_id = Column(Integer, nullable=True, index=True)
     channel_type = Column(String(20), nullable=False)  # telegram | discord | webhook
     name = Column(String(100), nullable=False, default="")
     # Fernet-encrypted JSON blob; plaintext never touches the database.

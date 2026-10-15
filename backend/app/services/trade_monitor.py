@@ -98,12 +98,14 @@ GTC_RECON_INTERVAL_SECONDS = 900  # 15 minutes
 try:
     from app.utils.scheduler_lock import (  # plan 02
         acquire_scheduler_lock,
+        release_scheduler_lock,
         scheduler_heartbeat,
     )
 
     _SCHEDULER_LOCK_AVAILABLE = True
 except ImportError:
     acquire_scheduler_lock = None  # type: ignore[assignment]
+    release_scheduler_lock = None  # type: ignore[assignment]
     scheduler_heartbeat = None  # type: ignore[assignment]
     _SCHEDULER_LOCK_AVAILABLE = False
 
@@ -491,6 +493,11 @@ def _mark_pending_trades_filled(
     the observed fill price/size/fee are recorded along with
     the derived slippage (vs the expected price captured at
     submission) and submission→fill latency (plan 03).
+
+    Each transition also appends an ``order_fill_observed`` event to
+    the append-only log (plan 10 Phase A), so the fill — the moment a
+    submission becomes realized P&L — is independently auditable
+    rather than only inferable from ``executed_at``.
     """
     if not order_hash:
         return 0
@@ -524,6 +531,33 @@ def _mark_pending_trades_filled(
         len(pending),
         order_hash[:16],
     )
+    try:
+        from app.services.event_log import append
+
+        for row in pending:
+            append(
+                db,
+                event_type="order_fill_observed",
+                aggregate_type="order",
+                aggregate_id=order_hash,
+                user_id=row.user_id,
+                payload={
+                    "trade_id": row.id,
+                    "strategy_source": row.strategy_source,
+                    "action": row.action,
+                    "fill_price": row.filled_price,
+                    "fill_size": row.filled_size,
+                    "fee_paid": row.fee_paid,
+                    "slippage_bps": row.slippage_bps,
+                    "latency_ms": row.latency_ms,
+                },
+                source="trade_monitor",
+            )
+        db.commit()
+    except Exception:
+        # The fill itself is already committed and durable; a logging
+        # failure must not undo or re-raise for it.
+        logger.warning("Failed to log fill events for order %s", order_hash[:16], exc_info=True)
     return len(pending)
 
 
@@ -1007,6 +1041,26 @@ def _acquire_job_lock(job_name: str) -> bool:
     return True
 
 
+def _release_job_lock(job_name: str) -> None:
+    """Release the cross-worker advisory lock for a reconciliation job.
+
+    The lock is held for the loop's lifetime, so every loop exit path
+    must release it: a cancellation from ``stop_trade_monitor`` lands
+    in the interval sleep, which sits outside the loop body's inner
+    try, and would otherwise leak the advisory lock until process exit
+    (blocking the next worker from ever acquiring it).
+
+    Idempotent by contract — ``release_scheduler_lock`` is a no-op for
+    a lock this process does not hold — and never raises, so the
+    in-flight ``CancelledError`` always keeps propagating.
+    """
+    if release_scheduler_lock is not None:
+        try:
+            release_scheduler_lock(job_name)
+        except Exception:
+            logger.exception("Failed to release the '%s' job lock", job_name)
+
+
 def _job_heartbeat(job_name: str) -> None:
     """Refresh the dead-man's-switch heartbeat (plan 02)."""
     if scheduler_heartbeat is not None:
@@ -1018,15 +1072,21 @@ async def _fill_reconciliation_loop():
     job_name = "fill_reconciliation"
     if not _acquire_job_lock(job_name):
         return
-    while True:
-        await asyncio.sleep(FILL_RECON_INTERVAL_SECONDS)
-        _job_heartbeat(job_name)
-        try:
-            await _reconcile_pending_fills()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Pending-fill reconciliation failed")
+    try:
+        while True:
+            await asyncio.sleep(FILL_RECON_INTERVAL_SECONDS)
+            _job_heartbeat(job_name)
+            try:
+                await _reconcile_pending_fills()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Pending-fill reconciliation failed")
+    finally:
+        # Released on every exit path — a cancellation landing in the
+        # interval sleep included — so the advisory lock is not leaked
+        # until process exit.
+        _release_job_lock(job_name)
 
 
 async def _reconcile_pending_fills() -> None:
@@ -1129,20 +1189,26 @@ async def _gtc_reconciliation_loop():
     job_name = "gtc_reconciliation"
     if not _acquire_job_lock(job_name):
         return
-    last_run = 0.0
-    while True:
-        await asyncio.sleep(60)
-        _job_heartbeat(job_name)
-        now = perf_counter()
-        if now - last_run < GTC_RECON_INTERVAL_SECONDS:
-            continue
-        last_run = now
-        try:
-            await _reconcile_orphaned_gtc_orders()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Orphaned-GTC reconciliation failed")
+    try:
+        last_run = 0.0
+        while True:
+            await asyncio.sleep(60)
+            _job_heartbeat(job_name)
+            now = perf_counter()
+            if now - last_run < GTC_RECON_INTERVAL_SECONDS:
+                continue
+            last_run = now
+            try:
+                await _reconcile_orphaned_gtc_orders()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Orphaned-GTC reconciliation failed")
+    finally:
+        # Released on every exit path — a cancellation landing in the
+        # interval sleep included — so the advisory lock is not leaked
+        # until process exit.
+        _release_job_lock(job_name)
 
 
 async def _reconcile_orphaned_gtc_orders() -> None:

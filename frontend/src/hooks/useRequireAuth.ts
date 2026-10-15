@@ -24,17 +24,20 @@ import { useLoginModal } from "../context/LoginModalContext";
  */
 export function useRequireAuth() {
   const { isAuthenticated } = useAuthStore();
-  const { openLoginModal } = useLoginModal();
+  const { openLoginModal, queueLoginAction } = useLoginModal();
 
   const requireAuth = useCallback(
     (callback?: () => void) => {
       if (isAuthenticated) {
         callback?.();
       } else {
+        if (callback) {
+          queueLoginAction(callback);
+        }
         openLoginModal();
       }
     },
-    [isAuthenticated, openLoginModal],
+    [isAuthenticated, openLoginModal, queueLoginAction],
   );
 
   return { isAuthenticated, requireAuth };

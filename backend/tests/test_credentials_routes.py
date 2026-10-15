@@ -179,6 +179,29 @@ class TradingKeyRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["detail"], "Invalid private key format")
 
+    def test_store_rejects_malformed_key_before_persisting(self):
+        # The handler re-checks the ^0x[a-fA-F0-9]{64}$ format before
+        # the key is encrypted and stored.
+        self._authenticate()
+        with patch("app.api.routes.credentials.store_wallet_credentials") as store_mock:
+            response = self.client.post(
+                "/api/auth/trading-key",
+                json={"private_key": "0x" + "zz" * 32},
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "Invalid private key format")
+        store_mock.assert_not_called()
+
+    def test_store_rejects_wrong_length_key(self):
+        self._authenticate()
+        with patch("app.api.routes.credentials.store_wallet_credentials") as store_mock:
+            response = self.client.post(
+                "/api/auth/trading-key",
+                json={"private_key": "0x" + "11" * 31},
+            )
+        self.assertEqual(response.status_code, 400)
+        store_mock.assert_not_called()
+
     def test_status_returns_503_when_encryption_unavailable(self):
         self._authenticate()
         with patch(

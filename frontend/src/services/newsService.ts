@@ -13,6 +13,7 @@
 import { apiClient } from "./apiClient";
 import { API_BASE_URL } from "../config/api";
 import { streamLines } from "./sseStream";
+import { getApiErrorMessage } from "../utils/apiError";
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -102,7 +103,7 @@ export function streamGenerate(
       // A network failure must surface through onError, not an
       // unhandled rejection of `done`.
       if ((err as Error)?.name !== "AbortError") {
-        callbacks.onError?.(err instanceof Error ? err.message : String(err));
+        callbacks.onError?.(getApiErrorMessage(err, "Stream failed"));
       }
       // onDone must still fire so callers can clear their busy state.
       callbacks.onDone?.();
@@ -148,7 +149,7 @@ export function streamGenerate(
       });
     } catch (err) {
       if ((err as Error)?.name !== "AbortError") {
-        callbacks.onError?.(err instanceof Error ? err.message : String(err));
+        callbacks.onError?.(getApiErrorMessage(err, "Stream failed"));
       }
       callbacks.onDone?.();
       return;

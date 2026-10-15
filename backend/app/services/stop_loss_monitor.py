@@ -32,6 +32,7 @@ from app.services.price_alert_service import (
     TAKE_PROFIT_EVENT,
     enrich_trigger_alert,
 )
+from app.services.trade_recorder import record_user_trade
 from app.utils.database import SessionLocal
 from app.utils.scheduler_lock import (
     acquire_scheduler_lock,
@@ -528,7 +529,8 @@ async def _execute_stop_loss(
         )
 
         now = datetime.now(UTC)
-        if result.get("success"):
+        submitted = bool(result.get("success"))
+        if submitted:
             order.status = "triggered"
             order.order_hash = result.get("order_hash")
             order.executed_price = live_price
@@ -540,6 +542,27 @@ async def _execute_stop_loss(
             logger.error(
                 "Stop-loss execution failed: order=%d error=%s", order.id, result.get("error")
             )
+
+        # Attributable trade row (plan 03 Phase A). The live close was
+        # previously recorded only on the StopLossOrder, so the sell
+        # never reached the FIFO matcher and the position's realized
+        # P&L — and therefore every loss limit derived from it — stayed
+        # at zero. A submitted order is ``pending`` until the trade
+        # monitor observes the fill.
+        record_user_trade(
+            db,
+            user_id=order.user_id,
+            market_id=order.market_id,
+            token_id=order.token_id,
+            action="sell",
+            amount=order.size,
+            price=live_price,
+            status="pending" if submitted else "failed",
+            strategy_source="stop_loss",
+            order_hash=result.get("order_hash"),
+            expected_price=live_price,
+            expected_size=order.size,
+        )
 
         order.updated_at = now
         db.commit()
@@ -568,8 +591,8 @@ async def _execute_stop_loss_simulated(
     the user's average entry price and tracked separately from real
     equity. No sell is submitted.
     """
-    from app.models.user_trade import UserTrade
     from app.services.simulation import average_entry_price, simulate_fill
+    from app.services.trade_recorder import record_user_trade
 
     market = {"best_bid": live_price, "best_ask": live_price}
     fill = simulate_fill(market, "SELL", order.size)
@@ -585,17 +608,19 @@ async def _execute_stop_loss_simulated(
     pnl = None
     if entry is not None and entry > 0:
         pnl = round(order.size * (fill["fill_price"] - entry), 4)
-    db.add(
-        UserTrade(
-            user_id=order.user_id,
-            market_id=order.market_id,
-            token_id=order.token_id,
-            action="sell",
-            amount=order.size,
-            price=fill["fill_price"],
-            status="simulated",
-            pnl=pnl,
-        )
+    record_user_trade(
+        db,
+        user_id=order.user_id,
+        market_id=order.market_id,
+        token_id=order.token_id,
+        action="sell",
+        amount=order.size,
+        price=fill["fill_price"],
+        status="simulated",
+        strategy_source="stop_loss",
+        expected_price=live_price,
+        expected_size=order.size,
+        pnl=pnl,
     )
     db.commit()
 
@@ -637,7 +662,8 @@ async def _execute_take_profit(
         )
 
         now = datetime.now(UTC)
-        if result.get("success"):
+        submitted = bool(result.get("success"))
+        if submitted:
             order.status = "triggered"
             order.order_hash = result.get("order_hash")
             order.executed_price = live_price
@@ -649,6 +675,23 @@ async def _execute_take_profit(
             logger.error(
                 "Take-profit execution failed: order=%d error=%s", order.id, result.get("error")
             )
+
+        # Attributable trade row (plan 03 Phase A) — see the stop-loss
+        # note: without it the close never reached the FIFO matcher.
+        record_user_trade(
+            db,
+            user_id=order.user_id,
+            market_id=order.market_id,
+            token_id=order.token_id,
+            action="sell",
+            amount=order.size,
+            price=live_price,
+            status="pending" if submitted else "failed",
+            strategy_source="take_profit",
+            order_hash=result.get("order_hash"),
+            expected_price=live_price,
+            expected_size=order.size,
+        )
 
         order.updated_at = now
         db.commit()
@@ -670,8 +713,8 @@ async def _execute_take_profit_simulated(
     live_price: float,
 ):
     """Paper mode: record a simulated take-profit close (no sell submitted)."""
-    from app.models.user_trade import UserTrade
     from app.services.simulation import average_entry_price, simulate_fill
+    from app.services.trade_recorder import record_user_trade
 
     market = {"best_bid": live_price, "best_ask": live_price}
     fill = simulate_fill(market, "SELL", order.size)
@@ -687,17 +730,19 @@ async def _execute_take_profit_simulated(
     pnl = None
     if entry is not None and entry > 0:
         pnl = round(order.size * (fill["fill_price"] - entry), 4)
-    db.add(
-        UserTrade(
-            user_id=order.user_id,
-            market_id=order.market_id,
-            token_id=order.token_id,
-            action="sell",
-            amount=order.size,
-            price=fill["fill_price"],
-            status="simulated",
-            pnl=pnl,
-        )
+    record_user_trade(
+        db,
+        user_id=order.user_id,
+        market_id=order.market_id,
+        token_id=order.token_id,
+        action="sell",
+        amount=order.size,
+        price=fill["fill_price"],
+        status="simulated",
+        strategy_source="take_profit",
+        expected_price=live_price,
+        expected_size=order.size,
+        pnl=pnl,
     )
     db.commit()
 

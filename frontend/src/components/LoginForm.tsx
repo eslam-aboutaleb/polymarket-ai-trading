@@ -20,6 +20,7 @@ import {
   type WalletSession,
 } from "../services/walletConnector";
 import { getApiErrorMessage } from "../utils/apiError";
+import { Banner } from "./ui";
 
 interface LoginFormProps {
   onLogin: (
@@ -214,13 +215,17 @@ export default function LoginForm({ onLogin, loading }: LoginFormProps) {
       </div>
 
       {!walletConnectEnabled && (
-        <div className="p-3 alert-error rounded text-sm">
+        <Banner variant="notice">
           WalletConnect disabled: set `VITE_WALLETCONNECT_PROJECT_ID` in frontend env to enable QR
           wallet connections.
-        </div>
+        </Banner>
       )}
 
-      {signingError && <div className="p-3 alert-error rounded text-sm">{signingError}</div>}
+      {signingError && (
+        <Banner variant="error" onDismiss={() => setSigningError(null)}>
+          {signingError}
+        </Banner>
+      )}
 
       <button
         type="button"
@@ -256,7 +261,11 @@ export default function LoginForm({ onLogin, loading }: LoginFormProps) {
         </label>
       </div>
 
-      {signingError && <div className="p-3 alert-error rounded text-sm">{signingError}</div>}
+      {signingError && (
+        <Banner variant="error" onDismiss={() => setSigningError(null)}>
+          {signingError}
+        </Banner>
+      )}
 
       <div className="flex gap-3">
         <button
@@ -288,7 +297,11 @@ export default function LoginForm({ onLogin, loading }: LoginFormProps) {
         <p className="break-words mono text-xs">{challenge}</p>
       </div>
 
-      {signingError && <div className="p-3 alert-error rounded text-sm">{signingError}</div>}
+      {signingError && (
+        <Banner variant="error" onDismiss={() => setSigningError(null)}>
+          {signingError}
+        </Banner>
+      )}
 
       <div className="flex gap-3">
         <button

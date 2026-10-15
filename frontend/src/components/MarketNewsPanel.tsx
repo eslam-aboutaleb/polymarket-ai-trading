@@ -8,6 +8,8 @@
  */
 import { useEffect, useState } from "react";
 import { getMarketNews, generateForMarket, type NewsArticle } from "../services/newsService";
+import { getApiErrorMessage } from "../utils/apiError";
+import { Banner } from "./ui";
 
 interface MarketNewsPanelProps {
   conditionId: string;
@@ -19,7 +21,9 @@ export default function MarketNewsPanel({ conditionId, question = "" }: MarketNe
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -29,8 +33,8 @@ export default function MarketNewsPanel({ conditionId, question = "" }: MarketNe
       .then((res) => {
         if (!cancelled) setArticle(res.article);
       })
-      .catch(() => {
-        if (!cancelled) setError("Failed to load market news.");
+      .catch((err: unknown) => {
+        if (!cancelled) setError(getApiErrorMessage(err, "Failed to load market news."));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -38,10 +42,13 @@ export default function MarketNewsPanel({ conditionId, question = "" }: MarketNe
     return () => {
       cancelled = true;
     };
-  }, [conditionId]);
+  }, [conditionId, reloadKey]);
+
+  const reload = () => setReloadKey((k) => k + 1);
 
   const handleGenerate = async () => {
     setGenerating(true);
+    setGenerateError(null);
     try {
       const res = await generateForMarket({
         condition_id: conditionId,
@@ -50,7 +57,9 @@ export default function MarketNewsPanel({ conditionId, question = "" }: MarketNe
       });
       setArticle(res.article);
     } catch (err) {
-      console.error("News generation failed", err);
+      // A failed generation must be visible — the panel would otherwise look
+      // like "no news exists".
+      setGenerateError(getApiErrorMessage(err, "News generation failed"));
     } finally {
       setGenerating(false);
     }
@@ -66,10 +75,22 @@ export default function MarketNewsPanel({ conditionId, question = "" }: MarketNe
 
   if (!article) {
     return (
-      <div className="surface-panel p-3 rounded-lg">
-        <div className="flex items-center justify-between">
-          <span className={`text-xs ${error ? "text-red-400" : "text-muted"}`}>
-            {error ?? "No news article yet"}
+      <div className="surface-panel p-3 rounded-lg space-y-2">
+        {error && (
+          <Banner
+            variant="error"
+            className="text-xs"
+            onDismiss={() => setError(null)}
+            onRetry={reload}
+          >
+            {error}
+          </Banner>
+        )}
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs text-muted">
+            {error
+              ? "Market news could not be loaded."
+              : "No news article yet — articles are generated from this market's recent activity and trader behaviour."}
           </span>
           <button
             onClick={handleGenerate}
@@ -79,6 +100,16 @@ export default function MarketNewsPanel({ conditionId, question = "" }: MarketNe
             {generating ? "Generating…" : "📰 Generate News"}
           </button>
         </div>
+        {generateError && (
+          <Banner
+            variant="error"
+            className="text-xs"
+            onDismiss={() => setGenerateError(null)}
+            onRetry={handleGenerate}
+          >
+            {generateError}
+          </Banner>
+        )}
       </div>
     );
   }

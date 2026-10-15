@@ -221,7 +221,7 @@ class BacktestingRouteTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["detail"], "start_date must be on or before end_date")
+        self.assertEqual(response.json()["detail"], "Invalid backtest request")
 
     def test_create_run_returns_500_when_service_returns_none(self):
         with patch(

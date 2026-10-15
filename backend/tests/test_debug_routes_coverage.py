@@ -374,7 +374,7 @@ class CheckPostgresTests(unittest.TestCase):
         ):
             result = asyncio_result(_check_postgres())
         self.assertEqual(result.status, "unhealthy")
-        self.assertIn("db down", result.detail)
+        self.assertEqual(result.detail, "Check failed")
 
     def test_unhealthy_when_execute_raises(self):
         db = MagicMock()
@@ -383,7 +383,7 @@ class CheckPostgresTests(unittest.TestCase):
         with patch("app.utils.database.SessionLocal", lambda: db):
             result = asyncio_result(_check_postgres())
         self.assertEqual(result.status, "unhealthy")
-        self.assertIn("query failed", result.detail)
+        self.assertEqual(result.detail, "Check failed")
         db.close.assert_called_once()
 
 
@@ -422,7 +422,7 @@ class CheckRedisTests(unittest.TestCase):
         ):
             result = asyncio_result(_check_redis())
         self.assertEqual(result.status, "unhealthy")
-        self.assertIn("redis down", result.detail)
+        self.assertEqual(result.detail, "Check failed")
 
 
 class CheckGrpcServiceTests(unittest.TestCase):
@@ -448,7 +448,7 @@ class CheckGrpcServiceTests(unittest.TestCase):
         ):
             result = asyncio_result(_check_grpc_service("Test gRPC", "localhost", 50051))
         self.assertEqual(result.status, "unhealthy")
-        self.assertIn("Timeout connecting to localhost:50051", result.detail)
+        self.assertEqual(result.detail, "Connection timed out")
 
     def test_unhealthy_on_error(self):
         with patch(
@@ -457,7 +457,7 @@ class CheckGrpcServiceTests(unittest.TestCase):
         ):
             result = asyncio_result(_check_grpc_service("Test gRPC", "localhost", 50051))
         self.assertEqual(result.status, "unhealthy")
-        self.assertIn("boom", result.detail)
+        self.assertEqual(result.detail, "Check failed")
 
 
 class CheckBackgroundTasksTests(unittest.TestCase):
@@ -502,7 +502,7 @@ class CheckBackgroundTasksTests(unittest.TestCase):
         with patch("app.main._background_tasks", _Exploding()):
             result = asyncio_result(_check_background_tasks())
         self.assertEqual(result.status, "unknown")
-        self.assertIn("boom", result.detail)
+        self.assertEqual(result.detail, "Check failed")
 
 
 class CheckInverseBotMonitorTests(unittest.TestCase):
@@ -542,7 +542,7 @@ class CheckInverseBotMonitorTests(unittest.TestCase):
         ):
             result = asyncio_result(_check_inverse_bot_monitor())
         self.assertEqual(result.status, "unknown")
-        self.assertIn("boom", result.detail)
+        self.assertEqual(result.detail, "Check failed")
 
 
 class CheckResearchMcpTests(unittest.TestCase):
@@ -578,7 +578,7 @@ class CheckResearchMcpTests(unittest.TestCase):
         ):
             result = asyncio_result(_check_research_mcp())
         self.assertEqual(result.status, "unhealthy")
-        self.assertIn("boom", result.detail)
+        self.assertEqual(result.detail, "Check failed")
 
 
 class ComprehensiveHealthTests(unittest.TestCase):

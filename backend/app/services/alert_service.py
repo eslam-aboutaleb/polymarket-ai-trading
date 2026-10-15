@@ -63,6 +63,9 @@ ALERT_EVENT_TYPES = frozenset(
         "daily_digest",
         "gtc_order_cancelled",
         "gtc_order_filled",
+        # Model calibration degrading (plan 04): the mean Brier for a
+        # model/task has drifted above baseline. Admin-scoped.
+        "model_drift",
     }
 )
 
@@ -82,6 +85,7 @@ EVENT_TYPE_LABELS = {
     "daily_digest": "Daily Portfolio Digest",
     "gtc_order_cancelled": "GTC Order Cancelled",
     "gtc_order_filled": "GTC Order Filled",
+    "model_drift": "Model Calibration Drift",
 }
 
 # High-volume event types buffered into a periodic digest instead
@@ -102,6 +106,10 @@ EVENT_TYPE_RATE_LIMITS = {
     # mid-sweep while the reconciliation loop keeps going.
     "gtc_order_filled": 20,
     "gtc_order_cancelled": 20,
+    # Drift is scored hourly, so an alert per scored model/task per hour
+    # is already the ceiling — a storm here would be alert fatigue on the
+    # one signal that says "the AI got worse".
+    "model_drift": 5,
 }
 
 # Per-channel token buckets: (capacity, refill tokens per second).
