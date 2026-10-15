@@ -1947,7 +1947,7 @@ async def get_size_suggestion(
             kelly_size_usdc=None,
         )
 
-    p, kelly_price = kelly_service.effective_trade_params(p_market, side, resolved_price)
+    p, kelly_price = kelly_service.kelly_trade_params(p_market, edge_source, side, resolved_price)
 
     # Bankroll = USDC balance + unrealized PnL (portfolio equity calc).
     try:

@@ -246,6 +246,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # The backend runs `alembic upgrade head` before uvicorn, so the
+      # worker's schedulers start only after the schema has been migrated.
+      backend:
+        condition: service_started
       llm-chain:
         condition: service_started
       cli-agent:

@@ -43,7 +43,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import get_settings
 from app.models.portfolio_snapshot import PortfolioSnapshot
@@ -375,14 +375,24 @@ async def run_snapshot_cycle(db: Session) -> dict[str, int]:
     if not users:
         return {"users": 0, "written": 0, "skipped": 0}
 
+    # Each concurrent capture gets its own Session off the same bind, so a
+    # single shared Session is never mutated by several coroutines at once
+    # (interleaved-flush errors, or committing another user's half-written
+    # snapshot). Derived from ``db`` rather than the global ``SessionLocal``
+    # so tests against a throwaway engine keep writing to that engine.
+    session_factory = sessionmaker(bind=db.get_bind(), autoflush=False, autocommit=False)
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_SNAPSHOTS)
 
     async def _capture(user: User) -> PortfolioSnapshot | None:
         async with semaphore:
-            return await asyncio.wait_for(
-                capture_user_snapshot(db, user),
-                timeout=SNAPSHOT_USER_TIMEOUT_SECONDS,
-            )
+            session = session_factory()
+            try:
+                return await asyncio.wait_for(
+                    capture_user_snapshot(session, user),
+                    timeout=SNAPSHOT_USER_TIMEOUT_SECONDS,
+                )
+            finally:
+                session.close()
 
     results = await asyncio.gather(
         *(_capture(user) for user in users),

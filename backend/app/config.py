@@ -121,6 +121,10 @@ class Settings(BaseSettings):
     port: int = 8002
     reload: bool = True
     cors_allowed_origins: str = "http://localhost:5173,http://localhost:3000"
+    # Trusted public origin (scheme://host, no trailing slash) used where a URL
+    # must not trust the request's Host header — e.g. the Stripe checkout
+    # success/cancel redirect. Empty falls back to the request origin.
+    public_app_origin: str = ""
     # Secure flag for auth cookies. None (default) derives it from the
     # environment — Secure outside local/dev — so operators can force the
     # flag on or off explicitly (e.g. plain-HTTP staging behind TLS
@@ -130,6 +134,10 @@ class Settings(BaseSettings):
     # Debug / observability hardening
     debug_endpoints_enabled: bool = False
     debug_log_hash_salt: str = ""
+    # External WS /ws/v1 handshake: allow the ?api_key= query fallback for
+    # clients that cannot set handshake headers. On by default (documented,
+    # less private); set WS_ALLOW_QUERY_KEY=false to accept only X-API-Key.
+    ws_allow_query_key: bool = True
 
     # Process role (plan 10 Phase A): which half of the system this
     # process runs. Background schedulers coordinate through Postgres

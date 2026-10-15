@@ -152,6 +152,30 @@ def effective_trade_params(p_market: float, side: str, price: float) -> tuple[fl
     return (max(0.0, min(1.0, p)), max(0.0, min(1.0, px)))
 
 
+def kelly_trade_params(
+    p_market: float,
+    edge_source: str | None,
+    side: str,
+    price: float,
+) -> tuple[float, float]:
+    """Map a resolved edge probability to Kelly ``(p, price)`` for a side.
+
+    ``effective_trade_params`` mirrors a *market Yes-probability* for a SELL
+    (``p -> 1 - p``). But an ``edge_source == "ai_assessment"`` probability is
+    already direction-aware — ``P(this trade is profitable)`` (see
+    :func:`resolve_edge_probability`) — so mirroring ``p`` again inverts the
+    edge and under-sizes or skips the sell. Only the price mirrors for a SELL
+    (economically a NO-side wager regardless of where ``p`` came from), so the
+    price always mirrors but the direction-aware ``p`` never does.
+    """
+    p = max(0.0, min(1.0, _to_float(p_market)))
+    px = max(0.0, min(1.0, _to_float(price)))
+    if str(side).upper() == "SELL":
+        kelly_p = p if edge_source == "ai_assessment" else 1.0 - p
+        return (kelly_p, 1.0 - px)
+    return (p, px)
+
+
 def resolve_edge_probability(
     db: Session,
     user_id: int,

@@ -106,6 +106,28 @@ def get_active_account(
         ) from exc
 
 
+def _resolve_gate_account(db: Session, user_id: int | None, x_account_id: str | None) -> Account:
+    """Resolve the active account for a gated dependency, 403 on a foreign id.
+
+    ``get_active_account`` converts ``AccountAccessDenied`` into a 403, but
+    the plan/quota gate dependencies resolve the account directly (only when
+    entitlement enforcement is on). Sharing that guard keeps the two paths
+    returning the same 403 instead of one leaking a 500.
+    """
+    try:
+        return resolve_account(db, user_id, x_account_id)
+    except AccountAccessDenied as exc:
+        logger.warning(
+            "Rejected account switch in gate: user_id=%s requested=%s",
+            user_id,
+            x_account_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account not found or not owned by caller",
+        ) from exc
+
+
 def external_api_rate_limit_key(request: Request) -> str:
     """SlowAPI key function for the external namespace.
 
@@ -224,7 +246,7 @@ def require_plan(capability: str) -> Callable[..., Account | None]:
         service = EntitlementService(db)
         if not service.enforcement_enabled():
             return None
-        account = resolve_account(db, current_user.get("user_id"), x_account_id)
+        account = _resolve_gate_account(db, current_user.get("user_id"), x_account_id)
         service.assert_capability(account, capability)
         return account
 
@@ -254,7 +276,7 @@ def require_plan_quota(capability: str) -> Callable[..., Account | None]:
         service = EntitlementService(db)
         if not service.enforcement_enabled():
             return None
-        account = resolve_account(db, current_user.get("user_id"), x_account_id)
+        account = _resolve_gate_account(db, current_user.get("user_id"), x_account_id)
         service.consume_quota(account, capability)
         return account
 
@@ -282,7 +304,7 @@ def optional_plan_quota(capability: str) -> Callable[..., Account | None]:
             return None
         if not current_user or not current_user.get("user_id"):
             return None
-        account = resolve_account(db, current_user["user_id"], x_account_id)
+        account = _resolve_gate_account(db, current_user["user_id"], x_account_id)
         service.consume_quota(account, capability)
         return account
 

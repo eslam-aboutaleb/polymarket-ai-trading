@@ -68,7 +68,11 @@ from app.services.audit_service import (
     to_csv,
 )
 from app.services.copy_trade_service import _place_order_on_polymarket
-from app.services.entitlement_service import CAP_EXTERNAL_API_READ, CAP_EXTERNAL_API_TRADE
+from app.services.entitlement_service import (
+    CAP_COMPLIANCE_EXPORT,
+    CAP_EXTERNAL_API_READ,
+    CAP_EXTERNAL_API_TRADE,
+)
 from app.services.execution_analytics import _FILLED_STATUSES
 from app.services.polymarket_service import get_polymarket_service
 from app.services.pre_trade_gate import (
@@ -494,7 +498,7 @@ async def external_audit(
     aggregate_type: str | None = None,
     format: str = Query(default="json", pattern="^(json|csv)$"),
     limit: int = Query(default=DEFAULT_EXPORT_LIMIT, ge=1, le=MAX_EXPORT_LIMIT),
-    auth: AuthContext = Depends(require_external_plan(CAP_EXTERNAL_API_READ, SCOPE_READ)),
+    auth: AuthContext = Depends(require_external_plan(CAP_COMPLIANCE_EXPORT, SCOPE_READ)),
     db: Session = Depends(get_db),
 ):
     """Compliance export of the owner's audit trail.
@@ -565,13 +569,20 @@ async def external_create_order(
     """
     # Idempotency: a replayed key returns the stored result, so a
     # retried request can never place a second order.
+    # Namespace the replay key by the key's account so a multi-account
+    # owner reusing the same Idempotency-Key on a second account cannot
+    # collide with the first account's stored result. An unscoped key
+    # (personal account) keeps the original key.
+    replay_key = idempotency_key
+    if idempotency_key and auth.account_id is not None:
+        replay_key = f"acct{auth.account_id}:{idempotency_key}"
     if idempotency_key:
-        prior = get_idempotent_order_result(db, auth.user_id, idempotency_key)
+        prior = get_idempotent_order_result(db, auth.user_id, replay_key)
         if prior is not None:
             logger.info(
                 "Replaying idempotent external order result for user_id=%s key=%s",
                 auth.user_id,
-                idempotency_key[:16],
+                replay_key[:16],
             )
             return ExternalOrderResponse(**prior)
 
@@ -589,7 +600,9 @@ async def external_create_order(
 
     # Global safety caps — halt, cooldown, loss limits, drawdown and
     # position size counting pending exposure — run before signing.
-    trade_size, rejection = apply_global_safety_caps(settings, body.size, db)
+    trade_size, rejection = apply_global_safety_caps(
+        settings, body.size, db, account_id=auth.account_id
+    )
     if rejection:
         # Persist any halt / drawdown flags the gate set.
         db.commit()
@@ -642,7 +655,7 @@ async def external_create_order(
         account_id=account.id,
     )
     if idempotency_key:
-        store_idempotent_order_result(db, auth.user_id, idempotency_key, response.model_dump())
+        store_idempotent_order_result(db, auth.user_id, replay_key, response.model_dump())
     return response
 
 

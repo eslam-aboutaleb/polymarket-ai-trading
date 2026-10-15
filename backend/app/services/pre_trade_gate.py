@@ -80,53 +80,55 @@ def _to_float(val: Any, default: float = 0.0) -> float:
 # ────────────── Risk aggregates ──────────────
 
 
-def _daily_loss_so_far(db: Session, user_id: int) -> float:
-    """Sum of negative PnL from copy trades executed today (UTC)."""
+def _daily_loss_so_far(db: Session, user_id: int, account_id: int | None = None) -> float:
+    """Sum of negative PnL from copy trades executed today (UTC).
+
+    When ``account_id`` is provided (an account-scoped API key) the
+    sum is restricted to that account so a sub-account's daily limit is
+    judged by its own losses rather than the owner's whole-account total.
+    """
     today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    result = (
-        db.query(func.coalesce(func.sum(UserTrade.pnl), 0.0))
-        .filter(
-            UserTrade.user_id == user_id,
-            UserTrade.copied_from_wallet.isnot(None),
-            UserTrade.executed_at >= today_start,
-            UserTrade.pnl < 0,
-        )
-        .scalar()
-    )
+    filters = [
+        UserTrade.user_id == user_id,
+        UserTrade.copied_from_wallet.isnot(None),
+        UserTrade.executed_at >= today_start,
+        UserTrade.pnl < 0,
+    ]
+    if account_id is not None:
+        filters.append(UserTrade.account_id == account_id)
+    result = db.query(func.coalesce(func.sum(UserTrade.pnl), 0.0)).filter(*filters).scalar()
     return abs(float(result or 0.0))
 
 
-def _monthly_loss_so_far(db: Session, user_id: int) -> float:
+def _monthly_loss_so_far(db: Session, user_id: int, account_id: int | None = None) -> float:
     """Sum of negative PnL from copy trades executed this calendar month (UTC)."""
     now = datetime.now(UTC)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    result = (
-        db.query(func.coalesce(func.sum(UserTrade.pnl), 0.0))
-        .filter(
-            UserTrade.user_id == user_id,
-            UserTrade.copied_from_wallet.isnot(None),
-            UserTrade.executed_at >= month_start,
-            UserTrade.pnl < 0,
-        )
-        .scalar()
-    )
+    filters = [
+        UserTrade.user_id == user_id,
+        UserTrade.copied_from_wallet.isnot(None),
+        UserTrade.executed_at >= month_start,
+        UserTrade.pnl < 0,
+    ]
+    if account_id is not None:
+        filters.append(UserTrade.account_id == account_id)
+    result = db.query(func.coalesce(func.sum(UserTrade.pnl), 0.0)).filter(*filters).scalar()
     return abs(float(result or 0.0))
 
 
-def _total_pnl_since_start(db: Session, user_id: int) -> float:
+def _total_pnl_since_start(db: Session, user_id: int, account_id: int | None = None) -> float:
     """Net PnL across all copy trades for a user (positive = profit, negative = loss)."""
-    result = (
-        db.query(func.coalesce(func.sum(UserTrade.pnl), 0.0))
-        .filter(
-            UserTrade.user_id == user_id,
-            UserTrade.copied_from_wallet.isnot(None),
-        )
-        .scalar()
-    )
+    filters = [
+        UserTrade.user_id == user_id,
+        UserTrade.copied_from_wallet.isnot(None),
+    ]
+    if account_id is not None:
+        filters.append(UserTrade.account_id == account_id)
+    result = db.query(func.coalesce(func.sum(UserTrade.pnl), 0.0)).filter(*filters).scalar()
     return float(result or 0.0)
 
 
-def _pending_exposure_so_far(db: Session, user_id: int) -> float:
+def _pending_exposure_so_far(db: Session, user_id: int, account_id: int | None = None) -> float:
     """Notional of the user's pending (submitted, unfilled) orders.
 
     Pending orders are committed capital: a resting GTC buy can fill
@@ -134,14 +136,13 @@ def _pending_exposure_so_far(db: Session, user_id: int) -> float:
     stack several max-size pending orders and blow through the cap
     once they all fill.
     """
-    result = (
-        db.query(func.coalesce(func.sum(UserTrade.amount), 0.0))
-        .filter(
-            UserTrade.user_id == user_id,
-            UserTrade.status == "pending",
-        )
-        .scalar()
-    )
+    filters = [
+        UserTrade.user_id == user_id,
+        UserTrade.status == "pending",
+    ]
+    if account_id is not None:
+        filters.append(UserTrade.account_id == account_id)
+    result = db.query(func.coalesce(func.sum(UserTrade.amount), 0.0)).filter(*filters).scalar()
     return abs(float(result or 0.0))
 
 
@@ -152,10 +153,16 @@ def apply_global_safety_caps(
     settings: UserSettings,
     trade_size: float,
     db: Session,
+    account_id: int | None = None,
 ) -> tuple[float, str | None]:
     """
     Apply multi-layer risk protection as the final guardrail,
     regardless of per-trader sizing mode.
+
+    ``account_id`` optionally scopes the loss / pending-exposure
+    aggregates to a single account (an account-scoped API key). ``None``
+    keeps the historical owner-level behaviour used by the manual and
+    copy-trade order paths.
 
     Layers:
       0. Trading halt / cooldown check
@@ -184,7 +191,7 @@ def apply_global_safety_caps(
     # Layer 1 – Monthly loss limit
     monthly_limit = _to_float(settings.monthly_loss_limit)
     if monthly_limit > 0:
-        monthly_loss = _monthly_loss_so_far(db, settings.user_id)
+        monthly_loss = _monthly_loss_so_far(db, settings.user_id, account_id)
         monthly_remaining = monthly_limit - monthly_loss
         if monthly_remaining <= 0:
             return 0.0, "Monthly loss limit reached"
@@ -194,7 +201,7 @@ def apply_global_safety_caps(
     max_dd_pct = _to_float(settings.max_drawdown_pct)
     peak = _to_float(settings.peak_capital)
     if max_dd_pct > 0 and peak > 0:
-        total_pnl = _total_pnl_since_start(db, settings.user_id)
+        total_pnl = _total_pnl_since_start(db, settings.user_id, account_id)
         initial = _to_float(settings.initial_capital, peak)
         current_capital = initial + total_pnl
         # Update peak if current is higher
@@ -213,7 +220,7 @@ def apply_global_safety_caps(
     total_halt_pct = _to_float(settings.total_loss_halt_pct)
     initial_cap = _to_float(settings.initial_capital)
     if total_halt_pct > 0 and initial_cap > 0:
-        total_pnl = _total_pnl_since_start(db, settings.user_id)
+        total_pnl = _total_pnl_since_start(db, settings.user_id, account_id)
         total_loss_pct = (abs(min(0, total_pnl)) / initial_cap) * 100.0
         if total_loss_pct >= total_halt_pct:
             settings.trading_halted = True
@@ -226,14 +233,14 @@ def apply_global_safety_caps(
     # the cap minus the user's pending notional.
     max_pos = _to_float(settings.max_position_size)
     if max_pos > 0:
-        pending_notional = _pending_exposure_so_far(db, settings.user_id)
+        pending_notional = _pending_exposure_so_far(db, settings.user_id, account_id)
         remaining_pos = max_pos - pending_notional
         if remaining_pos <= 0:
             return 0.0, "Max position size reached (pending exposure)"
         size = min(size, remaining_pos)
 
     # Layer 5 – Daily loss limit
-    daily_loss = _daily_loss_so_far(db, settings.user_id)
+    daily_loss = _daily_loss_so_far(db, settings.user_id, account_id)
     remaining = _to_float(settings.daily_loss_limit, 500.0) - daily_loss
     if remaining <= 0:
         return 0.0, "Daily loss limit reached"
