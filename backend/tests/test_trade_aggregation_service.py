@@ -21,9 +21,9 @@ Covered:
 * ``get_pending_buffers`` -- summary key format, token truncation, totals.
 * ``_aggregation_loop`` -- dispatch to ``execute_aggregated_trade``, and each of
   its four error paths (execution failure, missing helper, outer failure,
-  cancellation flush).
+  cancellation flush), plus releasing the advisory lock on cancellation.
 * ``start_aggregation_service`` / ``stop_aggregation_service`` -- idempotency,
-  restart after completion and cancellation.
+  restart after completion, cancellation, and advisory-lock release.
 """
 
 import asyncio
@@ -567,6 +567,43 @@ class AggregationLoopTests(unittest.IsolatedAsyncioTestCase):
             any("Trade aggregation service stopped" in line for line in captured.output)
         )
 
+    async def test_cancellation_inside_the_loop_releases_the_scheduler_lock(self):
+        # The CancelledError break is the graceful-shutdown path: the
+        # buffers still flush, and the advisory lock is released on the
+        # way out instead of lingering until process exit.
+        add_trade_to_buffer(7, TOKEN, "BUY", 0.40, 100.0)
+        release = MagicMock()
+
+        with (
+            patch.object(
+                tas, "get_aggregated_trade", MagicMock(side_effect=asyncio.CancelledError)
+            ),
+            patch.object(tas, "release_scheduler_lock", release),
+            self.assertLogs(tas.logger, level="INFO") as captured,
+        ):
+            await tas._aggregation_loop()
+
+        release.assert_called_once_with("trade_aggregation")
+        self.assertTrue(
+            any("Flushed pending aggregation on shutdown" in line for line in captured.output)
+        )
+
+    async def test_cancellation_during_the_interval_sleep_releases_the_scheduler_lock(self):
+        # The sleep sits outside the inner try, so a cancellation landing
+        # there used to propagate past both the flush and the release,
+        # leaking the lock for the rest of the process lifetime.
+        release = MagicMock()
+        sleep = AsyncMock(side_effect=asyncio.CancelledError("stop"))
+
+        with (
+            patch.object(asyncio, "sleep", sleep),
+            patch.object(tas, "release_scheduler_lock", release),
+            self.assertRaises(asyncio.CancelledError),
+        ):
+            await tas._aggregation_loop()
+
+        release.assert_called_once_with("trade_aggregation")
+
 
 class AggregationServiceLifecycleTests(unittest.IsolatedAsyncioTestCase):
     """Start/stop of the background task handle."""
@@ -626,6 +663,38 @@ class AggregationServiceLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await start_aggregation_service()
         await stop_aggregation_service()
         self.assertIsNone(tas._aggregation_task)
+
+    async def test_start_acquires_the_named_scheduler_lock(self):
+        acquire = MagicMock(return_value=True)
+        with patch.object(tas, "acquire_scheduler_lock", acquire):
+            await start_aggregation_service()
+
+        acquire.assert_called_once_with("trade_aggregation")
+
+    async def test_start_skips_the_task_when_another_worker_holds_the_lock(self):
+        acquire = MagicMock(return_value=False)
+        with patch.object(tas, "acquire_scheduler_lock", acquire):
+            await start_aggregation_service()
+
+        self.assertIsNone(tas._aggregation_task)
+        acquire.assert_called_once_with("trade_aggregation")
+
+    async def test_stop_releases_the_scheduler_lock(self):
+        # start/stop run without an intervening yield, so the task is
+        # cancelled before its first step and its coroutine body (try
+        # block included) never runs: only stop_aggregation_service's own
+        # release can put the lock back here.
+        release = MagicMock()
+        with (
+            patch.object(tas, "acquire_scheduler_lock", MagicMock(return_value=True)),
+            patch.object(tas, "release_scheduler_lock", release),
+        ):
+            await start_aggregation_service()
+            task = tas._aggregation_task
+            await stop_aggregation_service()
+
+        self.assertTrue(task.cancelled() or task.done())
+        release.assert_called_once_with("trade_aggregation")
 
 
 if __name__ == "__main__":

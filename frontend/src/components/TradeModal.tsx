@@ -8,7 +8,6 @@
  * @module components/TradeModal
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import {
   tradesService,
   ExecuteTradeRequest,
@@ -27,6 +26,7 @@ import {
   saveTradePreferences,
 } from "../utils/tradePreferences";
 import { pushRecentTradeMarket } from "../utils/tradingWorkspace";
+import { ConfirmModal, InfoTooltip, Modal, useToast } from "./ui";
 import {
   TradePresetMode,
   TradePreferences,
@@ -100,6 +100,25 @@ function isEditableTarget(target: EventTarget | null): boolean {
     return true;
   }
   return !!el.closest("input, textarea, select, [contenteditable='true']");
+}
+
+// Enter-submit allow-list: only the tagged amount input or primary submit button may place an order — the `data-trade-*` tags in the JSX below and this selector must move together.
+const TRADE_SUBMIT_TARGET_SELECTOR = "[data-trade-submit], [data-trade-amount]";
+
+function isTradeSubmitTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || typeof el.closest !== "function") return false;
+  return !!el.closest(TRADE_SUBMIT_TARGET_SELECTOR);
+}
+
+// Preventing a keydown's default also cancels a focused button's native Enter activation, so
+// replay the activation for the control the user actually focused. The allow-list decides
+// whether a trade fires, never whether the focused control activates.
+function activateFocusedControl(target: EventTarget | null): void {
+  const el = target as HTMLElement | null;
+  if (!el || typeof el.matches !== "function") return;
+  if (!el.matches("button, a[href], [role='button'], [tabindex]:not([tabindex='-1'])")) return;
+  el.click();
 }
 
 function findAvailableShares(
@@ -251,6 +270,7 @@ export default function TradeModal({
   onClose,
   onSuccess,
 }: TradeModalProps) {
+  const toast = useToast();
   const [outcome, setOutcome] = useState<TradeTicketOutcome>("Yes");
   const [side, setSide] = useState<TradeTicketSide>("BUY");
   const [amount, setAmount] = useState("");
@@ -267,10 +287,14 @@ export default function TradeModal({
   const [confirmArmed, setConfirmArmed] = useState(false);
   const [quoteNowTs, setQuoteNowTs] = useState(Date.now());
   const [sizeSuggestion, setSizeSuggestion] = useState<SizeSuggestion | null>(null);
+  const [discardPromptOpen, setDiscardPromptOpen] = useState(false);
 
   // True once the user typed or picked an amount themselves;
   // the Kelly suggestion only pre-fills an untouched field.
   const amountEditedRef = useRef(false);
+  // Amount of the last order dispatched from this ticket, so closing after a
+  // successful submit is not offered as a "discard".
+  const lastSubmittedAmountRef = useRef("");
 
   const yesToken = useMemo(
     () => market?.tokens.find((t) => normalizeTokenOutcome(t.outcome) === "Yes"),
@@ -379,6 +403,8 @@ export default function TradeModal({
     );
 
     amountEditedRef.current = false;
+    lastSubmittedAmountRef.current = "";
+    setDiscardPromptOpen(false);
     setSizeSuggestion(null);
     setResult(null);
     setError(null);
@@ -528,6 +554,8 @@ export default function TradeModal({
         outcome: activeToken.outcome,
       };
 
+      // Arm the discard guard: whatever comes back, this amount left the ticket.
+      lastSubmittedAmountRef.current = amount;
       const resp = await tradesService.executeTrade(req);
       setResult(resp);
 
@@ -545,6 +573,11 @@ export default function TradeModal({
           source,
         });
         onSuccess?.(resp);
+        // Ephemeral confirmation of the fill — the inline block below keeps
+        // the order hash for the record.
+        toast.success(
+          `${side === "BUY" ? "Bought" : "Sold"} ${resp.size ?? amountNum} ${outcome} @ ${pct(resp.price)}`,
+        );
       } else if (resp.error) {
         setError(resp.error);
       }
@@ -586,6 +619,27 @@ export default function TradeModal({
     setConfirmArmed(false);
   };
 
+  // Every close path (Escape, the header ✕, Done) routes through here: with an unsubmitted
+  // amount in the field, ask before dropping the ticket. tradePreferences persists the amount,
+  // so "Discard" is recoverable and this is a courtesy prompt, not data-loss prevention.
+  const requestClose = useCallback(() => {
+    // The prompt owns dismissal while it is open, so a close request replayed by the modal
+    // underneath (Escape reaches both dialogs) cannot immediately re-arm it.
+    if (discardPromptOpen) return;
+    if (amount.trim() !== "" && amount !== lastSubmittedAmountRef.current) {
+      setDiscardPromptOpen(true);
+      return;
+    }
+    onClose();
+  }, [amount, discardPromptOpen, onClose]);
+
+  const confirmDiscardClose = useCallback(() => {
+    setDiscardPromptOpen(false);
+    onClose();
+  }, [onClose]);
+
+  const keepEditing = useCallback(() => setDiscardPromptOpen(false), []);
+
   useEffect(() => {
     if (!market) return;
 
@@ -593,9 +647,10 @@ export default function TradeModal({
       if (event.defaultPrevented) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
 
-      if (event.key === "Escape") {
+      // Enter on the tagged amount input must beat the editable guard below.
+      if (event.key === "Enter" && isTradeSubmitTarget(event.target)) {
         event.preventDefault();
-        onClose();
+        void handleSubmit();
         return;
       }
 
@@ -624,8 +679,15 @@ export default function TradeModal({
         return;
       }
       if (key === "enter") {
+        // Allow-list: Enter submits only from the amount field or the submit button — the `data-trade-*` tags in the JSX below and this branch must move together.
+        if (isTradeSubmitTarget(document.activeElement)) {
+          event.preventDefault();
+          void handleSubmit();
+          return;
+        }
+        // Any other focused control keeps its activation but never submits a trade.
         event.preventDefault();
-        void handleSubmit();
+        activateFocusedControl(document.activeElement);
         return;
       }
 
@@ -637,7 +699,7 @@ export default function TradeModal({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [applyPreset, handleSubmit, market, onClose]);
+  }, [applyPreset, handleSubmit, market]);
 
   if (!market) return null;
 
@@ -645,430 +707,447 @@ export default function TradeModal({
   const noPrice = Number(noToken?.price ?? 0.5);
   const isStale = quoteAgeSec > 15;
 
-  return createPortal(
-    <div
-      className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="surface-panel w-full max-w-lg max-h-[90vh] overflow-hidden rounded-xl flex flex-col"
-        onClick={(e) => e.stopPropagation()}
+  return (
+    <>
+      <Modal
+        open
+        onClose={requestClose}
+        dismissOnBackdrop={false}
+        title={market.title}
+        closeLabel="Close trade ticket"
       >
-        <div className="p-5 border-b border-[var(--line)]">
-          <div className="flex justify-between items-start gap-3">
-            <div className="min-w-0">
-              <h2 className="text-base font-bold text-white leading-snug truncate">
-                {market.title}
-              </h2>
-              <p className="text-xs text-muted mt-1 uppercase tracking-wide">
-                Fast Trade Ticket · {source}
-              </p>
-            </div>
+        <p className="text-xs text-muted mt-1 uppercase tracking-wide">
+          Fast Trade Ticket · {source}
+        </p>
+
+        <div className="flex border-b border-[var(--line)]">
+          <button
+            onClick={() => setOutcome("Yes")}
+            className={`flex-1 py-3 text-sm font-semibold transition relative ${
+              outcome === "Yes" ? "text-emerald-400" : "text-muted hover:text-white"
+            }`}
+          >
+            <span className="flex items-center justify-center gap-2">
+              Yes
+              <span
+                className={`text-xs font-mono px-1.5 py-0.5 rounded ${
+                  outcome === "Yes"
+                    ? "bg-emerald-500/20 text-emerald-400"
+                    : "bg-[var(--bg-soft)] text-muted"
+                }`}
+              >
+                {pct(yesPrice)}
+              </span>
+            </span>
+            {outcome === "Yes" && (
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-400" />
+            )}
+          </button>
+          <button
+            onClick={() => setOutcome("No")}
+            className={`flex-1 py-3 text-sm font-semibold transition relative ${
+              outcome === "No" ? "text-red-400" : "text-muted hover:text-white"
+            }`}
+          >
+            <span className="flex items-center justify-center gap-2">
+              No
+              <span
+                className={`text-xs font-mono px-1.5 py-0.5 rounded ${
+                  outcome === "No" ? "bg-red-500/20 text-red-400" : "bg-[var(--bg-soft)] text-muted"
+                }`}
+              >
+                {pct(noPrice)}
+              </span>
+            </span>
+            {outcome === "No" && (
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-red-400" />
+            )}
+          </button>
+        </div>
+
+        <div className="px-5 pt-4">
+          <div className="flex gap-2 p-1 rounded-lg bg-[var(--bg-soft)]">
             <button
-              onClick={onClose}
-              className="text-muted hover:text-white transition text-xl leading-none shrink-0"
+              onClick={() => setSide("BUY")}
+              className={`flex-1 py-2 rounded-md text-sm font-semibold transition ${
+                side === "BUY"
+                  ? "bg-emerald-500/20 text-emerald-400 shadow-sm"
+                  : "text-muted hover:text-white"
+              }`}
             >
-              x
+              Buy (B)
+            </button>
+            <button
+              onClick={() => setSide("SELL")}
+              className={`flex-1 py-2 rounded-md text-sm font-semibold transition ${
+                side === "SELL"
+                  ? "bg-red-500/20 text-red-400 shadow-sm"
+                  : "text-muted hover:text-white"
+              }`}
+            >
+              Sell (S)
             </button>
           </div>
         </div>
 
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          <div className="flex border-b border-[var(--line)]">
-            <button
-              onClick={() => setOutcome("Yes")}
-              className={`flex-1 py-3 text-sm font-semibold transition relative ${
-                outcome === "Yes" ? "text-emerald-400" : "text-muted hover:text-white"
-              }`}
-            >
-              <span className="flex items-center justify-center gap-2">
-                Yes
-                <span
-                  className={`text-xs font-mono px-1.5 py-0.5 rounded ${
-                    outcome === "Yes"
-                      ? "bg-emerald-500/20 text-emerald-400"
-                      : "bg-[var(--bg-soft)] text-muted"
-                  }`}
-                >
-                  {pct(yesPrice)}
-                </span>
-              </span>
-              {outcome === "Yes" && (
-                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-400" />
-              )}
-            </button>
-            <button
-              onClick={() => setOutcome("No")}
-              className={`flex-1 py-3 text-sm font-semibold transition relative ${
-                outcome === "No" ? "text-red-400" : "text-muted hover:text-white"
-              }`}
-            >
-              <span className="flex items-center justify-center gap-2">
-                No
-                <span
-                  className={`text-xs font-mono px-1.5 py-0.5 rounded ${
-                    outcome === "No"
-                      ? "bg-red-500/20 text-red-400"
-                      : "bg-[var(--bg-soft)] text-muted"
-                  }`}
-                >
-                  {pct(noPrice)}
-                </span>
-              </span>
-              {outcome === "No" && (
-                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-red-400" />
-              )}
-            </button>
-          </div>
-
-          <div className="px-5 pt-4">
-            <div className="flex gap-2 p-1 rounded-lg bg-[var(--bg-soft)]">
+        <div className="p-5 space-y-4">
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-sm text-soft">
+                {side === "BUY" ? "Amount (USDC)" : "Shares to Sell"}
+              </label>
               <button
-                onClick={() => setSide("BUY")}
-                className={`flex-1 py-2 rounded-md text-sm font-semibold transition ${
-                  side === "BUY"
-                    ? "bg-emerald-500/20 text-emerald-400 shadow-sm"
-                    : "text-muted hover:text-white"
-                }`}
+                onClick={setMaxAmount}
+                className="text-xs text-[var(--accent)] hover:underline"
+                type="button"
               >
-                Buy (B)
-              </button>
-              <button
-                onClick={() => setSide("SELL")}
-                className={`flex-1 py-2 rounded-md text-sm font-semibold transition ${
-                  side === "SELL"
-                    ? "bg-red-500/20 text-red-400 shadow-sm"
-                    : "text-muted hover:text-white"
-                }`}
-              >
-                Sell (S)
+                Max
               </button>
             </div>
-          </div>
-
-          <div className="p-5 space-y-4">
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-sm text-soft">
-                  {side === "BUY" ? "Amount (USDC)" : "Shares to Sell"}
-                </label>
-                <button
-                  onClick={setMaxAmount}
-                  className="text-xs text-[var(--accent)] hover:underline"
-                  type="button"
-                >
-                  Max
-                </button>
-              </div>
-              <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted text-sm">
-                  {side === "BUY" ? "$" : "#"}
-                </span>
-                <input
-                  type="text"
-                  value={amount}
-                  onChange={(e) => {
-                    amountEditedRef.current = true;
-                    setAmount(e.target.value);
-                  }}
-                  placeholder={side === "BUY" ? "10.00" : "100"}
-                  className="w-full pl-7 pr-4 py-2.5 rounded-lg bg-[var(--bg-soft)] border border-[var(--line)] text-white placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition mono"
-                />
-              </div>
-
-              {sizeSuggestion && (
-                <div className="flex items-center justify-between mt-1.5 text-xs">
-                  <span className="text-muted">
-                    Kelly suggestion
-                    {sizeSuggestion.edge_probability != null
-                      ? ` (edge ${(sizeSuggestion.edge_probability * 100).toFixed(
-                          0,
-                        )}% · ${sizeSuggestion.edge_source ?? "n/a"})`
-                      : ""}
-                    {sizeSuggestion.capped_by ? ` · capped: ${sizeSuggestion.capped_by}` : ""}
-                  </span>
-                  <span className="text-soft mono">
-                    {sizeSuggestion.suggested_size_usdc > 0
-                      ? fmt$(sizeSuggestion.suggested_size_usdc)
-                      : "no edge"}
-                  </span>
-                </div>
-              )}
-
-              <div className="flex items-center gap-2 mt-2">
-                <button
-                  type="button"
-                  onClick={() => setPresetMode("fixed")}
-                  className={`text-xs px-2.5 py-1 rounded border ${
-                    presetMode === "fixed"
-                      ? "border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]"
-                      : "border-[var(--line)] text-soft"
-                  }`}
-                >
-                  Fixed
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPresetMode("percentage")}
-                  className={`text-xs px-2.5 py-1 rounded border ${
-                    presetMode === "percentage"
-                      ? "border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]"
-                      : "border-[var(--line)] text-soft"
-                  }`}
-                >
-                  % Balance
-                </button>
-              </div>
-
-              <div className="grid grid-cols-4 gap-2 mt-2">
-                {(presetMode === "fixed" ? fixedPresets : PERCENT_PRESETS).map((value, index) => (
-                  <button
-                    key={`${presetMode}-${value}`}
-                    onClick={() => applyPreset(index)}
-                    className="py-1 text-xs rounded bg-[var(--bg-soft)] text-muted hover:text-white hover:bg-[var(--bg-card)] border border-[var(--line)] transition"
-                    type="button"
-                  >
-                    {presetMode === "fixed"
-                      ? side === "BUY"
-                        ? `$${value}`
-                        : `${value}`
-                      : `${value}%`}
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex justify-between mt-2 text-xs text-muted">
-                <span>
-                  {side === "BUY"
-                    ? `USDC available: ${
-                        usdcBalance != null
-                          ? fmt$(usdcBalance)
-                          : balanceLoading
-                            ? "Loading..."
-                            : "N/A"
-                      }`
-                    : `Shares available: ${
-                        availableShares != null
-                          ? `${availableShares.toFixed(4)} ${outcome}`
-                          : balanceLoading
-                            ? "Loading..."
-                            : "N/A"
-                      }`}
-                </span>
-                {side === "BUY" && <span>Minimum buy: {fmt$(MIN_BUY_USDC)}</span>}
-              </div>
-            </div>
-
-            <div className="surface-soft rounded-lg p-3 text-xs space-y-1.5">
-              <div className="flex justify-between text-soft">
-                <span>Quote age</span>
-                <span className={isStale ? "text-yellow-300" : "text-emerald-300"}>
-                  {quoteAgeSec}s {isStale ? "stale" : "fresh"}
-                </span>
-              </div>
-              <div className="flex justify-between text-soft">
-                <span>Spread proxy</span>
-                <span>{spread != null ? `${(spread * 100).toFixed(2)}c` : "N/A"}</span>
-              </div>
-              <div className="flex justify-between text-soft">
-                <span>Liquidity</span>
-                <span>
-                  {liquidity != null ? fmt$(liquidity) : "N/A"}
-                  {liquidity != null && liquidity < LOW_LIQUIDITY_THRESHOLD ? " (low)" : ""}
-                </span>
-              </div>
-            </div>
-
-            {amountNum > 0 && Number.isFinite(amountNum) && (
-              <div className="surface-soft p-3.5 rounded-lg space-y-2 text-sm">
-                {side === "BUY" ? (
-                  <>
-                    <div className="flex justify-between">
-                      <span className="text-muted">You pay</span>
-                      <span className="text-white mono">{fmt$(notional)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted">Est. shares</span>
-                      <span className="text-white mono">
-                        {shares.toFixed(4)} {outcome}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted">Payout if correct</span>
-                      <span className="text-white mono">{fmt$(potentialPayout)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted">Max loss</span>
-                      <span className="text-red-300 mono">{fmt$(notional)}</span>
-                    </div>
-                    <div className="border-t border-[var(--line)] pt-2 flex justify-between font-semibold">
-                      <span className="text-muted">Breakeven framing</span>
-                      <span className="text-soft mono">
-                        Need &gt; {(activePrice * 100).toFixed(1)}%
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted">Potential profit</span>
-                      <span className="status-good mono">+{fmt$(potentialProfit)}</span>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="flex justify-between">
-                      <span className="text-muted">Shares to sell</span>
-                      <span className="text-white mono">
-                        {amountNum.toFixed(4)} {outcome}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted">Estimated proceeds</span>
-                      <span className="text-white mono">{fmt$(notional)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted">Upside given up if {outcome}</span>
-                      <span className="text-yellow-300 mono">
-                        {fmt$(Math.max(0, shares * (1 - activePrice)))}
-                      </span>
-                    </div>
-                    <div className="border-t border-[var(--line)] pt-2 flex justify-between font-semibold">
-                      <span className="text-muted">Breakeven framing</span>
-                      <span className="text-soft mono">
-                        Selling near {(activePrice * 100).toFixed(1)}%
-                      </span>
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-
-            {balanceError && (
-              <div className="p-2.5 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-200 text-xs">
-                {balanceError}
-              </div>
-            )}
-
-            {validation.errors.length > 0 && (
-              <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-300 text-xs space-y-1">
-                {validation.errors.map((row) => (
-                  <p key={row}>{row}</p>
-                ))}
-              </div>
-            )}
-
-            {validation.warnings.length > 0 && (
-              <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-200 text-xs space-y-1">
-                {validation.warnings.map((row) => (
-                  <p key={row}>{row}</p>
-                ))}
-              </div>
-            )}
-
-            {error && (
-              <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
-                {error}
-              </div>
-            )}
-
-            {result?.success && (
-              <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-sm">
-                <p className="font-semibold">
-                  {side === "BUY" ? "Bought" : "Sold"} {outcome} shares.
-                </p>
-                <p className="text-xs mt-1 mono">
-                  {result.side}{" "}
-                  {result.side === "BUY"
-                    ? `${fmt$(result.size ?? amountNum)}`
-                    : `${result.size ?? amountNum} shares`}{" "}
-                  @ {pct(result.price)}
-                </p>
-                {result.order_hash && (
-                  <p className="text-xs mt-1 text-muted truncate">Hash: {result.order_hash}</p>
-                )}
-              </div>
-            )}
-
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-muted">High-notional confirm at</span>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted text-sm">
+                {side === "BUY" ? "$" : "#"}
+              </span>
               <input
-                type="number"
-                min={1}
-                step={1}
-                value={highNotionalThreshold}
+                type="text"
+                inputMode="decimal"
+                pattern="[0-9]*"
+                data-trade-amount
+                value={amount}
                 onChange={(e) => {
-                  const next = Number(e.target.value);
-                  setHighNotionalThreshold(Number.isFinite(next) && next >= 1 ? next : 1);
+                  amountEditedRef.current = true;
+                  setAmount(e.target.value);
                 }}
-                className="w-24 px-2 py-1 rounded bg-[var(--bg-soft)] border border-[var(--line)] text-white"
+                placeholder={side === "BUY" ? "10.00" : "100"}
+                className="w-full pl-7 pr-4 py-2.5 rounded-lg bg-[var(--bg-soft)] border border-[var(--line)] text-white placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition mono"
               />
-              <span className="text-muted">USDC</span>
             </div>
 
-            {!result?.success ? (
-              <button
-                onClick={() => void handleSubmit()}
-                disabled={!canSubmit}
-                className={`w-full py-3 rounded-lg font-bold text-sm transition ${
-                  side === "BUY" ? "btn-success" : "btn-danger"
-                }`}
-              >
-                {loading ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-                      <circle
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        strokeWidth="3"
-                        className="opacity-30"
-                      />
-                      <path
-                        d="M4 12a8 8 0 018-8"
-                        stroke="currentColor"
-                        strokeWidth="3"
-                        strokeLinecap="round"
-                      />
-                    </svg>
-                    Placing order...
-                  </span>
-                ) : validation.requiresConfirm && !confirmArmed ? (
-                  `Confirm large ${side.toLowerCase()} (${fmt$(notional)})`
-                ) : (
-                  `${side === "BUY" ? "Buy" : "Sell"} ${outcome}${
-                    amountNum > 0
-                      ? side === "BUY"
-                        ? ` - ${fmt$(amountNum)}`
-                        : ` - ${amountNum.toFixed(4)} shares`
-                      : ""
-                  }`
-                )}
-              </button>
-            ) : (
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={handleReverseSide}
-                  className="py-3 rounded-lg font-bold text-sm btn-muted"
-                  type="button"
-                >
-                  Reverse Side
-                </button>
-                <button
-                  onClick={onClose}
-                  className="py-3 rounded-lg font-bold text-sm btn-muted"
-                  type="button"
-                >
-                  Done
-                </button>
+            {sizeSuggestion && (
+              <div className="flex items-center justify-between mt-1.5 text-xs">
+                <span className="text-muted">
+                  Kelly suggestion
+                  {sizeSuggestion.edge_probability != null
+                    ? ` (edge ${(sizeSuggestion.edge_probability * 100).toFixed(
+                        0,
+                      )}% · ${sizeSuggestion.edge_source ?? "n/a"})`
+                    : ""}
+                  {sizeSuggestion.capped_by ? ` · capped: ${sizeSuggestion.capped_by}` : ""}
+                  <InfoTooltip term="Kelly suggestion">
+                    Kelly sizing scales the suggested stake up or down with your estimated edge:
+                    bigger edges get bigger sizes, and it never stakes more than the edge justifies.
+                    "Edge" is the gap between the model&apos;s probability and the market price — a
+                    12% edge on a 60¢ contract means the model thinks the true chance is about 72%.
+                  </InfoTooltip>
+                </span>
+                <span className="text-soft mono">
+                  {sizeSuggestion.suggested_size_usdc > 0
+                    ? fmt$(sizeSuggestion.suggested_size_usdc)
+                    : "no edge"}
+                </span>
               </div>
             )}
 
-            <p className="text-[11px] text-muted">
-              Shortcuts: Y/N outcome, B/S side, 1-4 presets, Enter submit, Esc close.
-            </p>
+            <div className="flex items-center gap-2 mt-2">
+              <button
+                type="button"
+                onClick={() => setPresetMode("fixed")}
+                className={`text-xs px-2.5 py-2 min-h-[44px] rounded border ${
+                  presetMode === "fixed"
+                    ? "border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]"
+                    : "border-[var(--line)] text-soft"
+                }`}
+              >
+                Fixed
+              </button>
+              <button
+                type="button"
+                onClick={() => setPresetMode("percentage")}
+                className={`text-xs px-2.5 py-2 min-h-[44px] rounded border ${
+                  presetMode === "percentage"
+                    ? "border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-soft)]"
+                    : "border-[var(--line)] text-soft"
+                }`}
+              >
+                % Balance
+              </button>
+            </div>
+
+            <div className="grid grid-cols-4 gap-2 mt-2">
+              {(presetMode === "fixed" ? fixedPresets : PERCENT_PRESETS).map((value, index) => (
+                <button
+                  key={`${presetMode}-${value}`}
+                  onClick={() => applyPreset(index)}
+                  className="py-2 min-h-[44px] text-xs rounded bg-[var(--bg-soft)] text-muted hover:text-white hover:bg-[var(--bg-card)] border border-[var(--line)] transition"
+                  type="button"
+                >
+                  {presetMode === "fixed"
+                    ? side === "BUY"
+                      ? `$${value}`
+                      : `${value}`
+                    : `${value}%`}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex justify-between mt-2 text-xs text-muted">
+              <span>
+                {side === "BUY"
+                  ? `USDC available: ${
+                      usdcBalance != null
+                        ? fmt$(usdcBalance)
+                        : balanceLoading
+                          ? "Loading..."
+                          : "N/A"
+                    }`
+                  : `Shares available: ${
+                      availableShares != null
+                        ? `${availableShares.toFixed(4)} ${outcome}`
+                        : balanceLoading
+                          ? "Loading..."
+                          : "N/A"
+                    }`}
+              </span>
+              {side === "BUY" && <span>Minimum buy: {fmt$(MIN_BUY_USDC)}</span>}
+            </div>
           </div>
+
+          <div className="surface-soft rounded-lg p-3 text-xs space-y-1.5">
+            <div className="flex justify-between text-soft">
+              <span>Quote age</span>
+              <span className={isStale ? "text-yellow-300" : "text-emerald-300"}>
+                {quoteAgeSec}s {isStale ? "stale" : "fresh"}
+              </span>
+            </div>
+            <div className="flex justify-between text-soft">
+              <span>Spread proxy</span>
+              <span>{spread != null ? `${(spread * 100).toFixed(2)}c` : "N/A"}</span>
+            </div>
+            <div className="flex justify-between text-soft">
+              <span>Liquidity</span>
+              <span>
+                {liquidity != null ? fmt$(liquidity) : "N/A"}
+                {liquidity != null && liquidity < LOW_LIQUIDITY_THRESHOLD ? " (low)" : ""}
+              </span>
+            </div>
+          </div>
+
+          {amountNum > 0 && Number.isFinite(amountNum) && (
+            <div className="surface-soft p-3.5 rounded-lg space-y-2 text-sm">
+              {side === "BUY" ? (
+                <>
+                  <div className="flex justify-between">
+                    <span className="text-muted">You pay</span>
+                    <span className="text-white mono">{fmt$(notional)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted">Est. shares</span>
+                    <span className="text-white mono">
+                      {shares.toFixed(4)} {outcome}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted">Payout if correct</span>
+                    <span className="text-white mono">{fmt$(potentialPayout)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted">Max loss</span>
+                    <span className="text-red-300 mono">{fmt$(notional)}</span>
+                  </div>
+                  <div className="border-t border-[var(--line)] pt-2 flex justify-between font-semibold">
+                    <span className="text-muted">
+                      Breakeven framing
+                      <InfoTooltip term="Breakeven framing">
+                        Breakeven is the probability where a trade stops making money and starts
+                        losing it. Buying at 62.1¢ means the outcome needs to come true more than
+                        62.1% of the time to win; selling near a price means that price is roughly
+                        the fair value you are locking in.
+                      </InfoTooltip>
+                    </span>
+                    <span className="text-soft mono">
+                      Need &gt; {(activePrice * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted">Potential profit</span>
+                    <span className="status-good mono">+{fmt$(potentialProfit)}</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex justify-between">
+                    <span className="text-muted">Shares to sell</span>
+                    <span className="text-white mono">
+                      {amountNum.toFixed(4)} {outcome}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted">Estimated proceeds</span>
+                    <span className="text-white mono">{fmt$(notional)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted">Upside given up if {outcome}</span>
+                    <span className="text-yellow-300 mono">
+                      {fmt$(Math.max(0, shares * (1 - activePrice)))}
+                    </span>
+                  </div>
+                  <div className="border-t border-[var(--line)] pt-2 flex justify-between font-semibold">
+                    <span className="text-muted">
+                      Breakeven framing
+                      <InfoTooltip term="Breakeven framing">
+                        Breakeven is the probability where a trade stops making money and starts
+                        losing it. Buying at 62.1¢ means the outcome needs to come true more than
+                        62.1% of the time to win; selling near a price means that price is roughly
+                        the fair value you are locking in.
+                      </InfoTooltip>
+                    </span>
+                    <span className="text-soft mono">
+                      Selling near {(activePrice * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {balanceError && (
+            <div className="p-2.5 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-200 text-xs">
+              {balanceError}
+            </div>
+          )}
+
+          {validation.errors.length > 0 && (
+            <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-300 text-xs space-y-1">
+              {validation.errors.map((row) => (
+                <p key={row}>{row}</p>
+              ))}
+            </div>
+          )}
+
+          {validation.warnings.length > 0 && (
+            <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-200 text-xs space-y-1">
+              {validation.warnings.map((row) => (
+                <p key={row}>{row}</p>
+              ))}
+            </div>
+          )}
+
+          {error && (
+            <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
+              {error}
+            </div>
+          )}
+
+          {result?.success && (
+            <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-sm">
+              <p className="font-semibold">
+                {side === "BUY" ? "Bought" : "Sold"} {outcome} shares.
+              </p>
+              <p className="text-xs mt-1 mono">
+                {result.side}{" "}
+                {result.side === "BUY"
+                  ? `${fmt$(result.size ?? amountNum)}`
+                  : `${result.size ?? amountNum} shares`}{" "}
+                @ {pct(result.price)}
+              </p>
+              {result.order_hash && (
+                <p className="text-xs mt-1 text-muted truncate">Hash: {result.order_hash}</p>
+              )}
+            </div>
+          )}
+
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-muted">High-notional confirm at</span>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={highNotionalThreshold}
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                setHighNotionalThreshold(Number.isFinite(next) && next >= 1 ? next : 1);
+              }}
+              className="w-24 px-2 py-1 rounded bg-[var(--bg-soft)] border border-[var(--line)] text-white"
+            />
+            <span className="text-muted">USDC</span>
+          </div>
+
+          {!result?.success ? (
+            <button
+              data-trade-submit
+              onClick={() => void handleSubmit()}
+              disabled={!canSubmit}
+              className={`w-full py-3 rounded-lg font-bold text-sm transition ${
+                side === "BUY" ? "btn-success" : "btn-danger"
+              }`}
+            >
+              {loading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                    <circle
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="3"
+                      className="opacity-30"
+                    />
+                    <path
+                      d="M4 12a8 8 0 018-8"
+                      stroke="currentColor"
+                      strokeWidth="3"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                  Placing order...
+                </span>
+              ) : validation.requiresConfirm && !confirmArmed ? (
+                `Confirm large ${side.toLowerCase()} (${fmt$(notional)})`
+              ) : (
+                `${side === "BUY" ? "Buy" : "Sell"} ${outcome}${
+                  amountNum > 0
+                    ? side === "BUY"
+                      ? ` - ${fmt$(amountNum)}`
+                      : ` - ${amountNum.toFixed(4)} shares`
+                    : ""
+                }`
+              )}
+            </button>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={handleReverseSide}
+                className="py-3 rounded-lg font-bold text-sm btn-muted"
+                type="button"
+              >
+                Reverse Side
+              </button>
+              <button
+                onClick={requestClose}
+                className="py-3 rounded-lg font-bold text-sm btn-muted"
+                type="button"
+              >
+                Done
+              </button>
+            </div>
+          )}
+
+          <p className="text-[11px] text-muted">
+            Shortcuts: Y/N outcome, B/S side, 1-4 presets, Esc close. Enter submits only from the
+            amount field or the submit button.
+          </p>
         </div>
-      </div>
-    </div>,
-    document.body,
+      </Modal>
+
+      <ConfirmModal
+        open={discardPromptOpen}
+        title="Discard this order?"
+        body="This ticket has an amount that has not been submitted yet, so closing it will not place the order. Your amount, side and outcome are remembered for next time."
+        confirmLabel="Discard"
+        cancelLabel="Keep editing"
+        onConfirm={confirmDiscardClose}
+        onCancel={keepEditing}
+      />
+    </>
   );
 }

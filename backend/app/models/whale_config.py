@@ -12,6 +12,7 @@ class WhaleConfig(Base):
     __tablename__ = "whale_configs"
 
     user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    account_id = Column(Integer, nullable=True, index=True)
     min_notional = Column(Float, nullable=False, default=10000.0)
     auto_copy = Column(Boolean, nullable=False, default=False)
     watchlist = Column(JSON, nullable=False, default=list)

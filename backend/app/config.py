@@ -14,6 +14,23 @@ class AIBackend(StrEnum):
     CLI_AGENT = "cli_agent"  # GitHub Copilot CLI
 
 
+class ProcessRole(StrEnum):
+    """Which half of the system a process runs (plan 10 Phase A).
+
+    Background schedulers coordinate through Postgres advisory locks so
+    exactly one instance of each monitor runs per database — but a
+    second *web* worker would still try to start them. Splitting the
+    role lets the HTTP tier scale without multiplying the monitors.
+    """
+
+    ALL = "all"  # web + schedulers (default, today's behaviour)
+    WEB = "web"  # HTTP only, starts no background loop
+    WORKER = "worker"  # schedulers only, serves no HTTP traffic
+
+
+_ROLES = frozenset(role.value for role in ProcessRole)
+
+
 class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
 
@@ -96,15 +113,34 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 100
 
     # Server
-    environment: str = "development"
+    # Secure by default: an unset ENVIRONMENT is treated as production
+    # (fail closed), so local/dev setups must set ENVIRONMENT explicitly
+    # (docker-compose.yml already does: ${ENVIRONMENT:-development}).
+    environment: str = "production"
     host: str = "0.0.0.0"
     port: int = 8002
     reload: bool = True
     cors_allowed_origins: str = "http://localhost:5173,http://localhost:3000"
+    # Secure flag for auth cookies. None (default) derives it from the
+    # environment — Secure outside local/dev — so operators can force the
+    # flag on or off explicitly (e.g. plain-HTTP staging behind TLS
+    # termination that strips the scheme).
+    cookie_secure: bool | None = None
 
     # Debug / observability hardening
     debug_endpoints_enabled: bool = False
     debug_log_hash_salt: str = ""
+
+    # Process role (plan 10 Phase A): which half of the system this
+    # process runs. Background schedulers coordinate through Postgres
+    # advisory locks, so they must not be duplicated — but the shipped
+    # deployment pins WEB_CONCURRENCY=1 precisely because a second
+    # *web* worker would also start them. Splitting the role lets the
+    # HTTP tier scale without multiplying the schedulers.
+    #   "all"    — web + background schedulers (default, today's behaviour)
+    #   "web"    — HTTP only, starts no background loop
+    #   "worker" — background schedulers only, serves no HTTP traffic
+    role: str = ProcessRole.ALL.value
 
     # Admin — comma-separated wallet addresses that get is_admin=True
     admin_wallets: str = ""
@@ -188,6 +224,51 @@ class Settings(BaseSettings):
 
     # Per-trader copy attribution (plan 07): default window (days).
     copy_attribution_window_days: int = 30
+
+    # Sub-accounts (plan 06 Phase A): master switch for the
+    # ``X-Account-Id`` account context. Off by default so every
+    # existing route stays user-scoped; when off, a header that a
+    # client does send is ignored and the personal account is used.
+    # Phase B (money-path scoping) turns this on per-environment.
+    accounts_enabled: bool = False
+
+    # ── Subscription tiers (plan 09 Phase A) ───────────────────
+    # Master I12: enforcement ships OFF. With ``entitlements_enabled``
+    # false, a gated route resolves no account and performs no extra
+    # round-trip, so enabling the feature is a per-environment decision
+    # rather than something that changes behaviour on deploy.
+    entitlements_enabled: bool = False
+    # Stripe credentials. All optional: unset means the upgrade flow is
+    # disabled and only the free tier exists.
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_price_pro: str = ""
+    stripe_price_institutional: str = ""
+
+    # ── Venue adapters (plan 05 Phase A) ───────────────────────
+    # Read-only, signal-only cross-venue market data. Off by default
+    # per venue: an adapter only calls its venue's documented public
+    # endpoint, once per refresh, behind a TTL cache, and never places
+    # an order. Kalshi leads because it is CFTC-regulated with a public
+    # API, so nothing here scrapes or circumvents a venue's terms.
+    venue_kalshi_enabled: bool = False
+    venue_manifold_enabled: bool = False
+    venue_predictit_enabled: bool = False
+    # Refresh cadence for the venue_markets scheduler (seconds).
+    venue_markets_refresh_seconds: int = 300
+    # Token the AI services present when reading the cache over HTTP.
+    # Empty (default) leaves those services on user-JWT auth only — the
+    # MCP tool falls back to unauthenticated reads of the same rows.
+    venue_api_token: str = ""
+
+    # ── External API (plan 06 Phase B) ─────────────────────────
+    # Dedicated HMAC secret for API-key digests. Follows the refresh-token
+    # rollout order: when empty the code falls back to JWT_SECRET_KEY, so
+    # an existing deployment keeps working — but set it, because it lets
+    # the session secret rotate without invalidating every issued key.
+    # There is deliberately no default and no way to recover a key from
+    # the stored digest, so rotating this revokes all keys by design.
+    api_key_hash_secret: str = ""
 
     @field_validator("jwt_secret_key")
     @classmethod
@@ -274,6 +355,29 @@ class Settings(BaseSettings):
         if self.debug_endpoints_enabled and not self.debug_log_hash_salt.strip():
             raise ValueError("DEBUG_LOG_HASH_SALT is required when DEBUG_ENDPOINTS_ENABLED=true.")
         return self
+
+    @model_validator(mode="after")
+    def validate_role(self) -> "Settings":
+        role = (self.role or "").strip().lower()
+        if role not in _ROLES:
+            raise ValueError(f"ROLE must be one of {sorted(_ROLES)}; got '{self.role}'.")
+        return self
+
+    def runs_background_schedulers(self) -> bool:
+        """True when this process owns the background schedulers.
+
+        A ``web`` process must start none of them: duplicating a
+        monitor duplicates stop-loss orders.
+        """
+        return (self.role or "all").strip().lower() in {"all", "worker"}
+
+    def serves_http(self) -> bool:
+        """True when this process should accept HTTP traffic.
+
+        A ``worker`` container is run as a one-shot command
+        (``python -c ...``), so this only guards the uvicorn entrypoint.
+        """
+        return (self.role or "all").strip().lower() in {"all", "web"}
 
     @property
     def is_local_environment(self) -> bool:

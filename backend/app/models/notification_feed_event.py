@@ -13,6 +13,7 @@ class NotificationFeedEvent(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    account_id = Column(Integer, nullable=True, index=True)
     trader_wallet = Column(String(42), nullable=False, index=True)
     event_type = Column(String(40), nullable=False)  # opened | closed | alert catalog
     market_id = Column(String(200), nullable=False, default="")

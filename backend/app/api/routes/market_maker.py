@@ -6,8 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_plan
 from app.api.routes.auth import get_current_user_from_token
 from app.models.market_maker_config import MarketMakerConfig
+from app.services.entitlement_service import CAP_MARKET_MAKER
 from app.services.market_maker_service import (
     get_running_maker_ids,
     start_market_maker,
@@ -137,7 +139,11 @@ async def list_market_maker_configs(
     return [_to_response(r) for r in rows]
 
 
-@router.post("/configs", response_model=MarketMakerConfigResponse)
+@router.post(
+    "/configs",
+    response_model=MarketMakerConfigResponse,
+    dependencies=[Depends(require_plan(CAP_MARKET_MAKER))],
+)
 async def upsert_market_maker_config(
     body: MarketMakerConfigRequest,
     current_user: dict = Depends(get_current_user_from_token),
@@ -227,7 +233,10 @@ async def delete_market_maker_config(
     return {"status": "disabled", "id": config_id}
 
 
-@router.post("/configs/{config_id}/start")
+@router.post(
+    "/configs/{config_id}/start",
+    dependencies=[Depends(require_plan(CAP_MARKET_MAKER))],
+)
 async def start_market_maker_endpoint(
     config_id: int,
     current_user: dict = Depends(get_current_user_from_token),
@@ -279,7 +288,11 @@ async def stop_market_maker_endpoint(
     return {"status": "stopped" if stopped else "not_running", "config_id": config_id}
 
 
-@router.post("/configs/{config_id}/sync", response_model=MarketMakerSyncResponse)
+@router.post(
+    "/configs/{config_id}/sync",
+    response_model=MarketMakerSyncResponse,
+    dependencies=[Depends(require_plan(CAP_MARKET_MAKER))],
+)
 async def sync_market_maker_endpoint(
     config_id: int,
     current_user: dict = Depends(get_current_user_from_token),

@@ -945,6 +945,24 @@ class SyncMarketMakerTests(unittest.IsolatedAsyncioTestCase):
 # ─────────────── maker loop ───────────────
 
 
+def _blocking_sleep():
+    """A fake ``asyncio.sleep`` that parks until its task is cancelled.
+
+    Returns the coroutine function plus an event that is set once the loop
+    has parked inside the sleep, so a test can cancel the task mid-sleep
+    (the app-shutdown / worker-rollover path). The real sleep is captured
+    before any patching starts, so parking does not recurse into the fake.
+    """
+    parked = asyncio.Event()
+    real_sleep = asyncio.sleep
+
+    async def _fake_sleep(_seconds):
+        parked.set()
+        await real_sleep(60)
+
+    return _fake_sleep, parked
+
+
 class MakerLoopTests(unittest.IsolatedAsyncioTestCase):
     async def test_disabled_config_stops_loop_and_marks_idle(self):
         config = _config(enabled=False)
@@ -1046,6 +1064,72 @@ class MakerLoopTests(unittest.IsolatedAsyncioTestCase):
         sync.assert_awaited_once_with(1)
         cancel_all.assert_not_awaited()
         self.assertEqual(config.status, "idle")
+
+    async def test_cancellation_during_interval_sleep_releases_the_lock(self):
+        # Regression: the interval sleep sits outside the loop's inner
+        # try/except, so a cancellation landing during it (app shutdown or a
+        # WEB_CONCURRENCY rollover) used to skip release_scheduler_lock and
+        # leak the advisory lock until process exit — blocking the next
+        # worker from ever acquiring it.
+        config = _config(enabled=True, sync_interval_seconds=1)
+        db = _session([config])
+        sync = AsyncMock(return_value={"placed": 0})
+        release = MagicMock()
+        fake_sleep, parked = _blocking_sleep()
+
+        with (
+            patch.object(market_maker_service, "SessionLocal", return_value=db),
+            patch.object(
+                market_maker_service, "acquire_scheduler_lock", return_value=True
+            ) as acquire,
+            patch.object(market_maker_service, "_sync_market_maker", new=sync),
+            patch.object(market_maker_service, "release_scheduler_lock", new=release),
+            patch.object(market_maker_service.asyncio, "sleep", new=fake_sleep),
+            patch.object(market_maker_service, "logger", MagicMock()),
+        ):
+            task = asyncio.create_task(market_maker_service._maker_loop(1))
+            await asyncio.wait_for(parked.wait(), timeout=5)
+            task.cancel()
+            # The cancellation must still propagate: cleanup runs, but it is
+            # not swallowed.
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        acquire.assert_called_once_with("market_maker:1")
+        sync.assert_awaited_once_with(1)
+        release.assert_called_once_with("market_maker:1")
+
+    async def test_stop_market_maker_releases_the_lock_on_cancel(self):
+        # Shutdown discipline: stop_market_maker cancels the task wherever it
+        # is parked, so the loop's finally — not the caller — must still run
+        # the release on the graceful-shutdown path.
+        config = _config(enabled=True, sync_interval_seconds=1)
+        db = _session([config])
+        sync = AsyncMock(return_value={"placed": 0})
+        release = MagicMock()
+        fake_sleep, parked = _blocking_sleep()
+        restore = dict(market_maker_service._running_makers)
+        market_maker_service._running_makers.clear()
+        self.addCleanup(market_maker_service._running_makers.update, restore)
+
+        with (
+            patch.object(market_maker_service, "SessionLocal", return_value=db),
+            patch.object(market_maker_service, "acquire_scheduler_lock", return_value=True),
+            patch.object(market_maker_service, "_sync_market_maker", new=sync),
+            patch.object(market_maker_service, "release_scheduler_lock", new=release),
+            patch.object(market_maker_service.asyncio, "sleep", new=fake_sleep),
+            patch.object(market_maker_service, "logger", MagicMock()),
+        ):
+            started = await market_maker_service.start_market_maker(1)
+            self.assertIs(started, True)
+            task = market_maker_service._running_makers[1]
+            await asyncio.wait_for(parked.wait(), timeout=5)
+            stopped = await market_maker_service.stop_market_maker(1)
+
+        self.assertIs(stopped, True)
+        self.assertTrue(task.cancelled())
+        sync.assert_awaited_once_with(1)
+        release.assert_called_once_with("market_maker:1")
 
     async def test_sync_error_falls_back_to_thirty_second_interval(self):
         config = _config(enabled=True, sync_interval_seconds=1)

@@ -503,6 +503,59 @@ class EndpointAuthTests(unittest.TestCase):
         resp = client.get("/api/trades/analytics/trades")
         self.assertEqual(resp.status_code, 401)
 
+    def test_by_strategy_requires_auth(self):
+        client, _ = self._client()
+        resp = client.get("/api/trades/analytics/by-strategy")
+        self.assertEqual(resp.status_code, 401)
+
+    def test_by_strategy_returns_the_attribution_gap(self):
+        """The happy path reports both the strategies and the gap.
+
+        The unattributed count is the whole point of the endpoint: it is
+        the number of in-window trades excluded from every per-strategy
+        figure, and therefore from every loss limit derived from
+        ``UserTrade.pnl`` (plan 03 Phase A).
+        """
+        client, app = self._client()
+        self._override(app)
+        try:
+            self.db.add(
+                UserTrade(
+                    user_id=USER_ID,
+                    market_id="0xmarket",
+                    action="buy",
+                    amount=10.0,
+                    price=0.5,
+                    status="executed",
+                    strategy_source="copy",
+                    pnl=5.0,
+                    created_at=utc_now(),
+                )
+            )
+            self.db.add(
+                UserTrade(
+                    user_id=USER_ID,
+                    market_id="0xmarket",
+                    action="buy",
+                    amount=1.0,
+                    price=0.5,
+                    status="executed",
+                    strategy_source=None,
+                    created_at=utc_now(),
+                )
+            )
+            self.db.commit()
+
+            resp = client.get("/api/trades/analytics/by-strategy")
+        finally:
+            app.dependency_overrides.clear()
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual([s["strategy"] for s in payload["strategies"]], ["copy"])
+        self.assertEqual(payload["strategies"][0]["net_realized_pnl"], 5.0)
+        self.assertEqual(payload["data_quality"]["unattributed_trades"], 1)
+
     def test_summary_returns_valid_schema_when_authenticated(self):
         client, app = self._client()
         self._override(app)
@@ -591,6 +644,13 @@ class EndpointAuthTests(unittest.TestCase):
                 "stop_loss",
                 "take_profit",
                 "latency_arb",
+                # The emergency-stop panic sell (plan 03 Phase A): tracked
+                # separately so emergency liquidation P&L is separable
+                # from every strategy's own P&L.
+                "emergency",
+                # Orders placed through the external API (plan 06 Phase B),
+                # so a script's activity is separable from UI trades.
+                "external",
             ),
         )
 

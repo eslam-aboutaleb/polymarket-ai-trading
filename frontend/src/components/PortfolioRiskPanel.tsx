@@ -129,7 +129,7 @@ export default function PortfolioRiskPanel() {
   return (
     <div className="space-y-6">
       {/* Header — always states whether the figures are live or paper */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3" data-tutorial="risk">
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-xl font-bold text-white">Portfolio Risk Report</h2>

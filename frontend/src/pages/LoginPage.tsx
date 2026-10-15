@@ -14,9 +14,11 @@ import { useAuthStore } from "../store/authStore";
 import { authService } from "../services/authService";
 import LoginForm from "../components/LoginForm";
 import { getApiErrorMessage } from "../utils/apiError";
+import { useLoginModal } from "../context/LoginModalContext";
 
 export default function LoginPage() {
   const { setSession } = useAuthStore();
+  const { drainLoginAction } = useLoginModal();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -45,6 +47,7 @@ export default function LoginPage() {
         challengeId ?? undefined,
       );
       await restoreSession();
+      drainLoginAction();
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Authentication failed"));
     } finally {

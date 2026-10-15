@@ -8,7 +8,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.requests import Request
 
-from app.api.routes.auth import logout, refresh_access_token
+from app.api.routes.auth import (
+    REFRESH_TOKEN_COOKIE_NAME,
+    logout,
+    refresh_access_token,
+)
 from app.config import get_settings
 from app.models.token import RefreshToken
 from app.models.user import User
@@ -88,19 +92,28 @@ class RefreshTokenSecurityTests(unittest.TestCase):
                 "keep_logged_in": False,
             },
         ):
+            response_obj = Response()
             response_payload = refresh_access_token(
                 http_request=_request("/api/auth/refresh"),
-                response=Response(),
+                response=response_obj,
                 request=TokenRefresh(refresh_token=old_token),
                 db=self.db,
             )
 
-        self.assertNotEqual(response_payload.refresh_token, old_token)
+        # Tokens never appear in the response body — the rotated refresh
+        # token is delivered only via the httpOnly Set-Cookie header.
+        self.assertIsNone(response_payload.access_token)
+        self.assertIsNone(response_payload.refresh_token)
+        cookie_headers = response_obj.headers.getlist("set-cookie")
+        refresh_cookies = [c for c in cookie_headers if c.startswith(REFRESH_TOKEN_COOKIE_NAME)]
+        self.assertEqual(len(refresh_cookies), 1)
+        self.assertIn("HttpOnly", refresh_cookies[0])
+        rotated_token = refresh_cookies[0].split(";")[0].split("=", 1)[1]
+        self.assertNotEqual(rotated_token, old_token)
+
         self.assertIsNone(find_active_refresh_token_record(self.db, raw_refresh_token=old_token))
         self.assertIsNotNone(
-            find_active_refresh_token_record(
-                self.db, raw_refresh_token=response_payload.refresh_token
-            )
+            find_active_refresh_token_record(self.db, raw_refresh_token=rotated_token)
         )
         rows = self.db.query(RefreshToken).filter(RefreshToken.user_id == self.user.id).all()
         self.assertEqual(len(rows), 2)

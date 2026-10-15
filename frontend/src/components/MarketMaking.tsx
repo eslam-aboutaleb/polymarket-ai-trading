@@ -15,6 +15,8 @@ import {
   UpsertMarketMakerConfigRequest,
   MarketMakerMetrics,
 } from "../services/marketMakerService";
+import { getApiErrorMessage } from "../utils/apiError";
+import { Banner, ConfirmModal, Skeleton } from "./ui";
 
 type FormState = UpsertMarketMakerConfigRequest;
 
@@ -45,6 +47,7 @@ export default function MarketMaking() {
   const [form, setForm] = useState<FormState>({ ...defaultForm });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<number | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -55,7 +58,7 @@ export default function MarketMaking() {
       setConfigs(cfgs);
       setMetrics(met);
     } catch (e) {
-      setError(String(e));
+      setError(getApiErrorMessage(e, "Failed to load market maker data"));
     } finally {
       setLoading(false);
     }
@@ -80,7 +83,7 @@ export default function MarketMaking() {
       setForm({ ...defaultForm });
       await fetchData();
     } catch (e) {
-      setError(String(e));
+      setError(getApiErrorMessage(e, "Failed to save market maker config"));
     } finally {
       setSaving(false);
     }
@@ -91,7 +94,7 @@ export default function MarketMaking() {
       await marketMakerService.startMarketMaker(id);
       await fetchData();
     } catch (e) {
-      setError(String(e));
+      setError(getApiErrorMessage(e, "Failed to start market maker"));
     }
   };
 
@@ -100,7 +103,7 @@ export default function MarketMaking() {
       await marketMakerService.stopMarketMaker(id);
       await fetchData();
     } catch (e) {
-      setError(String(e));
+      setError(getApiErrorMessage(e, "Failed to stop market maker"));
     }
   };
 
@@ -108,27 +111,27 @@ export default function MarketMaking() {
     try {
       const result = await marketMakerService.syncMarketMaker(id);
       if (!result.success) {
-        setError(result.detail || "Sync failed");
+        setError(getApiErrorMessage(result.detail, "Sync failed"));
       }
       await fetchData();
     } catch (e) {
-      setError(String(e));
+      setError(getApiErrorMessage(e, "Sync failed"));
     }
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm("Disable this market maker config?")) return;
     try {
       await marketMakerService.deleteMarketMakerConfig(id);
       await fetchData();
     } catch (e) {
-      setError(String(e));
+      setError(getApiErrorMessage(e, "Failed to disable market maker config"));
     }
   };
 
   if (loading) {
     return (
-      <div className="p-6">
+      <div className="p-6 space-y-3" role="status" aria-live="polite">
+        <Skeleton variant="text" lines={3} />
         <p className="text-soft text-sm">Loading market maker configs...</p>
       </div>
     );
@@ -137,9 +140,9 @@ export default function MarketMaking() {
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between" data-tutorial="market-making">
         <div>
-          <h2 className="text-xl font-bold text-white">Market Making</h2>
+          <h1 className="text-xl font-bold text-white">Market Making</h1>
           <p className="text-soft text-sm mt-1">
             Configure automated market making with Bands or AMM strategies
           </p>
@@ -153,12 +156,9 @@ export default function MarketMaking() {
       </div>
 
       {error && (
-        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
+        <Banner variant="error" onDismiss={() => setError(null)} onRetry={fetchData}>
           {error}
-          <button onClick={() => setError(null)} className="ml-2 text-red-300 hover:text-white">
-            ✕
-          </button>
-        </div>
+        </Banner>
       )}
 
       {/* Create/Edit Form */}
@@ -405,7 +405,7 @@ export default function MarketMaking() {
                   Sync Now
                 </button>
                 <button
-                  onClick={() => handleDelete(cfg.id)}
+                  onClick={() => setPendingDelete(cfg.id)}
                   className="btn-muted text-xs text-red-400 hover:text-red-300"
                 >
                   Disable
@@ -415,6 +415,20 @@ export default function MarketMaking() {
           ))}
         </div>
       )}
+
+      <ConfirmModal
+        open={pendingDelete !== null}
+        title="Disable this market maker config?"
+        body="Disabling stops this market maker config from trading this market."
+        destructive
+        confirmLabel="Disable"
+        onConfirm={() => {
+          const id = pendingDelete;
+          setPendingDelete(null);
+          if (id !== null) void handleDelete(id);
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }

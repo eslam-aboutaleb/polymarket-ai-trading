@@ -41,6 +41,7 @@ import { RecentTradeMarket } from "../types/trading";
 import { MarketBoardCardVM } from "../types/marketBoard";
 import { TradeTicketOutcome } from "../types/trading";
 import { useRequireAuth } from "../hooks/useRequireAuth";
+import { Banner, Modal } from "./ui";
 const PAGE_SIZE = 60;
 const MIN_VISIBLE_TRADE_PANELS = 6;
 const MAX_INITIAL_FETCH_PAGES = 1;
@@ -65,6 +66,7 @@ function parseOutcomePrices(market: BrowseMarket): { yes: number; no: number } {
     const prices = typeof raw === "string" ? JSON.parse(raw) : raw;
     return { yes: Number(prices?.[0] ?? 0.5), no: Number(prices?.[1] ?? 0.5) };
   } catch {
+    console.warn("Failed to parse outcome prices", market.outcomePrices);
     return { yes: 0.5, no: 0.5 };
   }
 }
@@ -515,7 +517,7 @@ export default function Markets() {
     <div className="pm-board space-y-4">
       <section className="pm-board-surface space-y-4">
         <div className="pm-board-header">
-          <h1 className="pm-board-title">All markets</h1>
+          <h1 className="pm-board-title">Markets</h1>
           <div className="pm-board-tools">
             <button
               type="button"
@@ -630,7 +632,7 @@ export default function Markets() {
         </div>
 
         <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-center">
-          <div className="pm-board-search">
+          <div className="pm-board-search" data-tutorial="markets">
             <svg
               viewBox="0 0 24 24"
               fill="none"
@@ -696,7 +698,7 @@ export default function Markets() {
                   key={`${row.market_id}-${row.last_traded_at}`}
                   type="button"
                   onClick={() => requireAuth(() => openTradeFromRecent(row))}
-                  className="min-w-[220px] rounded-lg border border-[var(--pm-border)] bg-[var(--pm-bg)] px-3 py-2 text-left transition hover:border-[var(--pm-border-strong)]"
+                  className="min-w-[160px] flex-shrink-0 rounded-lg border border-[var(--pm-border)] bg-[var(--pm-bg)] px-3 py-2 text-left transition hover:border-[var(--pm-border-strong)]"
                 >
                   <p className="truncate text-xs font-semibold text-[var(--pm-text)]">
                     {row.title}
@@ -716,9 +718,9 @@ export default function Markets() {
         </p>
 
         {error && (
-          <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          <Banner variant="error" onDismiss={() => setError(null)} onRetry={() => fetchMarkets(0)}>
             {error}
-          </div>
+          </Banner>
         )}
 
         {loading ? (
@@ -841,163 +843,154 @@ export default function Markets() {
           AI TRADER ANALYSIS POPUP (streaming)
          ═══════════════════════════════════════════════════════════ */}
       {analysisMarket && (
-        <div
-          className="fixed inset-0 modal-overlay z-50 flex items-start justify-center overflow-y-auto pt-8 pb-8 px-4"
-          onClick={closeAnalysis}
+        <Modal
+          open
+          onClose={closeAnalysis}
+          title={analysisMarket.question || analysisMarket._event_title || "Market"}
+          size="lg"
         >
-          <div
-            className="surface-panel max-w-3xl w-full p-6 my-auto"
-            style={{ marginTop: "2rem", marginBottom: "2rem" }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Popup header */}
-            <div className="flex justify-between items-start gap-3 mb-4">
-              <h2 className="text-lg font-bold pr-3 leading-snug">
-                {analysisMarket.question || analysisMarket._event_title || "Market"}
-              </h2>
-              <button
-                onClick={closeAnalysis}
-                className="btn-muted !px-3 !py-1.5 text-xs flex-shrink-0"
-              >
-                Close
-              </button>
+          {/* Trader Stats Cards */}
+          {traderStats && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+              <StatsCard
+                label="YES Traders"
+                value={String(traderStats.yes_traders)}
+                accent="emerald"
+              />
+              <StatsCard label="NO Traders" value={String(traderStats.no_traders)} accent="red" />
+              <StatsCard
+                label="YES Volume"
+                value={fmtUSD2(traderStats.yes_volume)}
+                accent="emerald"
+              />
+              <StatsCard label="NO Volume" value={fmtUSD2(traderStats.no_volume)} accent="red" />
             </div>
+          )}
 
-            {/* Trader Stats Cards */}
-            {traderStats && (
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-                <StatsCard
-                  label="YES Traders"
-                  value={String(traderStats.yes_traders)}
-                  accent="emerald"
-                />
-                <StatsCard label="NO Traders" value={String(traderStats.no_traders)} accent="red" />
-                <StatsCard
-                  label="YES Volume"
-                  value={fmtUSD2(traderStats.yes_volume)}
-                  accent="emerald"
-                />
-                <StatsCard label="NO Volume" value={fmtUSD2(traderStats.no_volume)} accent="red" />
+          {/* Volume split bar */}
+          {traderStats && traderStats.total_trades > 0 && (
+            <div className="mb-4">
+              <div className="flex items-center justify-between text-xs text-soft mb-1.5">
+                <span>YES {traderStats.side_ratio.yes.toFixed(1)}%</span>
+                <span className="text-muted">{traderStats.total_trades} trades</span>
+                <span>NO {traderStats.side_ratio.no.toFixed(1)}%</span>
               </div>
-            )}
-
-            {/* Volume split bar */}
-            {traderStats && traderStats.total_trades > 0 && (
-              <div className="mb-4">
-                <div className="flex items-center justify-between text-xs text-soft mb-1.5">
-                  <span>YES {traderStats.side_ratio.yes.toFixed(1)}%</span>
-                  <span className="text-muted">{traderStats.total_trades} trades</span>
-                  <span>NO {traderStats.side_ratio.no.toFixed(1)}%</span>
-                </div>
-                <div className="h-2.5 rounded-full overflow-hidden flex bg-[var(--bg-soft)]">
-                  <div
-                    className="bg-emerald-500 transition-all duration-500"
-                    style={{ width: `${traderStats.side_ratio.yes}%` }}
-                  />
-                  <div
-                    className="bg-red-500 transition-all duration-500"
-                    style={{ width: `${traderStats.side_ratio.no}%` }}
-                  />
-                </div>
+              <div className="h-2.5 rounded-full overflow-hidden flex bg-[var(--bg-soft)]">
+                <div
+                  className="bg-emerald-500 transition-all duration-500"
+                  style={{ width: `${traderStats.side_ratio.yes}%` }}
+                />
+                <div
+                  className="bg-red-500 transition-all duration-500"
+                  style={{ width: `${traderStats.side_ratio.no}%` }}
+                />
               </div>
-            )}
+            </div>
+          )}
 
-            {/* Top Traders Table */}
-            {traderStats && traderStats.top_traders.length > 0 && (
-              <div className="mb-4 overflow-x-auto">
-                <table className="table-theme text-xs w-full">
-                  <thead>
-                    <tr>
-                      <th className="text-left p-2">Trader</th>
-                      <th className="text-right p-2">YES Vol</th>
-                      <th className="text-right p-2">NO Vol</th>
-                      <th className="text-right p-2">Total</th>
-                      <th className="text-center p-2">Lean</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {traderStats.top_traders.map((t, i) => (
-                      <tr key={i} className="border-t border-[var(--line)]">
-                        <td className="p-2 mono">
-                          {buildPolygonscanAddressUrl(t.address) ? (
-                            <a
-                              href={buildPolygonscanAddressUrl(t.address) || "#"}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-soft hover:text-white"
-                            >
-                              {t.short_address}
-                            </a>
-                          ) : (
-                            <span className="text-soft">{t.short_address}</span>
-                          )}
-                        </td>
-                        <td className="p-2 text-right mono text-emerald-400">
-                          {fmtUSD2(t.yes_volume)}
-                        </td>
-                        <td className="p-2 text-right mono text-red-400">{fmtUSD2(t.no_volume)}</td>
-                        <td className="p-2 text-right mono text-white font-medium">
-                          {fmtUSD2(t.total_volume)}
-                        </td>
-                        <td className="p-2 text-center">
-                          <span
-                            className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${t.lean === "YES" ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}`}
+          {/* Top Traders Table */}
+          {traderStats && traderStats.top_traders.length > 0 && (
+            <div className="mb-4 overflow-x-auto scroll-soft">
+              <table className="table-theme text-xs w-full min-w-[600px]">
+                <thead>
+                  <tr>
+                    <th className="text-left p-2">Trader</th>
+                    <th className="text-right p-2">YES Vol</th>
+                    <th className="text-right p-2">NO Vol</th>
+                    <th className="text-right p-2">Total</th>
+                    <th className="text-center p-2">Lean</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {traderStats.top_traders.map((t, i) => (
+                    <tr key={i} className="border-t border-[var(--line)]">
+                      <td className="p-2 mono">
+                        {buildPolygonscanAddressUrl(t.address) ? (
+                          <a
+                            href={buildPolygonscanAddressUrl(t.address) || "#"}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-soft hover:text-white"
                           >
-                            {t.lean}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {/* Status chip */}
-            <div className="mb-3">
-              {!streamDone ? (
-                <span className="text-sm px-3 py-1.5 rounded inline-flex items-center gap-2 chip chip-warning">
-                  <span className="animate-spin h-3.5 w-3.5 border-2 border-current border-t-transparent rounded-full inline-block" />
-                  Analyzing trader positions...
-                </span>
-              ) : streamError ? (
-                <span className="text-sm px-3 py-1.5 rounded inline-block chip chip-danger">
-                  Analysis failed
-                </span>
-              ) : (
-                <span className="text-sm px-3 py-1.5 rounded inline-block chip chip-success">
-                  Analysis complete
-                </span>
-              )}
+                            {t.short_address}
+                          </a>
+                        ) : (
+                          <span className="text-soft">{t.short_address}</span>
+                        )}
+                      </td>
+                      <td className="p-2 text-right mono text-emerald-400">
+                        {fmtUSD2(t.yes_volume)}
+                      </td>
+                      <td className="p-2 text-right mono text-red-400">{fmtUSD2(t.no_volume)}</td>
+                      <td className="p-2 text-right mono text-white font-medium">
+                        {fmtUSD2(t.total_volume)}
+                      </td>
+                      <td className="p-2 text-center">
+                        <span
+                          className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${t.lean === "YES" ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}`}
+                        >
+                          {t.lean}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
+          )}
 
-            {/* Analysis content */}
-            {streamError ? (
-              <div className="p-4 alert-error rounded text-sm">{streamError}</div>
-            ) : streamDone && streamText ? (
-              <AnalysisTable text={streamText} />
-            ) : streamText ? (
-              <div
-                ref={streamContainerRef}
-                className="bg-[var(--bg-elevated)] border border-[var(--line)] rounded-lg p-4 overflow-y-auto max-h-[40vh] min-h-[120px]"
-              >
-                <div className="flex items-center gap-2 text-muted text-sm mb-3">
-                  <span className="animate-spin h-3.5 w-3.5 border-2 border-current border-t-transparent rounded-full inline-block" />
-                  Receiving analysis data…
-                </div>
-                <pre className="text-xs text-muted whitespace-pre-wrap leading-relaxed opacity-50">
-                  {streamText.length > 300 ? "…" + streamText.slice(-300) : streamText}
-                  <span className="animate-pulse">&#9612;</span>
-                </pre>
-              </div>
+          {/* Status chip */}
+          <div className="mb-3">
+            {!streamDone ? (
+              <span className="text-sm px-3 py-1.5 rounded inline-flex items-center gap-2 chip chip-warning">
+                <span className="animate-spin h-3.5 w-3.5 border-2 border-current border-t-transparent rounded-full inline-block" />
+                Analyzing trader positions...
+              </span>
+            ) : streamError ? (
+              <span className="text-sm px-3 py-1.5 rounded inline-block chip chip-danger">
+                Analysis failed
+              </span>
             ) : (
-              <div className="flex items-center gap-2 text-muted italic text-sm py-8 justify-center">
-                <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full inline-block" />
-                Gathering trader data &amp; connecting to AI...
-              </div>
+              <span className="text-sm px-3 py-1.5 rounded inline-block chip chip-success">
+                Analysis complete
+              </span>
             )}
           </div>
-        </div>
+
+          {/* Analysis content */}
+          {streamError ? (
+            <Banner
+              variant="error"
+              onDismiss={() => setStreamError(null)}
+              onRetry={() => {
+                if (analysisMarket) openTraderAnalysis(analysisMarket);
+              }}
+            >
+              {streamError}
+            </Banner>
+          ) : streamDone && streamText ? (
+            <AnalysisTable text={streamText} />
+          ) : streamText ? (
+            <div
+              ref={streamContainerRef}
+              className="bg-[var(--bg-elevated)] border border-[var(--line)] rounded-lg p-4 overflow-y-auto max-h-[40vh] min-h-[120px]"
+            >
+              <div className="flex items-center gap-2 text-muted text-sm mb-3">
+                <span className="animate-spin h-3.5 w-3.5 border-2 border-current border-t-transparent rounded-full inline-block" />
+                Receiving analysis data…
+              </div>
+              <pre className="text-xs text-muted whitespace-pre-wrap leading-relaxed opacity-50">
+                {streamText.length > 300 ? "…" + streamText.slice(-300) : streamText}
+                <span className="animate-pulse">&#9612;</span>
+              </pre>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-muted italic text-sm py-8 justify-center">
+              <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full inline-block" />
+              Gathering trader data &amp; connecting to AI...
+            </div>
+          )}
+        </Modal>
       )}
     </div>
   );
@@ -1047,6 +1040,7 @@ function extractJSON(raw: string): Record<string, unknown> | null {
     const parsed = JSON.parse(raw.trim());
     if (typeof parsed === "object" && parsed !== null) return parsed;
   } catch {
+    console.warn("Failed to parse analysis JSON", raw);
     // continue
   }
 
@@ -1056,6 +1050,7 @@ function extractJSON(raw: string): Record<string, unknown> | null {
     try {
       return JSON.parse(codeBlock[1].trim());
     } catch {
+      console.warn("Failed to parse analysis JSON code block", codeBlock[1]);
       // continue
     }
   }
@@ -1067,6 +1062,7 @@ function extractJSON(raw: string): Record<string, unknown> | null {
     try {
       return JSON.parse(raw.slice(start, end + 1));
     } catch {
+      console.warn("Failed to parse analysis JSON object", raw);
       // continue
     }
   }

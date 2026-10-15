@@ -40,9 +40,21 @@ import {
 import { getApiErrorMessage } from "../utils/apiError";
 import { tradingKeyService } from "../services/tradingKeyService";
 import { useTradingKeyStatus } from "../hooks/useTradingKeyStatus";
+import { Banner, Skeleton, InfoTooltip, useToast } from "../components/ui";
+import {
+  Account,
+  AccountSettings,
+  AccountSettingsUpdate,
+  accountService,
+  getActiveAccountSelection,
+  onActiveAccountChange,
+  setActiveAccount,
+} from "../services/accountService";
+import ApiKeysSection from "../components/ApiKeysSection";
+import BillingSection from "../components/BillingSection";
 
 type AIBackend = "llm_chain" | "cli_agent";
-type SettingsTab = "profile" | "trading" | "notifications" | "admin";
+type SettingsTab = "profile" | "trading" | "notifications" | "accounts" | "admin";
 
 const RISK_MODES: { value: RiskMode; label: string; description: string }[] = [
   {
@@ -80,6 +92,7 @@ const INVERSE_SIZE_MODES: {
 ];
 
 export default function SettingsPage() {
+  const toast = useToast();
   const { walletAddress, isAdmin } = useAuthStore();
   const [activeTab, setActiveTab] = useState<SettingsTab>("profile");
   const [settings, setSettings] = useState<UserSettings | null>(null);
@@ -88,7 +101,6 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // Admin-specific state
   const [adminProviders, setAdminProviders] = useState<AdminProvidersResponse | null>(null);
@@ -190,8 +202,7 @@ export default function SettingsPage() {
       setDiscordUrl("");
       setWebhookUrl("");
       setWebhookSecret("");
-      setSuccessMessage("Notification channel created!");
-      setTimeout(() => setSuccessMessage(null), 3000);
+      toast.success("Notification channel created!");
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to create notification channel"));
     } finally {
@@ -211,8 +222,7 @@ export default function SettingsPage() {
           channel_ids: p.channel_ids.filter((cid) => cid !== id),
         })),
       );
-      setSuccessMessage("Notification channel deleted!");
-      setTimeout(() => setSuccessMessage(null), 3000);
+      toast.success("Notification channel deleted!");
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to delete notification channel"));
     } finally {
@@ -226,11 +236,10 @@ export default function SettingsPage() {
       setError(null);
       const result = await sendTestAlert({ channel_id: id });
       if (result.status === "dispatched") {
-        setSuccessMessage("Test alert sent — check your channel.");
+        toast.success("Test alert sent — check your channel.");
       } else {
         setError(`Test alert not delivered (${result.reason || result.status}).`);
       }
-      setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to send test alert"));
     } finally {
@@ -277,8 +286,7 @@ export default function SettingsPage() {
       const updated = await updateNotificationPreferences(toSave);
       setNotifPreferences(updated);
       setPrefsDirty(false);
-      setSuccessMessage("Notification preferences saved!");
-      setTimeout(() => setSuccessMessage(null), 3000);
+      toast.success("Notification preferences saved!");
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to save notification preferences"));
     } finally {
@@ -391,8 +399,7 @@ export default function SettingsPage() {
           default_model: result.default_model,
         });
       }
-      setSuccessMessage("System defaults updated!");
-      setTimeout(() => setSuccessMessage(null), 3000);
+      toast.success("System defaults updated!");
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to update defaults"));
     } finally {
@@ -418,8 +425,7 @@ export default function SettingsPage() {
           users: adminUsers.users.map((u) => (u.user_id === userId ? updated : u)),
         });
       }
-      setSuccessMessage("User settings updated!");
-      setTimeout(() => setSuccessMessage(null), 3000);
+      toast.success("User settings updated!");
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to update user settings"));
     } finally {
@@ -432,13 +438,11 @@ export default function SettingsPage() {
     try {
       setSaving(true);
       setError(null);
-      setSuccessMessage(null);
       const updated = await settingsService.updateUserSettings({
         ai_backend: backend,
       });
       setSettings(updated);
-      setSuccessMessage("Settings saved!");
-      setTimeout(() => setSuccessMessage(null), 3000);
+      toast.success("Settings saved!");
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to save settings"));
     } finally {
@@ -450,15 +454,13 @@ export default function SettingsPage() {
     try {
       setSaving(true);
       setError(null);
-      setSuccessMessage(null);
       const updated = await settingsService.updateUserProfile({
         display_name: displayName,
         email: email || null,
         phone: phone || null,
       });
       setProfile(updated);
-      setSuccessMessage("Profile saved!");
-      setTimeout(() => setSuccessMessage(null), 3000);
+      toast.success("Profile saved!");
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to save profile"));
     } finally {
@@ -470,15 +472,13 @@ export default function SettingsPage() {
     try {
       setSaving(true);
       setError(null);
-      setSuccessMessage(null);
       const updated = await settingsService.updateLLMSettings({
         provider: llmProviderChoice || null,
         model: llmModelChoice || null,
       });
       setCurrentLlmSettings(updated);
       setLlmDirty(false);
-      setSuccessMessage("LLM preferences saved!");
-      setTimeout(() => setSuccessMessage(null), 3000);
+      toast.success("LLM preferences saved!");
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to save LLM preferences"));
     } finally {
@@ -503,8 +503,7 @@ export default function SettingsPage() {
           profile_picture_url: dataUrl,
         });
         setProfile(updated);
-        setSuccessMessage("Avatar updated!");
-        setTimeout(() => setSuccessMessage(null), 3000);
+        toast.success("Avatar updated!");
       } catch (err: unknown) {
         setError(getApiErrorMessage(err, "Failed to upload avatar"));
       } finally {
@@ -521,8 +520,7 @@ export default function SettingsPage() {
         profile_picture_url: "",
       });
       setProfile(updated);
-      setSuccessMessage("Avatar removed!");
-      setTimeout(() => setSuccessMessage(null), 3000);
+      toast.success("Avatar removed!");
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to remove avatar"));
     } finally {
@@ -535,13 +533,11 @@ export default function SettingsPage() {
     try {
       setSaving(true);
       setError(null);
-      setSuccessMessage(null);
       const updated = await settingsService.updateCopyTradingSettings({
         [field]: value,
       });
       setSettings(updated);
-      setSuccessMessage("Copy-trading settings saved!");
-      setTimeout(() => setSuccessMessage(null), 3000);
+      toast.success("Copy-trading settings saved!");
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to save copy-trading settings"));
     } finally {
@@ -554,11 +550,9 @@ export default function SettingsPage() {
     try {
       setSaving(true);
       setError(null);
-      setSuccessMessage(null);
       const updated = await settingsService.updateDailyDigestSettings(enabled);
       setSettings(updated);
-      setSuccessMessage("Daily digest preference saved!");
-      setTimeout(() => setSuccessMessage(null), 3000);
+      toast.success("Daily digest preference saved!");
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to save daily digest preference"));
     } finally {
@@ -582,8 +576,7 @@ export default function SettingsPage() {
       setTradingPrivateKey("");
       setClobCredentialsJson("");
       await refreshTradingKeyStatus();
-      setSuccessMessage("Trading key connected!");
-      setTimeout(() => setSuccessMessage(null), 3000);
+      toast.success("Trading key connected!");
     } catch (err: unknown) {
       setTradingKeyError(getApiErrorMessage(err, "Failed to connect trading key"));
     } finally {
@@ -597,8 +590,7 @@ export default function SettingsPage() {
       setTradingKeyError(null);
       await tradingKeyService.disconnectTradingKey();
       await refreshTradingKeyStatus();
-      setSuccessMessage("Trading key disconnected!");
-      setTimeout(() => setSuccessMessage(null), 3000);
+      toast.success("Trading key disconnected!");
     } catch (err: unknown) {
       setTradingKeyError(getApiErrorMessage(err, "Failed to disconnect trading key"));
     } finally {
@@ -624,8 +616,13 @@ export default function SettingsPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center" style={{ minHeight: "calc(100vh - 8rem)" }}>
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[var(--accent)]"></div>
+      <div
+        className="flex items-center justify-center"
+        style={{ minHeight: "calc(100vh - 8rem)" }}
+        role="status"
+        aria-live="polite"
+      >
+        <Skeleton variant="text" lines={3} className="w-64" />
       </div>
     );
   }
@@ -634,11 +631,14 @@ export default function SettingsPage() {
     <div className="max-w-2xl mx-auto space-y-6">
       <h1 className="text-3xl font-bold">Settings</h1>
 
-      {error && <div className="alert-error px-4 py-3 rounded">{error}</div>}
-      {successMessage && <div className="alert-success px-4 py-3 rounded">{successMessage}</div>}
+      {error && (
+        <Banner variant="error" onDismiss={() => setError(null)} onRetry={loadSettings}>
+          {error}
+        </Banner>
+      )}
 
       {/* Tab Navigation */}
-      <div className="flex gap-1 border-b border-[var(--line)]">
+      <div className="flex gap-1 border-b border-[var(--line)]" data-tutorial="settings">
         <button
           onClick={() => setActiveTab("profile")}
           className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
@@ -668,6 +668,16 @@ export default function SettingsPage() {
           }`}
         >
           Notifications
+        </button>
+        <button
+          onClick={() => setActiveTab("accounts")}
+          className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
+            activeTab === "accounts"
+              ? "border-[var(--accent)] text-[var(--accent)]"
+              : "border-transparent text-muted hover:text-white"
+          }`}
+        >
+          Accounts
         </button>
         {isAdmin && (
           <button
@@ -968,7 +978,9 @@ export default function SettingsPage() {
                   </p>
                 </div>
                 {tradingKeyError && (
-                  <div className="p-3 alert-error rounded text-sm">{tradingKeyError}</div>
+                  <Banner variant="error" onDismiss={() => setTradingKeyError(null)}>
+                    {tradingKeyError}
+                  </Banner>
                 )}
                 <button
                   onClick={handleConnectTradingKey}
@@ -1117,7 +1129,16 @@ export default function SettingsPage() {
           {/* Inverse Position Bot Settings */}
           <div className="surface-panel p-6">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-semibold">Inverse Position Bot</h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl font-semibold">Inverse Position Bot</h2>
+                <InfoTooltip term="Inverse Position Bot">
+                  Watches your open positions and can flip them for you: every few minutes an AI
+                  re-reads market data, web news and X (Twitter) sentiment, and when it is confident
+                  the opposite outcome is now more likely it sells the current side and buys the
+                  other one. Most evaluations end in HOLD, so it acts rarely and never on a weak
+                  signal.
+                </InfoTooltip>
+              </div>
               <label className="flex items-center gap-2 cursor-pointer">
                 <span className="text-sm text-soft">
                   {settings?.inverse_bot_enabled ? "Enabled" : "Disabled"}
@@ -1248,8 +1269,12 @@ export default function SettingsPage() {
             </p>
 
             {notifLoading ? (
-              <div className="flex items-center justify-center py-8">
-                <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-[var(--accent)]"></div>
+              <div
+                className="flex items-center justify-center py-8"
+                role="status"
+                aria-live="polite"
+              >
+                <Skeleton variant="text" lines={2} className="w-48" />
               </div>
             ) : (
               <>
@@ -1505,6 +1530,21 @@ export default function SettingsPage() {
         </>
       )}
 
+      {/* Accounts Tab */}
+      {activeTab === "accounts" && (
+        <div className="space-y-8">
+          <AccountsTab />
+          {/* External API credentials live with accounts: a key is the
+              same owner acting through a channel that cannot hold a
+              cookie, and one may be scoped to a single account. */}
+          <ApiKeysSection />
+          {/* The tier is an account-level fact: a plan grants capabilities
+              and quotas that every sub-account inherits, so it belongs
+              here rather than on its own tab. */}
+          <BillingSection />
+        </div>
+      )}
+
       {/* Admin Tab */}
       {activeTab === "admin" && isAdmin && (
         <AdminSettingsTab
@@ -1592,6 +1632,383 @@ interface AdminSettingsTabProps {
   onRefresh: () => void;
 }
 
+function AccountsTab() {
+  const toast = useToast();
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [activeAccount, setActiveAccountState] = useState<Account | null>(
+    getActiveAccountSelection,
+  );
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [newName, setNewName] = useState("");
+  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [settingsOf, setSettingsOf] = useState<Account["id"] | null>(null);
+  const [settings, setSettings] = useState<AccountSettings | null>(null);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+
+  useEffect(() => onActiveAccountChange(setActiveAccountState), []);
+
+  const loadAccounts = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const list = await accountService.listAccounts();
+      setAccounts(list);
+    } catch (err) {
+      setError(getApiErrorMessage(err, "Could not load accounts."));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadAccounts();
+  }, []);
+
+  const loadSettings = async (id: Account["id"]) => {
+    setSettingsSaving(true);
+    setError(null);
+    try {
+      const row = await accountService.getAccountSettings(id);
+      setSettings(row);
+      setSettingsOf(id);
+    } catch (err) {
+      setError(getApiErrorMessage(err, "Could not load account settings."));
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
+  const handleCreate = async () => {
+    const name = newName.trim();
+    if (!name) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await accountService.createAccount(name);
+      setAccounts(await accountService.listAccounts());
+      setNewName("");
+      toast.success(`Created "". Switch to it from the header.`);
+    } catch (err) {
+      setError(getApiErrorMessage(err, "Could not create the sub-account."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRename = async (id: Account["id"]) => {
+    const name = renameValue.trim();
+    if (!name) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await accountService.renameAccount(id, name);
+      setRenamingId(null);
+      setAccounts(await accountService.listAccounts());
+      toast.success("Account renamed.");
+    } catch (err) {
+      setError(getApiErrorMessage(err, "Could not rename the account."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSelect = (account: Account) => {
+    setActiveAccount(account);
+    setActiveAccountState(account);
+    setSettingsOf(null);
+    setSettings(null);
+  };
+
+  const handleSettingsChange = (patch: AccountSettingsUpdate) => {
+    setSettings((prev) => (prev ? { ...prev, ...patch } : prev));
+  };
+
+  const handleSettingsSave = async () => {
+    if (settingsOf === null || !settings) return;
+    setSettingsSaving(true);
+    setError(null);
+    try {
+      const saved = await accountService.updateAccountSettings(settingsOf, {
+        ai_backend: settings.ai_backend,
+        kelly_fraction: settings.kelly_fraction,
+        simulation_mode: settings.simulation_mode,
+        paper_balance: settings.paper_balance,
+        daily_loss_limit: settings.daily_loss_limit,
+        max_position_size: settings.max_position_size,
+        max_drawdown_pct: settings.max_drawdown_pct,
+        require_ai_approval: settings.require_ai_approval,
+      });
+      setSettings(saved);
+      toast.success("Account settings saved.");
+    } catch (err) {
+      setError(getApiErrorMessage(err, "Could not save account settings."));
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
+  const personalAccount = accounts.find((a) => a.kind === "personal") ?? null;
+
+  return (
+    <>
+      <div className="surface-panel p-6">
+        <h2 className="text-xl font-semibold mb-2">Trading Accounts</h2>
+        <p className="text-soft mb-6 text-sm">
+          Your wallet owns one personal account — the identity every existing page uses — plus any
+          number of segregated sub-accounts with their own settings, simulation mode and paper
+          balance. Switching accounts from the header sends <code>X-Account-Id</code> on subsequent
+          requests.
+        </p>
+
+        {error && (
+          <div className="mb-4">
+            <Banner variant="error" onDismiss={() => setError(null)} onRetry={() => loadAccounts()}>
+              {error}
+            </Banner>
+          </div>
+        )}
+
+        {loading ? (
+          <div className="flex items-center justify-center py-8" role="status" aria-live="polite">
+            <Skeleton variant="text" lines={2} className="w-48" />
+          </div>
+        ) : (
+          <>
+            {accounts.length === 0 ? (
+              <div className="text-muted text-sm">
+                <p>No accounts found.</p>
+                <p className="text-xs mt-1">
+                  Your personal account is created automatically on first login. Use the form above
+                  to add a segregated sub-account with its own settings and paper balance.
+                </p>
+              </div>
+            ) : (
+              <ul className="space-y-3 mb-6">
+                {accounts.map((account) => {
+                  const isActive = (activeAccount ?? personalAccount)?.id === account.id;
+                  return (
+                    <li
+                      key={account.id}
+                      className="p-3 rounded-lg border border-[var(--line)] bg-[var(--bg-soft)]"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold">
+                              {account.kind === "personal" ? "Personal" : account.name}
+                            </span>
+                            {isActive && <span className="chip chip-success text-xs">Active</span>}
+                            {account.is_default && (
+                              <span className="chip bg-[var(--bg-soft)] text-muted border border-[var(--line)] text-xs">
+                                Default
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-muted mt-0.5">
+                            {account.kind === "sub" ? "Sub-account" : "Login account"} · #
+                            {account.id}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleSelect(account)}
+                            disabled={isActive || busy}
+                            className="btn-muted text-sm"
+                          >
+                            {isActive ? "Selected" : "Switch to"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRenamingId(account.id);
+                              setRenameValue(
+                                account.kind === "personal" ? "Personal" : account.name,
+                              );
+                            }}
+                            disabled={busy}
+                            className="btn-muted text-sm"
+                          >
+                            Rename
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void loadSettings(account.id)}
+                            disabled={settingsSaving}
+                            className="btn-muted text-sm"
+                          >
+                            Settings
+                          </button>
+                        </div>
+                      </div>
+
+                      {renamingId === account.id && (
+                        <div className="flex items-center gap-2 mt-3">
+                          <input
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            maxLength={100}
+                            className="input-field text-sm"
+                            aria-label={`Rename ${account.name}`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => void handleRename(account.id)}
+                            disabled={busy || !renameValue.trim()}
+                            className="btn-primary text-sm"
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRenamingId(null)}
+                            className="btn-muted text-sm"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+
+            <div className="flex items-end gap-2">
+              <div className="flex-1">
+                <label className="block text-sm font-medium mb-1">New sub-account</label>
+                <input
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleCreate();
+                  }}
+                  placeholder="e.g. Scalping"
+                  maxLength={100}
+                  className="input-field text-sm"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleCreate()}
+                disabled={busy || !newName.trim()}
+                className="btn-primary text-sm"
+              >
+                {busy ? "Creating..." : "Create"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {settingsOf !== null && (
+        <div className="surface-panel p-6">
+          <h2 className="text-xl font-semibold mb-4">
+            Settings — {accounts.find((a) => a.id === settingsOf)?.name ?? `#${settingsOf}`}
+          </h2>
+          <p className="text-soft mb-6 text-sm">
+            These values apply to this account only. The personal account keeps reading the Trading
+            tab, so both views edit the same row.
+          </p>
+
+          {settingsSaving && !settings ? (
+            <div className="flex items-center justify-center py-8" role="status" aria-live="polite">
+              <Skeleton variant="text" lines={2} className="w-48" />
+            </div>
+          ) : (
+            settings && (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                  <NumberInput
+                    label="Paper balance (USDC)"
+                    value={settings.paper_balance}
+                    onChange={(v) => handleSettingsChange({ paper_balance: v })}
+                    disabled={settingsSaving}
+                  />
+                  <NumberInput
+                    label="Daily loss limit (USDC)"
+                    value={settings.daily_loss_limit}
+                    onChange={(v) => handleSettingsChange({ daily_loss_limit: v })}
+                    disabled={settingsSaving}
+                  />
+                  <NumberInput
+                    label="Max position size (USDC)"
+                    value={settings.max_position_size}
+                    onChange={(v) => handleSettingsChange({ max_position_size: v })}
+                    disabled={settingsSaving}
+                  />
+                  <NumberInput
+                    label="Max drawdown (%)"
+                    value={settings.max_drawdown_pct}
+                    onChange={(v) => handleSettingsChange({ max_drawdown_pct: v })}
+                    disabled={settingsSaving}
+                  />
+                  <NumberInput
+                    label="Kelly fraction (0-1)"
+                    value={settings.kelly_fraction}
+                    onChange={(v) => handleSettingsChange({ kelly_fraction: v })}
+                    disabled={settingsSaving}
+                    max={1}
+                  />
+                </div>
+
+                <div className="space-y-3 mb-6">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={settings.simulation_mode}
+                      onChange={(e) => handleSettingsChange({ simulation_mode: e.target.checked })}
+                      disabled={settingsSaving}
+                      className="rounded border-[var(--line)] bg-[var(--bg-soft)]"
+                    />
+                    Simulation mode (paper fills only)
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={settings.require_ai_approval}
+                      onChange={(e) =>
+                        handleSettingsChange({ require_ai_approval: e.target.checked })
+                      }
+                      disabled={settingsSaving}
+                      className="rounded border-[var(--line)] bg-[var(--bg-soft)]"
+                    />
+                    Require AI approval before copying
+                  </label>
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSettingsOf(null);
+                      setSettings(null);
+                    }}
+                    className="btn-muted text-sm"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSettingsSave()}
+                    disabled={settingsSaving}
+                    className="btn-primary text-sm"
+                  >
+                    {settingsSaving ? "Saving..." : "Save settings"}
+                  </button>
+                </div>
+              </>
+            )
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 function AdminSettingsTab({
   providers,
   users,
@@ -1616,8 +2033,8 @@ function AdminSettingsTab({
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-[var(--accent)]"></div>
+      <div className="flex items-center justify-center py-12" role="status" aria-live="polite">
+        <Skeleton variant="text" lines={2} className="w-48" />
       </div>
     );
   }

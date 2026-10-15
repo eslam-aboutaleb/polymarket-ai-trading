@@ -1,6 +1,7 @@
 """Authentication API routes"""
 
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.models.user import User
 from app.schemas.auth import (
+    PRIVATE_KEY_PATTERN,
     ChallengeResponse,
     LoginRequest,
     LogoutRequest,
@@ -51,6 +53,10 @@ REFRESH_TOKEN_COOKIE_NAME = "pm_refresh_token"
 
 
 def _secure_cookie_enabled() -> bool:
+    # Explicit COOKIE_SECURE wins; otherwise the secure path is the
+    # default outside local/dev environments.
+    if settings.cookie_secure is not None:
+        return settings.cookie_secure
     return not settings.is_local_environment
 
 
@@ -353,6 +359,14 @@ def login_with_private_key(
     try:
         _validate_origin(http_request)
 
+        # Validate the key format before the heavy CLOB credential
+        # derivation so a malformed key fails fast with 400 instead of
+        # burning key derivation and a network round-trip.
+        if not re.fullmatch(PRIVATE_KEY_PATTERN, request.private_key):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid private key format"
+            )
+
         # Generate challenge
         nonce = str(uuid4())
         timestamp = datetime.now(UTC).isoformat()
@@ -593,10 +607,12 @@ def refresh_access_token(
         refresh_max_age_seconds=refresh_max_age_seconds,
     )
 
+    # Tokens are delivered via httpOnly cookies only — never in the
+    # response body, where any XSS could exfiltrate the long-lived
+    # refresh token.
     return TokenResponse(
-        access_token=access_token,
-        refresh_token=refresh_token_str,
         expires_in=settings.access_token_expire_minutes * 60,
+        wallet_address=user.wallet_address,
     )
 
 

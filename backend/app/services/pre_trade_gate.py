@@ -269,6 +269,7 @@ class OrderIdempotencyKey(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    account_id = Column(Integer, nullable=True, index=True)
     idempotency_key = Column(String(200), nullable=False, index=True)
     result_json = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)

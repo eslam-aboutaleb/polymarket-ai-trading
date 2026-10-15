@@ -13,6 +13,7 @@ from typing import Any
 from app.config import AIBackend, get_settings
 from app.services.llm_gateway import PROVIDER_TO_PROTO, LLMProviderType
 from app.utils.cache import get_cache
+from app.utils.scheduler_lock import acquire_scheduler_lock, release_scheduler_lock
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -215,18 +216,26 @@ async def _news_generation_loop() -> None:
     The interval is slept *before* the first cycle so a fresh boot
     does not immediately fire five LLM calls; every later cycle runs
     one ``_GENERATION_INTERVAL`` after the previous one.
+
+    The advisory lock is held for the loop's lifetime, so it is
+    released in the ``finally`` on every exit path — a cancellation
+    from ``stop_news_generator`` included — instead of being leaked
+    until process exit.
     """
     svc = get_news_service()
-    while True:
-        await asyncio.sleep(_GENERATION_INTERVAL)
-        try:
-            logger.info("Background news generation: starting cycle")
-            articles = await svc.generate_for_trending(max_markets=5)
-            logger.info("Background news generation: produced %d articles", len(articles))
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.exception("Background news generation error: %s", exc)
+    try:
+        while True:
+            await asyncio.sleep(_GENERATION_INTERVAL)
+            try:
+                logger.info("Background news generation: starting cycle")
+                articles = await svc.generate_for_trending(max_markets=5)
+                logger.info("Background news generation: produced %d articles", len(articles))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception("Background news generation error: %s", exc)
+    finally:
+        release_scheduler_lock("news_generator")
 
 
 async def start_news_generator() -> None:
@@ -234,16 +243,30 @@ async def start_news_generator() -> None:
 
     A finished (e.g. crashed) task is replaced, so the generator
     can be restarted without an explicit ``stop_news_generator``.
+
+    The in-process guard only covers one process, so the scheduler also
+    takes its Postgres advisory lock (plan 10 Phase A): without it, a
+    second worker — which the role split now makes possible — would
+    generate a second copy of every article in the same cycle.
     """
     global _generator_task
     if _generator_task is not None and not _generator_task.done():
+        return
+    if not acquire_scheduler_lock("news_generator"):
         return
     _generator_task = asyncio.create_task(_news_generation_loop())
     logger.info("News background generator started")
 
 
 async def stop_news_generator() -> None:
-    """Cancel the periodic news background task."""
+    """Cancel the periodic news background task and release its advisory lock.
+
+    The release is idempotent — ``release_scheduler_lock`` is a no-op
+    for a lock this process does not hold. The loop releases in its own
+    ``finally`` when the cancellation lands inside it; this extra call
+    covers a task cancelled before its first step, whose coroutine body
+    (try block included) never ran.
+    """
     global _generator_task
     if _generator_task is not None:
         _generator_task.cancel()
@@ -251,3 +274,4 @@ async def stop_news_generator() -> None:
             await _generator_task
         _generator_task = None
         logger.info("News background generator stopped")
+    release_scheduler_lock("news_generator")

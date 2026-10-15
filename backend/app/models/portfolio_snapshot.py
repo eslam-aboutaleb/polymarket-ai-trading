@@ -45,6 +45,7 @@ class PortfolioSnapshot(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    account_id = Column(Integer, nullable=True, index=True)
     # Truncated to the hour — the idempotency key for the writer.
     bucket_hour = Column(DateTime(timezone=True), nullable=False, index=True)
     captured_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)

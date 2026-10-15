@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 from fastapi import HTTPException
 from fastapi.responses import Response
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -471,6 +472,21 @@ class LoginWithPrivateKeyTests(AuthRouteTestBase):
         client.create_or_derive_api_creds.return_value = creds
         return client
 
+    def test_private_key_schema_pattern_rejects_invalid_keys(self):
+        for bad_key in (
+            "",
+            "0x",
+            "11" * 32,  # valid hex but missing the 0x prefix
+            "0x" + "11" * 31,  # too short
+            "0x" + "11" * 65,  # too long
+            "0x" + "zz" * 32,  # non-hex
+        ):
+            with self.assertRaises(ValidationError, msg=bad_key):
+                PrivateKeyLoginRequest(private_key=bad_key)
+        # A well-formed key passes validation.
+        request = PrivateKeyLoginRequest(private_key=PRIVATE_KEY)
+        self.assertEqual(request.private_key, PRIVATE_KEY)
+
     def test_login_with_key_happy_path(self):
         clob_client = self._clob_client_mock()
         with (
@@ -510,21 +526,45 @@ class LoginWithPrivateKeyTests(AuthRouteTestBase):
             {"api_key": "api-key", "api_secret": "api-secret", "api_passphrase": "api-passphrase"},
         )
 
-    def test_login_with_key_adds_0x_prefix_to_bare_private_key(self):
-        clob_client = self._clob_client_mock()
-        bare_key = "11" * 32  # no 0x prefix
+    def test_login_with_key_rejects_bare_private_key_without_prefix(self):
+        # The schema enforces ^0x[a-fA-F0-9]{64}$, so a bare hex key is
+        # rejected at validation time (422) and never reaches the
+        # expensive signing / CLOB derivation.
         with (
-            patch.object(auth_module, "sign_message_with_key", return_value=("0xsig", WALLET)),
-            patch.object(auth_module, "verify_eth_signature", return_value=True),
-            patch.object(auth_module, "store_wallet_credentials") as store_mock,
-            patch.object(auth_module, "create_access_token", return_value="a"),
-            patch.object(auth_module, "create_refresh_token", return_value="r"),
-            patch("py_clob_client.client.ClobClient", return_value=clob_client),
+            patch.object(auth_module, "sign_message_with_key") as sign_mock,
+            patch("py_clob_client.client.ClobClient") as clob_mock,
         ):
-            resp = self.client.post("/api/auth/login-with-key", json={"private_key": bare_key})
+            resp = self.client.post("/api/auth/login-with-key", json={"private_key": "11" * 32})
 
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(store_mock.call_args.kwargs["private_key"], "0x" + bare_key)
+        self.assertEqual(resp.status_code, 422)
+        sign_mock.assert_not_called()
+        clob_mock.assert_not_called()
+
+    def test_login_with_key_rejects_malformed_private_key_over_http(self):
+        with (
+            patch.object(auth_module, "sign_message_with_key") as sign_mock,
+            patch("py_clob_client.client.ClobClient") as clob_mock,
+        ):
+            resp = self.client.post(
+                "/api/auth/login-with-key", json={"private_key": "not-a-private-key"}
+            )
+
+        self.assertEqual(resp.status_code, 422)
+        sign_mock.assert_not_called()
+        clob_mock.assert_not_called()
+
+    def test_login_with_key_rejects_wrong_length_hex_key(self):
+        with (
+            patch.object(auth_module, "sign_message_with_key") as sign_mock,
+            patch("py_clob_client.client.ClobClient") as clob_mock,
+        ):
+            resp = self.client.post(
+                "/api/auth/login-with-key", json={"private_key": "0x" + "11" * 31}
+            )
+
+        self.assertEqual(resp.status_code, 422)
+        sign_mock.assert_not_called()
+        clob_mock.assert_not_called()
 
     def test_login_with_key_clob_creds_failure_is_non_fatal(self):
         with (
@@ -615,6 +655,30 @@ class LoginWithPrivateKeyTests(AuthRouteTestBase):
             )
         self.assertEqual(ctx.exception.status_code, 400)
         self.assertEqual(ctx.exception.detail, "Invalid private key format")
+
+    def test_login_with_key_invalid_format_is_400_before_derivation(self):
+        # Defense in depth: the handler re-checks the key format before
+        # the expensive signing + CLOB credential derivation. The schema
+        # pattern already rejects this over HTTP (422), so the request
+        # object is constructed directly to exercise the handler guard.
+        request = PrivateKeyLoginRequest.model_construct(
+            private_key="0x" + "zz" * 32, keep_logged_in=False
+        )
+        with (
+            patch.object(auth_module, "sign_message_with_key") as sign_mock,
+            patch("py_clob_client.client.ClobClient") as clob_mock,
+            self.assertRaises(HTTPException) as ctx,
+        ):
+            login_with_private_key(
+                request=request,
+                http_request=_request("/api/auth/login-with-key"),
+                response=Response(),
+                db=self.db,
+            )
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail, "Invalid private key format")
+        sign_mock.assert_not_called()
+        clob_mock.assert_not_called()
 
     def test_login_with_key_unexpected_error_is_400(self):
         with (
@@ -741,9 +805,13 @@ class RefreshAccessTokenTests(AuthRouteTestBase):
 
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
-        self.assertEqual(data["access_token"], "new-access-token")
-        self.assertEqual(data["refresh_token"], "new-refresh-token")
+        # Tokens are delivered via httpOnly cookies only, never the body.
+        self.assertIsNone(data["access_token"])
+        self.assertIsNone(data["refresh_token"])
         self.assertEqual(data["expires_in"], get_settings().access_token_expire_minutes * 60)
+        self.assertEqual(data["wallet_address"], WALLET)
+        self.assertEqual(resp.cookies.get(ACCESS_TOKEN_COOKIE_NAME), "new-access-token")
+        self.assertEqual(resp.cookies.get(REFRESH_TOKEN_COOKIE_NAME), "new-refresh-token")
 
         # Old token revoked, new token persisted.
         self.assertIsNone(
@@ -928,6 +996,55 @@ class RefreshAccessTokenTests(AuthRouteTestBase):
                 headers={"Origin": EVIL_ORIGIN},
             )
         self.assertEqual(resp.status_code, 403)
+
+    def test_refresh_sets_secure_cookies_in_non_local_environment(self):
+        user = self._create_user()
+        self._create_refresh_record("secure-token", user.id, datetime.now(UTC) + timedelta(days=3))
+        with (
+            patch.object(auth_module.settings, "environment", "production"),
+            patch.object(
+                auth_module,
+                "verify_token",
+                return_value={"type": "refresh", "sub": WALLET, "user_id": user.id},
+            ),
+            patch.object(auth_module, "create_access_token", return_value="a"),
+            patch.object(auth_module, "create_refresh_token", return_value="r"),
+        ):
+            resp = self.client.post("/api/auth/refresh", json={"refresh_token": "secure-token"})
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIsNone(data["access_token"])
+        self.assertIsNone(data["refresh_token"])
+        cookie_headers = resp.headers.get_list("set-cookie")
+        self.assertEqual(len(cookie_headers), 2)
+        self.assertTrue(all("Secure" in c for c in cookie_headers))
+        self.assertTrue(all("HttpOnly" in c for c in cookie_headers))
+        self.assertTrue(all("SameSite=strict" in c for c in cookie_headers))
+        self.assertTrue(all("Path=/" in c for c in cookie_headers))
+
+    def test_refresh_cookie_secure_override_disables_secure_flag(self):
+        user = self._create_user()
+        self._create_refresh_record(
+            "override-token", user.id, datetime.now(UTC) + timedelta(days=3)
+        )
+        with (
+            patch.object(auth_module.settings, "environment", "production"),
+            patch.object(auth_module.settings, "cookie_secure", False),
+            patch.object(
+                auth_module,
+                "verify_token",
+                return_value={"type": "refresh", "sub": WALLET, "user_id": user.id},
+            ),
+            patch.object(auth_module, "create_access_token", return_value="a"),
+            patch.object(auth_module, "create_refresh_token", return_value="r"),
+        ):
+            resp = self.client.post("/api/auth/refresh", json={"refresh_token": "override-token"})
+
+        self.assertEqual(resp.status_code, 200)
+        cookie_headers = resp.headers.get_list("set-cookie")
+        self.assertEqual(len(cookie_headers), 2)
+        self.assertTrue(all("Secure" not in c for c in cookie_headers))
 
 
 class LogoutTests(AuthRouteTestBase):

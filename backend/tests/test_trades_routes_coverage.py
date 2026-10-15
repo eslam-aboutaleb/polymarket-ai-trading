@@ -398,7 +398,10 @@ class ExecuteTradeTests(_TradesRouteTestCase):
             resp = self.client.post("/api/trades/execute", json=EXECUTE_BODY)
 
         self.assertEqual(resp.status_code, 503)
-        self.assertIn("Credential storage is unavailable", resp.json()["detail"])
+        self.assertEqual(
+            resp.json()["detail"],
+            "Trading credentials are temporarily unavailable",
+        )
         place.assert_not_called()
 
     def test_execute_idempotent_replay_skips_order(self):
@@ -1715,9 +1718,7 @@ class EmergencyStopTests(_TradesRouteTestCase):
             resp = self.client.post("/api/trades/emergency-stop")
 
         self.assertEqual(resp.status_code, 200)
-        self.assertTrue(
-            any(e.startswith("Failed to fetch positions: ") for e in resp.json()["errors"])
-        )
+        self.assertIn("Failed to fetch positions", resp.json()["errors"])
 
     def test_emergency_stop_closes_positions(self):
         session = FakeSession()
@@ -1760,7 +1761,7 @@ class EmergencyStopTests(_TradesRouteTestCase):
         self.assertEqual(data["positions_closed"], 1)
         errors = data["errors"]
         self.assertTrue(any(e.startswith("Failed to sell tok2") for e in errors))
-        self.assertTrue(any(e.startswith("Exception selling position: ") for e in errors))
+        self.assertIn("Exception selling position", errors)
         # The successful sell used a market price of 0.
         self.assertEqual(place.call_args_list[0].kwargs["price"], 0.0)
         self.assertEqual(place.call_args_list[0].kwargs["side"], "SELL")

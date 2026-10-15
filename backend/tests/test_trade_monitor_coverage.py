@@ -44,10 +44,12 @@ Covered:
 * ``_smtp_ready`` / ``_create_follow_notifications`` -- every email
   skip reason, sent, failed, both-disabled follower, no followers.
 * ``_emit_alert`` -- no dispatcher, dispatch, dispatch failure.
-* ``_gtc_ttl_seconds`` / ``_acquire_job_lock`` / ``_job_heartbeat``.
+* ``_gtc_ttl_seconds`` / ``_acquire_job_lock`` / ``_release_job_lock`` /
+  ``_job_heartbeat``.
 * ``_fill_reconciliation_loop`` / ``_gtc_reconciliation_loop`` --
   lock contention, heartbeat, reconcile, exception isolation,
-  cancellation propagation, GTC interval gating.
+  cancellation propagation, job-lock release on cancellation, GTC
+  interval gating.
 * ``_reconcile_pending_fills`` / ``_reconcile_fills_for_user`` --
   empty pending, per-user grouping, missing user, credential-store
   failure, missing credentials, lookup failure, no fills, fill
@@ -62,7 +64,7 @@ Covered:
   rollback on failure.
 * ``_to_float`` / ``_parse_timestamp`` -- all branches.
 * ``start_trade_monitor`` / ``stop_trade_monitor`` -- task creation,
-  HTTP client lifecycle, task cancellation.
+  HTTP client lifecycle, task cancellation, and recon job-lock release.
 * ``add_watched_wallet`` / ``remove_watched_wallet``.
 """
 
@@ -1753,6 +1755,26 @@ class JobControlTests(_MonitorTestCase):
 
         heartbeat.assert_called_once_with("job")
 
+    def test_release_job_lock_without_scheduler(self):
+        with patch.object(trade_monitor, "release_scheduler_lock", None):
+            trade_monitor._release_job_lock("job")  # no-op, no raise
+
+    def test_release_job_lock_delegates(self):
+        release = MagicMock()
+        with patch.object(trade_monitor, "release_scheduler_lock", release):
+            trade_monitor._release_job_lock("job")
+
+        release.assert_called_once_with("job")
+
+    def test_release_job_lock_swallows_release_failure(self):
+        # The release runs inside a finally that is unwinding a
+        # CancelledError, so it must never raise of its own.
+        release = MagicMock(side_effect=RuntimeError("db down"))
+        with patch.object(trade_monitor, "release_scheduler_lock", release):
+            trade_monitor._release_job_lock("job")  # no raise
+
+        release.assert_called_once_with("job")
+
 
 class FillReconciliationLoopTests(_MonitorTestCase):
     async def test_lock_contention_returns_immediately(self):
@@ -1818,6 +1840,23 @@ class FillReconciliationLoopTests(_MonitorTestCase):
             self.assertRaises(asyncio.CancelledError),
         ):
             await trade_monitor._fill_reconciliation_loop()
+
+    async def test_cancellation_during_the_sleep_releases_the_job_lock(self):
+        # This is the cancellation stop_trade_monitor delivers: the task
+        # is parked in the interval sleep, which sits outside the inner
+        # try. Without the outer finally the job lock stayed in
+        # _held_locks until process exit.
+        release = MagicMock()
+        with (
+            patch.object(trade_monitor, "_acquire_job_lock", return_value=True),
+            patch.object(trade_monitor, "_job_heartbeat", MagicMock()),
+            patch.object(trade_monitor, "release_scheduler_lock", release),
+            patch("asyncio.sleep", AsyncMock(side_effect=asyncio.CancelledError("stop"))),
+            self.assertRaises(asyncio.CancelledError),
+        ):
+            await trade_monitor._fill_reconciliation_loop()
+
+        release.assert_called_once_with("fill_reconciliation")
 
 
 class ReconcilePendingFillsTests(_MonitorTestCase):
@@ -2064,6 +2103,21 @@ class GtcReconciliationLoopTests(_MonitorTestCase):
             self.assertRaises(asyncio.CancelledError),
         ):
             await trade_monitor._gtc_reconciliation_loop()
+
+    async def test_cancellation_during_the_sleep_releases_the_job_lock(self):
+        # Mirrors the fill job: a cancellation parked in the interval
+        # sleep must not leak the job lock until process exit.
+        release = MagicMock()
+        with (
+            patch.object(trade_monitor, "_acquire_job_lock", return_value=True),
+            patch.object(trade_monitor, "_job_heartbeat", MagicMock()),
+            patch.object(trade_monitor, "release_scheduler_lock", release),
+            patch("asyncio.sleep", AsyncMock(side_effect=asyncio.CancelledError("stop"))),
+            self.assertRaises(asyncio.CancelledError),
+        ):
+            await trade_monitor._gtc_reconciliation_loop()
+
+        release.assert_called_once_with("gtc_reconciliation")
 
 
 class ReconcileOrphanedGtcOrdersTests(_MonitorTestCase):
@@ -2404,6 +2458,41 @@ class LifecycleTests(_MonitorTestCase):
         trade_monitor._poll_http_client = None
 
         await trade_monitor.stop_trade_monitor()  # no raise
+
+    async def test_stop_cancels_the_recon_tasks_and_releases_their_job_locks(self):
+        # End-to-end: the real recon loops acquire their Postgres
+        # advisory locks on their first step, park in the interval sleep,
+        # and stop_trade_monitor's cancel must land there and still
+        # release both locks — the cancellation used to leak them until
+        # process exit.
+        acquired = []
+        released = []
+
+        def _acquire(name):
+            acquired.append(name)
+            return True
+
+        with (
+            patch.object(trade_monitor, "acquire_scheduler_lock", side_effect=_acquire),
+            patch.object(trade_monitor, "release_scheduler_lock", side_effect=released.append),
+            patch.object(trade_monitor, "scheduler_heartbeat"),
+        ):
+            trade_monitor._monitor_task = None
+            trade_monitor._poll_http_client = None
+            fill_task = asyncio.create_task(trade_monitor._fill_reconciliation_loop())
+            gtc_task = asyncio.create_task(trade_monitor._gtc_reconciliation_loop())
+            trade_monitor._fill_recon_task = fill_task
+            trade_monitor._gtc_recon_task = gtc_task
+            # One yield lets both loops acquire their lock and reach the
+            # interval sleep, which is where the cancel lands.
+            await asyncio.sleep(0)
+
+            await trade_monitor.stop_trade_monitor()
+
+        self.assertEqual(sorted(acquired), ["fill_reconciliation", "gtc_reconciliation"])
+        self.assertEqual(sorted(released), ["fill_reconciliation", "gtc_reconciliation"])
+        self.assertTrue(fill_task.cancelled())
+        self.assertTrue(gtc_task.cancelled())
 
 
 class WatchListManagementTests(_MonitorTestCase):

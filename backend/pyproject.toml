@@ -39,6 +39,7 @@ dependencies = [
 dev = [
     "pytest>=9.0",
     "pytest-cov>=7.0",
+    "pytest-randomly>=5.0",
     "ruff>=0.6.9",
 ]
 
@@ -54,6 +55,15 @@ testpaths = ["tests"]
 # ../services/shared) is importable.
 pythonpath = [".", "../services/shared"]
 addopts = "--cov=app --cov-report=term-missing --cov-report=xml:coverage.xml"
+
+# Randomize test order (pytest-randomly). Module-level counters and cached
+# singletons made several tests pass only in file order; randomizing turned
+# those latent bugs into deterministic failures, and the shared reset fixture
+# in tests/conftest.py fixes them. Pass `-p no:randomly` or
+# `--randomly-seed=<n>` to reproduce a specific ordering.
+[tool.pytest.ini_options.pytest_randomly]
+# No fixed seed: every run exercises a different order. A failing run prints
+# the seed it used, which is the fastest way to reproduce it.
 
 [tool.coverage.run]
 # Migrations and gRPC stubs are infrastructure, not business logic.

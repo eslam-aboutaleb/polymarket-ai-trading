@@ -24,7 +24,7 @@ services:
       - redis_data:/data
     healthcheck:
       test:
-        ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:-dev_redis_password} ping"]
+        ["CMD-SHELL", "REDISCLI_AUTH=${REDIS_PASSWORD:-dev_redis_password} redis-cli ping"]
       interval: 10s
       timeout: 5s
       retries: 5

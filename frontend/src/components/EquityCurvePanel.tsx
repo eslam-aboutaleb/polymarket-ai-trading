@@ -31,6 +31,7 @@ import {
 import { portfolioService, EquitySnapshotPoint, EquitySummary } from "../services/portfolioService";
 import { settingsService } from "../services/settingsService";
 import { getApiErrorMessage } from "../utils/apiError";
+import { Banner, Skeleton } from "./ui";
 
 /** Period selector options; "all" is the whole recorded history. */
 const PERIODS = ["24h", "7d", "30d", "all"] as const;
@@ -99,6 +100,7 @@ export default function EquityCurvePanel() {
   const [modeOverride, setModeOverride] = useState<Mode | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
 
   const mode: Mode = modeOverride ?? settingsMode ?? "live";
 
@@ -113,7 +115,9 @@ export default function EquityCurvePanel() {
     try {
       const settings = await settingsService.getUserSettings();
       accountMode = modeOverride ?? (settings.simulation_mode ? "paper" : "live");
-    } catch {
+      setSettingsError(null);
+    } catch (err) {
+      setSettingsError(getApiErrorMessage(err, "Failed to load settings"));
       accountMode = modeOverride ?? "live";
     }
     const isPaper = accountMode === "paper";
@@ -208,10 +212,16 @@ export default function EquityCurvePanel() {
         </div>
       </div>
 
+      {settingsError && (
+        <Banner variant="error" onDismiss={() => setSettingsError(null)} onRetry={fetchEquity}>
+          {settingsError}
+        </Banner>
+      )}
+
       {error && (
-        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
+        <Banner variant="error" onDismiss={() => setError(null)} onRetry={fetchEquity}>
           {error}
-        </div>
+        </Banner>
       )}
 
       {/* Stat cards */}
@@ -290,11 +300,14 @@ export default function EquityCurvePanel() {
               </LineChart>
             </ResponsiveContainer>
           </div>
+        ) : loading ? (
+          <div className="py-4" role="status" aria-live="polite">
+            <Skeleton variant="text" lines={3} />
+            <p className="text-soft text-sm mt-2">Loading equity history…</p>
+          </div>
         ) : (
           <p className="text-soft text-sm">
-            {loading
-              ? "Loading equity history…"
-              : `No equity history for the ${mode === "paper" ? "paper" : "live"} account yet — the hourly writer records your first point within an hour.`}
+            {`No equity history for the ${mode === "paper" ? "paper" : "live"} account yet — the hourly writer records your first point within an hour.`}
           </p>
         )}
       </div>

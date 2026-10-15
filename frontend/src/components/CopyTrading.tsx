@@ -33,6 +33,7 @@ import {
 import { buildPolymarketProfileUrl } from "../utils/urlSafety";
 import { useAuthStore } from "../store/authStore";
 import { useLoginModal } from "../context/LoginModalContext";
+import { Banner, Skeleton, ConfirmModal, useToast } from "./ui";
 
 type MockPeriod = "24h" | "7d" | "30d" | "all_time";
 
@@ -95,22 +96,7 @@ const normalizeTraderConfig = (cfg: TraderConfigDraft) => ({
 export default function CopyTrading() {
   const { isAuthenticated } = useAuthStore();
   const { openLoginModal } = useLoginModal();
-
-  // ── Unauthenticated visitors see a connect-wallet prompt ──
-  if (!isAuthenticated) {
-    return (
-      <div className="max-w-3xl mx-auto mt-16 px-4 text-center space-y-6">
-        <h1 className="text-2xl font-bold text-white">Copy Trading</h1>
-        <p className="text-soft text-base leading-relaxed max-w-lg mx-auto">
-          Automatically mirror the trades of top Polymarket traders. Follow wallets, configure
-          position sizing, and track performance — all from one dashboard.
-        </p>
-        <button onClick={openLoginModal} className="btn-accent font-semibold text-sm px-6 py-3">
-          Connect Wallet to Get Started
-        </button>
-      </div>
-    );
-  }
+  const toast = useToast();
 
   const [activeTab, setActiveTab] = useState<"copy" | "mock">(() => {
     try {
@@ -130,7 +116,6 @@ export default function CopyTrading() {
   const [walletInput, setWalletInput] = useState("");
   const [maxPositionInput, setMaxPositionInput] = useState("");
   const [addingWallet, setAddingWallet] = useState(false);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -155,6 +140,7 @@ export default function CopyTrading() {
     wallet: null,
   });
   const [confirmLoading, setConfirmLoading] = useState(false);
+  const [mockRemoveWallet, setMockRemoveWallet] = useState<string | null>(null);
 
   const [evaluationWallet, setEvaluationWallet] = useState("");
   const [evaluationRows, setEvaluationRows] = useState<CopyEvaluationRow[]>([]);
@@ -168,7 +154,6 @@ export default function CopyTrading() {
   const [mockLeaderboard, setMockLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [mockLoading, setMockLoading] = useState(false);
   const [mockError, setMockError] = useState<string | null>(null);
-  const [mockSuccess, setMockSuccess] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -351,7 +336,7 @@ export default function CopyTrading() {
     try {
       await tradesService.unfollowTrader(wallet);
       setFollowing((prev) => prev.filter((f) => f.trader_wallet !== wallet));
-      setSuccessMessage(`Stopped copying trades from ${shortAddress(wallet)}.`);
+      toast.success(`Stopped copying trades from ${shortAddress(wallet)}.`);
       setSaveStatusByWallet((prev) => {
         const next = { ...prev };
         delete next[key];
@@ -375,7 +360,6 @@ export default function CopyTrading() {
 
     if (!isValidWallet(wallet)) {
       setError("Enter a valid Polymarket wallet address (0x + 40 hex chars).");
-      setSuccessMessage(null);
       return;
     }
 
@@ -384,13 +368,11 @@ export default function CopyTrading() {
       (!Number.isFinite(parsedMaxPosition) || parsedMaxPosition <= 0)
     ) {
       setError("Max position size must be a positive number.");
-      setSuccessMessage(null);
       return;
     }
 
     setAddingWallet(true);
     setError(null);
-    setSuccessMessage(null);
 
     try {
       const record = await tradesService.followTrader(wallet, {
@@ -415,7 +397,7 @@ export default function CopyTrading() {
       }));
       setWalletInput("");
       setMaxPositionInput("");
-      setSuccessMessage(`Now copying trades from ${shortAddress(wallet)}.`);
+      toast.success(`Now copying trades from ${shortAddress(wallet)}.`);
       if (!evaluationWallet) {
         setEvaluationWallet(wallet);
       }
@@ -520,7 +502,6 @@ export default function CopyTrading() {
     setSaveStatusByWallet((prev) => ({ ...prev, [key]: "saving" }));
     setSaveStatusMessageByWallet((prev) => ({ ...prev, [key]: null }));
     setError(null);
-    setSuccessMessage(null);
 
     try {
       const normalizedAlias = draft.trader_alias == null ? null : draft.trader_alias.trim() || null;
@@ -545,7 +526,7 @@ export default function CopyTrading() {
         ...prev,
         [key]: defaultTraderConfig(updated),
       }));
-      setSuccessMessage(`Saved copy config for ${shortAddress(key)}.`);
+      toast.success(`Saved copy config for ${shortAddress(key)}.`);
       setSaveStatusByWallet((prev) => ({ ...prev, [key]: "saved" }));
       setSaveStatusMessageByWallet((prev) => ({ ...prev, [key]: "Saved" }));
       return true;
@@ -572,12 +553,10 @@ export default function CopyTrading() {
     const wallet = mockWalletInput.trim().toLowerCase();
     if (!isValidWallet(wallet)) {
       setMockError("Enter a valid Polymarket wallet address (0x + 40 hex chars).");
-      setMockSuccess(null);
       return;
     }
     if (hasMockCopyTrader(mockTraders, wallet)) {
       setMockError("This wallet is already in mock copy trading.");
-      setMockSuccess(null);
       setMockIndicatorByWallet((prev) => ({
         ...prev,
         [wallet]: "already_exists",
@@ -587,7 +566,7 @@ export default function CopyTrading() {
     upsertMockTrader(wallet);
     setMockWalletInput("");
     setMockError(null);
-    setMockSuccess(`Mock copy started for ${shortAddress(wallet)} with $10,000.`);
+    toast.success(`Mock copy started for ${shortAddress(wallet)} with $10,000.`);
     setMockIndicatorByWallet((prev) => ({
       ...prev,
       [wallet]: "added",
@@ -598,7 +577,6 @@ export default function CopyTrading() {
     const normalized = wallet.toLowerCase();
     if (hasMockCopyTrader(mockTraders, normalized)) {
       setMockError("This wallet is already in mock copy trading.");
-      setMockSuccess(null);
       setMockIndicatorByWallet((prev) => ({
         ...prev,
         [normalized]: "already_exists",
@@ -607,7 +585,7 @@ export default function CopyTrading() {
     }
     upsertMockTrader(normalized, alias);
     setMockError(null);
-    setMockSuccess(`Added ${shortAddress(normalized)} to mock copy trading with $10,000.`);
+    toast.success(`Added ${shortAddress(normalized)} to mock copy trading with $10,000.`);
     setMockIndicatorByWallet((prev) => ({
       ...prev,
       [normalized]: "added",
@@ -620,7 +598,7 @@ export default function CopyTrading() {
       saveMockCopyTraders(next);
       return next;
     });
-    setMockSuccess(`Removed ${shortAddress(wallet)} from mock copy trading.`);
+    toast.success(`Removed ${shortAddress(wallet)} from mock copy trading.`);
     setMockError(null);
     setMockIndicatorByWallet((prev) => {
       const next = { ...prev };
@@ -764,6 +742,25 @@ export default function CopyTrading() {
     return [...rows].sort((a, b) => b.realized_pnl - a.realized_pnl);
   }, [attribution]);
 
+  // ── Unauthenticated visitors see a connect-wallet prompt ──
+  // This gate must stay below every hook above: returning early before the
+  // hooks would change the hook count between the unauthenticated first paint
+  // and the authenticated re-render once the session is restored.
+  if (!isAuthenticated) {
+    return (
+      <div className="max-w-3xl mx-auto mt-16 px-4 text-center space-y-6">
+        <h1 className="text-2xl font-bold text-white">Copy Trading</h1>
+        <p className="text-soft text-base leading-relaxed max-w-lg mx-auto">
+          Automatically mirror the trades of top Polymarket traders. Follow wallets, configure
+          position sizing, and track performance — all from one dashboard.
+        </p>
+        <button onClick={openLoginModal} className="btn-accent font-semibold text-sm px-6 py-3">
+          Connect Wallet to Get Started
+        </button>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -821,12 +818,9 @@ export default function CopyTrading() {
       </div>
 
       {activeTab === "copy" && error && (
-        <div className="p-4 alert-error rounded text-sm">{error}</div>
-      )}
-      {activeTab === "copy" && successMessage && (
-        <div className="p-4 rounded text-sm border border-green-500/30 bg-green-500/10 text-green-300">
-          {successMessage}
-        </div>
+        <Banner variant="error" onDismiss={() => setError(null)} onRetry={fetchData}>
+          {error}
+        </Banner>
       )}
 
       {activeTab === "mock" && (
@@ -844,11 +838,14 @@ export default function CopyTrading() {
             </button>
           </div>
 
-          {mockError && <div className="p-3 alert-error rounded text-sm">{mockError}</div>}
-          {mockSuccess && (
-            <div className="p-3 rounded text-sm border border-green-500/30 bg-green-500/10 text-green-300">
-              {mockSuccess}
-            </div>
+          {mockError && (
+            <Banner
+              variant="error"
+              onDismiss={() => setMockError(null)}
+              onRetry={refreshMockLeaderboard}
+            >
+              {mockError}
+            </Banner>
           )}
 
           <div className="flex items-center gap-2 flex-wrap">
@@ -991,7 +988,7 @@ export default function CopyTrading() {
                       </td>
                       <td className="p-3 text-center">
                         <button
-                          onClick={() => handleRemoveMockTrader(row.wallet)}
+                          onClick={() => setMockRemoveWallet(row.wallet)}
                           className="px-3 py-1 rounded text-xs font-semibold bg-red-500/20 text-red-400 hover:bg-red-500/30 transition"
                         >
                           Remove
@@ -1089,7 +1086,13 @@ export default function CopyTrading() {
           </div>
 
           {attributionError && (
-            <div className="p-3 alert-error rounded text-sm">{attributionError}</div>
+            <Banner
+              variant="error"
+              onDismiss={() => setAttributionError(null)}
+              onRetry={fetchAttribution}
+            >
+              {attributionError}
+            </Banner>
           )}
 
           {attribution?.data_quality && attribution.data_quality.unreconciled_sells > 0 && (
@@ -1107,7 +1110,10 @@ export default function CopyTrading() {
           )}
 
           {attributionLoading && !attribution ? (
-            <p className="text-soft text-sm">Loading attribution...</p>
+            <div className="py-4" role="status" aria-live="polite">
+              <Skeleton variant="text" lines={3} />
+              <p className="text-soft text-sm mt-2">Loading attribution...</p>
+            </div>
           ) : attributionRows.length === 0 ? (
             <p className="text-soft text-sm">
               No copy trades with settled PnL in this window. Follow a trader and let positions
@@ -1234,7 +1240,15 @@ export default function CopyTrading() {
           </p>
 
           {evaluationError && (
-            <div className="p-3 alert-error rounded text-sm">{evaluationError}</div>
+            <Banner
+              variant="error"
+              onDismiss={() => setEvaluationError(null)}
+              onRetry={() => {
+                if (evaluationWallet) fetchEvaluation(evaluationWallet);
+              }}
+            >
+              {evaluationError}
+            </Banner>
           )}
 
           {!evaluationWallet ? (
@@ -1331,7 +1345,7 @@ export default function CopyTrading() {
       )}
 
       {activeTab === "copy" && (
-        <div className="surface-panel p-6 rounded-lg">
+        <div className="surface-panel p-6 rounded-lg" data-tutorial="copy-trading">
           <h2 className="text-lg font-semibold mb-4">Followed Traders</h2>
           {following.length === 0 ? (
             <p className="text-soft text-sm">
@@ -1657,45 +1671,54 @@ export default function CopyTrading() {
         </div>
       )}
 
-      {confirmState.open && confirmState.type && confirmState.wallet && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 modal-overlay" onClick={closeConfirmModal} />
-          <div className="surface-panel relative z-10 w-full max-w-md p-6 space-y-4">
-            <h3 className="text-lg font-semibold text-white">
-              {confirmState.type === "save" ? "Confirm Save Configuration" : "Confirm Unfollow"}
-            </h3>
+      <ConfirmModal
+        open={Boolean(confirmState.open && confirmState.type && confirmState.wallet)}
+        title={confirmState.type === "save" ? "Confirm Save Configuration" : "Confirm Unfollow"}
+        body={
+          confirmState.type === "save" ? (
             <p className="text-sm text-soft">
-              {confirmState.type === "save"
-                ? `Are you sure you want to save this configuration for ${getTraderLabelByWallet(confirmState.wallet)}?`
-                : `Are you sure you want to unfollow ${getTraderLabelByWallet(confirmState.wallet)}? Copying will stop.`}
+              {`Are you sure you want to save this configuration for ${getTraderLabelByWallet(
+                confirmState.wallet ?? "",
+              )}?`}
             </p>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={closeConfirmModal}
-                disabled={confirmLoading}
-                className="btn-muted disabled:opacity-60"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmAction}
-                disabled={confirmLoading}
-                className={`disabled:opacity-60 ${
-                  confirmState.type === "save" ? "btn-accent" : "btn-danger"
-                }`}
-              >
-                {confirmLoading
-                  ? confirmState.type === "save"
-                    ? "Saving..."
-                    : "Unfollowing..."
-                  : confirmState.type === "save"
-                    ? "Confirm Save"
-                    : "Confirm Unfollow"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+          ) : (
+            <p className="text-sm text-soft">
+              {`Are you sure you want to unfollow ${getTraderLabelByWallet(
+                confirmState.wallet ?? "",
+              )}? Copying will stop.`}
+            </p>
+          )
+        }
+        destructive={confirmState.type === "unfollow"}
+        confirmDisabled={confirmLoading}
+        confirmLabel={
+          confirmLoading
+            ? confirmState.type === "save"
+              ? "Saving..."
+              : "Unfollowing..."
+            : confirmState.type === "save"
+              ? "Confirm Save"
+              : "Confirm Unfollow"
+        }
+        onConfirm={handleConfirmAction}
+        onCancel={closeConfirmModal}
+      />
+
+      <ConfirmModal
+        open={mockRemoveWallet !== null}
+        title="Remove mock trader?"
+        body={`Removing this mock trader deletes its simulated balance and estimated performance. Adding ${shortAddress(
+          mockRemoveWallet ?? "",
+        )} again later starts a fresh $10,000 balance.`}
+        destructive
+        confirmLabel="Remove"
+        onConfirm={() => {
+          const wallet = mockRemoveWallet;
+          setMockRemoveWallet(null);
+          if (wallet) handleRemoveMockTrader(wallet);
+        }}
+        onCancel={() => setMockRemoveWallet(null)}
+      />
     </div>
   );
 }

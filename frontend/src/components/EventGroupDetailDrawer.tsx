@@ -8,9 +8,11 @@
  *
  * @module components/EventGroupDetailDrawer
  */
-import React, { useEffect, useCallback, ReactNode } from "react";
+import React, { useCallback, ReactNode } from "react";
 import { EventGroup, getSubMarketLabel } from "../utils/groupMarkets";
 import { findLeadingOption, formatVolume, GroupableMarket } from "./EventGroupPanel";
+import { resolveZ } from "../lib/zIndex";
+import { useModalA11y } from "./ui/useModalA11y";
 
 interface EventGroupDetailDrawerProps<T extends GroupableMarket> {
   group: EventGroup<T>;
@@ -35,24 +37,16 @@ export default function EventGroupDetailDrawer<T extends GroupableMarket>({
   headerBadge,
   onClose,
 }: EventGroupDetailDrawerProps<T>) {
-  // ── Escape key closes ──
-  const handleKey = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    },
-    [onClose],
-  );
+  const { titleId, onOverlayMouseDown, panelRef } = useModalA11y({ open: true, onClose });
 
-  useEffect(() => {
-    document.addEventListener("keydown", handleKey);
-    // Prevent body scroll on mobile when modal is open
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.removeEventListener("keydown", handleKey);
-      document.body.style.overflow = prev;
-    };
-  }, [handleKey]);
+  const attachPanel = useCallback(
+    (el: HTMLDivElement | null) => {
+      if (el && el.offsetParent !== null) {
+        (panelRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+      }
+    },
+    [panelRef],
+  );
 
   const imgUrl = group.eventImage;
   const leader = findLeadingOption(group.markets, parsePrices, group.eventTitle, (m, title) =>
@@ -76,7 +70,9 @@ export default function EventGroupDetailDrawer<T extends GroupableMarket>({
           />
         )}
         <div className="flex-1 min-w-0">
-          <h2 className="text-base font-bold text-white leading-snug">{group.eventTitle}</h2>
+          <h2 id={titleId} className="text-base font-bold text-white leading-snug">
+            {group.eventTitle}
+          </h2>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
             {leader && (
               <span className="text-xs font-medium text-[var(--accent)]">
@@ -120,13 +116,18 @@ export default function EventGroupDetailDrawer<T extends GroupableMarket>({
   return (
     <>
       {/* ═══════ MOBILE (<md): Centered modal ═══════ */}
-      <div className="md:hidden fixed inset-0 z-[120]">
+      <div className={`md:hidden fixed inset-0 ${resolveZ("drawer")}`}>
         {/* Backdrop */}
-        <div className="absolute inset-0 modal-overlay" onClick={onClose} />
+        <div className="absolute inset-0 modal-overlay" onClick={onOverlayMouseDown} />
         {/* Modal panel */}
         <div className="relative flex items-end sm:items-center justify-center min-h-full p-4">
           <div
-            className="surface-panel w-full max-w-lg max-h-[85vh] rounded-xl overflow-hidden flex flex-col animate-[lift-in_200ms_ease-out]"
+            ref={attachPanel}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={titleId}
+            tabIndex={-1}
+            className="surface-panel w-full max-w-lg max-h-[85vh] rounded-xl overflow-hidden flex flex-col animate-[lift-in_200ms_ease-out] safe-padded"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Close handle (drag-style bar for mobile) */}
@@ -158,15 +159,20 @@ export default function EventGroupDetailDrawer<T extends GroupableMarket>({
       </div>
 
       {/* ═══════ DESKTOP (md+): Right-side slide-in drawer ═══════ */}
-      <div className="hidden md:block fixed inset-x-0 bottom-0 top-16 z-[120]">
+      <div className={`hidden md:block fixed inset-x-0 bottom-0 top-16 ${resolveZ("drawer")}`}>
         {/* Backdrop (semi-transparent, left side) */}
         <div
-          className="absolute inset-0 z-[120] bg-black/40 backdrop-blur-[2px] animate-[fade-in_150ms_ease-out]"
-          onClick={onClose}
+          className={`absolute inset-0 ${resolveZ("drawer")} bg-black/40 backdrop-blur-[2px] animate-[fade-in_150ms_ease-out]`}
+          onClick={onOverlayMouseDown}
         />
         {/* Drawer panel */}
         <div
-          className="absolute top-0 right-0 z-[121] h-full w-[460px] max-w-[90vw] surface-panel border-l border-[var(--line)] flex flex-col shadow-2xl animate-[slide-in-right_250ms_ease-out]"
+          ref={attachPanel}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          tabIndex={-1}
+          className={`absolute top-0 right-0 ${resolveZ("drawer")} h-full w-[460px] max-w-[90vw] surface-panel border-l border-[var(--line)] flex flex-col shadow-2xl animate-[slide-in-right_250ms_ease-out]`}
           onClick={(e) => e.stopPropagation()}
         >
           {/* Close button */}

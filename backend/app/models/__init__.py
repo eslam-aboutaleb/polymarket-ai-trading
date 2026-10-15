@@ -1,10 +1,16 @@
 """SQLAlchemy models – import all so Base.metadata knows every table."""
 
+from app.models.account import Account
+from app.models.account_settings import AccountSettings
+from app.models.api_key import ApiKey
+from app.models.app_event import AppEvent
 from app.models.assessment import Assessment
 from app.models.audit_log import AdminAuditLog
 from app.models.backtest_run import BacktestRun
 from app.models.base import Base
+from app.models.collaboration import ForecastVote, MarketAnnotation, UserFollow
 from app.models.followed_trader import FollowedTrader
+from app.models.governance import LLMExperiment, VerdictFeedback
 from app.models.inverse_bot_action import InverseBotAction
 from app.models.inverse_bot_position import InverseBotPosition
 from app.models.latency_arb_config import LatencyArbConfig
@@ -17,6 +23,7 @@ from app.models.notification_followed_trader import NotificationFollowedTrader
 from app.models.portfolio_snapshot import PortfolioSnapshot
 from app.models.redemption_attempt import RedemptionAttempt
 from app.models.stop_loss import StopLossOrder
+from app.models.subscription import BillingWebhookEvent, Subscription
 from app.models.take_profit import TakeProfitOrder
 from app.models.token import RefreshToken
 from app.models.trade_history import TradeHistory
@@ -25,6 +32,7 @@ from app.models.user import User
 from app.models.user_notification_preference import UserNotificationPreference
 from app.models.user_settings import UserSettings
 from app.models.user_trade import UserTrade
+from app.models.venue_market import VenueMarket
 from app.models.whale_config import WhaleConfig
 from app.models.whale_event import WhaleEvent
 from app.models.winner import Winner
@@ -58,4 +66,16 @@ __all__ = [
     "WhaleConfig",
     "StopLossOrder",
     "LatencyArbConfig",
+    "AppEvent",
+    "VerdictFeedback",
+    "LLMExperiment",
+    "Account",
+    "AccountSettings",
+    "ApiKey",
+    "VenueMarket",
+    "ForecastVote",
+    "MarketAnnotation",
+    "UserFollow",
+    "Subscription",
+    "BillingWebhookEvent",
 ]

@@ -16,6 +16,8 @@ import {
   HealthResponse,
   EndpointStat,
 } from "../services/debugService";
+import { getApiErrorMessage } from "../utils/apiError";
+import { Banner } from "./ui";
 
 /* ═══════════════════════════════════════════════════════════════
    Debug Dashboard — real-time monitoring for backend services
@@ -38,6 +40,7 @@ export default function DebugDashboard() {
   const [nextRefreshInSeconds, setNextRefreshInSeconds] = useState<number | null>(null);
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"logs" | "endpoints" | "health">("logs");
   const [sortCol, setSortCol] = useState<keyof EndpointStat>("call_count");
   const [sortAsc, setSortAsc] = useState(false);
@@ -64,9 +67,10 @@ export default function DebugDashboard() {
       setTotalLogs(logsRes.total);
       setStats(statsRes);
       setHealth(healthRes);
+      setError(null);
       return true;
-    } catch {
-      /* ignore — user might not be authed yet */
+    } catch (err: unknown) {
+      setError(getApiErrorMessage(err, "Failed to load logs, stats and health"));
       return false;
     } finally {
       refreshInFlightRef.current = false;
@@ -300,6 +304,12 @@ export default function DebugDashboard() {
           </button>
         </div>
       </div>
+
+      {error && (
+        <Banner variant="error" onDismiss={() => setError(null)} onRetry={handleManualRefresh}>
+          {error}
+        </Banner>
+      )}
 
       {/* ── Summary KPIs ── */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">

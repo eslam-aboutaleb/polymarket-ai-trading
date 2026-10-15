@@ -121,6 +121,9 @@ TASK_TIERS: dict[str, ModelTier] = {
     "copy_trade_eval": ModelTier.STRONG,
     "inverse_position_eval": ModelTier.STRONG,
     "discover_best_trade": ModelTier.STRONG,
+    # Orchestration synthesis merges ≥3 STRONG-tier step outputs into
+    # one verdict, so it runs at the same tier as the steps it merges.
+    "orchestration": ModelTier.STRONG,
     # ── WRITER: long-form ──────────────────────────────────────
     "news_article": ModelTier.WRITER,
     "daily_portfolio_summary": ModelTier.WRITER,

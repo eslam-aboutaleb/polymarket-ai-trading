@@ -23,8 +23,8 @@ class SchedulerLockTests(unittest.TestCase):
     def test_acquire_success(self):
         connection = MagicMock()
         connection.execute.return_value.scalar.return_value = True
-        with patch.object(scheduler_lock, "engine") as mock_engine:
-            mock_engine.connect.return_value = connection
+        with patch.object(scheduler_lock, "_lock_engine") as mock_engine:
+            mock_engine.return_value.connect.return_value = connection
             self.assertTrue(scheduler_lock.acquire_scheduler_lock("test_scheduler"))
             self.assertIn("test_scheduler", scheduler_lock._held_locks)
             connection.close.assert_not_called()
@@ -32,8 +32,8 @@ class SchedulerLockTests(unittest.TestCase):
     def test_acquire_contended(self):
         connection = MagicMock()
         connection.execute.return_value.scalar.return_value = False
-        with patch.object(scheduler_lock, "engine") as mock_engine:
-            mock_engine.connect.return_value = connection
+        with patch.object(scheduler_lock, "_lock_engine") as mock_engine:
+            mock_engine.return_value.connect.return_value = connection
             self.assertFalse(scheduler_lock.acquire_scheduler_lock("test_scheduler"))
             self.assertNotIn("test_scheduler", scheduler_lock._held_locks)
             connection.close.assert_called()
@@ -43,8 +43,8 @@ class SchedulerLockTests(unittest.TestCase):
         self.assertTrue(scheduler_lock.acquire_scheduler_lock("test_scheduler"))
 
     def test_acquire_database_error_fails_open(self):
-        with patch.object(scheduler_lock, "engine") as mock_engine:
-            mock_engine.connect.side_effect = RuntimeError("db down")
+        with patch.object(scheduler_lock, "_lock_engine") as mock_engine:
+            mock_engine.return_value.connect.side_effect = RuntimeError("db down")
             self.assertTrue(scheduler_lock.acquire_scheduler_lock("test_scheduler"))
 
     def test_release(self):

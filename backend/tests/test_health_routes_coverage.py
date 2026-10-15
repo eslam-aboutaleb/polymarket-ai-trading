@@ -249,7 +249,7 @@ class HealthEndpointTests(unittest.TestCase):
         self.assertEqual(data["status"], "error")
         check = data["checks"]["database"]
         self.assertFalse(check["ok"])
-        self.assertIn("connection refused", check["error"])
+        self.assertEqual(check["error"], "Database check failed")
 
     def test_health_ok_when_grpc_results_empty(self):
         self._patch_engine_ok()

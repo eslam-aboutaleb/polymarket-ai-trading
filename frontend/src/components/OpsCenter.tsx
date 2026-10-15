@@ -23,12 +23,13 @@ import {
 } from "../services/emergencyService";
 import { marketsService, MarketCategory } from "../services/marketsService";
 import { getApiErrorMessage } from "../utils/apiError";
+import { Banner, ConfirmModal, useToast } from "./ui";
 
 const JSON_PRETTY_SPACE = 2;
 
 export default function OpsCenter() {
+  const toast = useToast();
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
   // ── Binance data ────────────────────────────────────────────────
   const [binanceBusy, setBinanceBusy] = useState(false);
@@ -49,6 +50,7 @@ export default function OpsCenter() {
 
   // ── Risk ops ────────────────────────────────────────────────────
   const [riskBusy, setRiskBusy] = useState<string | null>(null);
+  const [emergencyStopOpen, setEmergencyStopOpen] = useState(false);
   const [arbitrageRows, setArbitrageRows] = useState<ArbitrageOpportunity[]>([]);
   const [qualityWallet, setQualityWallet] = useState("");
   const [traderQuality, setTraderQuality] = useState<TraderQuality | null>(null);
@@ -140,13 +142,14 @@ export default function OpsCenter() {
   }, []);
 
   const setNoticeError = (err: unknown, fallback: string) => {
-    setSuccess(null);
     setError(getApiErrorMessage(err, fallback));
   };
 
   const setNoticeSuccess = (message: string) => {
+    // Ephemeral confirmation of an action the user just triggered — a toast,
+    // not a persistent banner.
     setError(null);
-    setSuccess(message);
+    toast.success(message);
   };
 
   // ── Binance actions ──────────────────────────────────────────────
@@ -404,6 +407,9 @@ export default function OpsCenter() {
 
   const arbitragePreview = useMemo(() => arbitrageRows.slice(0, 8), [arbitrageRows]);
 
+  const emergencyStopBody =
+    "Emergency stop halts all automated trading and closes your open positions at market price. This cannot be undone — stop-losses, take-profit orders and inverse bots stop with it, and anything you want back has to be re-opened manually.";
+
   return (
     <div className="space-y-6">
       <div>
@@ -413,7 +419,7 @@ export default function OpsCenter() {
         </p>
       </div>
 
-      <section className="surface-panel p-5 space-y-3">
+      <section className="surface-panel p-5 space-y-3" data-tutorial="ops">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h2 className="text-lg font-semibold">How To Use Ops Center</h2>
           <a href="/guide" className="btn-muted text-xs px-3 py-1.5">
@@ -452,8 +458,11 @@ export default function OpsCenter() {
         </div>
       </section>
 
-      {error && <div className="alert-error p-3 rounded text-sm">{error}</div>}
-      {success && <div className="alert-success p-3 rounded text-sm">{success}</div>}
+      {error && (
+        <Banner variant="error" onDismiss={() => setError(null)}>
+          {error}
+        </Banner>
+      )}
 
       <section className="surface-panel p-5 space-y-4">
         <h2 className="text-lg font-semibold">Risk Controls</h2>
@@ -461,7 +470,7 @@ export default function OpsCenter() {
           <button
             type="button"
             className="btn-danger text-xs"
-            onClick={runEmergencyStop}
+            onClick={() => setEmergencyStopOpen(true)}
             disabled={riskBusy !== null}
           >
             {riskBusy === "emergency_stop" ? "Running..." : "Emergency Stop + Close Positions"}
@@ -1007,6 +1016,20 @@ export default function OpsCenter() {
           </div>
         )}
       </section>
+
+      <ConfirmModal
+        open={emergencyStopOpen}
+        title="Emergency stop trading?"
+        body={emergencyStopBody}
+        confirmLabel="Close positions & stop"
+        destructive
+        confirmDisabled={riskBusy !== null}
+        onConfirm={() => {
+          setEmergencyStopOpen(false);
+          void runEmergencyStop();
+        }}
+        onCancel={() => setEmergencyStopOpen(false)}
+      />
     </div>
   );
 }

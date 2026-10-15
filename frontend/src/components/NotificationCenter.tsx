@@ -18,6 +18,9 @@ import {
   markNotificationRead,
 } from "../services/notificationsService";
 import { getApiErrorMessage } from "../utils/apiError";
+import { Banner } from "./ui";
+import { useModalA11y } from "./ui/useModalA11y";
+import { resolveZ } from "../lib/zIndex";
 
 const EVENT_LABELS: Record<string, string> = {
   fill: "Order Fill",
@@ -60,7 +63,13 @@ export default function NotificationCenter() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [markAllNotice, setMarkAllNotice] = useState<string | null>(null);
   const [markingIds, setMarkingIds] = useState<Set<number>>(new Set());
+
+  const { panelRef, titleId, onOverlayMouseDown } = useModalA11y({
+    open,
+    onClose: () => setOpen(false),
+  });
 
   const refresh = useCallback(async () => {
     try {
@@ -78,21 +87,6 @@ export default function NotificationCenter() {
     const timer = setInterval(refresh, POLL_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [refresh]);
-
-  // Escape key closes the drawer; lock body scroll while open.
-  useEffect(() => {
-    if (!open) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("keydown", handleKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.removeEventListener("keydown", handleKey);
-      document.body.style.overflow = prev;
-    };
-  }, [open]);
 
   const handleMarkRead = async (event: NotificationEvent) => {
     if (!event.unread || markingIds.has(event.id)) return;
@@ -116,24 +110,28 @@ export default function NotificationCenter() {
     const unread = events.filter((e) => e.unread);
     if (unread.length === 0) return;
     setLoading(true);
-    try {
-      const results = await Promise.allSettled(unread.map((e) => markNotificationRead(e.id)));
-      const readIds = new Set(
-        results
-          .map((r, i) => (r.status === "fulfilled" ? unread[i].id : null))
-          .filter((id): id is number => id !== null),
-      );
-      setEvents((prev) =>
-        prev.map((e) =>
-          readIds.has(e.id) ? { ...e, unread: false, read_at: new Date().toISOString() } : e,
-        ),
-      );
-      setUnreadCount((prev) => Math.max(0, prev - readIds.size));
-    } catch (err: unknown) {
-      setError(getApiErrorMessage(err, "Failed to mark notifications read"));
-    } finally {
-      setLoading(false);
-    }
+    // `Promise.allSettled` never rejects — the previous catch here was
+    // unreachable. Report the honest per-event outcome instead of assuming
+    // every PATCH succeeded.
+    const results = await Promise.allSettled(unread.map((e) => markNotificationRead(e.id)));
+    const readIds = new Set(
+      results
+        .map((r, i) => (r.status === "fulfilled" ? unread[i].id : null))
+        .filter((id): id is number => id !== null),
+    );
+    setEvents((prev) =>
+      prev.map((e) =>
+        readIds.has(e.id) ? { ...e, unread: false, read_at: new Date().toISOString() } : e,
+      ),
+    );
+    setUnreadCount((prev) => Math.max(0, prev - readIds.size));
+    const failedCount = unread.length - readIds.size;
+    setMarkAllNotice(
+      failedCount > 0
+        ? `Marked ${readIds.size} of ${unread.length} read — ${failedCount} could not be updated.`
+        : null,
+    );
+    setLoading(false);
   };
 
   return (
@@ -157,7 +155,11 @@ export default function NotificationCenter() {
           />
         </svg>
         {unreadCount > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+          <span
+            className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center"
+            role="status"
+            aria-live="polite"
+          >
             {unreadCount > 99 ? "99+" : unreadCount}
           </span>
         )}
@@ -166,13 +168,22 @@ export default function NotificationCenter() {
       {open && (
         <>
           <div
-            className="fixed inset-0 bg-black/50 z-40"
-            onClick={() => setOpen(false)}
+            className={`fixed inset-0 bg-black/50 ${resolveZ("drawer")}`}
+            onClick={onOverlayMouseDown}
             aria-hidden="true"
           />
-          <aside className="fixed right-0 top-0 h-full w-full sm:w-96 bg-[var(--bg)] border-l border-[var(--line)] z-50 flex flex-col">
+          <aside
+            ref={panelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={titleId}
+            tabIndex={-1}
+            className={`fixed right-0 top-0 h-full w-full sm:w-96 bg-[var(--bg)] border-l border-[var(--line)] ${resolveZ("drawer")} flex flex-col`}
+          >
             <div className="flex items-center justify-between p-4 border-b border-[var(--line)]">
-              <h2 className="text-lg font-bold">Notifications</h2>
+              <h2 id={titleId} className="text-lg font-bold">
+                Notifications
+              </h2>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -201,12 +212,34 @@ export default function NotificationCenter() {
             </div>
 
             {error && (
-              <div className="alert-error mx-4 mt-3 px-3 py-2 rounded text-sm">{error}</div>
+              <div className="mx-4 mt-3">
+                <Banner variant="error" onDismiss={() => setError(null)} onRetry={refresh}>
+                  {error}
+                </Banner>
+              </div>
+            )}
+
+            {markAllNotice && (
+              <div className="mx-4 mt-3">
+                <Banner
+                  variant="notice"
+                  onDismiss={() => setMarkAllNotice(null)}
+                  onRetry={handleMarkAllRead}
+                >
+                  {markAllNotice}
+                </Banner>
+              </div>
             )}
 
             <div className="flex-1 overflow-y-auto">
               {events.length === 0 && !loading ? (
-                <p className="text-muted text-sm p-6 text-center">No notifications yet</p>
+                <div className="p-6 text-center">
+                  <p className="text-muted text-sm">No notifications yet</p>
+                  <p className="text-muted text-xs mt-2">
+                    Order fills, stop-loss and take-profit hits, whale alerts, followed-trader
+                    activity, redemption reminders and system warnings all show up here.
+                  </p>
+                </div>
               ) : (
                 <ul className="divide-y divide-[var(--line)]">
                   {events.map((event) => (

@@ -92,6 +92,7 @@ function tryParseJSON(raw: string): TraderAnalysisJSON | null {
   try {
     return JSON.parse(cleaned.slice(start, end + 1));
   } catch {
+    console.warn("Failed to parse streamed analysis row", raw);
     return null;
   }
 }
@@ -143,7 +144,10 @@ export default function TraderAnalysisTable({ text, streaming }: TraderAnalysisT
   // While streaming, show raw text with a cursor
   if (streaming) {
     return (
-      <div className="rounded-xl border border-[var(--line)] bg-[var(--bg-soft)] p-4 min-h-[120px]">
+      <div
+        className="rounded-xl border border-[var(--line)] bg-[var(--bg-soft)] p-4 min-h-[120px]"
+        aria-live="polite"
+      >
         <div className="flex items-center gap-2 mb-3">
           <span className="animate-spin h-4 w-4 border-2 border-[var(--accent)] border-t-transparent rounded-full" />
           <span className="text-sm text-muted font-medium">Analyzing trader profile…</span>

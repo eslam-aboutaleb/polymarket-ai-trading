@@ -69,7 +69,7 @@ export default function AnalysisPage() {
   return (
     <div className="max-w-4xl mx-auto">
       {/* Market Header */}
-      <div className="surface-panel p-6 mb-6">
+      <div className="surface-panel p-6 mb-6" data-tutorial="analysis">
         <h1 className="text-xl font-bold mb-3" style={{ color: "var(--text-primary)" }}>
           {marketTitle}
         </h1>

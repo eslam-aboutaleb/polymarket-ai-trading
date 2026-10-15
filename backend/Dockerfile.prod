@@ -17,9 +17,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh -s -- --install-dir /usr/local/bin
 ENV PATH="/usr/local/bin:$PATH"
 
-# ── Deps layer (cached until pyproject.toml changes) ──────────
-COPY pyproject.toml .
-RUN uv sync --no-dev
+# ── Deps layer (cached until pyproject.toml or uv.lock changes) ─
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
 
 # ── Application code ──────────────────────────────────────────
 COPY app ./app
@@ -47,12 +47,13 @@ EXPOSE 8002
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
   CMD curl -f http://localhost:8002/health || exit 1
 
-# Production: no --reload. Default to a SINGLE worker.
+# Production: no --reload.
 #
-# Every scheduled background job (stop-loss monitor, inverse bot, market maker,
-# trade monitor, aggregation, lifecycle) starts from the FastAPI lifespan, and
-# every one of them de-duplicates through process-local in-memory state. With
-# more than one worker, each process runs its own copy, so a single stop-loss
-# trigger placed two independent sell orders. Raising WEB_CONCURRENCY requires
-# moving the schedulers behind a Postgres advisory lock first.
-CMD ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port 8002 --workers ${WEB_CONCURRENCY:-1} --log-level info"]
+# Schema migrations run as the container command below, which means
+# every replica races `alembic upgrade head` at startup. With
+# WEB_CONCURRENCY > 1 that is a real race (plan 10 Phase A): N workers
+# apply the same revision concurrently, and one of them fails on the
+# "table already exists" branch. Move the migration to a dedicated
+# init job before raising WEB_CONCURRENCY, or accept that the losing
+# worker logs an error and continues on an already-migrated schema.
+CMD ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port 8002 --workers ${WEB_CONCURRENCY:-2} --log-level info"]

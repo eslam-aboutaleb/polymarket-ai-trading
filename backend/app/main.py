@@ -1,6 +1,7 @@
 """Main FastAPI application"""
 
 import asyncio
+import contextlib
 import importlib
 import logging.config
 import os
@@ -16,13 +17,18 @@ from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import text
 
 from app.api.routes import (
+    accounts,
     analysis,
     auth,
     backtesting,
+    billing,
     binance_signals,
     calibration,
+    collaboration,
     credentials,
     debug,
+    experiments,
+    external,
     health,
     inverse_bot,
     latency_arb,
@@ -30,10 +36,13 @@ from app.api.routes import (
     markets,
     news,
     notifications,
+    orchestration,
     portfolio,
     risk_report,
     trades,
+    venues,
     whales,
+    ws_v1,
 )
 from app.api.routes import settings as settings_routes
 from app.config import get_settings
@@ -170,6 +179,200 @@ def _sync_admin_wallets():
 _background_tasks: list = []
 
 
+async def _start_background_services() -> None:
+    """Start every background scheduler (roles ``all`` and ``worker``).
+
+    Extracted from the lifespan so the lifespan itself reads as a role
+    decision rather than 150 lines of service wiring (plan 10 Phase A).
+    """
+    from app.models.followed_trader import FollowedTrader
+    from app.models.notification_followed_trader import NotificationFollowedTrader
+    from app.services.leaderboard_service import refresh_leaderboard_background
+    from app.services.trade_monitor import start_trade_monitor
+
+    # Load currently-followed wallets so the monitor can subscribe
+    db = SessionLocal()
+    try:
+        copy_wallets = (
+            db.query(FollowedTrader.trader_wallet)
+            .filter(
+                FollowedTrader.is_active,
+            )
+            .distinct()
+            .all()
+        )
+        notif_wallets = (
+            db.query(NotificationFollowedTrader.trader_wallet)
+            .filter(
+                NotificationFollowedTrader.is_active,
+            )
+            .distinct()
+            .all()
+        )
+        initial_wallets = list(
+            {
+                w.trader_wallet.lower()
+                for w in (copy_wallets + notif_wallets)
+                if w and w.trader_wallet
+            }
+        )
+    finally:
+        db.close()
+
+    if initial_wallets:
+        from app.services.trade_monitor import add_watched_wallet
+
+        for w in initial_wallets:
+            add_watched_wallet(w)
+
+    # Start background tasks
+    monitor_task = asyncio.create_task(start_trade_monitor())
+    _background_tasks.append(monitor_task)
+
+    # Start the CLOB WebSocket manager for real-time price ticks
+    from app.services.clob_ws_manager import start_clob_ws_manager
+
+    start_clob_ws_manager()
+
+    leaderboard_task = asyncio.create_task(refresh_leaderboard_background(db=None, interval=300))
+    _background_tasks.append(leaderboard_task)
+
+    # Start stop-loss monitor
+    from app.services.stop_loss_monitor import start_stop_loss_monitor
+
+    await start_stop_loss_monitor()
+
+    # Start inverse position bot monitor
+    from app.services.inverse_bot_monitor import start_inverse_bot_monitor
+
+    await start_inverse_bot_monitor()
+
+    # Start market maker for all enabled configs
+    from app.services.market_maker_service import start_all_enabled_market_makers
+
+    await start_all_enabled_market_makers()
+
+    # Start position lifecycle manager
+    from app.services.position_lifecycle_service import start_position_lifecycle_manager
+
+    await start_position_lifecycle_manager()
+
+    # Start trade aggregation service
+    from app.services.trade_aggregation_service import start_aggregation_service
+
+    await start_aggregation_service()
+
+    # Start arbitrage detection monitor
+    from app.services.arbitrage_service import start_arbitrage_monitor
+
+    await start_arbitrage_monitor()
+
+    # Start news background generator
+    from app.services.news_service import start_news_generator
+
+    await start_news_generator()
+
+    # Start the daily portfolio digest scheduler (plan 02)
+    from app.services.daily_report_service import start_daily_report_service
+
+    await start_daily_report_service()
+
+    # Start on-chain whale monitor (CTF events)
+    from app.services.ctf_events_service import start_ctf_events_monitor
+
+    await start_ctf_events_monitor()
+
+    # Start on-chain auto-redeem manager (dry-run by default)
+    from app.services.redemption_service import start_redemption_manager
+
+    await start_redemption_manager()
+
+    # Start the latency-arbitrage engine (paper-first;
+    # live mode behind LATENCY_ARB_LIVE)
+    from app.services.latency_arb_service import (
+        start_latency_arb_engine,
+    )
+
+    await start_latency_arb_engine()
+
+    # Start hourly equity-snapshot writer (plan 05)
+    from app.services.equity_snapshot_service import start_equity_snapshot_service
+
+    await start_equity_snapshot_service()
+
+    # Start the forecast-resolution job (plan 01)
+    from app.services.forecast_resolution import start_forecast_resolution
+
+    await start_forecast_resolution()
+
+    # Start the venue-market refresh loop (plan 05 Phase A). Signal-only,
+    # read-only, and per-venue gated by venue_<name>_enabled.
+    from app.services.venue_market_service import start_venue_market_service
+
+    await start_venue_market_service()
+
+    # Start the model-drift detector (plan 04): hourly calibration
+    # scoring that alerts when AI forecasts degrade.
+    from app.services.model_drift_monitor import start_model_drift_monitor
+
+    await start_model_drift_monitor()
+
+    # Dead-man's switch watchdog: alerts when a scheduler
+    # heartbeat goes stale (e.g. a monitor crashed without
+    # cancelling its task).
+    async def _scheduler_watchdog() -> None:
+        from app.utils.scheduler_lock import (
+            SCHEDULER_INTERVALS,
+            scheduler_heartbeat_age,
+            scheduler_stale_threshold,
+        )
+
+        while True:
+            await asyncio.sleep(60)
+            for scheduler_name in SCHEDULER_INTERVALS:
+                age = scheduler_heartbeat_age(scheduler_name)
+                if age is None:
+                    continue
+                threshold = scheduler_stale_threshold(scheduler_name)
+                if age <= threshold:
+                    continue
+                logger.error(
+                    "DEAD_MAN_SWITCH: scheduler '%s' heartbeat is %.0fs old (stale threshold %ds)",
+                    scheduler_name,
+                    age,
+                    threshold,
+                )
+                try:
+                    from app.services.alert_service import dispatch
+
+                    await dispatch(
+                        "dead_man_switch",
+                        None,
+                        {
+                            "scheduler": scheduler_name,
+                            "heartbeat_age_seconds": round(age, 1),
+                            "threshold_seconds": threshold,
+                        },
+                    )
+                except ImportError:
+                    pass
+                except Exception:
+                    logger.warning(
+                        "Dead-man alert dispatch failed for '%s'",
+                        scheduler_name,
+                        exc_info=True,
+                    )
+
+    watchdog_task = asyncio.create_task(_scheduler_watchdog())
+    _background_tasks.append(watchdog_task)
+
+    logger.info(
+        "Background services started (trade monitor + leaderboard refresh + "
+        "stop-loss monitor + inverse-bot monitor + market-maker + "
+        "position-lifecycle + trade-aggregation + arbitrage-monitor + news-generator)"
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle for background services."""
@@ -178,186 +381,23 @@ async def lifespan(app: FastAPI):
     _validate_database_connectivity()
     _sync_admin_wallets()
 
-    try:
-        from app.models.followed_trader import FollowedTrader
-        from app.models.notification_followed_trader import NotificationFollowedTrader
-        from app.services.leaderboard_service import refresh_leaderboard_background
-        from app.services.trade_monitor import start_trade_monitor
-
-        # Load currently-followed wallets so the monitor can subscribe
-        db = SessionLocal()
+    # Process role (plan 10 Phase A). A "web" process starts no
+    # background loop: duplicating a monitor duplicates stop-loss
+    # orders, which is why the shipped compose pinned
+    # WEB_CONCURRENCY=1. Splitting the role lets the HTTP tier scale.
+    if settings.runs_background_schedulers():
         try:
-            copy_wallets = (
-                db.query(FollowedTrader.trader_wallet)
-                .filter(
-                    FollowedTrader.is_active,
-                )
-                .distinct()
-                .all()
-            )
-            notif_wallets = (
-                db.query(NotificationFollowedTrader.trader_wallet)
-                .filter(
-                    NotificationFollowedTrader.is_active,
-                )
-                .distinct()
-                .all()
-            )
-            initial_wallets = list(
-                {
-                    w.trader_wallet.lower()
-                    for w in (copy_wallets + notif_wallets)
-                    if w and w.trader_wallet
-                }
-            )
-        finally:
-            db.close()
+            from app.services.event_log import start_event_writer
 
-        if initial_wallets:
-            from app.services.trade_monitor import add_watched_wallet
-
-            for w in initial_wallets:
-                add_watched_wallet(w)
-
-        # Start background tasks
-        monitor_task = asyncio.create_task(start_trade_monitor())
-        _background_tasks.append(monitor_task)
-
-        # Start the CLOB WebSocket manager for real-time price ticks
-        from app.services.clob_ws_manager import start_clob_ws_manager
-
-        start_clob_ws_manager()
-
-        leaderboard_task = asyncio.create_task(
-            refresh_leaderboard_background(db=None, interval=300)
-        )
-        _background_tasks.append(leaderboard_task)
-
-        # Start stop-loss monitor
-        from app.services.stop_loss_monitor import start_stop_loss_monitor
-
-        await start_stop_loss_monitor()
-
-        # Start inverse position bot monitor
-        from app.services.inverse_bot_monitor import start_inverse_bot_monitor
-
-        await start_inverse_bot_monitor()
-
-        # Start market maker for all enabled configs
-        from app.services.market_maker_service import start_all_enabled_market_makers
-
-        await start_all_enabled_market_makers()
-
-        # Start position lifecycle manager
-        from app.services.position_lifecycle_service import start_position_lifecycle_manager
-
-        await start_position_lifecycle_manager()
-
-        # Start trade aggregation service
-        from app.services.trade_aggregation_service import start_aggregation_service
-
-        await start_aggregation_service()
-
-        # Start arbitrage detection monitor
-        from app.services.arbitrage_service import start_arbitrage_monitor
-
-        await start_arbitrage_monitor()
-
-        # Start news background generator
-        from app.services.news_service import start_news_generator
-
-        await start_news_generator()
-
-        # Start the daily portfolio digest scheduler (plan 02)
-        from app.services.daily_report_service import start_daily_report_service
-
-        await start_daily_report_service()
-
-        # Start on-chain whale monitor (CTF events)
-        from app.services.ctf_events_service import start_ctf_events_monitor
-
-        await start_ctf_events_monitor()
-
-        # Start on-chain auto-redeem manager (dry-run by default)
-        from app.services.redemption_service import start_redemption_manager
-
-        await start_redemption_manager()
-
-        # Start the latency-arbitrage engine (paper-first;
-        # live mode behind LATENCY_ARB_LIVE)
-        from app.services.latency_arb_service import (
-            start_latency_arb_engine,
-        )
-
-        await start_latency_arb_engine()
-
-        # Start hourly equity-snapshot writer (plan 05)
-        from app.services.equity_snapshot_service import start_equity_snapshot_service
-
-        await start_equity_snapshot_service()
-
-        # Start the forecast-resolution job (plan 01)
-        from app.services.forecast_resolution import start_forecast_resolution
-
-        await start_forecast_resolution()
-
-        # Dead-man's switch watchdog: alerts when a scheduler
-        # heartbeat goes stale (e.g. a monitor crashed without
-        # cancelling its task).
-        async def _scheduler_watchdog() -> None:
-            from app.utils.scheduler_lock import (
-                SCHEDULER_INTERVALS,
-                scheduler_heartbeat_age,
-                scheduler_stale_threshold,
-            )
-
-            while True:
-                await asyncio.sleep(60)
-                for scheduler_name in SCHEDULER_INTERVALS:
-                    age = scheduler_heartbeat_age(scheduler_name)
-                    if age is None:
-                        continue
-                    threshold = scheduler_stale_threshold(scheduler_name)
-                    if age <= threshold:
-                        continue
-                    logger.error(
-                        "DEAD_MAN_SWITCH: scheduler '%s' heartbeat is %.0fs old "
-                        "(stale threshold %ds)",
-                        scheduler_name,
-                        age,
-                        threshold,
-                    )
-                    try:
-                        from app.services.alert_service import dispatch
-
-                        await dispatch(
-                            "dead_man_switch",
-                            None,
-                            {
-                                "scheduler": scheduler_name,
-                                "heartbeat_age_seconds": round(age, 1),
-                                "threshold_seconds": threshold,
-                            },
-                        )
-                    except ImportError:
-                        pass
-                    except Exception:
-                        logger.warning(
-                            "Dead-man alert dispatch failed for '%s'",
-                            scheduler_name,
-                            exc_info=True,
-                        )
-
-        watchdog_task = asyncio.create_task(_scheduler_watchdog())
-        _background_tasks.append(watchdog_task)
-
+            start_event_writer()
+            await _start_background_services()
+        except Exception as e:
+            logger.warning(f"Background services failed to start: {e}")
+    else:
         logger.info(
-            "Background services started (trade monitor + leaderboard refresh + "
-            "stop-loss monitor + inverse-bot monitor + market-maker + "
-            "position-lifecycle + trade-aggregation + arbitrage-monitor + news-generator)"
+            "ROLE=%s: background schedulers are owned by a worker process; serving HTTP only",
+            settings.role,
         )
-    except Exception as e:
-        logger.warning(f"Background services failed to start: {e}")
 
     yield
 
@@ -408,6 +448,11 @@ async def lifespan(app: FastAPI):
             "app.services.forecast_resolution",
             "stop_forecast_resolution",
         ),
+        (
+            "model_drift_monitor",
+            "app.services.model_drift_monitor",
+            "stop_model_drift_monitor",
+        ),
         ("analysis_client", "app.grpc_clients.analysis_client", "close_shared_channels"),
     ]
     for label, module_path, attr in shutdown_hooks:
@@ -424,6 +469,13 @@ async def lifespan(app: FastAPI):
             )
     for task in _background_tasks:
         task.cancel()
+    if settings.runs_background_schedulers():
+        # Drain the queued events before the process exits so a
+        # graceful shutdown does not silently lose the last writes.
+        with contextlib.suppress(Exception):
+            from app.services.event_log import stop_event_writer
+
+            await stop_event_writer()
     logger.info("Background services stopped")
 
 
@@ -479,10 +531,13 @@ app.add_middleware(RequestLogMiddleware)
 
 
 # Include routers
+app.include_router(accounts.router)
 app.include_router(auth.router)
 app.include_router(credentials.router)
 app.include_router(analysis.router)
 app.include_router(calibration.router)
+app.include_router(collaboration.router)
+app.include_router(experiments.router)
 app.include_router(portfolio.router)
 app.include_router(risk_report.router)
 app.include_router(settings_routes.router)
@@ -501,6 +556,17 @@ app.include_router(health.router)
 app.include_router(whales.router)
 app.include_router(notifications.router)
 app.include_router(latency_arb.router)
+app.include_router(orchestration.router)
+app.include_router(venues.router)
+app.include_router(billing.router)
+# Plan 06b: the external API mounts four routers out of one module —
+# /api/v1/external/* (key-authenticated), /api/settings/api-keys/*
+# (browser session), /api/portfolio/exposure (user-authenticated), and
+# /ws/v1.
+app.include_router(external.router)
+app.include_router(external.api_keys_router)
+app.include_router(external.exposure_router)
+app.include_router(ws_v1.router)
 
 
 # Root endpoint

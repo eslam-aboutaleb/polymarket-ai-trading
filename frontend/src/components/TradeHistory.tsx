@@ -8,6 +8,7 @@
  * @module components/TradeHistory
  */
 import { useEffect, useState, useRef, useCallback } from "react";
+import { Link } from "react-router-dom";
 import { tradesService, TradeRecord, TradeHistoryResponse } from "../services/tradesService";
 import { portfolioService, PortfolioSummary } from "../services/portfolioService";
 import { stopLossService, StopLossOrder } from "../services/stopLossService";
@@ -20,6 +21,7 @@ import {
 import { analysisService } from "../services/analysisService";
 import { useAuthStore } from "../store/authStore";
 import { getApiErrorMessage } from "../utils/apiError";
+import { Banner, InfoTooltip } from "./ui";
 import {
   buildPolymarketEventUrl,
   buildPolygonscanAddressUrl,
@@ -67,6 +69,10 @@ export default function TradeHistory() {
   const [portfolio, setPortfolio] = useState<PortfolioSummary | null>(null);
   const [posLoading, setPosLoading] = useState(false);
   const [posError, setPosError] = useState<string | null>(null);
+  const [stopLossError, setStopLossError] = useState<string | null>(null);
+  const [takeProfitError, setTakeProfitError] = useState<string | null>(null);
+  const [inverseBotError, setInverseBotError] = useState<string | null>(null);
+  const [positionPriceError, setPositionPriceError] = useState<string | null>(null);
   const [flashIds, setFlashIds] = useState<Set<string>>(new Set());
   const prevPricesRef = useRef<Record<string, number>>({});
   const flashResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -116,8 +122,9 @@ export default function TradeHistory() {
     try {
       const orders = await stopLossService.getStopLosses("active");
       setActiveStopLosses(orders);
-    } catch {
-      // ignore
+      setStopLossError(null);
+    } catch (err: unknown) {
+      setStopLossError(getApiErrorMessage(err, "Failed to load active stop-losses"));
     }
   }, []);
 
@@ -125,8 +132,9 @@ export default function TradeHistory() {
     try {
       const orders = await takeProfitService.getTakeProfits("active");
       setActiveTakeProfits(orders);
-    } catch {
-      // ignore
+      setTakeProfitError(null);
+    } catch (err: unknown) {
+      setTakeProfitError(getApiErrorMessage(err, "Failed to load active take-profits"));
     }
   }, []);
 
@@ -134,8 +142,9 @@ export default function TradeHistory() {
     try {
       const rows = await inverseBotService.listInverseBotPositions();
       setInverseBotPositions(rows);
-    } catch {
-      // ignore
+      setInverseBotError(null);
+    } catch (err: unknown) {
+      setInverseBotError(getApiErrorMessage(err, "Failed to load inverse bot positions"));
     }
   }, []);
 
@@ -465,8 +474,12 @@ export default function TradeHistory() {
             pnl_percentage: +pnlPct.toFixed(2),
           };
         });
-      } catch {
-        // Silently ignore price poll errors
+      } catch (err: unknown) {
+        // Stale position prices are money-adjacent — surface the failure
+        // rather than silently showing the last poll as current.
+        setPositionPriceError(
+          getApiErrorMessage(err, "Live prices are temporarily unavailable — P&L may be stale"),
+        );
       }
     };
 
@@ -598,7 +611,7 @@ export default function TradeHistory() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b border-[var(--line)]">
+      <div className="flex gap-1 border-b border-[var(--line)]" data-tutorial="trades">
         <button
           onClick={() => setActiveTab("history")}
           className={`px-4 py-2.5 text-sm font-semibold transition border-b-2 -mb-px ${
@@ -630,7 +643,55 @@ export default function TradeHistory() {
       {/* ========== POSITIONS TAB ========== */}
       {activeTab === "positions" && (
         <div className="space-y-6">
-          {posError && <div className="p-4 alert-error rounded text-sm">{posError}</div>}
+          {posError && (
+            <Banner variant="error" onDismiss={() => setPosError(null)} onRetry={fetchPositions}>
+              {posError}
+            </Banner>
+          )}
+
+          {(positionPriceError || stopLossError || takeProfitError || inverseBotError) && (
+            <div className="space-y-2">
+              {positionPriceError && (
+                <Banner
+                  variant="error"
+                  className="text-xs"
+                  onDismiss={() => setPositionPriceError(null)}
+                >
+                  {positionPriceError}
+                </Banner>
+              )}
+              {stopLossError && (
+                <Banner
+                  variant="error"
+                  className="text-xs"
+                  onDismiss={() => setStopLossError(null)}
+                  onRetry={fetchStopLosses}
+                >
+                  {stopLossError}
+                </Banner>
+              )}
+              {takeProfitError && (
+                <Banner
+                  variant="error"
+                  className="text-xs"
+                  onDismiss={() => setTakeProfitError(null)}
+                  onRetry={fetchTakeProfits}
+                >
+                  {takeProfitError}
+                </Banner>
+              )}
+              {inverseBotError && (
+                <Banner
+                  variant="error"
+                  className="text-xs"
+                  onDismiss={() => setInverseBotError(null)}
+                  onRetry={fetchInverseBotPositions}
+                >
+                  {inverseBotError}
+                </Banner>
+              )}
+            </div>
+          )}
 
           {tradingKeyPrompt && <TradingKeyPrompt strategy="The inverse position bot" />}
 
@@ -777,6 +838,52 @@ export default function TradeHistory() {
                         const enabled = !!inverse?.enabled;
                         const infoOpen =
                           inverseInfoPinnedToken === tokenId || inverseInfoHoverToken === tokenId;
+                        // Shared inverse-bot explanation content, rendered inside the
+                        // mobile modal (md:hidden) and the desktop tooltip (md+).
+                        const inverseInfoBody = (
+                          <>
+                            <div className="px-3 py-2 border-b border-[var(--line)] bg-[var(--bg-soft)]">
+                              <p className="text-[11px] font-semibold text-soft">
+                                Inverse Bot Evaluation
+                              </p>
+                            </div>
+                            {inverseExplainLoadingToken === tokenId ? (
+                              <p className="text-[11px] text-muted p-3">
+                                Generating explanation...
+                              </p>
+                            ) : inverseExplainErrorByToken[tokenId] ? (
+                              <p className="text-[11px] text-red-300 p-3">
+                                {inverseExplainErrorByToken[tokenId]}
+                              </p>
+                            ) : (
+                              <div className="overflow-x-auto scroll-soft">
+                                <table className="table-theme text-[11px] w-full min-w-[20rem]">
+                                  <tbody>
+                                    {Object.entries(
+                                      inverseExplainByToken[tokenId] || {
+                                        decision: "No explanation available yet.",
+                                        why: "-",
+                                        confidence: "-",
+                                        market_signal: "-",
+                                        web_signal: "-",
+                                        x_signal: "-",
+                                        next_checks: "-",
+                                        updated_at: "-",
+                                      },
+                                    ).map(([key, value]) => (
+                                      <tr key={key}>
+                                        <td className="p-2 text-muted capitalize">
+                                          {key.replace(/_/g, " ")}
+                                        </td>
+                                        <td className="p-2 text-soft">{String(value)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </>
+                        );
                         return (
                           <div className="mb-3 p-3 rounded-lg border border-[var(--line)] bg-[var(--bg-soft)] space-y-2">
                             <div className="flex items-center justify-between">
@@ -784,6 +891,13 @@ export default function TradeHistory() {
                                 <p className="text-xs font-semibold text-soft">
                                   Inverse Position Bot
                                 </p>
+                                <InfoTooltip term="Inverse Position Bot">
+                                  Watches this position and can flip it for you: every few minutes
+                                  an AI re-reads market data, web news and X (Twitter) sentiment,
+                                  and when it is confident the opposite outcome is now more likely
+                                  it sells this side and buys the other one. Most evaluations end in
+                                  HOLD, so it acts rarely and never on a weak signal.
+                                </InfoTooltip>
                                 {enabled && (
                                   <div
                                     className="relative"
@@ -809,50 +923,30 @@ export default function TradeHistory() {
                                       i
                                     </button>
                                     {infoOpen && (
-                                      <div className="absolute z-20 mt-2 left-0 w-[34rem] max-w-[92vw] surface-panel p-0 shadow-xl overflow-hidden">
-                                        <div className="px-3 py-2 border-b border-[var(--line)] bg-[var(--bg-soft)]">
-                                          <p className="text-[11px] font-semibold text-soft">
-                                            Inverse Bot Evaluation
-                                          </p>
-                                        </div>
-                                        {inverseExplainLoadingToken === tokenId ? (
-                                          <p className="text-[11px] text-muted p-3">
-                                            Generating explanation...
-                                          </p>
-                                        ) : inverseExplainErrorByToken[tokenId] ? (
-                                          <p className="text-[11px] text-red-300 p-3">
-                                            {inverseExplainErrorByToken[tokenId]}
-                                          </p>
-                                        ) : (
-                                          <div className="overflow-x-auto">
-                                            <table className="table-theme text-[11px] w-full">
-                                              <tbody>
-                                                {Object.entries(
-                                                  inverseExplainByToken[tokenId] || {
-                                                    decision: "No explanation available yet.",
-                                                    why: "-",
-                                                    confidence: "-",
-                                                    market_signal: "-",
-                                                    web_signal: "-",
-                                                    x_signal: "-",
-                                                    next_checks: "-",
-                                                    updated_at: "-",
-                                                  },
-                                                ).map(([key, value]) => (
-                                                  <tr key={key}>
-                                                    <td className="p-2 text-muted capitalize">
-                                                      {key.replace(/_/g, " ")}
-                                                    </td>
-                                                    <td className="p-2 text-soft">
-                                                      {String(value)}
-                                                    </td>
-                                                  </tr>
-                                                ))}
-                                              </tbody>
-                                            </table>
+                                      <>
+                                        {/* ═══════ MOBILE (<md): Centered modal ═══════ */}
+                                        <div className="md:hidden fixed inset-0 z-[120]">
+                                          {/* Backdrop */}
+                                          <div
+                                            className="absolute inset-0 modal-overlay"
+                                            onClick={() => setInverseInfoPinnedToken(null)}
+                                          />
+                                          {/* Modal panel */}
+                                          <div className="relative flex items-center justify-center min-h-full p-4">
+                                            <div
+                                              className="surface-panel w-full max-w-lg max-h-[85vh] rounded-xl overflow-hidden flex flex-col shadow-xl safe-padded"
+                                              onClick={(e) => e.stopPropagation()}
+                                            >
+                                              {inverseInfoBody}
+                                            </div>
                                           </div>
-                                        )}
-                                      </div>
+                                        </div>
+
+                                        {/* ═══════ DESKTOP (md+): Absolute tooltip ═══════ */}
+                                        <div className="hidden md:block absolute z-20 mt-2 left-0 w-[34rem] max-w-[92vw] surface-panel p-0 shadow-xl overflow-hidden">
+                                          {inverseInfoBody}
+                                        </div>
+                                      </>
                                     )}
                                   </div>
                                 )}
@@ -981,7 +1075,11 @@ export default function TradeHistory() {
       {/* ========== TRADE HISTORY TAB ========== */}
       {activeTab === "history" && (
         <div className="space-y-6">
-          {error && <div className="p-4 alert-error rounded text-sm">{error}</div>}
+          {error && (
+            <Banner variant="error" onDismiss={() => setError(null)} onRetry={() => fetchTrades(0)}>
+              {error}
+            </Banner>
+          )}
 
           {/* Summary Stats */}
           {trades.length > 0 && (
@@ -1033,8 +1131,8 @@ export default function TradeHistory() {
           {/* Trades Table */}
           {filteredTrades.length > 0 ? (
             <div className="surface-panel overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="table-theme text-sm w-full">
+              <div className="overflow-x-auto scroll-soft">
+                <table className="table-theme text-sm w-full min-w-[900px]">
                   <thead>
                     <tr>
                       <th className="text-left p-3">Market</th>
@@ -1261,6 +1359,14 @@ export default function TradeHistory() {
                   ? `No ${filter} trades. Try a different filter.`
                   : "Start trading on Polymarket to see your history here."}
               </p>
+              {filter === "all" && (
+                <Link
+                  to="/markets"
+                  className="inline-block mt-3 text-sm text-[var(--accent)] hover:underline"
+                >
+                  Browse markets to place your first trade
+                </Link>
+              )}
             </div>
           )}
         </div>

@@ -50,7 +50,7 @@ services:
       - redis_data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD} ping | grep -q PONG"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=${REDIS_PASSWORD} redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -169,15 +169,78 @@ services:
       DEFAULT_AI_BACKEND: ${DEFAULT_AI_BACKEND:-llm_chain}
       GRPC_TIMEOUT: ${GRPC_TIMEOUT:-60}
       ADMIN_WALLETS: ${ADMIN_WALLETS:-}
-      # MUST stay 1: every scheduled background job
-      # (stop-loss, inverse bot, market maker, trade monitor,
-      # aggregation, lifecycle) starts from the FastAPI lifespan
-      # and de-duplicates through process-local in-memory state.
-      # More than one worker runs duplicate schedulers, so a
-      # single stop-loss trigger places two independent orders.
-      # Raising this requires moving the schedulers behind a
-      # Postgres advisory lock first.
-      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-1}
+      # Process role (plan 10 Phase A): "web" means this container
+      # serves HTTP and owns NO background scheduler. Every scheduler
+      # takes a Postgres advisory lock, so scaling WEB_CONCURRENCY
+      # only multiplies request capacity — never stop-loss orders.
+      # The `backend-worker` service below owns the schedulers.
+      ROLE: "web"
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      llm-chain:
+        condition: service_started
+      cli-agent:
+        condition: service_started
+    volumes:
+      - ./prompts:/app/prompts:ro
+      - ./services/shared:/app/shared:ro
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+  # ── Backend worker (background schedulers only) ─────────────
+  # Runs every monitor: trade monitor, stop-loss, inverse bot, market
+  # maker, position lifecycle, aggregation, arbitrage, news digest,
+  # whale/CTF events, redemption, latency arb, equity snapshots,
+  # forecast resolution and the event-log writer.
+  #
+  # Exactly one instance. Each scheduler already takes a Postgres
+  # advisory lock, so a second worker would skip them all anyway —
+  # but a stopped worker means no stop-loss at all, which is why
+  # `restart: unless-stopped` and the dead-man's-switch watchdog
+  # (in-app) matter more here than anywhere else in this file.
+  backend-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-polymarket}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set}
+      REFRESH_TOKEN_HASH_SECRET: ${REFRESH_TOKEN_HASH_SECRET:-}
+      ENCRYPTION_MASTER_KEYS: ${ENCRYPTION_MASTER_KEYS:-}
+      ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:-}
+      CREDENTIAL_CACHE_TTL_SECONDS: ${CREDENTIAL_CACHE_TTL_SECONDS:-3600}
+      REQUIRE_REDIS_FOR_CREDENTIALS: "true"
+      ENVIRONMENT: production
+      DEBUG_ENDPOINTS_ENABLED: "false"
+      DEBUG_LOG_HASH_SALT: ${DEBUG_LOG_HASH_SALT:-}
+      POLYMARKET_PRIVATE_KEY: ${POLYMARKET_PRIVATE_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      PROMPTS_PATH: /app/prompts/prompts.json
+      PYTHONPATH: /app:/app/shared
+      LLM_CHAIN_GRPC_HOST: llm-chain
+      LLM_CHAIN_GRPC_PORT: 50051
+      CLI_AGENT_GRPC_HOST: cli-agent
+      CLI_AGENT_GRPC_PORT: 50052
+      DEFAULT_AI_BACKEND: ${DEFAULT_AI_BACKEND:-llm_chain}
+      GRPC_TIMEOUT: ${GRPC_TIMEOUT:-60}
+      ADMIN_WALLETS: ${ADMIN_WALLETS:-}
+      BINANCE_SKILLS_ENABLED: ${BINANCE_SKILLS_ENABLED:-true}
+      # "worker" starts the schedulers and serves no HTTP.
+      ROLE: "worker"
+    # Boot the schedulers without an ASGI server (plan 10 Phase A).
+    command: ["uv", "run", "python", "-m", "app.worker_main"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -208,7 +271,7 @@ services:
       args:
         VITE_API_URL: "" # empty → relative /api, proxied by nginx
     ports:
-      - "${FRONTEND_PORT:-80}:80"
+      - "${FRONTEND_PORT:-80}:8080"
     depends_on:
       - backend
     restart: unless-stopped

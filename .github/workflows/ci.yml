@@ -51,6 +51,13 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install dependencies
         run: npm ci
+      - name: Audit dependencies
+        # Non-blocking: 27 high-severity transitive advisories (ws via
+        # ethers/viem/@solana, pulled in by the wallet deps) are unfixed.
+        # Tracked in .kilo/plans/context-shared.md; flip to blocking once
+        # the transitive fixes land without breaking package.json.
+        continue-on-error: true
+        run: npm audit --audit-level=high
       - name: Type-check and build
         run: npm run build
       - name: Prettier check

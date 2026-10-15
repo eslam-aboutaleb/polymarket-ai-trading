@@ -1988,6 +1988,155 @@ class AnalysisClient:
             text = ""
         return {"report": text.strip(), "success": bool(text.strip())}
 
+    # ── Multi-step Orchestration (plan 01) ──────────────────────
+
+    async def orchestrate(
+        self,
+        intent: str,
+        payload: dict[str, Any] | None = None,
+        steps: list[str] | None = None,
+        user_id: str = "",
+        llm_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Run a multi-step orchestration plan on the llm-chain backend.
+
+        The planner, per-step routing and synthesis all live in the service
+        (see ``services/llm-chain/src/orchestrator.py``); this method only
+        transports the intent + payload and the request-level LLM config,
+        which is what decides whether each step runs on llm-chain or on
+        cli-agent (GitHub Models providers).
+
+        Fail-soft: a failed step yields ``partial=True`` with a typed
+        ``error`` per step, and the synthesis is still returned. Only a
+        transport failure raises.
+
+        Attribution: ``prompt_version`` / ``experiment_id`` / ``variant`` /
+        ``llm_tier`` are not fields of the proto LLMConfig, so they ride
+        along inside ``llm_config`` and are stamped onto the returned
+        ``metadata`` for the verdict recorders (plan 04).
+        """
+        from app.grpc_clients import analysis_pb2
+
+        stub = await self._get_stub()
+        request_kwargs: dict[str, Any] = {
+            "intent": intent,
+            "payload_json": json.dumps(payload or {}, default=str),
+            "steps": steps or [],
+            "user_id": user_id,
+            "stream": False,
+        }
+        proto_llm_config = _build_llm_config(llm_config)
+        if proto_llm_config is not None:
+            request_kwargs["llm_config"] = proto_llm_config
+        request = analysis_pb2.OrchestrateRequest(**request_kwargs)
+
+        try:
+            response = await stub.OrchestrateAnalysis(
+                request,
+                timeout=settings.grpc_timeout * ORCHESTRATION_TIMEOUT_MULTIPLIER,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"OrchestrateAnalysis failed: {exc}") from exc
+
+        return _orchestrate_result(response, llm_config)
+
+    async def orchestrate_stream(
+        self,
+        intent: str,
+        payload: dict[str, Any] | None = None,
+        steps: list[str] | None = None,
+        user_id: str = "",
+        llm_config: dict[str, Any] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """
+        Stream an orchestration plan: one ``step`` event per executed step,
+        then a final ``recommendation`` event with the synthesis.
+
+        Yields the decoded event dicts from the service; a transport failure
+        yields a single ``error`` event instead of raising so the SSE route
+        can render it with the existing error envelope.
+        """
+        from app.grpc_clients import analysis_pb2
+
+        stub = await self._get_stub()
+        request_kwargs: dict[str, Any] = {
+            "intent": intent,
+            "payload_json": json.dumps(payload or {}, default=str),
+            "steps": steps or [],
+            "user_id": user_id,
+            "stream": True,
+        }
+        proto_llm_config = _build_llm_config(llm_config)
+        if proto_llm_config is not None:
+            request_kwargs["llm_config"] = proto_llm_config
+        request = analysis_pb2.OrchestrateRequest(**request_kwargs)
+
+        try:
+            async for chunk in stub.OrchestrateAnalysisStream(
+                request,
+                timeout=settings.grpc_timeout * ORCHESTRATION_TIMEOUT_MULTIPLIER,
+            ):
+                event = _parse_ai_json(chunk.chunk) or {"raw": chunk.chunk}
+                if not isinstance(event, dict):  # pragma: no cover - defensive
+                    event = {"raw": chunk.chunk}
+                event.setdefault("chunk_type", chunk.chunk_type)
+                event["is_final"] = chunk.is_final
+                yield event
+                if chunk.is_final and chunk.chunk_type == "recommendation":
+                    break
+        except Exception as exc:
+            logger.error("OrchestrateAnalysisStream failed: %s", exc)
+            yield {"chunk_type": "error", "error": "Stream processing failed", "is_final": True}
+
+
+# ── Orchestration helpers ─────────────────────────────────────
+
+#: A plan runs several STRONG-tier LLM calls in sequence, so it needs a much
+#: longer budget than a single analysis RPC.
+ORCHESTRATION_TIMEOUT_MULTIPLIER = 10
+
+#: Keys that are not proto LLMConfig fields but must survive the round-trip
+#: so recorded verdicts stay attributable (prompt version, A/B arm, tier).
+ORCHESTRATION_ATTRIBUTION_KEYS = (
+    "prompt_version",
+    "experiment_id",
+    "variant",
+    "llm_tier",
+)
+
+
+def _orchestrate_result(response: Any, llm_config: dict[str, Any] | None) -> dict[str, Any]:
+    """Decode an ``OrchestrateResponse`` into the route-facing dict."""
+    steps: list[dict[str, Any]] = []
+    for step in response.steps:
+        output: dict[str, Any] = {}
+        if step.output_json:
+            parsed = _parse_ai_json(step.output_json)
+            output = parsed if isinstance(parsed, dict) else {"raw": step.output_json}
+        steps.append(
+            {
+                "step": step.step,
+                "ok": step.ok,
+                "output": output,
+                "error": step.error,
+                "backend": step.backend,
+                "duration_ms": step.duration_ms,
+            }
+        )
+    metadata = dict(response.metadata)
+    for key in ORCHESTRATION_ATTRIBUTION_KEYS:
+        value = (llm_config or {}).get(key)
+        if value:
+            metadata.setdefault(key, str(value))
+    return {
+        "success": response.success,
+        "synthesis": response.synthesis,
+        "steps": steps,
+        "partial": response.partial,
+        "metadata": metadata,
+    }
+
 
 # Client factory for dependency injection
 def get_analysis_client(backend: AIBackend = None) -> AnalysisClient:

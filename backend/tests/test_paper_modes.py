@@ -583,7 +583,16 @@ class StopLossPaperModeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sl.status, "triggered")
         self.assertEqual(sl.order_hash, "0xabc")
         self.assertEqual(sl.executed_price, 0.30)
-        self.assertEqual(_added_objects(db, UserTrade), [])
+        # Live mode now records an attributed trade (plan 03 Phase A).
+        # Before this the live close only touched StopLossOrder, so the
+        # sell never reached the FIFO matcher and the position's
+        # realized P&L stayed at zero — with every loss limit derived
+        # from it.
+        trades = _added_objects(db, UserTrade)
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades[0].strategy_source, "stop_loss")
+        self.assertEqual(trades[0].status, "pending")
+        self.assertEqual(trades[0].order_hash, "0xabc")
 
 
 if __name__ == "__main__":

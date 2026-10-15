@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getApiErrorMessage } from "../utils/apiError";
 import { whaleService, WhaleConfig, WhaleEvent } from "../services/whaleService";
+import { Banner, useToast } from "./ui";
 
 const POLL_INTERVAL_MS = 15000;
 const DEFAULT_MIN_NOTIONAL = 10000;
@@ -56,8 +57,8 @@ function truncateWallet(wallet: string): string {
 }
 
 export default function WhaleFeed() {
+  const toast = useToast();
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -114,7 +115,6 @@ export default function WhaleFeed() {
 
   const saveConfig = async () => {
     setSaving(true);
-    setSuccess(null);
     setError(null);
     try {
       const watchlist = watchlistText
@@ -129,7 +129,7 @@ export default function WhaleFeed() {
       });
       setConfig(result);
       setWatchlistText(result.watchlist.join("\n"));
-      setSuccess("Whale monitoring settings saved");
+      toast.success("Whale monitoring settings saved");
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -146,7 +146,7 @@ export default function WhaleFeed() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Whale Monitoring</h1>
+        <h1 className="text-3xl font-bold">Whales</h1>
         <p className="text-soft text-sm mt-1">
           Whale-sized position movements detected on-chain, typically 3–30s ahead of the public
           positions API.
@@ -154,14 +154,9 @@ export default function WhaleFeed() {
       </div>
 
       {error && (
-        <div className="rounded border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-400">
+        <Banner variant="error" onDismiss={() => setError(null)} onRetry={fetchEvents}>
           {error}
-        </div>
-      )}
-      {success && (
-        <div className="rounded border border-green-500/40 bg-green-500/10 p-3 text-sm text-green-400">
-          {success}
-        </div>
+        </Banner>
       )}
 
       <section className="surface-panel p-5 space-y-4">
@@ -225,7 +220,7 @@ export default function WhaleFeed() {
         </div>
       </section>
 
-      <section className="surface-panel p-5 space-y-3">
+      <section className="surface-panel p-5 space-y-3" data-tutorial="whales">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h2 className="text-lg font-semibold">
             Live Whale Activity{" "}

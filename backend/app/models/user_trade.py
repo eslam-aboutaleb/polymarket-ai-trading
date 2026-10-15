@@ -13,6 +13,7 @@ class UserTrade(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    account_id = Column(Integer, nullable=True, index=True)
     market_id = Column(String(200), nullable=False, index=True)
     token_id = Column(String(200), nullable=True, index=True)  # CLOB condition token
     action = Column(String(20), nullable=False)  # buy or sell
@@ -49,7 +50,7 @@ class UserTrade(Base):
     strategy_source = Column(
         String(50),
         nullable=True,
-    )  # copy|manual|market_maker|inverse|stop_loss|take_profit|latency_arb
+    )  # copy|manual|market_maker|inverse|stop_loss|take_profit|latency_arb|emergency
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 

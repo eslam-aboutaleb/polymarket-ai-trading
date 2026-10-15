@@ -15,6 +15,8 @@ import {
   CreateBacktestRequest,
   StrategyInfo,
 } from "../services/backtestingService";
+import { getApiErrorMessage } from "../utils/apiError";
+import { Banner, ConfirmModal, Skeleton } from "./ui";
 
 type FormState = CreateBacktestRequest;
 
@@ -41,6 +43,7 @@ export default function Backtesting() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedRun, setSelectedRun] = useState<BacktestRun | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<number | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -51,7 +54,7 @@ export default function Backtesting() {
       setRuns(runsResp.runs);
       setStrategies(strats.strategies);
     } catch (e) {
-      setError(String(e));
+      setError(getApiErrorMessage(e, "Failed to load backtesting data"));
     } finally {
       setLoading(false);
     }
@@ -74,20 +77,19 @@ export default function Backtesting() {
       setSelectedRun(result);
       await fetchData();
     } catch (e) {
-      setError(String(e));
+      setError(getApiErrorMessage(e, "Failed to start backtest run"));
     } finally {
       setRunning(false);
     }
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm("Delete this backtest run?")) return;
     try {
       await backtestingService.deleteBacktestRun(id);
       if (selectedRun?.id === id) setSelectedRun(null);
       await fetchData();
     } catch (e) {
-      setError(String(e));
+      setError(getApiErrorMessage(e, "Failed to delete backtest run"));
     }
   };
 
@@ -106,7 +108,8 @@ export default function Backtesting() {
 
   if (loading) {
     return (
-      <div className="p-6">
+      <div className="p-6 space-y-3" role="status" aria-live="polite">
+        <Skeleton variant="text" lines={3} />
         <p className="text-soft text-sm">Loading backtesting data...</p>
       </div>
     );
@@ -115,9 +118,9 @@ export default function Backtesting() {
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between" data-tutorial="backtesting">
         <div>
-          <h2 className="text-xl font-bold text-white">Backtesting</h2>
+          <h1 className="text-xl font-bold text-white">Backtesting</h1>
           <p className="text-soft text-sm mt-1">
             Test strategies against historical data before trading live
           </p>
@@ -128,12 +131,9 @@ export default function Backtesting() {
       </div>
 
       {error && (
-        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
+        <Banner variant="error" onDismiss={() => setError(null)} onRetry={fetchData}>
           {error}
-          <button onClick={() => setError(null)} className="ml-2 text-red-300 hover:text-white">
-            ✕
-          </button>
-        </div>
+        </Banner>
       )}
 
       {/* Create Form */}
@@ -501,7 +501,7 @@ export default function Backtesting() {
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      handleDelete(run.id);
+                      setPendingDelete(run.id);
                     }}
                     className="text-xs text-soft hover:text-red-400"
                   >
@@ -519,6 +519,20 @@ export default function Backtesting() {
           ))}
         </div>
       )}
+
+      <ConfirmModal
+        open={pendingDelete !== null}
+        title="Delete backtest run?"
+        body="This permanently deletes the backtest run and its results. This action cannot be undone."
+        destructive
+        confirmLabel="Delete"
+        onConfirm={() => {
+          const id = pendingDelete;
+          setPendingDelete(null);
+          if (id !== null) void handleDelete(id);
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }

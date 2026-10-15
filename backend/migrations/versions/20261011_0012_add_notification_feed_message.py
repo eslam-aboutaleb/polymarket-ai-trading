@@ -32,12 +32,16 @@ depends_on = None
 
 
 def upgrade() -> None:
-    existing = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("notification_feed_events")}
+    existing = {
+        c["name"] for c in sa.inspect(op.get_bind()).get_columns("notification_feed_events")
+    }
     if "message" not in existing:
         op.add_column("notification_feed_events", sa.Column("message", sa.Text(), nullable=True))
 
 
 def downgrade() -> None:
-    existing = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("notification_feed_events")}
+    existing = {
+        c["name"] for c in sa.inspect(op.get_bind()).get_columns("notification_feed_events")
+    }
     if "message" in existing:
         op.drop_column("notification_feed_events", "message")

@@ -14,6 +14,7 @@ class TakeProfitOrder(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    account_id = Column(Integer, nullable=True, index=True)
 
     # Eager-loadable relationship (avoids N+1 wallet lookups)
     user = relationship("User", lazy="noload")

@@ -13,6 +13,7 @@
  * @module components/Dashboard
  */
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
+import { Link } from "react-router-dom";
 import { portfolioService, PortfolioSummary, PolymarketMarket } from "../services/portfolioService";
 import { stopLossService, StopLossOrder } from "../services/stopLossService";
 import {
@@ -27,6 +28,7 @@ import { getPaperSummary, PaperSummary } from "../services/settingsService";
 import { useAuthStore } from "../store/authStore";
 import { usePriceStream } from "../hooks/usePriceStream";
 import { getApiErrorMessage } from "../utils/apiError";
+import { Banner, Skeleton, ConfirmModal, InfoTooltip } from "./ui";
 import CashOutModal from "./CashOutModal";
 import StopLossModal from "./StopLossModal";
 import PositionAnalysisPopup, {
@@ -59,8 +61,12 @@ function DashboardContent() {
   const [followingFeed, setFollowingFeed] = useState<FollowingFeedEvent[]>([]);
   const [followingFeedLoading, setFollowingFeedLoading] = useState(false);
   const [followingFeedError, setFollowingFeedError] = useState<string | null>(null);
+  const [positionPriceError, setPositionPriceError] = useState<string | null>(null);
+  const [stopLossError, setStopLossError] = useState<string | null>(null);
+  const [inverseBotError, setInverseBotError] = useState<string | null>(null);
   const [riskOpsBusy, setRiskOpsBusy] = useState<string | null>(null);
   const [riskOpsMessage, setRiskOpsMessage] = useState<string | null>(null);
+  const [emergencyStopOpen, setEmergencyStopOpen] = useState(false);
   const [arbitrageRows, setArbitrageRows] = useState<ArbitrageOpportunity[]>([]);
   const [paperSummary, setPaperSummary] = useState<PaperSummary | null>(null);
   const [feedEventTypeFilter, setFeedEventTypeFilter] = useState<"all" | "opened" | "closed">(
@@ -197,9 +203,14 @@ function DashboardContent() {
     if (!isAuthenticated || !portfolio?.positions?.length) return {};
     try {
       const { prices } = await portfolioService.refreshPositionPrices();
+      setPositionPriceError(null);
       return prices || {};
-    } catch {
-      // Silently ignore price poll errors — retried on the next tick.
+    } catch (err: unknown) {
+      // Stale P&L is money-adjacent — surface the failure instead of
+      // silently showing the last polled prices as current.
+      setPositionPriceError(
+        getApiErrorMessage(err, "Live prices are temporarily unavailable — P&L may be stale"),
+      );
       return {};
     }
   }, [isAuthenticated, portfolio?.positions?.length]);
@@ -355,8 +366,10 @@ function DashboardContent() {
     try {
       const orders = await stopLossService.getStopLosses("active");
       setActiveStopLosses(orders);
-    } catch {
-      // ignore
+      setStopLossError(null);
+    } catch (err: unknown) {
+      // Risk controls must never look absent — say so when they cannot load.
+      setStopLossError(getApiErrorMessage(err, "Failed to load active stop-losses"));
     } finally {
       stopLossInFlightRef.current = false;
     }
@@ -366,8 +379,9 @@ function DashboardContent() {
     try {
       const rows = await inverseBotService.listInverseBotPositions();
       setInverseBotPositions(rows);
-    } catch {
-      // ignore
+      setInverseBotError(null);
+    } catch (err: unknown) {
+      setInverseBotError(getApiErrorMessage(err, "Failed to load inverse bot positions"));
     }
   }, []);
 
@@ -645,6 +659,16 @@ function DashboardContent() {
     }
   };
 
+  const activePositionsCount = portfolio?.active_positions;
+  const hasPositionCount =
+    typeof activePositionsCount === "number" && Number.isFinite(activePositionsCount);
+  const positionCountPhrase = hasPositionCount
+    ? activePositionsCount === 1
+      ? "your 1 active position"
+      : `your ${activePositionsCount} active positions`
+    : "your open positions";
+  const emergencyStopBody = `Emergency stop halts all automated trading and closes ${positionCountPhrase} at market price. This cannot be undone — stop-losses, take-profit orders and inverse bots stop with it, and anything you want back has to be re-opened manually.`;
+
   const shortAddress = walletAddress
     ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
     : "Not connected";
@@ -667,7 +691,7 @@ function DashboardContent() {
           <h1 className="text-4xl font-bold mb-2">Dashboard</h1>
           <p className="text-soft">Loading portfolio data...</p>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-4 gap-6">
           {[1, 2, 3, 4].map((i) => (
             <div key={i} className="surface-panel p-6 animate-pulse">
               <div className="h-4 bg-[var(--bg-soft)] rounded w-24 mb-3"></div>
@@ -694,10 +718,17 @@ function DashboardContent() {
         </button>
       </div>
 
-      {error && <div className="p-4 alert-error rounded text-sm">{error}</div>}
+      {error && (
+        <Banner variant="error" onDismiss={() => setError(null)} onRetry={fetchData}>
+          {error}
+        </Banner>
+      )}
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div
+        data-tutorial="dashboard"
+        className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-4 gap-6"
+      >
         {/* Portfolio Balance */}
         <div className="surface-panel p-6">
           <h3 className="text-soft text-sm font-medium mb-2">USDC Balance</h3>
@@ -769,7 +800,7 @@ function DashboardContent() {
 
         <div className="flex flex-wrap gap-2">
           <button
-            onClick={handleEmergencyStop}
+            onClick={() => setEmergencyStopOpen(true)}
             disabled={riskOpsBusy !== null}
             className="btn-danger text-xs"
           >
@@ -852,11 +883,27 @@ function DashboardContent() {
         </div>
 
         {followingFeedError && (
-          <div className="p-3 alert-error rounded text-xs mb-3">{followingFeedError}</div>
+          <Banner
+            variant="error"
+            className="mb-3 text-xs"
+            onDismiss={() => setFollowingFeedError(null)}
+            onRetry={() => fetchFollowingFeed()}
+          >
+            {followingFeedError}
+          </Banner>
         )}
 
         {followingFeed.length === 0 ? (
-          <div className="text-soft text-sm py-4">No followed-trader events yet.</div>
+          <div className="text-soft text-sm py-4">
+            <p>No followed-trader events yet.</p>
+            <p className="text-xs text-muted mt-1">
+              Follow traders from the{" "}
+              <Link to="/leaderboard" className="text-[var(--accent)] hover:underline">
+                Leaderboard
+              </Link>{" "}
+              — their opened and closed positions will appear here.
+            </p>
+          </div>
         ) : (
           <div className="space-y-2 max-h-80 overflow-y-auto scroll-soft">
             {followingFeed.map((row) => (
@@ -890,7 +937,7 @@ function DashboardContent() {
       </div>
 
       {/* Content Sections */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Positions */}
         <div className="surface-panel p-6">
           <div className="flex items-center gap-2 mb-4">
@@ -900,6 +947,7 @@ function DashboardContent() {
                 className={`chip text-[10px] ${
                   priceStreamStatus === "live" ? "chip-success" : "chip-warning"
                 }`}
+                aria-live="polite"
                 title={
                   priceStreamStatus === "live"
                     ? "Prices streaming live over SSE"
@@ -910,6 +958,41 @@ function DashboardContent() {
               </span>
             )}
           </div>
+
+          {(positionPriceError || stopLossError || inverseBotError) && (
+            <div className="space-y-2 mb-3">
+              {positionPriceError && (
+                <Banner
+                  variant="error"
+                  className="text-xs"
+                  onDismiss={() => setPositionPriceError(null)}
+                >
+                  {positionPriceError}
+                </Banner>
+              )}
+              {stopLossError && (
+                <Banner
+                  variant="error"
+                  className="text-xs"
+                  onDismiss={() => setStopLossError(null)}
+                  onRetry={fetchStopLosses}
+                >
+                  {stopLossError}
+                </Banner>
+              )}
+              {inverseBotError && (
+                <Banner
+                  variant="error"
+                  className="text-xs"
+                  onDismiss={() => setInverseBotError(null)}
+                  onRetry={fetchInverseBotPositions}
+                >
+                  {inverseBotError}
+                </Banner>
+              )}
+            </div>
+          )}
+
           {portfolio?.positions && portfolio.positions.length > 0 ? (
             <div className="space-y-3 max-h-80 overflow-y-auto scroll-soft">
               {portfolio.positions.map((pos: any, idx: number) => {
@@ -1012,6 +1095,50 @@ function DashboardContent() {
                       const enabled = !!inverse?.enabled;
                       const infoOpen =
                         inverseInfoPinnedToken === tokenId || inverseInfoHoverToken === tokenId;
+                      // Shared inverse-bot explanation content, rendered inside the
+                      // mobile modal (md:hidden) and the desktop tooltip (md+).
+                      const inverseInfoBody = (
+                        <>
+                          <div className="px-3 py-2 border-b border-[var(--line)] bg-[var(--bg-soft)]">
+                            <p className="text-[11px] font-semibold text-soft">
+                              Inverse Bot Evaluation
+                            </p>
+                          </div>
+                          {inverseExplainLoadingToken === tokenId ? (
+                            <p className="text-[11px] text-muted p-3">Generating explanation...</p>
+                          ) : inverseExplainErrorByToken[tokenId] ? (
+                            <p className="text-[11px] text-red-300 p-3">
+                              {inverseExplainErrorByToken[tokenId]}
+                            </p>
+                          ) : (
+                            <div className="overflow-x-auto scroll-soft">
+                              <table className="table-theme text-[11px] w-full min-w-[20rem]">
+                                <tbody>
+                                  {Object.entries(
+                                    inverseExplainByToken[tokenId] || {
+                                      decision: "No explanation available yet.",
+                                      why: "-",
+                                      confidence: "-",
+                                      market_signal: "-",
+                                      web_signal: "-",
+                                      x_signal: "-",
+                                      next_checks: "-",
+                                      updated_at: "-",
+                                    },
+                                  ).map(([key, value]) => (
+                                    <tr key={key}>
+                                      <td className="p-2 text-muted capitalize">
+                                        {key.replace(/_/g, " ")}
+                                      </td>
+                                      <td className="p-2 text-soft">{String(value)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </>
+                      );
                       return (
                         <div className="mb-3 p-3 rounded-lg border border-[var(--line)] bg-[var(--bg-soft)] space-y-2">
                           <div className="flex items-center justify-between">
@@ -1019,6 +1146,13 @@ function DashboardContent() {
                               <p className="text-xs font-semibold text-soft">
                                 Inverse Position Bot
                               </p>
+                              <InfoTooltip term="Inverse Position Bot">
+                                Watches this position and can flip it for you: every few minutes an
+                                AI re-reads market data, web news and X (Twitter) sentiment, and
+                                when it is confident the opposite outcome is now more likely it
+                                sells this side and buys the other one. Most evaluations end in
+                                HOLD, so it acts rarely and never on a weak signal.
+                              </InfoTooltip>
                               {enabled && (
                                 <div
                                   className="relative"
@@ -1044,48 +1178,30 @@ function DashboardContent() {
                                     i
                                   </button>
                                   {infoOpen && (
-                                    <div className="absolute z-20 mt-2 left-0 w-[34rem] max-w-[92vw] surface-panel p-0 shadow-xl overflow-hidden">
-                                      <div className="px-3 py-2 border-b border-[var(--line)] bg-[var(--bg-soft)]">
-                                        <p className="text-[11px] font-semibold text-soft">
-                                          Inverse Bot Evaluation
-                                        </p>
-                                      </div>
-                                      {inverseExplainLoadingToken === tokenId ? (
-                                        <p className="text-[11px] text-muted p-3">
-                                          Generating explanation...
-                                        </p>
-                                      ) : inverseExplainErrorByToken[tokenId] ? (
-                                        <p className="text-[11px] text-red-300 p-3">
-                                          {inverseExplainErrorByToken[tokenId]}
-                                        </p>
-                                      ) : (
-                                        <div className="overflow-x-auto">
-                                          <table className="table-theme text-[11px] w-full">
-                                            <tbody>
-                                              {Object.entries(
-                                                inverseExplainByToken[tokenId] || {
-                                                  decision: "No explanation available yet.",
-                                                  why: "-",
-                                                  confidence: "-",
-                                                  market_signal: "-",
-                                                  web_signal: "-",
-                                                  x_signal: "-",
-                                                  next_checks: "-",
-                                                  updated_at: "-",
-                                                },
-                                              ).map(([key, value]) => (
-                                                <tr key={key}>
-                                                  <td className="p-2 text-muted capitalize">
-                                                    {key.replace(/_/g, " ")}
-                                                  </td>
-                                                  <td className="p-2 text-soft">{String(value)}</td>
-                                                </tr>
-                                              ))}
-                                            </tbody>
-                                          </table>
+                                    <>
+                                      {/* ═══════ MOBILE (<md): Centered modal ═══════ */}
+                                      <div className="md:hidden fixed inset-0 z-[120]">
+                                        {/* Backdrop */}
+                                        <div
+                                          className="absolute inset-0 modal-overlay"
+                                          onClick={() => setInverseInfoPinnedToken(null)}
+                                        />
+                                        {/* Modal panel */}
+                                        <div className="relative flex items-center justify-center min-h-full p-4">
+                                          <div
+                                            className="surface-panel w-full max-w-lg max-h-[85vh] rounded-xl overflow-hidden flex flex-col shadow-xl safe-padded"
+                                            onClick={(e) => e.stopPropagation()}
+                                          >
+                                            {inverseInfoBody}
+                                          </div>
                                         </div>
-                                      )}
-                                    </div>
+                                      </div>
+
+                                      {/* ═══════ DESKTOP (md+): Absolute tooltip ═══════ */}
+                                      <div className="hidden md:block absolute z-20 mt-2 left-0 w-[34rem] max-w-[92vw] surface-panel p-0 shadow-xl overflow-hidden">
+                                        {inverseInfoBody}
+                                      </div>
+                                    </>
                                   )}
                                 </div>
                               )}
@@ -1207,7 +1323,18 @@ function DashboardContent() {
             </div>
           ) : (
             <div className="text-soft text-center py-8">
-              No positions found. Start trading to see your activity here.
+              <p>No positions found.</p>
+              <p className="text-xs text-muted mt-1">
+                Browse{" "}
+                <Link to="/markets" className="text-[var(--accent)] hover:underline">
+                  Markets
+                </Link>{" "}
+                or{" "}
+                <Link to="/opportunities" className="text-[var(--accent)] hover:underline">
+                  Opportunities
+                </Link>{" "}
+                to open your first position — it will show up here.
+              </p>
             </div>
           )}
         </div>
@@ -1242,6 +1369,10 @@ function DashboardContent() {
                             <span className="status-good">Yes: {(yesPrice * 100).toFixed(0)}¢</span>
                           ) : null;
                         } catch {
+                          // A dropped price row must read as "no price", not
+                          // as a real zero — warn and let the row render
+                          // without it.
+                          console.warn("Failed to parse trending market outcome prices", market);
                           return null;
                         }
                       })()}
@@ -1250,7 +1381,10 @@ function DashboardContent() {
               ))}
             </div>
           ) : (
-            <div className="text-soft text-center py-8">Loading trending markets...</div>
+            <div className="py-8" role="status" aria-live="polite">
+              <Skeleton variant="text" lines={3} />
+              <p className="text-soft text-center text-sm mt-2">Loading trending markets...</p>
+            </div>
           )}
         </div>
       </div>
@@ -1319,6 +1453,20 @@ function DashboardContent() {
           onClose={() => setAnalysisPosition(null)}
         />
       )}
+
+      <ConfirmModal
+        open={emergencyStopOpen}
+        title="Emergency stop trading?"
+        body={emergencyStopBody}
+        confirmLabel="Close positions & stop"
+        destructive
+        confirmDisabled={riskOpsBusy !== null}
+        onConfirm={() => {
+          setEmergencyStopOpen(false);
+          void handleEmergencyStop();
+        }}
+        onCancel={() => setEmergencyStopOpen(false)}
+      />
     </div>
   );
 }

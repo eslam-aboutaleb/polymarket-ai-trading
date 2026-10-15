@@ -6,16 +6,25 @@ streaming endpoint (progress, article, done and error
 events), feed refresh, request validation, and the SSE
 event formatter. The news service singleton is replaced
 with a mock so no LLM or cache I/O happens.
+
+The three generation/refresh POST routes are
+authenticated and rate limited (plan B1): the tests
+authenticate through a dependency override, and the
+auth checks themselves are exercised with the override
+absent.
 """
 
 import json
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from app.api.routes.auth import get_current_user_from_token
 from app.api.routes.news import _sse_event
 from app.main import app
+from app.security.rate_limit import limiter
 
 
 def _fake_service():
@@ -46,7 +55,21 @@ class NewsRouteTestCase(unittest.TestCase):
         )
         patcher.start()
         self.addCleanup(patcher.stop)
+        # The news POST routes carry a 5/minute per-IP budget; the counter
+        # lives in the shared in-memory limiter, so it is cleared between
+        # tests instead of letting an earlier test 429 the next one.
+        limiter.reset()
+        self.addCleanup(limiter.reset)
+        self._authenticate()
         self.client = TestClient(app)
+
+    def _authenticate(self, user_id=1):
+        app.dependency_overrides[get_current_user_from_token] = lambda: {
+            "user_id": user_id,
+            "wallet_address": "0x" + "ab" * 20,
+            "is_admin": False,
+        }
+        self.addCleanup(app.dependency_overrides.pop, get_current_user_from_token, None)
 
 
 class FeedRouteTests(NewsRouteTestCase):
@@ -136,7 +159,20 @@ class GenerateRouteTests(NewsRouteTestCase):
             json={"condition_id": "c1", "question": "Q?"},
         )
         self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.json()["detail"], "llm down")
+        # The provider failure text stays in the log, never in the body.
+        self.assertEqual(response.json()["detail"], "News generation failed")
+        self.assertNotIn("llm down", response.text)
+
+    def test_generate_is_rate_limited_below_the_global_budget(self):
+        body = {"condition_id": "c1", "question": "Q?"}
+
+        for _ in range(5):
+            self.assertEqual(self.client.post("/api/news/generate", json=body).status_code, 200)
+
+        # The sixth call inside a minute is the endpoint's own 5/minute cap,
+        # not the global 100/minute one.
+        sixth = self.client.post("/api/news/generate", json=body)
+        self.assertEqual(sixth.status_code, 429)
 
 
 class GenerateStreamRouteTests(NewsRouteTestCase):
@@ -164,7 +200,10 @@ class GenerateStreamRouteTests(NewsRouteTestCase):
         text = response.text
         self.assertIn("event: status", text)
         self.assertIn("event: error", text)
-        self.assertIn("llm down", text)
+        self.assertIn("News generation failed", text)
+        # No exception internals cross the SSE boundary.
+        self.assertNotIn("llm down", text)
+        self.assertNotIn("Traceback", text)
         self.assertNotIn("event: done", text)
 
 
@@ -202,7 +241,66 @@ class RefreshFeedRouteTests(NewsRouteTestCase):
         self.service.generate_for_trending = AsyncMock(side_effect=RuntimeError("trending down"))
         response = self.client.post("/api/news/refresh-feed", json={})
         self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.json()["detail"], "trending down")
+        self.assertEqual(response.json()["detail"], "News feed refresh failed")
+        self.assertNotIn("trending down", response.text)
+
+
+class GenerationAuthTests(unittest.TestCase):
+    """The paid-generation POST routes are authenticated; reads are not."""
+
+    def setUp(self):
+        limiter.reset()
+        self.addCleanup(limiter.reset)
+        patcher = patch(
+            "app.api.routes.news.get_news_service",
+            return_value=_fake_service(),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(app.dependency_overrides.clear)
+        self.client = TestClient(app)
+
+    def test_generate_requires_authentication(self):
+        response = self.client.post(
+            "/api/news/generate",
+            json={"condition_id": "c1", "question": "Q?"},
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_generate_stream_requires_authentication(self):
+        response = self.client.post(
+            "/api/news/generate/stream",
+            json={"condition_id": "c1", "question": "Q?"},
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_refresh_feed_requires_authentication(self):
+        response = self.client.post("/api/news/refresh-feed", json={})
+        self.assertEqual(response.status_code, 401)
+
+    def test_invalid_credentials_are_rejected(self):
+        app.dependency_overrides[get_current_user_from_token] = lambda: (_ for _ in ()).throw(
+            HTTPException(status_code=401, detail="Invalid authentication credentials")
+        )
+        response = self.client.post(
+            "/api/news/generate",
+            json={"condition_id": "c1", "question": "Q?"},
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_authenticated_request_still_generates(self):
+        app.dependency_overrides[get_current_user_from_token] = lambda: {"user_id": 7}
+        response = self.client.post(
+            "/api/news/generate",
+            json={"condition_id": "c1", "question": "Q?"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["article"]["headline"], "Generated")
+
+    def test_read_routes_stay_public(self):
+        for path in ("/api/news/feed", "/api/news/market/c1"):
+            response = self.client.get(path)
+            self.assertEqual(response.status_code, 200, path)
 
 
 class SseEventHelperTests(unittest.TestCase):

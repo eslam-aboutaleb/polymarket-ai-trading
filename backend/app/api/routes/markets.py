@@ -3,7 +3,7 @@
 import json
 import logging
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -12,6 +12,7 @@ from app.api.routes.auth import get_optional_user_from_token
 from app.config import AIBackend, get_settings
 from app.grpc_clients.analysis_client import AnalysisClient
 from app.models.user_settings import AIBackendType, UserSettings
+from app.security.rate_limit import limiter
 from app.services.polymarket_service import get_polymarket_service
 from app.utils.database import get_db
 from app.utils.time import utc_now
@@ -19,6 +20,16 @@ from app.utils.time import utc_now
 router = APIRouter(prefix="/api/markets", tags=["markets"])
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+
+# This stream fetches live CLOB trades, aggregates trader statistics and
+# hands them to the LLM, all for an anonymous caller: on the global
+# 100/minute budget alone one client could spend it entirely. The limit
+# rides on a stub dependency (the auth.py pattern) so the limiter keys off
+# the client IP without touching the handler signature.
+@limiter.limit("5/minute")
+def _trader_analysis_stream_rate_limit(request: Request) -> None:
+    """Rate-limit POST /api/markets/trader-analysis/stream: 5/minute per IP."""
 
 
 # ── Request / Response schemas ───────────────────────────────────────
@@ -92,7 +103,7 @@ async def browse_markets(
     return {"tag": tag, "markets": markets, "count": len(markets)}
 
 
-@router.post("/trader-analysis/stream")
+@router.post("/trader-analysis/stream", dependencies=[Depends(_trader_analysis_stream_rate_limit)])
 async def stream_trader_analysis(
     request: TraderAnalysisRequest,
     current_user: dict | None = Depends(get_optional_user_from_token),
@@ -192,9 +203,9 @@ async def stream_trader_analysis(
                 yield f"data: {json.dumps({'chunk': chunk})}\n\n"
 
             yield f"data: {json.dumps({'done': True})}\n\n"
-        except Exception as e:
-            logger.error("Trader analysis stream error: %s", e, exc_info=True)
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        except Exception:
+            logger.exception("Trader analysis stream error for %s", request.condition_id)
+            yield f"data: {json.dumps({'error': 'Trader analysis failed'})}\n\n"
         finally:
             await client.close()
 

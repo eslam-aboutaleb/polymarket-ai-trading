@@ -23,6 +23,7 @@ class InverseBotPosition(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    account_id = Column(Integer, nullable=True, index=True)
 
     token_id = Column(String(200), nullable=False, index=True)
     condition_id = Column(String(200), nullable=False, index=True)

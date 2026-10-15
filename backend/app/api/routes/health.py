@@ -69,8 +69,9 @@ async def health():
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         checks["database"] = {"ok": True}
-    except Exception as exc:
-        checks["database"] = {"ok": False, "error": str(exc)[:200]}
+    except Exception:
+        logger.exception("Health probe: database check failed")
+        checks["database"] = {"ok": False, "error": "Database check failed"}
 
     checks["cache"] = {"ok": True, "backend": _cache_backend()}
     checks["grpc_backends"] = await _grpc_backend_health()

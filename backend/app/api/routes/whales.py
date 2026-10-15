@@ -10,13 +10,17 @@ from app.api.routes.auth import get_current_user_from_token
 from app.models.whale_config import WhaleConfig
 from app.models.whale_event import WhaleEvent
 from app.services.ctf_events_service import (
+    DEFAULT_MIN_CO_OCCURRENCE,
+    DEFAULT_WINDOW_HOURS,
     WHALE_AUTO_COPY,
     WHALE_MIN_NOTIONAL,
     WHALE_SET_SIZE,
     get_user_config,
+    get_wallet_clusters,
     invalidate_config_cache,
 )
 from app.utils.database import get_db
+from app.utils.time import utc_now
 
 router = APIRouter(prefix="/api/whales", tags=["whales"])
 
@@ -59,6 +63,45 @@ class WhaleConfigUpdate(BaseModel):
     auto_copy: bool | None = None
     watchlist: list[str] | None = None
     whale_set_size: int | None = Field(None, ge=1, le=500)
+
+
+class WalletClusterEdge(BaseModel):
+    wallets: list[str]
+    shared: int
+
+
+class WalletClusterSharedMarket(BaseModel):
+    key: str
+    market_id: str
+    side: str
+    wallets: list[str]
+
+
+class WalletCluster(BaseModel):
+    """Wallets that traded the same market and side together.
+
+    A label for a human to review: nothing here follows or copies a
+    wallet, and membership says nothing about intent — only that the
+    same market and side saw the same wallets repeatedly.
+    """
+
+    cluster_id: str
+    size: int
+    wallets: list[str]
+    co_occurrence: int
+    edges: list[WalletClusterEdge] = []
+    shared_markets: list[WalletClusterSharedMarket] = []
+    distinct_markets: int = 0
+    total_notional: float = 0.0
+    is_tracked_whale: list[str] = []
+
+
+class WalletClusterResponse(BaseModel):
+    clusters: list[WalletCluster]
+    count: int
+    window_hours: float
+    min_co_occurrence: int
+    generated_at: datetime
 
 
 def _event_to_response(event: WhaleEvent) -> WhaleEventResponse:
@@ -110,6 +153,24 @@ async def list_whale_events(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/clusters", response_model=WalletClusterResponse)
+async def list_wallet_clusters(
+    window_hours: float = Query(DEFAULT_WINDOW_HOURS, ge=0.5, le=168.0),
+    min_co_occurrence: int = Query(DEFAULT_MIN_CO_OCCURRENCE, ge=2, le=10),
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """Wallet co-occurrence clusters from recent whale events."""
+    clusters = get_wallet_clusters(window_hours, min_co_occurrence, db)
+    return {
+        "clusters": clusters,
+        "count": len(clusters),
+        "window_hours": window_hours,
+        "min_co_occurrence": min_co_occurrence,
+        "generated_at": utc_now(),
+    }
 
 
 @router.get("/config", response_model=WhaleConfigResponse)

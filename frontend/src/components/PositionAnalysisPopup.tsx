@@ -9,6 +9,9 @@
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 import { analysisService } from "../services/analysisService";
+import { getApiErrorMessage, sanitizeAIError } from "../utils/apiError";
+import { resolveZ } from "../lib/zIndex";
+import { useModalA11y } from "./ui/useModalA11y";
 
 export interface PositionForAnalysis {
   title?: string;
@@ -117,7 +120,6 @@ export default function PositionAnalysisPopup({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [streamedText, setStreamedText] = useState("");
-  const popupRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Accumulated stream text — the source of truth for onDone parsing, so
   // setResult never runs inside a setState updater.
@@ -130,6 +132,8 @@ export default function PositionAnalysisPopup({
   // Set by the unmount/dep-change cleanup so an aborted stream never
   // triggers the non-streaming fallback.
   const abortedRef = useRef(false);
+
+  const { panelRef, titleId } = useModalA11y({ open: true, onClose });
 
   const title = position.title || position.market || position.asset || "Unknown Position";
   // Snapshot values captured at click time — they drive the analysis request
@@ -247,7 +251,7 @@ export default function PositionAnalysisPopup({
         const text = String(resp?.data?.analysis || JSON.stringify(resp?.data || {}));
         applyResult(text);
       } catch (fallbackErr: unknown) {
-        setError(fallbackErr instanceof Error ? fallbackErr.message : "Analysis failed");
+        setError(sanitizeAIError(getApiErrorMessage(fallbackErr, "Analysis failed")));
       }
       setLoading(false);
     };
@@ -270,7 +274,7 @@ export default function PositionAnalysisPopup({
             void runNonStreamingFallback();
             return;
           }
-          setError(err || "Analysis failed");
+          setError(sanitizeAIError(err || "Analysis failed"));
           setLoading(false);
         },
       });
@@ -281,7 +285,7 @@ export default function PositionAnalysisPopup({
         hasFallBackRef.current = true;
         await runNonStreamingFallback();
       } else {
-        setError(err instanceof Error ? err.message : "Analysis failed");
+        setError(sanitizeAIError(getApiErrorMessage(err, "Analysis failed")));
         setLoading(false);
       }
     }
@@ -297,8 +301,8 @@ export default function PositionAnalysisPopup({
 
   // Position the popup near the click, but keep it within viewport
   useEffect(() => {
-    if (!popupRef.current) return;
-    const popup = popupRef.current;
+    if (!panelRef.current) return;
+    const popup = panelRef.current;
     const rect = popup.getBoundingClientRect();
     const vw = window.innerWidth;
     const vh = window.innerHeight;
@@ -325,22 +329,17 @@ export default function PositionAnalysisPopup({
   // Close on outside click
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
-      if (popupRef.current && !popupRef.current.contains(e.target as Node)) {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
         onClose();
       }
-    };
-    const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
     };
     // Delay adding listener so the triggering click doesn't immediately close
     const timer = setTimeout(() => {
       document.addEventListener("mousedown", handleClick);
-      document.addEventListener("keydown", handleEsc);
     }, 100);
     return () => {
       clearTimeout(timer);
       document.removeEventListener("mousedown", handleClick);
-      document.removeEventListener("keydown", handleEsc);
     };
   }, [onClose]);
 
@@ -391,8 +390,12 @@ export default function PositionAnalysisPopup({
 
   return (
     <div
-      ref={popupRef}
-      className="fixed z-50 surface-panel shadow-2xl overflow-hidden"
+      ref={panelRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      tabIndex={-1}
+      className={`fixed ${resolveZ("modal")} surface-panel shadow-2xl overflow-hidden safe-padded`}
       style={{
         left: clickX,
         top: clickY + 8,
@@ -405,7 +408,9 @@ export default function PositionAnalysisPopup({
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-lg">🤖</span>
           <div className="min-w-0">
-            <h3 className="text-sm font-bold text-white truncate">AI Position Analysis</h3>
+            <h3 id={titleId} className="text-sm font-bold text-white truncate">
+              AI Position Analysis
+            </h3>
             <p className="text-[11px] text-muted truncate">{title}</p>
           </div>
         </div>
@@ -453,7 +458,10 @@ export default function PositionAnalysisPopup({
 
         {error && !loading && (
           <div className="p-4">
-            <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
+            <div
+              className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm"
+              role="alert"
+            >
               {error}
             </div>
             <div className="mt-3 flex gap-2">

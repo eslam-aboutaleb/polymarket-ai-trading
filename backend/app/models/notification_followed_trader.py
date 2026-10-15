@@ -28,6 +28,7 @@ class NotificationFollowedTrader(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    account_id = Column(Integer, nullable=True, index=True)
     trader_wallet = Column(String(42), nullable=False, index=True)
     is_active = Column(Boolean, default=True, nullable=False)
     feed_enabled = Column(Boolean, default=True, nullable=False)

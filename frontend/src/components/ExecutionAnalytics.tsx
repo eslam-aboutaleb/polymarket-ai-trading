@@ -28,6 +28,7 @@ import {
   YAxis,
 } from "recharts";
 import { getApiErrorMessage } from "../utils/apiError";
+import { Banner } from "./ui";
 import {
   EdgeScoreRow,
   ExecutionStrategyStats,
@@ -35,6 +36,8 @@ import {
   executionAnalyticsService,
   ExecutionSummaryResponse,
   EdgeScoreResponse,
+  StrategyBreakdownResponse,
+  StrategyBreakdownRow,
 } from "../services/executionAnalyticsService";
 
 const WINDOW_OPTIONS = [7, 30, 90];
@@ -47,6 +50,8 @@ const STRATEGY_LABELS: Record<string, string> = {
   stop_loss: "Stop-loss",
   take_profit: "Take-profit",
   latency_arb: "Latency arb",
+  emergency: "Emergency close",
+  external: "External API",
 };
 
 const SLIPPAGE_BUCKETS = [
@@ -121,6 +126,7 @@ export default function ExecutionAnalytics() {
 
   const [summary, setSummary] = useState<ExecutionSummaryResponse | null>(null);
   const [edgeScores, setEdgeScores] = useState<EdgeScoreResponse | null>(null);
+  const [breakdown, setBreakdown] = useState<StrategyBreakdownResponse | null>(null);
   const [trades, setTrades] = useState<ExecutionTradeRecord[]>([]);
 
   const fetchData = useCallback(async () => {
@@ -128,13 +134,15 @@ export default function ExecutionAnalytics() {
     setError(null);
     try {
       const query = { window_days: windowDays };
-      const [summaryResp, edgeResp, tradesResp] = await Promise.all([
+      const [summaryResp, edgeResp, breakdownResp, tradesResp] = await Promise.all([
         executionAnalyticsService.getSummary(query),
         executionAnalyticsService.getEdgeScores(query),
+        executionAnalyticsService.getStrategyBreakdown(query),
         executionAnalyticsService.getTrades(strategyFilter || undefined, 200),
       ]);
       setSummary(summaryResp);
       setEdgeScores(edgeResp);
+      setBreakdown(breakdownResp);
       setTrades(tradesResp.trades);
     } catch (err) {
       setError(getApiErrorMessage(err));
@@ -157,6 +165,11 @@ export default function ExecutionAnalytics() {
 
   const totals = summary?.totals ?? null;
   const dataQuality = summary?.data_quality ?? null;
+  const attributionRows = useMemo(
+    () => (breakdown?.strategies ?? []) as StrategyBreakdownRow[],
+    [breakdown],
+  );
+  const unattributed = breakdown?.data_quality?.unattributed_trades ?? 0;
 
   if (loading && !summary) {
     return (
@@ -169,7 +182,10 @@ export default function ExecutionAnalytics() {
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div
+        className="flex flex-wrap items-center justify-between gap-3"
+        data-tutorial="execution-analytics"
+      >
         <div>
           <h2 className="text-xl font-bold text-white">Execution Analytics</h2>
           <p className="text-soft text-sm mt-1">
@@ -204,9 +220,9 @@ export default function ExecutionAnalytics() {
       </div>
 
       {error && (
-        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
+        <Banner variant="error" onDismiss={() => setError(null)} onRetry={fetchData}>
           {error}
-        </div>
+        </Banner>
       )}
 
       {/* Data quality strip */}
@@ -266,6 +282,70 @@ export default function ExecutionAnalytics() {
           </div>
         </div>
       )}
+
+      {/* Strategy attribution (plan 03 Phase A): realized P&L per
+          strategy, plus how many trades still carry no attribution.
+          Every loss limit derives from UserTrade.pnl, so an
+          unattributed strategy is one whose risk controls are blind. */}
+      <div className="surface-panel p-5">
+        <h3 className="text-base font-semibold text-white mb-1">Strategy attribution</h3>
+        <p className="text-soft text-xs mb-3">
+          Realized P&amp;L per strategy over the window, best net first
+        </p>
+        {attributionRows.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="table-theme w-full">
+              <thead>
+                <tr>
+                  <th>Strategy</th>
+                  <th className="text-right">Closed</th>
+                  <th className="text-right">Win rate</th>
+                  <th className="text-right">Gross P&amp;L</th>
+                  <th className="text-right">Net P&amp;L</th>
+                  <th className="text-right">Fees</th>
+                  <th className="text-right">Avg slippage</th>
+                </tr>
+              </thead>
+              <tbody>
+                {attributionRows.map((row) => (
+                  <tr key={row.strategy}>
+                    <td>{strategyLabel(row.strategy)}</td>
+                    <td className="text-right">
+                      {row.closed_trades}
+                      <span className="text-soft">
+                        {" "}
+                        ({row.wins}W/{row.losses}L)
+                      </span>
+                    </td>
+                    <td className="text-right">{pct(row.win_rate, 0)}</td>
+                    <td className="text-right">{usd(row.gross_realized_pnl)}</td>
+                    <td
+                      className={`text-right ${
+                        row.net_realized_pnl >= 0 ? "text-green-400" : "text-red-400"
+                      }`}
+                    >
+                      {usd(row.net_realized_pnl)}
+                    </td>
+                    <td className="text-right">{usd(row.total_fees, 4)}</td>
+                    <td className="text-right">{bps(row.avg_slippage_bps)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-soft text-sm">
+            No attributed trades in this window yet — every automated strategy records its trades
+            with a strategy source, so attribution appears as soon as a trade executes.
+          </p>
+        )}
+        {unattributed > 0 && (
+          <p className="text-yellow-400 text-xs mt-3">
+            {unattributed} trade{unattributed === 1 ? "" : "s"} in this window carry no strategy
+            attribution and are excluded from every per-strategy figure above.
+          </p>
+        )}
+      </div>
 
       {/* Edge Score per strategy */}
       <div className="surface-panel p-5">
@@ -460,7 +540,13 @@ export default function ExecutionAnalytics() {
             </table>
           </div>
         ) : (
-          <p className="text-soft text-sm">No trades in this window.</p>
+          <div className="text-soft text-sm">
+            <p>No trades in this window.</p>
+            <p className="text-xs text-muted mt-1">
+              Executed paper and live trades appear here with fill price, fees and latency. Place a
+              trade from the Markets board to start building history.
+            </p>
+          </div>
         )}
       </div>
     </div>

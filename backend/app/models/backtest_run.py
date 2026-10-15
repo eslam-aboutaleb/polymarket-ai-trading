@@ -22,6 +22,7 @@ class BacktestRun(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    account_id = Column(Integer, nullable=True, index=True)
 
     # Strategy being tested: "copy_trade" | "inverse_bot" | "market_maker" | "custom"
     strategy_type = Column(String(50), nullable=False, index=True)

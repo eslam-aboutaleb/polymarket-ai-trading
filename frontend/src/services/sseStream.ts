@@ -16,6 +16,7 @@
  */
 
 import { API_BASE_URL } from "../config/api";
+import { getApiErrorMessage } from "../utils/apiError";
 
 /** Callbacks invoked as SSE payloads arrive. */
 export interface SSEHandlers {
@@ -95,7 +96,7 @@ export async function consumeSSEStream(res: Response, handlers: SSEHandlers): Pr
     await streamLines(res, (lines) => handleSSELines(lines, handlers));
   } catch (err) {
     if ((err as Error)?.name === "AbortError") return;
-    handlers.onError?.(err instanceof Error ? err.message : String(err));
+    handlers.onError?.(getApiErrorMessage(err, "Stream failed"));
     return;
   }
 

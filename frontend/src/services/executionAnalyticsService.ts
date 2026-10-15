@@ -99,6 +99,32 @@ export interface ExecutionTradesResponse {
   trades: ExecutionTradeRecord[];
 }
 
+export interface StrategyBreakdownRow {
+  strategy: string;
+  submissions: number;
+  filled: number;
+  closed_trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number | null;
+  gross_realized_pnl: number;
+  net_realized_pnl: number;
+  total_fees: number;
+  avg_slippage_bps: number | null;
+  edge_score: number | null;
+}
+
+export interface StrategyBreakdownResponse {
+  user_id: number;
+  window_days: number;
+  generated_at: string;
+  strategies: StrategyBreakdownRow[];
+  data_quality: {
+    unattributed_trades: number;
+    strategies: number;
+  };
+}
+
 export interface ExecutionAnalyticsQuery {
   window_days?: number;
 }
@@ -114,6 +140,14 @@ export const executionAnalyticsService = {
 
   async getEdgeScores(query: ExecutionAnalyticsQuery = {}): Promise<EdgeScoreResponse> {
     return apiClient.get<EdgeScoreResponse>("/api/trades/analytics/edge-score", {
+      params: query,
+    });
+  },
+
+  async getStrategyBreakdown(
+    query: ExecutionAnalyticsQuery = {},
+  ): Promise<StrategyBreakdownResponse> {
+    return apiClient.get<StrategyBreakdownResponse>("/api/trades/analytics/by-strategy", {
       params: query,
     });
   },

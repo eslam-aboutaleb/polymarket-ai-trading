@@ -12,6 +12,7 @@ import { useAuthStore } from "../store/authStore";
 import { authService } from "../services/authService";
 import Navigation from "./Navigation";
 import LoginModal from "./LoginModal";
+import TutorialLauncher from "./TutorialLauncher";
 import { FOCUS_MARKET_SEARCH_EVENT } from "../utils/tradingWorkspace";
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -34,6 +35,11 @@ export default function PublicAppLayout() {
   const handleLogout = async () => {
     try {
       await authService.logout();
+    } catch (err) {
+      // The server-side cookie may fail to clear, but the session is dropped
+      // below regardless — a failed logout must not become an unhandled
+      // rejection or leave the confirm modal stuck open.
+      console.warn("Logout request failed; clearing session anyway", err);
     } finally {
       clearSession();
     }
@@ -63,6 +69,8 @@ export default function PublicAppLayout() {
       <main className="relative z-0 max-w-7xl mx-auto px-4 py-8">
         <Outlet />
       </main>
+      {/* Floating tutorial launcher + overlay — public visitors can start the tour too */}
+      <TutorialLauncher />
       <LoginModal />
     </div>
   );

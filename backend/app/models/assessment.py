@@ -41,5 +41,19 @@ class Assessment(Base):
     #: trade_history link, which is absent for scan verdicts).
     condition_id = Column(String(100), nullable=True)
 
+    # ── Model governance (plan 04) ──────────────────────────────
+    #: Short content hash of the prompt store that produced this
+    #: verdict. Every prompt change is a new version, so calibration
+    #: impact is measurable without hand-numbered prompt releases.
+    prompt_version = Column(String(16), nullable=True)
+    #: A/B experiment this verdict belonged to, when any.
+    experiment_id = Column(String(64), nullable=True)
+    #: ``control`` or ``variant`` — the arm of that experiment.
+    variant = Column(String(16), nullable=True)
+    #: Model tier actually used (CHEAP/STANDARD/STRONG/WRITER). Null
+    #: when tiering was disabled, which is why it must never be
+    #: treated as a foreign key.
+    llm_tier = Column(String(16), nullable=True)
+
     def __repr__(self):
         return f"<Assessment(trade_id={self.trade_history_id}, score={self.ai_score})>"

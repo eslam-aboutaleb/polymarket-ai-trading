@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any
 
 from app.config import get_settings
+from app.utils.scheduler_lock import acquire_scheduler_lock, release_scheduler_lock
 from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -178,71 +179,96 @@ def get_pending_buffers() -> dict[str, Any]:
 
 
 async def _aggregation_loop():
-    """Background loop: check for ready aggregated trades and execute them."""
+    """Background loop: check for ready aggregated trades and execute them.
+
+    The advisory lock acquired by ``start_aggregation_service`` is held
+    for the loop's lifetime and released in the ``finally`` on every
+    exit path — the shutdown break below, a cancellation landing in the
+    interval sleep (outside the inner try), or a crash — instead of
+    being leaked until process exit.
+    """
     logger.info("Trade aggregation service started")
 
-    while True:
-        try:
-            # Check all pending buffers
-            for key in list(_pending_buffer.keys()):
-                user_id, token_id, side = key
-                aggregated = get_aggregated_trade(user_id, token_id, side)
-                if aggregated:
-                    logger.info(
-                        "Aggregated trade ready: user=%d token=%s side=%s "
-                        "size=%.2f vwap=%.4f (from %d trades over %.1fs)",
-                        user_id,
-                        token_id[:20],
-                        side,
-                        aggregated["aggregated_size"],
-                        aggregated["vwap_price"],
-                        aggregated["trade_count"],
-                        aggregated["window_seconds"],
-                    )
-
-                    # Execute the aggregated trade via copy_trade_service
-                    try:
-                        from app.services.copy_trade_service import execute_aggregated_trade
-
-                        await execute_aggregated_trade(aggregated)
-                    except ImportError:
-                        logger.debug(
-                            "execute_aggregated_trade not available yet, "
-                            "logging aggregated trade only"
+    try:
+        while True:
+            try:
+                # Check all pending buffers
+                for key in list(_pending_buffer.keys()):
+                    user_id, token_id, side = key
+                    aggregated = get_aggregated_trade(user_id, token_id, side)
+                    if aggregated:
+                        logger.info(
+                            "Aggregated trade ready: user=%d token=%s side=%s "
+                            "size=%.2f vwap=%.4f (from %d trades over %.1fs)",
+                            user_id,
+                            token_id[:20],
+                            side,
+                            aggregated["aggregated_size"],
+                            aggregated["vwap_price"],
+                            aggregated["trade_count"],
+                            aggregated["window_seconds"],
                         )
-                    except Exception as e:
-                        logger.error("Failed to execute aggregated trade: %s", e)
 
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            logger.error("Aggregation loop error: %s", e)
+                        # Execute the aggregated trade via copy_trade_service
+                        try:
+                            from app.services.copy_trade_service import execute_aggregated_trade
 
-        await asyncio.sleep(5)  # Check every 5 seconds
+                            await execute_aggregated_trade(aggregated)
+                        except ImportError:
+                            logger.debug(
+                                "execute_aggregated_trade not available yet, "
+                                "logging aggregated trade only"
+                            )
+                        except Exception as e:
+                            logger.error("Failed to execute aggregated trade: %s", e)
 
-    # Flush all pending on shutdown
-    for key in list(_pending_buffer.keys()):
-        user_id, token_id, side = key
-        flushed = flush_buffer(user_id, token_id, side)
-        if flushed:
-            logger.info("Flushed pending aggregation on shutdown: %s", flushed)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("Aggregation loop error: %s", e)
+
+            await asyncio.sleep(5)  # Check every 5 seconds
+
+        # Flush all pending on shutdown
+        for key in list(_pending_buffer.keys()):
+            user_id, token_id, side = key
+            flushed = flush_buffer(user_id, token_id, side)
+            if flushed:
+                logger.info("Flushed pending aggregation on shutdown: %s", flushed)
+    finally:
+        release_scheduler_lock("trade_aggregation")
 
     logger.info("Trade aggregation service stopped")
 
 
 async def start_aggregation_service():
-    """Start the trade aggregation background service."""
+    """Start the trade aggregation background service.
+
+    Guarded by its Postgres advisory lock (plan 10 Phase A): the
+    aggregation job writes snapshot rows, so a second concurrent writer
+    would double-count every trade it aggregates.
+    """
     global _aggregation_task
     if _aggregation_task and not _aggregation_task.done():
+        return
+    if not acquire_scheduler_lock("trade_aggregation"):
         return
     _aggregation_task = asyncio.create_task(_aggregation_loop())
 
 
 async def stop_aggregation_service():
-    """Stop the trade aggregation background service."""
+    """Stop the trade aggregation background service and release its advisory lock.
+
+    The release is idempotent — ``release_scheduler_lock`` is a no-op
+    for a lock this process does not hold. The loop releases in its own
+    ``finally`` when the cancellation lands inside it; this extra call
+    covers a task cancelled before its first step, whose coroutine body
+    (try block included) never ran.
+    """
     global _aggregation_task
     if _aggregation_task and not _aggregation_task.done():
         _aggregation_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await _aggregation_task
     _aggregation_task = None
+    release_scheduler_lock("trade_aggregation")

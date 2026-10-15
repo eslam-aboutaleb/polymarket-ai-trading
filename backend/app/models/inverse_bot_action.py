@@ -16,6 +16,7 @@ class InverseBotAction(Base):
         Integer, ForeignKey("inverse_bot_positions.id"), nullable=False, index=True
     )
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    account_id = Column(Integer, nullable=True, index=True)
     condition_id = Column(String(200), nullable=False, index=True)
 
     from_token_id = Column(String(200), nullable=False)
