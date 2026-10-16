@@ -54,7 +54,7 @@ def _cancel_task(task: Any) -> None:
 
 def _reset_news_service() -> None:
     """Clear the background-generator task handle and the service singleton."""
-    import app.services.news_service as news_service
+    import app.services.intelligence.news_service as news_service
 
     _cancel_task(news_service._generator_task)
     news_service._generator_task = None
@@ -65,7 +65,7 @@ def _reset_trade_aggregation_service() -> None:
     """Clear the aggregation-loop task handle and the in-memory buffers."""
     from collections import defaultdict
 
-    import app.services.trade_aggregation_service as aggregation_service
+    import app.services.trading.trade_aggregation_service as aggregation_service
 
     _cancel_task(aggregation_service._aggregation_task)
     aggregation_service._aggregation_task = None
@@ -77,7 +77,7 @@ def _reset_trade_monitor() -> None:
     """Clear the monitor/reconciliation tasks and all in-memory monitor state."""
     import asyncio
 
-    import app.services.trade_monitor as trade_monitor
+    import app.services.trading.trade_monitor as trade_monitor
 
     for attribute in ("_monitor_task", "_fill_recon_task", "_gtc_recon_task"):
         _cancel_task(getattr(trade_monitor, attribute, None))
@@ -148,8 +148,8 @@ def _reset_settings_state() -> None:
 
 def _reset_observability_metrics() -> None:
     """Zero the observability counters shared by the venue/daily-report services."""
-    from app.services.daily_report_service import reset_daily_report_metrics
-    from app.services.venue_market_service import reset_venue_market_metrics
+    from app.services.market_data.venue_market_service import reset_venue_market_metrics
+    from app.services.users.daily_report_service import reset_daily_report_metrics
 
     reset_venue_market_metrics()
     reset_daily_report_metrics()

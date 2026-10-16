@@ -1,4 +1,4 @@
-"""Unit tests for the LLM provider gateway (``app.services.llm_gateway``).
+"""Unit tests for the LLM provider gateway (``app.services.intelligence.llm_gateway``).
 
 The gateway is a pure factory: no network, no gRPC, no database. Everything it
 decides is observable from the ``(AIBackend, LLMConfig)`` tuples it returns and
@@ -25,8 +25,8 @@ from unittest.mock import MagicMock, patch
 
 from app.config import AIBackend
 from app.models.user_settings import AIBackendType
-from app.services import llm_gateway
-from app.services.llm_gateway import (
+from app.services.intelligence import llm_gateway
+from app.services.intelligence.llm_gateway import (
     MODEL_SUGGESTIONS,
     PROVIDER_TO_BACKEND,
     PROVIDER_TO_PROTO,

@@ -1,4 +1,4 @@
-"""Coverage tests for ``app.api.routes.health``.
+"""Coverage tests for ``app.api.routes.platform.health``.
 
 Every external boundary is replaced with a double:
 
@@ -20,8 +20,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-import app.api.routes.health as health_module
-from app.api.routes.auth import get_current_user_from_token
+import app.api.routes.platform.health as health_module
+from app.api.routes.auth.auth import get_current_user_from_token
 from app.main import app
 from app.models.user import User
 from app.utils.database import get_db
@@ -144,24 +144,24 @@ class HealthEndpointTests(unittest.TestCase):
 
     def _patch_engine_ok(self):
         engine = MagicMock()
-        self._patch("app.api.routes.health.engine", engine)
+        self._patch("app.api.routes.platform.health.engine", engine)
         return engine
 
     def _patch_schedulers(self, age=None, threshold=300):
         self._patch(
-            "app.api.routes.health.scheduler_heartbeat_age",
+            "app.api.routes.platform.health.scheduler_heartbeat_age",
             return_value=age,
         )
         self._patch(
-            "app.api.routes.health.scheduler_stale_threshold",
+            "app.api.routes.platform.health.scheduler_stale_threshold",
             return_value=threshold,
         )
 
     def test_health_all_ok(self):
         self._patch_engine_ok()
-        self._patch("app.api.routes.health._cache_backend", return_value="memory")
+        self._patch("app.api.routes.platform.health._cache_backend", return_value="memory")
         self._patch(
-            "app.api.routes.health._grpc_backend_health",
+            "app.api.routes.platform.health._grpc_backend_health",
             AsyncMock(return_value={"llm_chain": True, "cli_agent": True}),
         )
         self._patch_schedulers(age=None)
@@ -183,9 +183,9 @@ class HealthEndpointTests(unittest.TestCase):
 
     def test_health_degraded_when_grpc_backend_down(self):
         self._patch_engine_ok()
-        self._patch("app.api.routes.health._cache_backend", return_value="memory")
+        self._patch("app.api.routes.platform.health._cache_backend", return_value="memory")
         self._patch(
-            "app.api.routes.health._grpc_backend_health",
+            "app.api.routes.platform.health._grpc_backend_health",
             AsyncMock(return_value={"llm_chain": True, "cli_agent": False}),
         )
         self._patch_schedulers(age=None)
@@ -197,9 +197,9 @@ class HealthEndpointTests(unittest.TestCase):
 
     def test_health_degraded_when_scheduler_stale(self):
         self._patch_engine_ok()
-        self._patch("app.api.routes.health._cache_backend", return_value="memory")
+        self._patch("app.api.routes.platform.health._cache_backend", return_value="memory")
         self._patch(
-            "app.api.routes.health._grpc_backend_health",
+            "app.api.routes.platform.health._grpc_backend_health",
             AsyncMock(return_value={"llm_chain": True, "cli_agent": True}),
         )
         self._patch_schedulers(age=9999.0, threshold=300)
@@ -215,9 +215,9 @@ class HealthEndpointTests(unittest.TestCase):
 
     def test_health_degraded_with_fresh_scheduler_heartbeat(self):
         self._patch_engine_ok()
-        self._patch("app.api.routes.health._cache_backend", return_value="redis")
+        self._patch("app.api.routes.platform.health._cache_backend", return_value="redis")
         self._patch(
-            "app.api.routes.health._grpc_backend_health",
+            "app.api.routes.platform.health._grpc_backend_health",
             AsyncMock(return_value={"llm_chain": True, "cli_agent": True}),
         )
         self._patch_schedulers(age=12.34, threshold=300)
@@ -234,10 +234,10 @@ class HealthEndpointTests(unittest.TestCase):
     def test_health_error_when_database_down(self):
         engine = MagicMock()
         engine.connect.side_effect = RuntimeError("connection refused")
-        self._patch("app.api.routes.health.engine", engine)
-        self._patch("app.api.routes.health._cache_backend", return_value="memory")
+        self._patch("app.api.routes.platform.health.engine", engine)
+        self._patch("app.api.routes.platform.health._cache_backend", return_value="memory")
         self._patch(
-            "app.api.routes.health._grpc_backend_health",
+            "app.api.routes.platform.health._grpc_backend_health",
             AsyncMock(return_value={"llm_chain": True, "cli_agent": True}),
         )
         self._patch_schedulers(age=None)
@@ -253,9 +253,9 @@ class HealthEndpointTests(unittest.TestCase):
 
     def test_health_ok_when_grpc_results_empty(self):
         self._patch_engine_ok()
-        self._patch("app.api.routes.health._cache_backend", return_value="memory")
+        self._patch("app.api.routes.platform.health._cache_backend", return_value="memory")
         self._patch(
-            "app.api.routes.health._grpc_backend_health",
+            "app.api.routes.platform.health._grpc_backend_health",
             AsyncMock(return_value={}),
         )
         self._patch_schedulers(age=None)
@@ -321,11 +321,11 @@ class MetricsTests(unittest.TestCase):
 
         with (
             patch(
-                "app.api.routes.health.render_prometheus",
+                "app.api.routes.platform.health.render_prometheus",
                 return_value="# HELP app_uptime_seconds up\n",
             ),
             patch(
-                "app.api.routes.health.scheduler_heartbeat_age",
+                "app.api.routes.platform.health.scheduler_heartbeat_age",
                 side_effect=heartbeat_age,
             ),
         ):

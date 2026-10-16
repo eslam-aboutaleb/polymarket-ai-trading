@@ -1,4 +1,4 @@
-"""Coverage tests for ``app.services.polymarket_service``.
+"""Coverage tests for ``app.services.market_data.polymarket_service``.
 
 Every external I/O boundary is faked:
 
@@ -26,8 +26,8 @@ import unittest
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services import polymarket_service
-from app.services.polymarket_service import (
+from app.services.market_data import polymarket_service
+from app.services.market_data.polymarket_service import (
     POLYMARKET_CLOB_API,
     POLYMARKET_DATA_API,
     POLYMARKET_GAMMA_API,
@@ -519,7 +519,7 @@ class IsNoiseEventTests(_PolymarketServiceTestCase):
 
     def test_up_or_down_title_is_noise(self):
         self.assertTrue(
-            self.service._is_noise_event({"title": "BTC up or down 5m", "liquidity": 1000})
+            self.service._is_noise_event({"title": "BTC up or down 5m", "liquidity": 1000}),
         )
 
     def test_updown_title_is_noise(self):
@@ -527,7 +527,7 @@ class IsNoiseEventTests(_PolymarketServiceTestCase):
 
     def test_title_matching_is_case_insensitive(self):
         self.assertTrue(
-            self.service._is_noise_event({"title": "BTC UP OR DOWN", "liquidity": 1000})
+            self.service._is_noise_event({"title": "BTC UP OR DOWN", "liquidity": 1000}),
         )
 
     def test_low_liquidity_is_noise(self):
@@ -2713,7 +2713,7 @@ class GetMarketTraderStatsTests(_PolymarketServiceTestCase):
                     ],
                     "asks": [{"size": "80", "price": "0.7"}],
                 },
-            )
+            ),
         )
 
         stats = await self.service.get_market_trader_stats("cid-1")
@@ -2758,7 +2758,7 @@ class GetMarketTraderStatsTests(_PolymarketServiceTestCase):
             self._routes(
                 market_data={"tokens": [{"token_id": "tok-no", "outcome": "No", "price": "0.5"}]},
                 gamma_data=[{"volumeNum": "100"}],
-            )
+            ),
         )
         stats = await self.service.get_market_trader_stats("cid-1")
         self.assertEqual(stats["yes_traders"], 0)
@@ -2791,7 +2791,7 @@ class GetMarketTraderStatsTests(_PolymarketServiceTestCase):
                     "bids": [{"size": "100", "price": "0.6"}],
                     "asks": [],
                 },
-            )
+            ),
         )
         # gamma returns 200 with an empty list → total_volume 0.
         stats = await self.service.get_market_trader_stats("cid-1")
@@ -2804,7 +2804,7 @@ class GetMarketTraderStatsTests(_PolymarketServiceTestCase):
                 market_data={"tokens": [{"token_id": "tok-yes", "outcome": "Yes", "price": "0.5"}]},
                 gamma_data=[{"volumeNum": "100"}],
                 book=None,
-            )
+            ),
         )
         # Override the book route with a non-200.
         self._patch_http(
@@ -2831,7 +2831,7 @@ class GetMarketTraderStatsTests(_PolymarketServiceTestCase):
                     ]
                 },
                 gamma_data=[{"volumeNum": "100"}],
-            )
+            ),
         )
         stats = await self.service.get_market_trader_stats("cid-1")
         self.assertEqual(stats["yes_volume"], 50.0)
@@ -2844,7 +2844,7 @@ class GetMarketTraderStatsTests(_PolymarketServiceTestCase):
                 market_data={"tokens": [{"token_id": "tok-yes", "outcome": "Yes", "price": "0.5"}]},
                 gamma_data=[{"volumeNum": "1000"}],
                 book={"bids": bids, "asks": []},
-            )
+            ),
         )
         stats = await self.service.get_market_trader_stats("cid-1")
         self.assertEqual(len(stats["top_traders"]), 10)

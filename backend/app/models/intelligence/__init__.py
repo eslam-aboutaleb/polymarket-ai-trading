@@ -1,0 +1,1 @@
+"""Intelligence persistence models."""

@@ -8,15 +8,15 @@ from starlette.requests import Request
 
 os.environ.setdefault("JWT_SECRET_KEY", "a" * 32)
 
-import app.api.routes.auth as auth_module
-from app.api.routes.auth import (
+import app.api.routes.auth.auth as auth_module
+from app.api.routes.auth.auth import (
     ACCESS_TOKEN_COOKIE_NAME,
     REFRESH_TOKEN_COOKIE_NAME,
     _clear_auth_cookies,
-    _extract_bearer_token,
     _set_auth_cookies,
     _validate_origin,
 )
+from app.security.auth import extract_bearer_token as _extract_bearer_token
 
 
 def _request_with_origin(origin: str) -> Request:

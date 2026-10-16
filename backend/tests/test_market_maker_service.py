@@ -1,4 +1,4 @@
-"""Tests for :mod:`app.services.market_maker_service`.
+"""Tests for :mod:`app.services.trading.market_maker_service`.
 
 Two layers are covered:
 
@@ -28,8 +28,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from py_clob_client.clob_types import OpenOrderParams
 
-import app.services.market_maker_service as market_maker_service
-from app.services.market_maker_service import MAX_BANDS
+import app.services.trading.market_maker_service as market_maker_service
+from app.services.trading.market_maker_service import MAX_BANDS
 
 CLOB_API = market_maker_service.POLYMARKET_CLOB_API
 
@@ -584,7 +584,7 @@ class _PlacementPatches:
             patch("py_clob_client.order_builder.constants.SELL", "SELL"),
             patch("py_clob_client.signer.Signer", self.signer),
             patch(
-                "app.services.copy_trade_service._get_poly_proxy_wallet_address",
+                "app.services.trading.copy_trade_service._get_poly_proxy_wallet_address",
                 self.proxy_lookup,
             ),
         ]

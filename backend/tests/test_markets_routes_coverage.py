@@ -11,11 +11,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from app.api.routes.auth import (
+from app.api.routes.auth.auth import (
     get_current_user_from_token,
     get_optional_user_from_token,
 )
-from app.api.routes.markets import _get_analysis_client
+from app.api.routes.markets.markets import _get_analysis_client
 from app.config import AIBackend
 from app.grpc_clients.analysis_client import AnalysisClient
 from app.main import app
@@ -124,7 +124,7 @@ class CategoriesTests(unittest.TestCase):
             return_value=[{"tag": "crypto"}, {"tag": "politics"}],
         )
         patcher = patch(
-            "app.api.routes.markets.get_polymarket_service",
+            "app.api.routes.markets.markets.get_polymarket_service",
             lambda: self.service,
         )
         patcher.start()
@@ -154,7 +154,7 @@ class SearchMarketsTests(unittest.TestCase):
             return_value={"markets": [{"id": "m1"}], "count": 1},
         )
         patcher = patch(
-            "app.api.routes.markets.get_polymarket_service",
+            "app.api.routes.markets.markets.get_polymarket_service",
             lambda: self.service,
         )
         patcher.start()
@@ -214,7 +214,7 @@ class BrowseMarketsTests(unittest.TestCase):
             return_value=[{"id": "m1"}, {"id": "m2"}],
         )
         patcher = patch(
-            "app.api.routes.markets.get_polymarket_service",
+            "app.api.routes.markets.markets.get_polymarket_service",
             lambda: self.service,
         )
         patcher.start()
@@ -288,7 +288,7 @@ class TraderAnalysisStreamTests(unittest.TestCase):
         )
 
         service_patcher = patch(
-            "app.api.routes.markets.get_polymarket_service",
+            "app.api.routes.markets.markets.get_polymarket_service",
             lambda: self.service,
         )
         service_patcher.start()
@@ -296,7 +296,7 @@ class TraderAnalysisStreamTests(unittest.TestCase):
 
         self.client_factory = AsyncMock(return_value=self.mock_client)
         client_patcher = patch(
-            "app.api.routes.markets._get_analysis_client",
+            "app.api.routes.markets.markets._get_analysis_client",
             self.client_factory,
         )
         client_patcher.start()

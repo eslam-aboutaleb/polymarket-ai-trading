@@ -25,7 +25,7 @@ from app.models.notification_delivery import NotificationDelivery
 from app.models.notification_feed_event import NotificationFeedEvent
 from app.models.user_notification_preference import UserNotificationPreference
 from app.security.crypto import decrypt_text, encrypt_text
-from app.services.alert_service import (
+from app.services.users.alert_service import (
     AlertDeliveryError,
     AlertService,
     TokenBucketRateLimiter,
@@ -119,7 +119,7 @@ def _fake_http_client(post_side_effect=None):
 def _patched_http(post_side_effect=None):
     fake_client = _fake_http_client(post_side_effect)
     with mock.patch(
-        "app.services.alert_service.httpx.AsyncClient",
+        "app.services.users.alert_service.httpx.AsyncClient",
         return_value=fake_client,
     ):
         yield fake_client
@@ -129,7 +129,7 @@ def _patched_http(post_side_effect=None):
 def _patched_settings(token=None):
     fake_settings = mock.MagicMock()
     fake_settings.telegram_bot_token = "123456:ABC-DEF" if token is None else token
-    with mock.patch("app.services.alert_service.get_settings", return_value=fake_settings):
+    with mock.patch("app.services.users.alert_service.get_settings", return_value=fake_settings):
         yield fake_settings
 
 
@@ -313,7 +313,7 @@ class AlertServiceDispatchTests(unittest.IsolatedAsyncioTestCase):
             _patched_settings(),
             _patched_http(post_side_effect=[Exception("boom"), Exception("boom"), response]),
             mock.patch(
-                "app.services.alert_service.asyncio.sleep",
+                "app.services.users.alert_service.asyncio.sleep",
                 new_callable=mock.AsyncMock,
             ) as sleep_mock,
         ):
@@ -331,7 +331,7 @@ class AlertServiceDispatchTests(unittest.IsolatedAsyncioTestCase):
             _patched_settings(),
             _patched_http(post_side_effect=Exception("boom")),
             mock.patch(
-                "app.services.alert_service.asyncio.sleep",
+                "app.services.users.alert_service.asyncio.sleep",
                 new_callable=mock.AsyncMock,
             ),
         ):

@@ -1,4 +1,4 @@
-"""Coverage for :mod:`app.services.daily_report_service`.
+"""Coverage for :mod:`app.services.users.daily_report_service`.
 
 The digest cycle is exercised against a real in-memory SQLite database with
 every external boundary doubled:
@@ -34,7 +34,7 @@ from app.models.user import User
 from app.models.user_settings import UserSettings
 from app.models.user_trade import UserTrade
 from app.models.whale_event import WhaleEvent
-from app.services import daily_report_service
+from app.services.users import daily_report_service
 from app.utils.time import utc_now
 
 USER_ID = 1
@@ -227,7 +227,7 @@ class DailyReportServiceTestBase(unittest.IsolatedAsyncioTestCase):
                 market_id=MARKET_A,
                 email_status="skipped",
                 created_at=now,
-            )
+            ),
         )
         self.db.add(
             WhaleEvent(
@@ -237,7 +237,7 @@ class DailyReportServiceTestBase(unittest.IsolatedAsyncioTestCase):
                 notional=25000.0,
                 tx_hash="0xwhale",
                 detected_at=now,
-            )
+            ),
         )
         self.db.add(
             StopLossOrder(
@@ -249,7 +249,7 @@ class DailyReportServiceTestBase(unittest.IsolatedAsyncioTestCase):
                 stop_price=0.15,
                 status="triggered",
                 triggered_at=now,
-            )
+            ),
         )
         self.db.add(
             UserTrade(
@@ -391,7 +391,7 @@ class IdempotencyTests(DailyReportServiceTestBase):
                 event_type="daily_digest",
                 email_status="sent",
                 created_at=now,
-            )
+            ),
         )
         self.db.commit()
 

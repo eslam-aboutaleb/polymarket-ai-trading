@@ -18,8 +18,8 @@ import math
 import unittest
 from datetime import UTC, datetime, timedelta
 
-from app.services.crypto_markets_service import CryptoMarket
-from app.services.latency_arb_service import (
+from app.services.market_data.crypto_markets_service import CryptoMarket
+from app.services.trading.latency_arb_service import (
     DEFAULT_SIGMA,
     compute_distance,
     compute_edge,

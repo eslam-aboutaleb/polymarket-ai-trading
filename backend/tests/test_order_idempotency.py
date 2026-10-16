@@ -15,13 +15,13 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (register models on Base.metadata)
-from app.api.routes.trades import ExecuteTradeRequest, execute_trade
+from app.api.routes.trading.trades import ExecuteTradeRequest, execute_trade
 from app.models.base import Base
 from app.models.user import User
 from app.models.user_settings import UserSettings
 from app.models.user_trade import UserTrade
-from app.services import copy_trade_service
-from app.services.pre_trade_gate import (
+from app.services.trading import copy_trade_service
+from app.services.trading.pre_trade_gate import (
     OrderIdempotencyKey,  # noqa: F401
     _get_idempotency_cache,
 )
@@ -46,7 +46,7 @@ def _make_db():
             copy_trading_enabled=True,
             max_position_size=100.0,
             daily_loss_limit=500.0,
-        )
+        ),
     )
     db.commit()
     return db
@@ -90,10 +90,10 @@ class ManualExecuteIdempotencyTests(unittest.IsolatedAsyncioTestCase):
         )
         with (
             patch(
-                "app.api.routes.trades.load_wallet_credentials",
+                "app.api.routes.trading.trades.load_wallet_credentials",
                 return_value={"private_key": "0xpk", "clob_creds": None},
             ),
-            patch("app.api.routes.trades._place_order_on_polymarket", new=mock),
+            patch("app.api.routes.trading.trades._place_order_on_polymarket", new=mock),
         ):
             return await execute_trade(
                 body=_body(),
@@ -181,14 +181,14 @@ class CopyTradeIdempotencyTests(unittest.IsolatedAsyncioTestCase):
         )
         with (
             patch(
-                "app.services.copy_trade_service.load_wallet_credentials",
+                "app.services.trading.copy_trade_service.load_wallet_credentials",
                 return_value={"private_key": "0xpk", "clob_creds": None},
             ),
             patch(
-                "app.services.copy_trade_service._plan_copy_trade_size",
+                "app.services.trading.copy_trade_service._plan_copy_trade_size",
                 new=AsyncMock(return_value=plan),
             ),
-            patch("app.services.copy_trade_service._place_order_on_polymarket", new=mock),
+            patch("app.services.trading.copy_trade_service._place_order_on_polymarket", new=mock),
         ):
             return await copy_trade_service.execute_copy_trade(
                 db=self.db,

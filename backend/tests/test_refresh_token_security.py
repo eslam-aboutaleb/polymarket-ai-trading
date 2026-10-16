@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.requests import Request
 
-from app.api.routes.auth import (
+from app.api.routes.auth.auth import (
     REFRESH_TOKEN_COOKIE_NAME,
     logout,
     refresh_access_token,
@@ -84,7 +84,7 @@ class RefreshTokenSecurityTests(unittest.TestCase):
         self.db.commit()
 
         with patch(
-            "app.api.routes.auth.verify_token",
+            "app.api.routes.auth.auth.verify_token",
             return_value={
                 "type": "refresh",
                 "sub": self.user.wallet_address,
@@ -113,7 +113,7 @@ class RefreshTokenSecurityTests(unittest.TestCase):
 
         self.assertIsNone(find_active_refresh_token_record(self.db, raw_refresh_token=old_token))
         self.assertIsNotNone(
-            find_active_refresh_token_record(self.db, raw_refresh_token=rotated_token)
+            find_active_refresh_token_record(self.db, raw_refresh_token=rotated_token),
         )
         rows = self.db.query(RefreshToken).filter(RefreshToken.user_id == self.user.id).all()
         self.assertEqual(len(rows), 2)

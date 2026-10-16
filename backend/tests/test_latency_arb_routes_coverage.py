@@ -18,8 +18,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api.routes.auth import get_current_user_from_token
-from app.api.routes.latency_arb import (
+from app.api.routes.auth.auth import get_current_user_from_token
+from app.api.routes.trading.latency_arb import (
     _config_to_response,
     _opportunity_to_response,
 )
@@ -116,7 +116,7 @@ class ConfigRouteTests(LatencyArbRouteTestCase):
             symbols=["BTC", "ETH"],
             windows=[5, 15],
         )
-        with patch("app.api.routes.latency_arb.get_config", return_value=config):
+        with patch("app.api.routes.trading.latency_arb.get_config", return_value=config):
             response = self.client.get("/api/latency-arb/config")
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -143,7 +143,7 @@ class ConfigRouteTests(LatencyArbRouteTestCase):
             return config
 
         with patch(
-            "app.api.routes.latency_arb.get_or_create_config",
+            "app.api.routes.trading.latency_arb.get_or_create_config",
             side_effect=_get_or_create,
         ):
             response = self.client.post(
@@ -176,15 +176,15 @@ class ConfigRouteTests(LatencyArbRouteTestCase):
 
         with (
             patch(
-                "app.api.routes.latency_arb.get_or_create_config",
+                "app.api.routes.trading.latency_arb.get_or_create_config",
                 side_effect=_get_or_create,
             ),
             patch(
-                "app.services.crypto_markets_service.SYMBOLS",
+                "app.services.market_data.crypto_markets_service.SYMBOLS",
                 ("BTC", "ETH", "SOL"),
             ),
             patch(
-                "app.services.crypto_markets_service.WINDOW_MINUTES",
+                "app.services.market_data.crypto_markets_service.WINDOW_MINUTES",
                 (5, 15, 60),
             ),
         ):
@@ -236,15 +236,15 @@ class OpportunitiesRouteTests(LatencyArbRouteTestCase):
         }
         with (
             patch(
-                "app.api.routes.latency_arb.get_latest_opportunities",
+                "app.api.routes.trading.latency_arb.get_latest_opportunities",
                 return_value=[opportunity],
             ),
             patch(
-                "app.api.routes.latency_arb.get_engine_status",
+                "app.api.routes.trading.latency_arb.get_engine_status",
                 return_value=engine_status,
             ),
             patch(
-                "app.api.routes.latency_arb.latency_stats",
+                "app.api.routes.trading.latency_arb.latency_stats",
                 return_value=stats,
             ),
         ):
@@ -265,11 +265,11 @@ class OpportunitiesRouteTests(LatencyArbRouteTestCase):
     def test_opportunities_with_empty_board(self):
         with (
             patch(
-                "app.api.routes.latency_arb.get_latest_opportunities",
+                "app.api.routes.trading.latency_arb.get_latest_opportunities",
                 return_value=[],
             ),
             patch(
-                "app.api.routes.latency_arb.get_engine_status",
+                "app.api.routes.trading.latency_arb.get_engine_status",
                 return_value={
                     "running": False,
                     "live_mode": False,
@@ -280,7 +280,7 @@ class OpportunitiesRouteTests(LatencyArbRouteTestCase):
                 },
             ),
             patch(
-                "app.api.routes.latency_arb.latency_stats",
+                "app.api.routes.trading.latency_arb.latency_stats",
                 return_value={
                     "samples": 0,
                     "feed_lag_p50_ms": 0.0,

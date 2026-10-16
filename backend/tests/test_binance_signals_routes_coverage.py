@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from app.api.routes import binance_signals
-from app.api.routes.auth import get_current_user_from_token
+from app.api.routes.auth.auth import get_current_user_from_token
+from app.api.routes.markets import binance_signals
 from app.main import app
 
 WALLET = "0x" + "ab" * 20
@@ -73,7 +73,7 @@ class BinancePostTests(unittest.TestCase):
 
     def test_post_returns_data_key(self):
         client = _mock_httpx_client({"data": [{"id": 1}]})
-        with patch("app.api.routes.binance_signals.httpx.AsyncClient", lambda **kw: client):
+        with patch("app.api.routes.markets.binance_signals.httpx.AsyncClient", lambda **kw: client):
             result = asyncio_result(binance_signals._binance_post("/path", {"a": 1}))
         self.assertEqual(result, [{"id": 1}])
         self.assertEqual(
@@ -89,19 +89,19 @@ class BinancePostTests(unittest.TestCase):
 
     def test_post_returns_whole_payload_without_data_key(self):
         client = _mock_httpx_client({"rows": [{"id": 2}]})
-        with patch("app.api.routes.binance_signals.httpx.AsyncClient", lambda **kw: client):
+        with patch("app.api.routes.markets.binance_signals.httpx.AsyncClient", lambda **kw: client):
             result = asyncio_result(binance_signals._binance_post("/path", {"a": 1}))
         self.assertEqual(result, {"rows": [{"id": 2}]})
 
     def test_post_returns_none_on_error(self):
         client = _mock_httpx_client(None, post_exc=RuntimeError("network down"))
-        with patch("app.api.routes.binance_signals.httpx.AsyncClient", lambda **kw: client):
+        with patch("app.api.routes.markets.binance_signals.httpx.AsyncClient", lambda **kw: client):
             result = asyncio_result(binance_signals._binance_post("/path", {"a": 1}))
         self.assertIsNone(result)
 
     def test_post_caches_result(self):
         client = _mock_httpx_client({"data": [{"id": 1}]})
-        with patch("app.api.routes.binance_signals.httpx.AsyncClient", lambda **kw: client):
+        with patch("app.api.routes.markets.binance_signals.httpx.AsyncClient", lambda **kw: client):
             first = asyncio_result(
                 binance_signals._binance_post(
                     "/path",
@@ -123,7 +123,7 @@ class BinancePostTests(unittest.TestCase):
 
     def test_post_no_cache_key_skips_cache(self):
         client = _mock_httpx_client({"data": [{"id": 1}]})
-        with patch("app.api.routes.binance_signals.httpx.AsyncClient", lambda **kw: client):
+        with patch("app.api.routes.markets.binance_signals.httpx.AsyncClient", lambda **kw: client):
             asyncio_result(binance_signals._binance_post("/path", {"a": 1}))
             asyncio_result(binance_signals._binance_post("/path", {"a": 1}))
         self.assertEqual(client.post.await_count, 2)
@@ -137,7 +137,7 @@ class BinanceGetTests(unittest.TestCase):
 
     def test_get_returns_data_key(self):
         client = _mock_httpx_client({"data": [{"id": 1}]})
-        with patch("app.api.routes.binance_signals.httpx.AsyncClient", lambda **kw: client):
+        with patch("app.api.routes.markets.binance_signals.httpx.AsyncClient", lambda **kw: client):
             result = asyncio_result(binance_signals._binance_get("/path", {"q": "x"}))
         self.assertEqual(result, [{"id": 1}])
         self.assertEqual(
@@ -148,13 +148,13 @@ class BinanceGetTests(unittest.TestCase):
 
     def test_get_returns_none_on_error(self):
         client = _mock_httpx_client(None, get_exc=RuntimeError("network down"))
-        with patch("app.api.routes.binance_signals.httpx.AsyncClient", lambda **kw: client):
+        with patch("app.api.routes.markets.binance_signals.httpx.AsyncClient", lambda **kw: client):
             result = asyncio_result(binance_signals._binance_get("/path", {"q": "x"}))
         self.assertIsNone(result)
 
     def test_get_caches_result(self):
         client = _mock_httpx_client({"data": [{"id": 1}]})
-        with patch("app.api.routes.binance_signals.httpx.AsyncClient", lambda **kw: client):
+        with patch("app.api.routes.markets.binance_signals.httpx.AsyncClient", lambda **kw: client):
             first = asyncio_result(binance_signals._binance_get("/path", cache_key="gk"))
             second = asyncio_result(binance_signals._binance_get("/path", cache_key="gk"))
         self.assertEqual(first, [{"id": 1}])
@@ -173,7 +173,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
 
     def _patch_settings(self, enabled):
         return patch(
-            "app.api.routes.binance_signals.settings",
+            "app.api.routes.markets.binance_signals.settings",
             MagicMock(binance_skills_enabled=enabled),
         )
 
@@ -183,7 +183,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value=[{"token_address": "0x1"}]),
             ) as mock_post,
         ):
@@ -203,7 +203,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value={"rows": [{"a": 1}, {"b": 2}]}),
             ),
         ):
@@ -215,7 +215,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value={"signals": [{"s": 1}]}),
             ),
         ):
@@ -227,7 +227,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value=None),
             ),
         ):
@@ -239,7 +239,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value=[]),
             ) as mock_post,
         ):
@@ -259,7 +259,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value=[]),
             ) as mock_post,
         ):
@@ -274,7 +274,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value=[]),
             ) as mock_post,
         ):
@@ -289,7 +289,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value=rows),
             ),
         ):
@@ -331,7 +331,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value=[{"token": "t"}]),
             ) as mock_post,
         ):
@@ -348,7 +348,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value={"rows": [{"a": 1}]}),
             ),
         ):
@@ -360,7 +360,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value=None),
             ),
         ):
@@ -387,7 +387,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value=[{"rank": 1}]),
             ) as mock_post,
         ):
@@ -403,7 +403,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value={"rankings": [{"r": 1}]}),
             ),
         ):
@@ -415,7 +415,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value=None),
             ),
         ):
@@ -441,7 +441,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value=[{"t": 1}]),
             ) as mock_post,
         ):
@@ -457,7 +457,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value={"rankings": [{"r": 1}]}),
             ),
         ):
@@ -469,7 +469,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value=None),
             ),
         ):
@@ -495,7 +495,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value=[{"i": 1}]),
             ) as mock_post,
         ):
@@ -513,7 +513,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value={"rankings": [{"r": 1}]}),
             ),
         ):
@@ -527,7 +527,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value=None),
             ),
         ):
@@ -557,7 +557,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value=[{"p": 1}]),
             ) as mock_post,
         ):
@@ -580,7 +580,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value={"rankings": [{"r": 1}]}),
             ),
         ):
@@ -592,7 +592,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value=None),
             ),
         ):
@@ -618,7 +618,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value=[{"token": "PEPE"}]),
             ) as mock_post,
         ):
@@ -638,7 +638,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value={"tokens": [{"t": 1}]}),
             ),
         ):
@@ -653,7 +653,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value={"rows": [{"r": 1}]}),
             ),
         ):
@@ -668,7 +668,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value=None),
             ),
         ):
@@ -696,7 +696,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value=rows),
             ),
         ):
@@ -713,7 +713,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value={"price": 0.5}),
             ) as mock_post,
         ):
@@ -736,7 +736,7 @@ class BinanceSignalRouteTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(return_value=None),
             ),
         ):
@@ -771,7 +771,7 @@ class BinanceDashboardTests(unittest.TestCase):
 
     def _patch_settings(self, enabled):
         return patch(
-            "app.api.routes.binance_signals.settings",
+            "app.api.routes.markets.binance_signals.settings",
             MagicMock(binance_skills_enabled=enabled),
         )
 
@@ -799,7 +799,7 @@ class BinanceDashboardTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(side_effect=results),
             ),
         ):
@@ -824,7 +824,7 @@ class BinanceDashboardTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(side_effect=results),
             ),
         ):
@@ -848,7 +848,7 @@ class BinanceDashboardTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(side_effect=results),
             ),
         ):
@@ -875,7 +875,7 @@ class BinanceDashboardTests(unittest.TestCase):
         with (
             self._patch_settings(True),
             patch(
-                "app.api.routes.binance_signals._binance_post",
+                "app.api.routes.markets.binance_signals._binance_post",
                 AsyncMock(side_effect=results),
             ),
         ):

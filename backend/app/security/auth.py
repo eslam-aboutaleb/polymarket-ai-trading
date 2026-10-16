@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from eth_account.messages import encode_defunct
 from eth_utils import to_checksum_address
-from fastapi import HTTPException, status
+from fastapi import Header, HTTPException, Request, status
 from jose import JWTError, jwt
 from web3 import Web3
 
@@ -17,6 +17,11 @@ from app.config import get_settings
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+# Name of the cookie carrying the short-lived access token. Kept in the
+# security layer because both the route handlers and the request-scoped
+# dependencies resolve it from here.
+ACCESS_TOKEN_COOKIE_NAME = "pm_access_token"  # noqa: S105 - cookie name, not a secret
 
 # Fallback used when the prompts file is missing or has no template. Kept in one
 # place so the two call sites below cannot drift apart.
@@ -85,6 +90,80 @@ def verify_token(token: str) -> dict:
             detail="Invalid authentication credentials",
             headers={"WWW-Authenticate": "Bearer"},
         ) from None
+
+
+def extract_bearer_token(authorization: str | None) -> str | None:
+    """Return the token carried by an ``Authorization: Bearer <token>`` header."""
+    if not authorization:
+        return None
+    parts = authorization.split(" ", 1)
+    if len(parts) != 2:
+        return None
+    if parts[0].lower() != "bearer":
+        return None
+    token = parts[1].strip()
+    return token or None
+
+
+def get_current_user_from_token(
+    request: Request,
+    authorization: str | None = Header(default=None),
+):
+    """
+    FastAPI dependency that resolves the caller from an ``Authorization``
+    header or the access-token cookie. Lives in the security layer (not the
+    route layer) so dependency modules can use it without importing routes.
+    """
+    token = extract_bearer_token(authorization) or request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    payload = verify_token(token)
+
+    # Ensure this is an access token (allowlist: only the
+    # type="access" claim is accepted — tokens with a missing
+    # or different type claim are rejected).
+    if payload.get("type") != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Access token required",
+        )
+
+    return {
+        "user_id": payload.get("user_id"),
+        "wallet_address": payload.get("sub"),
+        "is_admin": payload.get("is_admin", False),
+    }
+
+
+def get_optional_user_from_token(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict | None:
+    """
+    Like get_current_user_from_token but returns None instead of raising 401
+    when no valid credentials are present.  Used by public-facing endpoints
+    that optionally enrich responses for authenticated visitors.
+    """
+    token = extract_bearer_token(authorization) or request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)
+    if not token:
+        return None
+
+    try:
+        payload = verify_token(token)
+        if payload.get("type") != "access":
+            return None
+        return {
+            "user_id": payload.get("user_id"),
+            "wallet_address": payload.get("sub"),
+            "is_admin": payload.get("is_admin", False),
+        }
+    except Exception:
+        return None
 
 
 def generate_challenge_message(wallet_address: str, timestamp: str, nonce: str) -> str:

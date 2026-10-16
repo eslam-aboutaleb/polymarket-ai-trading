@@ -16,7 +16,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.models.base import Base
 from app.models.user_trade import UserTrade
-from app.services.pnl_reconciliation import (
+from app.services.analytics.pnl_reconciliation import (
     has_pnl_history,
     reconcile_realized_pnl,
     reconciliation_summary,

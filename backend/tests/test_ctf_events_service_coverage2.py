@@ -36,7 +36,7 @@ from web3 import Web3
 
 from app.models.followed_trader import FollowedTrader
 from app.models.whale_config import WhaleConfig
-from app.services import ctf_events_service as svc
+from app.services.market_data import ctf_events_service as svc
 
 WHALE = "0x" + "1" * 40
 OTHER = "0x" + "2" * 40
@@ -285,7 +285,7 @@ class RefreshMarketMapsTests(_ServiceStateTestCase):
         service.get_active_markets = active
         service.get_newest_markets = newest
         with patch(
-            "app.services.polymarket_service.get_polymarket_service",
+            "app.services.market_data.polymarket_service.get_polymarket_service",
             return_value=service,
         ):
             await svc._refresh_market_maps()
@@ -308,7 +308,7 @@ class RefreshMarketMapsTests(_ServiceStateTestCase):
         service.get_active_markets = AsyncMock(return_value=[])
         service.get_newest_markets = AsyncMock(return_value=[])
         with patch(
-            "app.services.polymarket_service.get_polymarket_service",
+            "app.services.market_data.polymarket_service.get_polymarket_service",
             return_value=service,
         ):
             await svc._refresh_market_maps()
@@ -321,7 +321,7 @@ class RefreshMarketMapsTests(_ServiceStateTestCase):
         service.get_active_markets = AsyncMock(side_effect=RuntimeError("api down"))
         service.get_newest_markets = AsyncMock(return_value=[])
         with patch(
-            "app.services.polymarket_service.get_polymarket_service",
+            "app.services.market_data.polymarket_service.get_polymarket_service",
             return_value=service,
         ):
             await svc._refresh_market_maps()
@@ -337,7 +337,7 @@ class RefreshWhaleSetTests(_ServiceStateTestCase):
             {},
         ]
         with patch(
-            "app.services.leaderboard_service.fetch_leaderboard",
+            "app.services.analytics.leaderboard_service.fetch_leaderboard",
             AsyncMock(return_value=entries),
         ) as fetch:
             await svc._refresh_whale_set()
@@ -347,7 +347,7 @@ class RefreshWhaleSetTests(_ServiceStateTestCase):
     async def test_refresh_whale_set_failure_isolated(self):
         svc._whale_wallets = {"0xkeep"}
         with patch(
-            "app.services.leaderboard_service.fetch_leaderboard",
+            "app.services.analytics.leaderboard_service.fetch_leaderboard",
             AsyncMock(side_effect=RuntimeError("leaderboard down")),
         ):
             await svc._refresh_whale_set()
@@ -545,11 +545,11 @@ class UpdateBlockTsTests(_ServiceStateTestCase):
 # ── Alert dispatch ────────────────────────────────────────
 class DispatchAlertTests(_ServiceStateTestCase):
     def test_dispatch_alert_service_unavailable(self):
-        with patch.dict(sys.modules, {"app.services.alert_service": None}):
+        with patch.dict(sys.modules, {"app.services.users.alert_service": None}):
             svc._dispatch_alert(1, {"wallet": WHALE})
 
     def test_dispatch_alert_sync_result(self):
-        with patch("app.services.alert_service.dispatch", MagicMock()) as dispatch:
+        with patch("app.services.users.alert_service.dispatch", MagicMock()) as dispatch:
             svc._dispatch_alert(1, {"wallet": WHALE})
         dispatch.assert_called_once_with("whale_alert", 1, {"wallet": WHALE}, background=True)
 
@@ -560,13 +560,13 @@ class DispatchAlertTests(_ServiceStateTestCase):
         def _dispatch(*args, **kwargs):
             return _noop(*args, **kwargs)
 
-        with patch("app.services.alert_service.dispatch", _dispatch):
+        with patch("app.services.users.alert_service.dispatch", _dispatch):
             svc._dispatch_alert(1, {"wallet": WHALE})
         await asyncio.sleep(0)
 
     def test_dispatch_alert_dispatch_failure(self):
         with patch(
-            "app.services.alert_service.dispatch",
+            "app.services.users.alert_service.dispatch",
             MagicMock(side_effect=RuntimeError("boom")),
         ):
             svc._dispatch_alert(1, {"wallet": WHALE})
@@ -575,7 +575,7 @@ class DispatchAlertTests(_ServiceStateTestCase):
 # ── Auto-copy routing ─────────────────────────────────────
 class RunAutoCopyTests(_ServiceStateTestCase):
     async def test_run_auto_copy_service_unavailable(self):
-        with patch.dict(sys.modules, {"app.services.copy_trade_service": None}):
+        with patch.dict(sys.modules, {"app.services.trading.copy_trade_service": None}):
             await svc._run_auto_copy(
                 1,
                 WHALE,
@@ -592,7 +592,7 @@ class RunAutoCopyTests(_ServiceStateTestCase):
         candidate = {"token_id": "t1", "side": "buy"}
         with (
             patch.object(svc, "SessionLocal", return_value=db),
-            patch("app.services.copy_trade_service.execute_copy_trade", execute),
+            patch("app.services.trading.copy_trade_service.execute_copy_trade", execute),
         ):
             await svc._run_auto_copy(
                 1,
@@ -622,7 +622,7 @@ class RunAutoCopyTests(_ServiceStateTestCase):
         candidate = {"token_id": "t1", "side": "open"}
         with (
             patch.object(svc, "SessionLocal", return_value=db),
-            patch("app.services.copy_trade_service.execute_copy_trade", execute),
+            patch("app.services.trading.copy_trade_service.execute_copy_trade", execute),
         ):
             await svc._run_auto_copy(
                 1,
@@ -641,7 +641,7 @@ class RunAutoCopyTests(_ServiceStateTestCase):
         candidate = {"token_id": "t1", "side": "sell"}
         with (
             patch.object(svc, "SessionLocal", return_value=db),
-            patch("app.services.copy_trade_service.execute_copy_trade", execute),
+            patch("app.services.trading.copy_trade_service.execute_copy_trade", execute),
         ):
             await svc._run_auto_copy(
                 1,
@@ -659,7 +659,7 @@ class RunAutoCopyTests(_ServiceStateTestCase):
         execute = AsyncMock(side_effect=RuntimeError("copy failed"))
         with (
             patch.object(svc, "SessionLocal", return_value=db),
-            patch("app.services.copy_trade_service.execute_copy_trade", execute),
+            patch("app.services.trading.copy_trade_service.execute_copy_trade", execute),
         ):
             await svc._run_auto_copy(
                 1,

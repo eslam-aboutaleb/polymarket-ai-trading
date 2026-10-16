@@ -1,5 +1,5 @@
 """Coverage for the backtesting API routes
-(:mod:`app.api.routes.backtesting`).
+(:mod:`app.api.routes.trading.backtesting`).
 
 Exercises every endpoint through ``TestClient`` with the auth
 dependency overridden: listing (with the 100-row limit clamp),
@@ -15,8 +15,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from app.api.routes.auth import get_current_user_from_token
-from app.api.routes.backtesting import _to_response
+from app.api.routes.auth.auth import get_current_user_from_token
+from app.api.routes.trading.backtesting import _to_response
 from app.main import app
 from app.utils.database import get_db
 
@@ -124,7 +124,7 @@ class BacktestingRouteTests(unittest.TestCase):
     def test_list_runs_returns_runs_and_total(self):
         run = _run(id=7)
         with patch(
-            "app.api.routes.backtesting.get_backtest_runs",
+            "app.api.routes.trading.backtesting.get_backtest_runs",
             return_value=[run],
         ) as list_mock:
             response = self.client.get("/api/backtesting/runs")
@@ -138,7 +138,7 @@ class BacktestingRouteTests(unittest.TestCase):
 
     def test_list_runs_clamps_limit_to_one_hundred(self):
         with patch(
-            "app.api.routes.backtesting.get_backtest_runs",
+            "app.api.routes.trading.backtesting.get_backtest_runs",
             return_value=[],
         ) as list_mock:
             response = self.client.get("/api/backtesting/runs?limit=500")
@@ -157,7 +157,7 @@ class BacktestingRouteTests(unittest.TestCase):
     def test_get_run_returns_run(self):
         run = _run(id=9)
         with patch(
-            "app.api.routes.backtesting.get_backtest_run",
+            "app.api.routes.trading.backtesting.get_backtest_run",
             return_value=run,
         ) as get_mock:
             response = self.client.get("/api/backtesting/runs/9")
@@ -168,7 +168,7 @@ class BacktestingRouteTests(unittest.TestCase):
 
     def test_get_run_returns_404_when_missing(self):
         with patch(
-            "app.api.routes.backtesting.get_backtest_run",
+            "app.api.routes.trading.backtesting.get_backtest_run",
             return_value=None,
         ):
             response = self.client.get("/api/backtesting/runs/999")
@@ -181,7 +181,7 @@ class BacktestingRouteTests(unittest.TestCase):
     def test_create_run_returns_created_run(self):
         run = _run(id=11, status="completed")
         with patch(
-            "app.api.routes.backtesting.create_and_run_backtest",
+            "app.api.routes.trading.backtesting.create_and_run_backtest",
             new=AsyncMock(return_value=run),
         ) as create_mock:
             response = self.client.post(
@@ -208,7 +208,7 @@ class BacktestingRouteTests(unittest.TestCase):
 
     def test_create_run_returns_400_on_value_error(self):
         with patch(
-            "app.api.routes.backtesting.create_and_run_backtest",
+            "app.api.routes.trading.backtesting.create_and_run_backtest",
             new=AsyncMock(side_effect=ValueError("start_date must be on or before end_date")),
         ):
             response = self.client.post(
@@ -225,7 +225,7 @@ class BacktestingRouteTests(unittest.TestCase):
 
     def test_create_run_returns_500_when_service_returns_none(self):
         with patch(
-            "app.api.routes.backtesting.create_and_run_backtest",
+            "app.api.routes.trading.backtesting.create_and_run_backtest",
             new=AsyncMock(return_value=None),
         ):
             response = self.client.post(
@@ -265,7 +265,7 @@ class BacktestingRouteTests(unittest.TestCase):
     def test_create_run_defaults_strategy_name_and_parameters(self):
         run = _run(id=12, strategy_name="Unnamed Strategy", parameters={})
         with patch(
-            "app.api.routes.backtesting.create_and_run_backtest",
+            "app.api.routes.trading.backtesting.create_and_run_backtest",
             new=AsyncMock(return_value=run),
         ) as create_mock:
             response = self.client.post(

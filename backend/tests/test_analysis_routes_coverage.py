@@ -21,14 +21,14 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (register models on Base.metadata)
-from app.api.routes import analysis
-from app.api.routes.analysis import (
+from app.api.routes.analysis import analysis
+from app.api.routes.analysis.analysis import (
     _enrich_trader_request,
     _group_markets_by_event,
     get_analysis_client_for_user,
     get_user_backend,
 )
-from app.api.routes.auth import (
+from app.api.routes.auth.auth import (
     get_current_user_from_token,
     get_optional_user_from_token,
 )
@@ -39,7 +39,7 @@ from app.models.assessment import Assessment
 from app.models.base import Base
 from app.models.user_settings import AIBackendType
 from app.security.rate_limit import limiter
-from app.services.llm_gateway import LLMConfig, LLMProviderType
+from app.services.intelligence.llm_gateway import LLMConfig, LLMProviderType
 from app.utils.database import get_db
 
 WALLET = "0x" + "ab" * 20
@@ -144,7 +144,7 @@ class _AnalysisRouteMixin:
         self.mock_client = self._make_client()
         self.factory = AsyncMock(return_value=(self.mock_client, None))
         factory_patcher = patch(
-            "app.api.routes.analysis.get_analysis_client_for_user", self.factory
+            "app.api.routes.analysis.analysis.get_analysis_client_for_user", self.factory
         )
         factory_patcher.start()
         self.addCleanup(factory_patcher.stop)
@@ -177,7 +177,10 @@ class _AnalysisRouteMixin:
         return status, body
 
     def _patch_service(self, service):
-        patcher = patch("app.api.routes.analysis.get_polymarket_service", return_value=service)
+        patcher = patch(
+            "app.api.routes.analysis.analysis.get_polymarket_service",
+            return_value=service,
+        )
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -224,7 +227,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
 
     def test_analyze_market_forwards_llm_config(self):
         self.factory = AsyncMock(return_value=(self.mock_client, {"model": "gpt-4"}))
-        with patch("app.api.routes.analysis.get_analysis_client_for_user", self.factory):
+        with patch("app.api.routes.analysis.analysis.get_analysis_client_for_user", self.factory):
             response = self.client.post("/api/analysis/market", json=MARKET_PAYLOAD)
         self.assertEqual(response.status_code, 200)
         kwargs = self.mock_client.analyze_market.await_args.kwargs
@@ -267,7 +270,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
     def test_analyze_market_stream_forwards_llm_config(self):
         self.factory = AsyncMock(return_value=(self.mock_client, {"provider": 1, "model": "m"}))
         self.mock_client.analyze_market_stream = MagicMock(return_value=_async_gen(["x"]))
-        with patch("app.api.routes.analysis.get_analysis_client_for_user", self.factory):
+        with patch("app.api.routes.analysis.analysis.get_analysis_client_for_user", self.factory):
             status, body = self._stream("/api/analysis/market/stream", MARKET_PAYLOAD)
         self.assertEqual(status, 200)
         kwargs = self.mock_client.analyze_market_stream.call_args.kwargs
@@ -463,7 +466,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
 
     def test_analyze_trader_success(self):
         with patch(
-            "app.api.routes.analysis.fetch_trader_trades",
+            "app.api.routes.analysis.analysis.fetch_trader_trades",
             AsyncMock(
                 return_value={
                     "stats": {
@@ -496,7 +499,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
     def test_analyze_trader_error_returns_500(self):
         self.mock_client.analyze_trader = AsyncMock(side_effect=RuntimeError("boom"))
         with patch(
-            "app.api.routes.analysis.fetch_trader_trades",
+            "app.api.routes.analysis.analysis.fetch_trader_trades",
             AsyncMock(return_value={"stats": {}, "trade_summary": ""}),
         ):
             response = self.client.post("/api/analysis/trader", json=TRADER_PAYLOAD)
@@ -510,7 +513,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
             return_value=_async_gen(["trader chunk"])
         )
         with patch(
-            "app.api.routes.analysis.fetch_trader_trades",
+            "app.api.routes.analysis.analysis.fetch_trader_trades",
             AsyncMock(return_value={"stats": {}, "trade_summary": "sum"}),
         ):
             status, body = self._stream("/api/analysis/trader/stream", TRADER_PAYLOAD)
@@ -526,7 +529,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
             return_value=_raising_gen(RuntimeError("trader boom"))
         )
         with patch(
-            "app.api.routes.analysis.fetch_trader_trades",
+            "app.api.routes.analysis.analysis.fetch_trader_trades",
             AsyncMock(return_value={"stats": {}, "trade_summary": ""}),
         ):
             status, body = self._stream("/api/analysis/trader/stream", TRADER_PAYLOAD)
@@ -1101,8 +1104,8 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
         cancelled = AsyncMock(side_effect=asyncio.CancelledError)
 
         with (
-            patch("app.api.routes.analysis.opportunity_cache", cache),
-            patch("app.api.routes.analysis.get_polymarket_service", return_value=service),
+            patch("app.api.routes.analysis.analysis.opportunity_cache", cache),
+            patch("app.api.routes.analysis.analysis.get_polymarket_service", return_value=service),
             patch.object(analysis, "_score_event_groups", new=cancelled),
             contextlib.suppress(asyncio.CancelledError),
         ):
@@ -1213,7 +1216,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
             {"condition_id": "c1", "ai_score": 80},
             {"condition_id": "c2", "ai_score": 70},
         ]
-        with patch("app.api.routes.analysis.opportunity_cache", cache):
+        with patch("app.api.routes.analysis.analysis.opportunity_cache", cache):
             status, body = self._stream("/api/analysis/opportunities/stream", {"limit": 10})
         self.assertEqual(status, 200)
         self.assertIn('"cached": true', body)
@@ -1230,8 +1233,8 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
         service.get_newest_markets = AsyncMock(return_value=[])
         service.get_active_markets = AsyncMock(return_value=[])
         with (
-            patch("app.api.routes.analysis.opportunity_cache", cache),
-            patch("app.api.routes.analysis.get_polymarket_service", return_value=service),
+            patch("app.api.routes.analysis.analysis.opportunity_cache", cache),
+            patch("app.api.routes.analysis.analysis.get_polymarket_service", return_value=service),
         ):
             status, body = self._stream(
                 "/api/analysis/opportunities/stream",
@@ -1299,8 +1302,8 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
             }
         )
         with (
-            patch("app.api.routes.analysis.opportunity_cache", cache),
-            patch("app.api.routes.analysis.get_polymarket_service", return_value=service),
+            patch("app.api.routes.analysis.analysis.opportunity_cache", cache),
+            patch("app.api.routes.analysis.analysis.get_polymarket_service", return_value=service),
         ):
             status, body = self._stream("/api/analysis/opportunities/stream", {"limit": 40})
         self.assertEqual(status, 200)
@@ -1328,8 +1331,8 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
         service.get_newest_markets = AsyncMock(return_value=[])
         service.get_active_markets = AsyncMock(return_value=[])
         with (
-            patch("app.api.routes.analysis.opportunity_cache", cache),
-            patch("app.api.routes.analysis.get_polymarket_service", return_value=service),
+            patch("app.api.routes.analysis.analysis.opportunity_cache", cache),
+            patch("app.api.routes.analysis.analysis.get_polymarket_service", return_value=service),
         ):
             status, body = self._stream("/api/analysis/opportunities/stream", {"limit": 10})
         self.assertEqual(status, 200)
@@ -1342,8 +1345,8 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
         service.get_newest_markets = AsyncMock(side_effect=RuntimeError("fetch down"))
         service.get_active_markets = AsyncMock(return_value=[])
         with (
-            patch("app.api.routes.analysis.opportunity_cache", cache),
-            patch("app.api.routes.analysis.get_polymarket_service", return_value=service),
+            patch("app.api.routes.analysis.analysis.opportunity_cache", cache),
+            patch("app.api.routes.analysis.analysis.get_polymarket_service", return_value=service),
         ):
             status, body = self._stream("/api/analysis/opportunities/stream", {"limit": 10})
         self.assertEqual(status, 200)
@@ -1369,8 +1372,8 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
             return_value={"condition_id": "cid-1", "ai_score": 50}
         )
         with (
-            patch("app.api.routes.analysis.opportunity_cache", cache),
-            patch("app.api.routes.analysis.get_polymarket_service", return_value=service),
+            patch("app.api.routes.analysis.analysis.opportunity_cache", cache),
+            patch("app.api.routes.analysis.analysis.get_polymarket_service", return_value=service),
         ):
             status, body = self._stream("/api/analysis/opportunities/stream", {"limit": 10})
         self.assertEqual(status, 200)
@@ -1391,8 +1394,8 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
             return_value={"condition_id": "cid-1", "ai_score": 50}
         )
         with (
-            patch("app.api.routes.analysis.opportunity_cache", cache),
-            patch("app.api.routes.analysis.get_polymarket_service", return_value=service),
+            patch("app.api.routes.analysis.analysis.opportunity_cache", cache),
+            patch("app.api.routes.analysis.analysis.get_polymarket_service", return_value=service),
         ):
             status, body = self._stream("/api/analysis/opportunities/stream", {"limit": 10})
         self.assertEqual(status, 200)
@@ -1412,8 +1415,8 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
             return_value={"condition_id": "cid-1", "ai_score": 50}
         )
         with (
-            patch("app.api.routes.analysis.opportunity_cache", cache),
-            patch("app.api.routes.analysis.get_polymarket_service", return_value=service),
+            patch("app.api.routes.analysis.analysis.opportunity_cache", cache),
+            patch("app.api.routes.analysis.analysis.get_polymarket_service", return_value=service),
         ):
             status, body = self._stream("/api/analysis/opportunities/stream", {"limit": 10})
         self.assertEqual(status, 200)
@@ -1461,8 +1464,8 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
             }
         )
         with (
-            patch("app.api.routes.analysis.opportunity_cache", cache),
-            patch("app.api.routes.analysis.get_polymarket_service", return_value=service),
+            patch("app.api.routes.analysis.analysis.opportunity_cache", cache),
+            patch("app.api.routes.analysis.analysis.get_polymarket_service", return_value=service),
         ):
             status, body = self._stream("/api/analysis/opportunities/stream", {"limit": 10})
         self.assertEqual(status, 200)
@@ -1495,8 +1498,8 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
 
         self.mock_client.scan_opportunity = AsyncMock(side_effect=_scan)
         with (
-            patch("app.api.routes.analysis.opportunity_cache", cache),
-            patch("app.api.routes.analysis.get_polymarket_service", return_value=service),
+            patch("app.api.routes.analysis.analysis.opportunity_cache", cache),
+            patch("app.api.routes.analysis.analysis.get_polymarket_service", return_value=service),
         ):
             status, body = self._stream("/api/analysis/opportunities/stream", {"limit": 10})
         self.assertEqual(status, 200)
@@ -1511,8 +1514,8 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
         service.get_smart_money_analysis = AsyncMock(return_value={})
         self.mock_client.scan_opportunity = AsyncMock(side_effect=RuntimeError("ai down"))
         with (
-            patch("app.api.routes.analysis.opportunity_cache", cache),
-            patch("app.api.routes.analysis.get_polymarket_service", return_value=service),
+            patch("app.api.routes.analysis.analysis.opportunity_cache", cache),
+            patch("app.api.routes.analysis.analysis.get_polymarket_service", return_value=service),
         ):
             status, body = self._stream("/api/analysis/opportunities/stream", {"limit": 10})
         self.assertEqual(status, 200)
@@ -1534,8 +1537,8 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
         service.get_smart_money_analysis = AsyncMock(return_value={})
         self.mock_client.scan_event_opportunity = AsyncMock(side_effect=RuntimeError("ai down"))
         with (
-            patch("app.api.routes.analysis.opportunity_cache", cache),
-            patch("app.api.routes.analysis.get_polymarket_service", return_value=service),
+            patch("app.api.routes.analysis.analysis.opportunity_cache", cache),
+            patch("app.api.routes.analysis.analysis.get_polymarket_service", return_value=service),
         ):
             status, body = self._stream("/api/analysis/opportunities/stream", {"limit": 10})
         self.assertEqual(status, 200)
@@ -1549,8 +1552,8 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
         service.get_newest_markets = AsyncMock(return_value=[{"question": "No ID"}])
         service.get_active_markets = AsyncMock(return_value=[])
         with (
-            patch("app.api.routes.analysis.opportunity_cache", cache),
-            patch("app.api.routes.analysis.get_polymarket_service", return_value=service),
+            patch("app.api.routes.analysis.analysis.opportunity_cache", cache),
+            patch("app.api.routes.analysis.analysis.get_polymarket_service", return_value=service),
         ):
             status, body = self._stream("/api/analysis/opportunities/stream", {"limit": 10})
         self.assertEqual(status, 200)
@@ -1571,8 +1574,8 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
 
         self.mock_client.scan_opportunity = AsyncMock(side_effect=_slow_scan)
         with (
-            patch("app.api.routes.analysis.opportunity_cache", cache),
-            patch("app.api.routes.analysis.get_polymarket_service", return_value=service),
+            patch("app.api.routes.analysis.analysis.opportunity_cache", cache),
+            patch("app.api.routes.analysis.analysis.get_polymarket_service", return_value=service),
         ):
             status, body = self._stream("/api/analysis/opportunities/stream", {"limit": 10})
         self.assertEqual(status, 200)
@@ -1595,8 +1598,8 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
             return_value={"condition_id": "cid-1", "ai_score": 50}
         )
         with (
-            patch("app.api.routes.analysis.opportunity_cache", cache),
-            patch("app.api.routes.analysis.get_polymarket_service", return_value=service),
+            patch("app.api.routes.analysis.analysis.opportunity_cache", cache),
+            patch("app.api.routes.analysis.analysis.get_polymarket_service", return_value=service),
         ):
             status, body = self._stream("/api/analysis/opportunities/stream", {"limit": 10})
         self.assertEqual(status, 200)
@@ -1740,7 +1743,7 @@ class AnalysisRouteHelperTests(unittest.IsolatedAsyncioTestCase):
     async def test_get_analysis_client_for_user_anonymous(self):
         gateway = MagicMock()
         gateway.resolve_provider.return_value = (AIBackend.LLM_CHAIN, None)
-        with patch("app.api.routes.analysis.get_llm_gateway", return_value=gateway):
+        with patch("app.api.routes.analysis.analysis.get_llm_gateway", return_value=gateway):
             client, config = await get_analysis_client_for_user(None, MagicMock())
         self.assertIsInstance(client, AnalysisClient)
         self.assertEqual(client.backend, AIBackend.LLM_CHAIN)
@@ -1759,7 +1762,7 @@ class AnalysisRouteHelperTests(unittest.IsolatedAsyncioTestCase):
             max_tokens=100,
         )
         gateway.resolve_provider.return_value = (AIBackend.CLI_AGENT, config)
-        with patch("app.api.routes.analysis.get_llm_gateway", return_value=gateway):
+        with patch("app.api.routes.analysis.analysis.get_llm_gateway", return_value=gateway):
             client, llm_config = await get_analysis_client_for_user(1, db)
         self.assertIsInstance(client, AnalysisClient)
         self.assertEqual(client.backend, AIBackend.CLI_AGENT)
@@ -1775,14 +1778,14 @@ class AnalysisRouteHelperTests(unittest.IsolatedAsyncioTestCase):
         db.query.return_value.filter.return_value.first.return_value = record
         gateway = MagicMock()
         gateway.resolve_provider.return_value = (AIBackend.LLM_CHAIN, None)
-        with patch("app.api.routes.analysis.get_llm_gateway", return_value=gateway):
+        with patch("app.api.routes.analysis.analysis.get_llm_gateway", return_value=gateway):
             client, llm_config = await get_analysis_client_for_user(1, db)
         self.assertIsNone(llm_config)
 
     # ── _enrich_trader_request ──────────────────────────
 
     async def test_enrich_trader_request_skips_fetch(self):
-        from app.api.routes.analysis import TraderAnalysisRequest
+        from app.api.routes.analysis.analysis import TraderAnalysisRequest
 
         request = TraderAnalysisRequest(
             wallet_address=WALLET,
@@ -1795,7 +1798,7 @@ class AnalysisRouteHelperTests(unittest.IsolatedAsyncioTestCase):
             fetch_real_trades=False,
         )
         with patch(
-            "app.api.routes.analysis.fetch_trader_trades",
+            "app.api.routes.analysis.analysis.fetch_trader_trades",
             AsyncMock(return_value={"stats": {}, "trade_summary": "x"}),
         ) as fetch:
             enriched = await _enrich_trader_request(request)
@@ -1809,7 +1812,7 @@ class AnalysisRouteHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(enriched["recent_trades_json"], "[{}]")
 
     async def test_enrich_trader_request_applies_real_stats(self):
-        from app.api.routes.analysis import TraderAnalysisRequest
+        from app.api.routes.analysis.analysis import TraderAnalysisRequest
 
         request = TraderAnalysisRequest(
             wallet_address=WALLET, fetch_real_trades=True, total_pnl=0.0
@@ -1825,7 +1828,7 @@ class AnalysisRouteHelperTests(unittest.IsolatedAsyncioTestCase):
             "trade_summary": "real trades",
         }
         with patch(
-            "app.api.routes.analysis.fetch_trader_trades",
+            "app.api.routes.analysis.analysis.fetch_trader_trades",
             AsyncMock(return_value=trade_data),
         ):
             enriched = await _enrich_trader_request(request)
@@ -1836,7 +1839,7 @@ class AnalysisRouteHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(enriched["recent_trades_json"], "real trades")
 
     async def test_enrich_trader_request_zero_stats_keep_request_values(self):
-        from app.api.routes.analysis import TraderAnalysisRequest
+        from app.api.routes.analysis.analysis import TraderAnalysisRequest
 
         request = TraderAnalysisRequest(
             wallet_address=WALLET,
@@ -1848,7 +1851,7 @@ class AnalysisRouteHelperTests(unittest.IsolatedAsyncioTestCase):
             fetch_real_trades=True,
         )
         with patch(
-            "app.api.routes.analysis.fetch_trader_trades",
+            "app.api.routes.analysis.analysis.fetch_trader_trades",
             AsyncMock(return_value={"stats": {}, "trade_summary": "sum"}),
         ):
             enriched = await _enrich_trader_request(request)
@@ -1860,14 +1863,14 @@ class AnalysisRouteHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(enriched["recent_trades_json"], "sum")
 
     async def test_enrich_trader_request_pnl_fallback_without_total_pnl(self):
-        from app.api.routes.analysis import TraderAnalysisRequest
+        from app.api.routes.analysis.analysis import TraderAnalysisRequest
 
         request = TraderAnalysisRequest(
             wallet_address=WALLET, fetch_real_trades=True, total_pnl=0.0
         )
         # total_volume > 0 but stats carry no total_pnl key
         with patch(
-            "app.api.routes.analysis.fetch_trader_trades",
+            "app.api.routes.analysis.analysis.fetch_trader_trades",
             AsyncMock(
                 return_value={
                     "stats": {"total_volume": 500.0},
@@ -1879,7 +1882,7 @@ class AnalysisRouteHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(enriched["total_pnl"], 0.0)
 
     async def test_enrich_trader_request_fetch_failure_falls_back(self):
-        from app.api.routes.analysis import TraderAnalysisRequest
+        from app.api.routes.analysis.analysis import TraderAnalysisRequest
 
         request = TraderAnalysisRequest(
             wallet_address=WALLET,
@@ -1892,7 +1895,7 @@ class AnalysisRouteHelperTests(unittest.IsolatedAsyncioTestCase):
             fetch_real_trades=True,
         )
         with patch(
-            "app.api.routes.analysis.fetch_trader_trades",
+            "app.api.routes.analysis.analysis.fetch_trader_trades",
             AsyncMock(side_effect=RuntimeError("network down")),
         ):
             enriched = await _enrich_trader_request(request)

@@ -25,13 +25,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api.routes.auth import get_current_user_from_token
+from app.api.routes.auth.auth import get_current_user_from_token
 from app.config import get_settings
 from app.main import app
 from app.models.base import Base
 from app.models.followed_trader import FollowedTrader
 from app.models.user_trade import UserTrade
-from app.services.copy_trade_service import get_trader_copy_stats
+from app.services.trading.copy_trade_service import get_trader_copy_stats
 from app.utils.database import get_db
 
 WALLET_A = "0x" + "aa" * 20
@@ -90,7 +90,7 @@ class TraderAttributionTestBase(unittest.TestCase):
                 trader_alias=alias,
                 is_active=True,
                 copy_wallet_percentage=100.0,
-            )
+            ),
         )
         self.db.commit()
 

@@ -1,4 +1,4 @@
-"""Behavioural tests for :mod:`app.services.position_lifecycle_service`.
+"""Behavioural tests for :mod:`app.services.trading.position_lifecycle_service`.
 
 Covers the whole position lifecycle engine:
 
@@ -26,7 +26,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
-import app.services.position_lifecycle_service as lifecycle
+import app.services.trading.position_lifecycle_service as lifecycle
 from app.models.user_trade import UserTrade
 from app.utils.time import utc_now
 
@@ -119,7 +119,10 @@ class CheckResolvedMarketsTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
 
-        with patch("app.services.polymarket_service.get_polymarket_service", return_value=service):
+        with patch(
+            "app.services.market_data.polymarket_service.get_polymarket_service",
+            return_value=service,
+        ):
             redeemed = await lifecycle._check_resolved_markets(self.db, 7, "0xaaa")
 
         service.get_positions.assert_awaited_once_with("0xaaa")
@@ -147,7 +150,10 @@ class CheckResolvedMarketsTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
 
-        with patch("app.services.polymarket_service.get_polymarket_service", return_value=service):
+        with patch(
+            "app.services.market_data.polymarket_service.get_polymarket_service",
+            return_value=service,
+        ):
             redeemed = await lifecycle._check_resolved_markets(self.db, 1, "0xbbb")
 
         self.assertEqual(len(redeemed), 1)
@@ -161,7 +167,10 @@ class CheckResolvedMarketsTests(unittest.IsolatedAsyncioTestCase):
             [{"conditionId": "0xcond-3", "size": 1, "market": {"resolved": True}}]
         )
 
-        with patch("app.services.polymarket_service.get_polymarket_service", return_value=service):
+        with patch(
+            "app.services.market_data.polymarket_service.get_polymarket_service",
+            return_value=service,
+        ):
             redeemed = await lifecycle._check_resolved_markets(self.db, 1, "0xbbb")
 
         self.assertEqual(redeemed[0]["title"], "Unknown")
@@ -177,7 +186,10 @@ class CheckResolvedMarketsTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
 
-        with patch("app.services.polymarket_service.get_polymarket_service", return_value=service):
+        with patch(
+            "app.services.market_data.polymarket_service.get_polymarket_service",
+            return_value=service,
+        ):
             redeemed = await lifecycle._check_resolved_markets(self.db, 1, "0xbbb")
 
         self.assertEqual(len(redeemed), 1)
@@ -186,7 +198,10 @@ class CheckResolvedMarketsTests(unittest.IsolatedAsyncioTestCase):
     async def test_no_positions_returns_empty_list(self):
         service = self._service([])
 
-        with patch("app.services.polymarket_service.get_polymarket_service", return_value=service):
+        with patch(
+            "app.services.market_data.polymarket_service.get_polymarket_service",
+            return_value=service,
+        ):
             redeemed = await lifecycle._check_resolved_markets(self.db, 1, "0xbbb")
 
         self.assertEqual(redeemed, [])
@@ -197,7 +212,10 @@ class CheckResolvedMarketsTests(unittest.IsolatedAsyncioTestCase):
         logger_mock = MagicMock()
 
         with (
-            patch("app.services.polymarket_service.get_polymarket_service", return_value=service),
+            patch(
+                "app.services.market_data.polymarket_service.get_polymarket_service",
+                return_value=service,
+            ),
             patch.object(lifecycle, "logger", new=logger_mock),
         ):
             redeemed = await lifecycle._check_resolved_markets(self.db, 5, "0xccc")
@@ -225,7 +243,10 @@ class CheckResolvedMarketsTests(unittest.IsolatedAsyncioTestCase):
         logger_mock = MagicMock()
 
         with (
-            patch("app.services.polymarket_service.get_polymarket_service", return_value=service),
+            patch(
+                "app.services.market_data.polymarket_service.get_polymarket_service",
+                return_value=service,
+            ),
             patch.object(lifecycle, "logger", new=logger_mock),
         ):
             redeemed = await lifecycle._check_resolved_markets(self.db, 5, "0xccc")
@@ -245,7 +266,10 @@ class CheckResolvedMarketsTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
 
-        with patch("app.services.polymarket_service.get_polymarket_service", return_value=service):
+        with patch(
+            "app.services.market_data.polymarket_service.get_polymarket_service",
+            return_value=service,
+        ):
             redeemed = await lifecycle._check_resolved_markets(self.db, 5, "0xccc")
 
         self.assertEqual(redeemed, [])
@@ -253,7 +277,10 @@ class CheckResolvedMarketsTests(unittest.IsolatedAsyncioTestCase):
     async def test_non_dict_entry_is_skipped(self):
         service = self._service(["oops", None, 42])
 
-        with patch("app.services.polymarket_service.get_polymarket_service", return_value=service):
+        with patch(
+            "app.services.market_data.polymarket_service.get_polymarket_service",
+            return_value=service,
+        ):
             redeemed = await lifecycle._check_resolved_markets(self.db, 5, "0xccc")
 
         self.assertEqual(redeemed, [])

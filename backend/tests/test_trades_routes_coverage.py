@@ -1,4 +1,4 @@
-"""Coverage tests for the /api/trades routes (``app.api.routes.trades``).
+"""Coverage tests for the /api/trades routes (``app.api.routes.trading.trades``).
 
 Every route and every branch is exercised against an in-memory fake
 DB session (``FakeSession``/``FakeQuery``) with all external I/O
@@ -59,11 +59,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from app.api.routes.auth import (
+from app.api.routes.auth.auth import (
     get_current_user_from_token,
     get_optional_user_from_token,
 )
-from app.api.routes.trades import _safe_json_obj
+from app.api.routes.trading.trades import _safe_json_obj
 from app.main import app
 from app.models.followed_trader import FollowedTrader
 from app.models.notification_feed_event import NotificationFeedEvent
@@ -74,7 +74,7 @@ from app.models.user import User
 from app.models.user_settings import UserSettings
 from app.models.user_trade import UserTrade
 from app.security.credential_store import CredentialStoreError
-from app.services import kelly_service
+from app.services.trading import kelly_service
 from app.utils.database import get_db
 from app.utils.time import utc_now
 
@@ -214,11 +214,11 @@ def _execute_env(
     app.dependency_overrides[get_db] = lambda: session
     try:
         with (
-            patch("app.api.routes.trades.load_wallet_credentials", creds),
-            patch("app.api.routes.trades.get_idempotent_order_result", idem_get),
-            patch("app.api.routes.trades.store_idempotent_order_result", idem_store),
-            patch("app.api.routes.trades.apply_global_safety_caps", caps),
-            patch("app.api.routes.trades._place_order_on_polymarket", place),
+            patch("app.api.routes.trading.trades.load_wallet_credentials", creds),
+            patch("app.api.routes.trading.trades.get_idempotent_order_result", idem_get),
+            patch("app.api.routes.trading.trades.store_idempotent_order_result", idem_store),
+            patch("app.api.routes.trading.trades.apply_global_safety_caps", caps),
+            patch("app.api.routes.trading.trades._place_order_on_polymarket", place),
         ):
             yield session, place, caps, idem_get, idem_store
     finally:
@@ -266,8 +266,8 @@ class TradeHistoryTests(_TradesRouteTestCase):
         )
         stored = {"private_key": PRIVATE_KEY, "clob_creds": CLOB_CREDS}
         with (
-            patch("app.api.routes.trades.get_polymarket_service", return_value=service),
-            patch("app.api.routes.trades.load_wallet_credentials", return_value=stored),
+            patch("app.api.routes.trading.trades.get_polymarket_service", return_value=service),
+            patch("app.api.routes.trading.trades.load_wallet_credentials", return_value=stored),
         ):
             resp = self.client.get("/api/trades/history?limit=10&offset=0")
 
@@ -288,8 +288,8 @@ class TradeHistoryTests(_TradesRouteTestCase):
         service = MagicMock()
         service.get_trade_history = AsyncMock(return_value=[{"id": "t1", "side": "BUY"}])
         with (
-            patch("app.api.routes.trades.get_polymarket_service", return_value=service),
-            patch("app.api.routes.trades.load_wallet_credentials", return_value=None),
+            patch("app.api.routes.trading.trades.get_polymarket_service", return_value=service),
+            patch("app.api.routes.trading.trades.load_wallet_credentials", return_value=None),
         ):
             resp = self.client.get("/api/trades/history?limit=1")
 
@@ -303,8 +303,8 @@ class TradeHistoryTests(_TradesRouteTestCase):
         service = MagicMock()
         service.get_trade_history = AsyncMock(return_value=[])
         with (
-            patch("app.api.routes.trades.get_polymarket_service", return_value=service),
-            patch("app.api.routes.trades.load_wallet_credentials", return_value=None),
+            patch("app.api.routes.trading.trades.get_polymarket_service", return_value=service),
+            patch("app.api.routes.trading.trades.load_wallet_credentials", return_value=None),
         ):
             resp = self.client.get("/api/trades/history")
 
@@ -316,9 +316,9 @@ class TradeHistoryTests(_TradesRouteTestCase):
         service = MagicMock()
         service.get_trade_history = AsyncMock(return_value=[])
         with (
-            patch("app.api.routes.trades.get_polymarket_service", return_value=service),
+            patch("app.api.routes.trading.trades.get_polymarket_service", return_value=service),
             patch(
-                "app.api.routes.trades.load_wallet_credentials",
+                "app.api.routes.trading.trades.load_wallet_credentials",
                 side_effect=CredentialStoreError("down"),
             ),
         ):
@@ -603,7 +603,7 @@ class LeaderboardTests(_TradesRouteTestCase):
     def test_leaderboard_anonymous(self):
         app.dependency_overrides[get_optional_user_from_token] = lambda: None
         with patch(
-            "app.api.routes.trades.fetch_leaderboard",
+            "app.api.routes.trading.trades.fetch_leaderboard",
             AsyncMock(return_value=[self.ENTRY]),
         ):
             resp = self.client.get("/api/trades/leaderboard?limit=25&period=24h")
@@ -637,7 +637,7 @@ class LeaderboardTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         with patch(
-            "app.api.routes.trades.fetch_leaderboard",
+            "app.api.routes.trading.trades.fetch_leaderboard",
             AsyncMock(return_value=[self.ENTRY]),
         ):
             resp = self.client.get("/api/trades/leaderboard")
@@ -650,7 +650,7 @@ class LeaderboardTests(_TradesRouteTestCase):
     def test_leaderboard_empty(self):
         app.dependency_overrides[get_optional_user_from_token] = lambda: None
         with patch(
-            "app.api.routes.trades.fetch_leaderboard",
+            "app.api.routes.trading.trades.fetch_leaderboard",
             AsyncMock(return_value=[]),
         ):
             resp = self.client.get("/api/trades/leaderboard")
@@ -666,7 +666,7 @@ class LeaderboardTests(_TradesRouteTestCase):
 class TraderProfileTests(_TradesRouteTestCase):
     def test_trader_profile_not_found(self):
         with patch(
-            "app.api.routes.trades.fetch_trader_profile",
+            "app.api.routes.trading.trades.fetch_trader_profile",
             AsyncMock(return_value=None),
         ):
             resp = self.client.get(f"/api/trades/trader/{TRADER}")
@@ -692,8 +692,14 @@ class TraderProfileTests(_TradesRouteTestCase):
             }
         }
         with (
-            patch("app.api.routes.trades.fetch_trader_profile", AsyncMock(return_value=profile)),
-            patch("app.api.routes.trades.fetch_trader_trades", AsyncMock(return_value=trade_data)),
+            patch(
+                "app.api.routes.trading.trades.fetch_trader_profile",
+                AsyncMock(return_value=profile),
+            ),
+            patch(
+                "app.api.routes.trading.trades.fetch_trader_trades",
+                AsyncMock(return_value=trade_data),
+            ),
         ):
             resp = self.client.get(f"/api/trades/trader/{TRADER}")
 
@@ -710,8 +716,14 @@ class TraderProfileTests(_TradesRouteTestCase):
         profile = {"display_name": "T", "markets_traded": 4, "win_rate": 0.4}
         trade_data = {"stats": {"win_rate": 0.0, "unique_markets": 2, "total_trades": 5}}
         with (
-            patch("app.api.routes.trades.fetch_trader_profile", AsyncMock(return_value=profile)),
-            patch("app.api.routes.trades.fetch_trader_trades", AsyncMock(return_value=trade_data)),
+            patch(
+                "app.api.routes.trading.trades.fetch_trader_profile",
+                AsyncMock(return_value=profile),
+            ),
+            patch(
+                "app.api.routes.trading.trades.fetch_trader_trades",
+                AsyncMock(return_value=trade_data),
+            ),
         ):
             resp = self.client.get(f"/api/trades/trader/{TRADER}")
 
@@ -725,8 +737,14 @@ class TraderProfileTests(_TradesRouteTestCase):
         profile = {"display_name": "T", "markets_traded": 0, "win_rate": None}
         trade_data = {"stats": {"win_rate": None, "unique_markets": 0, "total_trades": 0}}
         with (
-            patch("app.api.routes.trades.fetch_trader_profile", AsyncMock(return_value=profile)),
-            patch("app.api.routes.trades.fetch_trader_trades", AsyncMock(return_value=trade_data)),
+            patch(
+                "app.api.routes.trading.trades.fetch_trader_profile",
+                AsyncMock(return_value=profile),
+            ),
+            patch(
+                "app.api.routes.trading.trades.fetch_trader_trades",
+                AsyncMock(return_value=trade_data),
+            ),
         ):
             resp = self.client.get(f"/api/trades/trader/{TRADER}")
 
@@ -768,8 +786,8 @@ class FollowTests(_TradesRouteTestCase):
         add_watched = MagicMock()
         seed = AsyncMock()
         with (
-            patch("app.services.trade_monitor.add_watched_wallet", add_watched),
-            patch("app.services.trade_monitor.seed_wallet_cursor", seed),
+            patch("app.services.trading.trade_monitor.add_watched_wallet", add_watched),
+            patch("app.services.trading.trade_monitor.seed_wallet_cursor", seed),
         ):
             resp = self.client.post(f"/api/trades/follow/{TRADER}")
 
@@ -800,8 +818,8 @@ class FollowTests(_TradesRouteTestCase):
             "copy_wallet_fixed_amount": 5.0,
         }
         with (
-            patch("app.services.trade_monitor.add_watched_wallet", MagicMock()),
-            patch("app.services.trade_monitor.seed_wallet_cursor", AsyncMock()),
+            patch("app.services.trading.trade_monitor.add_watched_wallet", MagicMock()),
+            patch("app.services.trading.trade_monitor.seed_wallet_cursor", AsyncMock()),
         ):
             resp = self.client.post(f"/api/trades/follow/{TRADER}", json=body)
 
@@ -823,8 +841,8 @@ class FollowTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         with (
-            patch("app.services.trade_monitor.add_watched_wallet", MagicMock()),
-            patch("app.services.trade_monitor.seed_wallet_cursor", AsyncMock()),
+            patch("app.services.trading.trade_monitor.add_watched_wallet", MagicMock()),
+            patch("app.services.trading.trade_monitor.seed_wallet_cursor", AsyncMock()),
         ):
             resp = self.client.post(
                 f"/api/trades/follow/{TRADER}",
@@ -841,8 +859,8 @@ class FollowTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         with (
-            patch("app.services.trade_monitor.add_watched_wallet", MagicMock()),
-            patch("app.services.trade_monitor.seed_wallet_cursor", AsyncMock()),
+            patch("app.services.trading.trade_monitor.add_watched_wallet", MagicMock()),
+            patch("app.services.trading.trade_monitor.seed_wallet_cursor", AsyncMock()),
         ):
             resp = self.client.post(
                 f"/api/trades/follow/{TRADER}",
@@ -859,10 +877,12 @@ class FollowTests(_TradesRouteTestCase):
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         with (
             patch(
-                "app.services.trade_monitor.add_watched_wallet", side_effect=RuntimeError("boom")
+                "app.services.trading.trade_monitor.add_watched_wallet",
+                side_effect=RuntimeError("boom"),
             ),
             patch(
-                "app.services.trade_monitor.seed_wallet_cursor", side_effect=RuntimeError("boom")
+                "app.services.trading.trade_monitor.seed_wallet_cursor",
+                side_effect=RuntimeError("boom"),
             ),
         ):
             resp = self.client.post(f"/api/trades/follow/{TRADER}")
@@ -879,7 +899,7 @@ class UnfollowTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         remove_watched = MagicMock()
-        with patch("app.services.trade_monitor.remove_watched_wallet", remove_watched):
+        with patch("app.services.trading.trade_monitor.remove_watched_wallet", remove_watched):
             resp = self.client.delete(f"/api/trades/follow/{TRADER}")
 
         self.assertEqual(resp.status_code, 200)
@@ -898,7 +918,7 @@ class UnfollowTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         remove_watched = MagicMock()
-        with patch("app.services.trade_monitor.remove_watched_wallet", remove_watched):
+        with patch("app.services.trading.trade_monitor.remove_watched_wallet", remove_watched):
             resp = self.client.delete(f"/api/trades/follow/{TRADER}")
 
         self.assertEqual(resp.status_code, 200)
@@ -921,7 +941,8 @@ class UnfollowTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         with patch(
-            "app.services.trade_monitor.remove_watched_wallet", side_effect=RuntimeError("boom")
+            "app.services.trading.trade_monitor.remove_watched_wallet",
+            side_effect=RuntimeError("boom"),
         ):
             resp = self.client.delete(f"/api/trades/follow/{TRADER}")
 
@@ -981,7 +1002,7 @@ class NotificationFollowTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         add_watched = MagicMock()
-        with patch("app.services.trade_monitor.add_watched_wallet", add_watched):
+        with patch("app.services.trading.trade_monitor.add_watched_wallet", add_watched):
             resp = self.client.post(f"/api/trades/notification-follow/{TRADER}")
 
         self.assertEqual(resp.status_code, 200)
@@ -997,7 +1018,7 @@ class NotificationFollowTests(_TradesRouteTestCase):
         session.register(NotificationFollowedTrader, first=None)
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
-        with patch("app.services.trade_monitor.add_watched_wallet", MagicMock()):
+        with patch("app.services.trading.trade_monitor.add_watched_wallet", MagicMock()):
             resp = self.client.post(
                 f"/api/trades/notification-follow/{TRADER}",
                 json={"feed_enabled": False, "email_enabled": True},
@@ -1013,7 +1034,7 @@ class NotificationFollowTests(_TradesRouteTestCase):
         session.register(NotificationFollowedTrader, first=None)
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
-        with patch("app.services.trade_monitor.add_watched_wallet", MagicMock()):
+        with patch("app.services.trading.trade_monitor.add_watched_wallet", MagicMock()):
             resp = self.client.post(
                 f"/api/trades/notification-follow/{TRADER}",
                 json={"feed_enabled": False, "email_enabled": False},
@@ -1029,7 +1050,7 @@ class NotificationFollowTests(_TradesRouteTestCase):
         session.register(NotificationFollowedTrader, first=record)
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
-        with patch("app.services.trade_monitor.add_watched_wallet", MagicMock()):
+        with patch("app.services.trading.trade_monitor.add_watched_wallet", MagicMock()):
             resp = self.client.post(
                 f"/api/trades/notification-follow/{TRADER}",
                 json={"feed_enabled": True, "email_enabled": True},
@@ -1047,7 +1068,7 @@ class NotificationFollowTests(_TradesRouteTestCase):
         session.register(NotificationFollowedTrader, first=record)
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
-        with patch("app.services.trade_monitor.add_watched_wallet", MagicMock()):
+        with patch("app.services.trading.trade_monitor.add_watched_wallet", MagicMock()):
             resp = self.client.post(
                 f"/api/trades/notification-follow/{TRADER}",
                 json={"feed_enabled": False, "email_enabled": False},
@@ -1063,7 +1084,7 @@ class NotificationFollowTests(_TradesRouteTestCase):
         session.register(NotificationFollowedTrader, first=record)
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
-        with patch("app.services.trade_monitor.add_watched_wallet", MagicMock()):
+        with patch("app.services.trading.trade_monitor.add_watched_wallet", MagicMock()):
             resp = self.client.post(
                 f"/api/trades/notification-follow/{TRADER}",
                 json={"feed_enabled": None, "email_enabled": None},
@@ -1080,7 +1101,8 @@ class NotificationFollowTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         with patch(
-            "app.services.trade_monitor.add_watched_wallet", side_effect=RuntimeError("boom")
+            "app.services.trading.trade_monitor.add_watched_wallet",
+            side_effect=RuntimeError("boom"),
         ):
             resp = self.client.post(f"/api/trades/notification-follow/{TRADER}")
 
@@ -1096,7 +1118,7 @@ class NotificationUnfollowTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         remove_watched = MagicMock()
-        with patch("app.services.trade_monitor.remove_watched_wallet", remove_watched):
+        with patch("app.services.trading.trade_monitor.remove_watched_wallet", remove_watched):
             resp = self.client.delete(f"/api/trades/notification-follow/{TRADER}")
 
         self.assertEqual(resp.status_code, 200)
@@ -1120,7 +1142,7 @@ class NotificationUnfollowTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         remove_watched = MagicMock()
-        with patch("app.services.trade_monitor.remove_watched_wallet", remove_watched):
+        with patch("app.services.trading.trade_monitor.remove_watched_wallet", remove_watched):
             resp = self.client.delete(f"/api/trades/notification-follow/{TRADER}")
 
         self.assertEqual(resp.status_code, 200)
@@ -1134,7 +1156,8 @@ class NotificationUnfollowTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         with patch(
-            "app.services.trade_monitor.remove_watched_wallet", side_effect=RuntimeError("boom")
+            "app.services.trading.trade_monitor.remove_watched_wallet",
+            side_effect=RuntimeError("boom"),
         ):
             resp = self.client.delete(f"/api/trades/notification-follow/{TRADER}")
 
@@ -1282,7 +1305,7 @@ class CopyTradesTests(_TradesRouteTestCase):
             }
         ]
         with patch(
-            "app.api.routes.trades.get_copy_trade_history",
+            "app.api.routes.trading.trades.get_copy_trade_history",
             AsyncMock(return_value=trades),
         ):
             resp = self.client.get("/api/trades/copy-trades?limit=5")
@@ -1298,7 +1321,7 @@ class CopyTradesTests(_TradesRouteTestCase):
 
     def test_copy_trades_minimal_row(self):
         with patch(
-            "app.api.routes.trades.get_copy_trade_history",
+            "app.api.routes.trading.trades.get_copy_trade_history",
             AsyncMock(return_value=[{"id": 1}]),
         ):
             resp = self.client.get("/api/trades/copy-trades")
@@ -1318,7 +1341,7 @@ class CopyTradesTests(_TradesRouteTestCase):
             {"id": 2, "calculation_details": "[1, 2]"},
         ]
         with patch(
-            "app.api.routes.trades.get_copy_trade_history",
+            "app.api.routes.trading.trades.get_copy_trade_history",
             AsyncMock(return_value=trades),
         ):
             resp = self.client.get("/api/trades/copy-trades")
@@ -1342,7 +1365,7 @@ class CopyEvaluationTests(_TradesRouteTestCase):
             }
         ]
         with patch(
-            "app.api.routes.trades.get_copy_trade_evaluation",
+            "app.api.routes.trading.trades.get_copy_trade_evaluation",
             AsyncMock(return_value=rows),
         ):
             resp = self.client.get(f"/api/trades/copy-evaluation/{TRADER}")
@@ -1359,7 +1382,7 @@ class CopyEvaluationTests(_TradesRouteTestCase):
 class CopyPnlTests(_TradesRouteTestCase):
     def test_copy_trade_pnl(self):
         with patch(
-            "app.api.routes.trades.get_daily_copy_pnl",
+            "app.api.routes.trading.trades.get_daily_copy_pnl",
             AsyncMock(return_value=123.45),
         ):
             resp = self.client.get("/api/trades/copy-trades/pnl")
@@ -1675,7 +1698,7 @@ class EmergencyStopTests(_TradesRouteTestCase):
         session.register(User, first=SimpleNamespace(wallet_address=WALLET))
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
-        with patch("app.api.routes.trades.load_wallet_credentials", return_value=None):
+        with patch("app.api.routes.trading.trades.load_wallet_credentials", return_value=None):
             resp = self.client.post("/api/trades/emergency-stop")
 
         self.assertEqual(resp.status_code, 200)
@@ -1690,7 +1713,7 @@ class EmergencyStopTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         with patch(
-            "app.api.routes.trades.load_wallet_credentials",
+            "app.api.routes.trading.trades.load_wallet_credentials",
             side_effect=CredentialStoreError("down"),
         ):
             resp = self.client.post("/api/trades/emergency-stop")
@@ -1710,10 +1733,10 @@ class EmergencyStopTests(_TradesRouteTestCase):
         service.get_positions = AsyncMock(side_effect=RuntimeError("boom"))
         with (
             patch(
-                "app.api.routes.trades.load_wallet_credentials",
+                "app.api.routes.trading.trades.load_wallet_credentials",
                 return_value={"private_key": PRIVATE_KEY, "clob_creds": CLOB_CREDS},
             ),
-            patch("app.api.routes.trades.get_polymarket_service", return_value=service),
+            patch("app.api.routes.trading.trades.get_polymarket_service", return_value=service),
         ):
             resp = self.client.post("/api/trades/emergency-stop")
 
@@ -1748,11 +1771,11 @@ class EmergencyStopTests(_TradesRouteTestCase):
         )
         with (
             patch(
-                "app.api.routes.trades.load_wallet_credentials",
+                "app.api.routes.trading.trades.load_wallet_credentials",
                 return_value={"private_key": PRIVATE_KEY, "clob_creds": CLOB_CREDS},
             ),
-            patch("app.api.routes.trades.get_polymarket_service", return_value=service),
-            patch("app.api.routes.trades._place_order_on_polymarket", place),
+            patch("app.api.routes.trading.trades.get_polymarket_service", return_value=service),
+            patch("app.api.routes.trading.trades._place_order_on_polymarket", place),
         ):
             resp = self.client.post("/api/trades/emergency-stop")
 
@@ -1856,7 +1879,7 @@ class TraderQualityTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         with patch(
-            "app.services.trader_quality_service.get_trader_quality",
+            "app.services.analytics.trader_quality_service.get_trader_quality",
             return_value=scores,
         ):
             resp = self.client.get(f"/api/trades/trader/{TRADER.upper()}/quality")
@@ -1872,7 +1895,7 @@ class TraderQualityTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         with patch(
-            "app.services.trader_quality_service.get_trader_quality",
+            "app.services.analytics.trader_quality_service.get_trader_quality",
             return_value=None,
         ):
             resp = self.client.get(f"/api/trades/trader/{TRADER}/quality")
@@ -1886,7 +1909,7 @@ class RescoreTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         with patch(
-            "app.services.trader_quality_service.score_all_traders",
+            "app.services.analytics.trader_quality_service.score_all_traders",
             return_value=7,
         ):
             resp = self.client.post("/api/trades/traders/rescore")
@@ -1922,7 +1945,7 @@ class ArbitrageTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         with patch(
-            "app.services.arbitrage_service.get_recent_opportunities",
+            "app.services.analytics.arbitrage_service.get_recent_opportunities",
             return_value=opportunities,
         ):
             resp = self.client.get("/api/trades/arbitrage/opportunities")
@@ -1944,7 +1967,7 @@ class ArbitrageTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         with patch(
-            "app.services.arbitrage_service.scan_for_arbitrage",
+            "app.services.analytics.arbitrage_service.scan_for_arbitrage",
             AsyncMock(return_value=opportunities),
         ):
             resp = self.client.post("/api/trades/arbitrage/scan")
@@ -1972,7 +1995,7 @@ class AnalyticsTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         with patch(
-            "app.services.execution_analytics.get_execution_summary",
+            "app.services.analytics.execution_analytics.get_execution_summary",
             return_value=summary,
         ):
             resp = self.client.get("/api/trades/analytics/summary?window_days=7")
@@ -2002,7 +2025,7 @@ class AnalyticsTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         with patch(
-            "app.services.execution_analytics.get_edge_scores",
+            "app.services.analytics.execution_analytics.get_edge_scores",
             return_value=rows,
         ):
             resp = self.client.get("/api/trades/analytics/edge-score")
@@ -2041,7 +2064,7 @@ class AnalyticsTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         with patch(
-            "app.services.execution_analytics.get_trade_details",
+            "app.services.analytics.execution_analytics.get_trade_details",
             return_value=trades,
         ):
             resp = self.client.get("/api/trades/analytics/trades?strategy=copy&limit=10")
@@ -2099,7 +2122,7 @@ class SizeSuggestionTests(_TradesRouteTestCase):
                 "resolve_edge_probability",
                 MagicMock(return_value=(0.6, "ai_assessment")),
             ),
-            patch("app.api.routes.trades.get_polymarket_service", return_value=service),
+            patch("app.api.routes.trading.trades.get_polymarket_service", return_value=service),
         ):
             resp = self._suggest(session, market_id="mkt", side="BUY")
 
@@ -2125,13 +2148,13 @@ class SizeSuggestionTests(_TradesRouteTestCase):
             ),
             patch.object(kelly_service, "compute_bankroll", AsyncMock(return_value=1000.0)),
             patch.object(kelly_service, "size", MagicMock(return_value=50.0)),
-            patch("app.api.routes.trades.get_polymarket_service", return_value=service),
+            patch("app.api.routes.trading.trades.get_polymarket_service", return_value=service),
             patch(
-                "app.api.routes.trades.load_wallet_credentials",
+                "app.api.routes.trading.trades.load_wallet_credentials",
                 return_value={"private_key": PRIVATE_KEY, "clob_creds": CLOB_CREDS},
             ),
             patch(
-                "app.api.routes.trades.apply_global_safety_caps",
+                "app.api.routes.trading.trades.apply_global_safety_caps",
                 MagicMock(return_value=(50.0, None)),
             ),
         ):
@@ -2174,10 +2197,10 @@ class SizeSuggestionTests(_TradesRouteTestCase):
             ),
             patch.object(kelly_service, "compute_bankroll", AsyncMock(return_value=0.0)),
             patch.object(kelly_service, "size", MagicMock(return_value=0.0)),
-            patch("app.api.routes.trades.get_polymarket_service", return_value=MagicMock()),
-            patch("app.api.routes.trades.load_wallet_credentials", return_value=None),
+            patch("app.api.routes.trading.trades.get_polymarket_service", return_value=MagicMock()),
+            patch("app.api.routes.trading.trades.load_wallet_credentials", return_value=None),
             patch(
-                "app.api.routes.trades.apply_global_safety_caps",
+                "app.api.routes.trading.trades.apply_global_safety_caps",
                 MagicMock(return_value=(0.0, None)),
             ),
         ):
@@ -2201,10 +2224,10 @@ class SizeSuggestionTests(_TradesRouteTestCase):
             ),
             patch.object(kelly_service, "compute_bankroll", AsyncMock(return_value=1000.0)),
             patch.object(kelly_service, "size", MagicMock(return_value=100.0)),
-            patch("app.api.routes.trades.get_polymarket_service", return_value=MagicMock()),
-            patch("app.api.routes.trades.load_wallet_credentials", return_value=None),
+            patch("app.api.routes.trading.trades.get_polymarket_service", return_value=MagicMock()),
+            patch("app.api.routes.trading.trades.load_wallet_credentials", return_value=None),
             patch(
-                "app.api.routes.trades.apply_global_safety_caps",
+                "app.api.routes.trading.trades.apply_global_safety_caps",
                 MagicMock(return_value=(100.0, None)),
             ),
         ):
@@ -2228,10 +2251,10 @@ class SizeSuggestionTests(_TradesRouteTestCase):
             ),
             patch.object(kelly_service, "compute_bankroll", AsyncMock(return_value=1000.0)),
             patch.object(kelly_service, "size", MagicMock(return_value=0.5)),
-            patch("app.api.routes.trades.get_polymarket_service", return_value=MagicMock()),
-            patch("app.api.routes.trades.load_wallet_credentials", return_value=None),
+            patch("app.api.routes.trading.trades.get_polymarket_service", return_value=MagicMock()),
+            patch("app.api.routes.trading.trades.load_wallet_credentials", return_value=None),
             patch(
-                "app.api.routes.trades.apply_global_safety_caps",
+                "app.api.routes.trading.trades.apply_global_safety_caps",
                 MagicMock(return_value=(0.5, None)),
             ),
         ):
@@ -2255,10 +2278,10 @@ class SizeSuggestionTests(_TradesRouteTestCase):
             ),
             patch.object(kelly_service, "compute_bankroll", AsyncMock(return_value=1000.0)),
             patch.object(kelly_service, "size", MagicMock(return_value=50.0)),
-            patch("app.api.routes.trades.get_polymarket_service", return_value=MagicMock()),
-            patch("app.api.routes.trades.load_wallet_credentials", return_value=None),
+            patch("app.api.routes.trading.trades.get_polymarket_service", return_value=MagicMock()),
+            patch("app.api.routes.trading.trades.load_wallet_credentials", return_value=None),
             patch(
-                "app.api.routes.trades.apply_global_safety_caps",
+                "app.api.routes.trading.trades.apply_global_safety_caps",
                 MagicMock(return_value=(25.0, None)),
             ),
         ):
@@ -2284,10 +2307,10 @@ class SizeSuggestionTests(_TradesRouteTestCase):
             ),
             patch.object(kelly_service, "compute_bankroll", AsyncMock(return_value=1000.0)),
             patch.object(kelly_service, "size", MagicMock(return_value=50.0)),
-            patch("app.api.routes.trades.get_polymarket_service", return_value=MagicMock()),
-            patch("app.api.routes.trades.load_wallet_credentials", return_value=None),
+            patch("app.api.routes.trading.trades.get_polymarket_service", return_value=MagicMock()),
+            patch("app.api.routes.trading.trades.load_wallet_credentials", return_value=None),
             patch(
-                "app.api.routes.trades.apply_global_safety_caps",
+                "app.api.routes.trading.trades.apply_global_safety_caps",
                 MagicMock(return_value=(0.0, "trading_halted")),
             ),
         ):
@@ -2315,13 +2338,13 @@ class SizeSuggestionTests(_TradesRouteTestCase):
             ),
             patch.object(kelly_service, "compute_bankroll", compute_bankroll),
             patch.object(kelly_service, "size", MagicMock(return_value=50.0)),
-            patch("app.api.routes.trades.get_polymarket_service", return_value=MagicMock()),
+            patch("app.api.routes.trading.trades.get_polymarket_service", return_value=MagicMock()),
             patch(
-                "app.api.routes.trades.load_wallet_credentials",
+                "app.api.routes.trading.trades.load_wallet_credentials",
                 side_effect=CredentialStoreError("down"),
             ),
             patch(
-                "app.api.routes.trades.apply_global_safety_caps",
+                "app.api.routes.trading.trades.apply_global_safety_caps",
                 MagicMock(return_value=(50.0, None)),
             ),
         ):
@@ -2382,7 +2405,7 @@ class CopyAttributionTests(_TradesRouteTestCase):
 
     def test_attribution_defaults_to_30_days(self):
         with patch(
-            "app.services.copy_trade_service.get_trader_copy_stats",
+            "app.services.trading.copy_trade_service.get_trader_copy_stats",
             return_value=self._attribution(),
         ) as stats:
             resp = self._get()
@@ -2395,7 +2418,7 @@ class CopyAttributionTests(_TradesRouteTestCase):
     def test_attribution_window_days_forwarded(self):
         empty_totals = {"realized_pnl": 0.0, "trade_count": 0, "win_rate": None}
         with patch(
-            "app.services.copy_trade_service.get_trader_copy_stats",
+            "app.services.trading.copy_trade_service.get_trader_copy_stats",
             return_value=self._attribution(window_days=90, traders=[], totals=empty_totals),
         ):
             resp = self._get("?window_days=90")
@@ -2417,7 +2440,7 @@ class CopyAttributionTests(_TradesRouteTestCase):
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         with patch(
-            "app.services.copy_trade_service.get_trader_copy_stats",
+            "app.services.trading.copy_trade_service.get_trader_copy_stats",
             return_value=self._attribution(),
         ):
             resp = self.client.get("/api/trades/copy-trades/pnl/by-trader")
@@ -2426,7 +2449,7 @@ class CopyAttributionTests(_TradesRouteTestCase):
 
     def test_daily_copy_pnl_response_is_unchanged(self):
         with patch(
-            "app.api.routes.trades.get_daily_copy_pnl",
+            "app.api.routes.trading.trades.get_daily_copy_pnl",
             AsyncMock(return_value=-12.5),
         ):
             resp = self.client.get("/api/trades/copy-trades/pnl")

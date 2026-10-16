@@ -10,8 +10,8 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from app.api.routes.auth import get_current_user_from_token
-from app.api.routes.credentials import _trading_key_rate_limit
+from app.api.routes.auth.auth import get_current_user_from_token
+from app.api.routes.auth.credentials import _trading_key_rate_limit
 from app.main import app
 from app.security.credential_store import CredentialStoreError
 
@@ -50,15 +50,15 @@ class TradingKeyRouteTests(unittest.TestCase):
         self.store = _FakeCredentialStore()
         self.patchers = [
             patch(
-                "app.api.routes.credentials.store_wallet_credentials",
+                "app.api.routes.auth.credentials.store_wallet_credentials",
                 self.store.store_wallet_credentials,
             ),
             patch(
-                "app.api.routes.credentials.load_wallet_credentials",
+                "app.api.routes.auth.credentials.load_wallet_credentials",
                 self.store.load_wallet_credentials,
             ),
             patch(
-                "app.api.routes.credentials.delete_wallet_credentials",
+                "app.api.routes.auth.credentials.delete_wallet_credentials",
                 self.store.delete_wallet_credentials,
             ),
         ]
@@ -156,7 +156,7 @@ class TradingKeyRouteTests(unittest.TestCase):
     def test_store_returns_503_when_encryption_unavailable(self):
         self._authenticate()
         with patch(
-            "app.api.routes.credentials.store_wallet_credentials",
+            "app.api.routes.auth.credentials.store_wallet_credentials",
             side_effect=CredentialStoreError("no keys"),
         ):
             response = self.client.post(
@@ -169,7 +169,7 @@ class TradingKeyRouteTests(unittest.TestCase):
     def test_store_returns_400_on_invalid_key_format(self):
         self._authenticate()
         with patch(
-            "app.api.routes.credentials.store_wallet_credentials",
+            "app.api.routes.auth.credentials.store_wallet_credentials",
             side_effect=ValueError("bad key"),
         ):
             response = self.client.post(
@@ -183,7 +183,7 @@ class TradingKeyRouteTests(unittest.TestCase):
         # The handler re-checks the ^0x[a-fA-F0-9]{64}$ format before
         # the key is encrypted and stored.
         self._authenticate()
-        with patch("app.api.routes.credentials.store_wallet_credentials") as store_mock:
+        with patch("app.api.routes.auth.credentials.store_wallet_credentials") as store_mock:
             response = self.client.post(
                 "/api/auth/trading-key",
                 json={"private_key": "0x" + "zz" * 32},
@@ -194,7 +194,7 @@ class TradingKeyRouteTests(unittest.TestCase):
 
     def test_store_rejects_wrong_length_key(self):
         self._authenticate()
-        with patch("app.api.routes.credentials.store_wallet_credentials") as store_mock:
+        with patch("app.api.routes.auth.credentials.store_wallet_credentials") as store_mock:
             response = self.client.post(
                 "/api/auth/trading-key",
                 json={"private_key": "0x" + "11" * 31},
@@ -205,7 +205,7 @@ class TradingKeyRouteTests(unittest.TestCase):
     def test_status_returns_503_when_encryption_unavailable(self):
         self._authenticate()
         with patch(
-            "app.api.routes.credentials.load_wallet_credentials",
+            "app.api.routes.auth.credentials.load_wallet_credentials",
             side_effect=CredentialStoreError("no keys"),
         ):
             response = self.client.get("/api/auth/trading-key")

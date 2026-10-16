@@ -1,4 +1,4 @@
-"""Coverage tests for ``app.services.copy_trade_service``.
+"""Coverage tests for ``app.services.trading.copy_trade_service``.
 
 Every external boundary is replaced with a double:
 
@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import app.services.copy_trade_service as copy_trade_service
+import app.services.trading.copy_trade_service as copy_trade_service
 from app.models.assessment import Assessment
 from app.models.followed_trader import FollowedTrader
 from app.models.trade_history import TradeHistory
@@ -353,11 +353,11 @@ class PlaceOrderTests(CopyTradeServiceTestCase):
             patch("py_clob_client.order_builder.constants.SELL", "SELL"),
             patch("py_clob_client.signer.Signer", signer),
             patch(
-                "app.services.copy_trade_service._get_poly_proxy_wallet_address",
+                "app.services.trading.copy_trade_service._get_poly_proxy_wallet_address",
                 proxy_lookup,
             ),
             patch(
-                "app.services.copy_trade_service.order_landed_on_clob",
+                "app.services.trading.copy_trade_service.order_landed_on_clob",
                 MagicMock(return_value=""),
             ),
         ]
@@ -429,7 +429,7 @@ class PlaceOrderTests(CopyTradeServiceTestCase):
             patch("py_clob_client.order_builder.constants.SELL", "SELL"),
             patch("py_clob_client.signer.Signer", MagicMock()),
             patch(
-                "app.services.copy_trade_service._get_poly_proxy_wallet_address",
+                "app.services.trading.copy_trade_service._get_poly_proxy_wallet_address",
                 MagicMock(return_value=None),
             ),
         ):
@@ -473,7 +473,7 @@ class PlaceOrderTests(CopyTradeServiceTestCase):
         client = _fake_exchange(post_response={"success": False, "errorMsg": "invalid tick size"})
         self._patch_exchange(client)
         with patch(
-            "app.services.copy_trade_service.order_landed_on_clob",
+            "app.services.trading.copy_trade_service.order_landed_on_clob",
             MagicMock(return_value="0xlanded"),
         ):
             result = copy_trade_service._place_order_on_polymarket(
@@ -487,7 +487,7 @@ class PlaceOrderTests(CopyTradeServiceTestCase):
         client = _fake_exchange(post_response={"success": False, "errorMsg": "invalid tick size"})
         self._patch_exchange(client)
         with patch(
-            "app.services.copy_trade_service.order_landed_on_clob",
+            "app.services.trading.copy_trade_service.order_landed_on_clob",
             MagicMock(return_value=None),
         ):
             result = copy_trade_service._place_order_on_polymarket(
@@ -571,11 +571,11 @@ class PlaceOrderTests(CopyTradeServiceTestCase):
             patch("py_clob_client.order_builder.constants.SELL", "SELL"),
             patch("py_clob_client.signer.Signer", signer),
             patch(
-                "app.services.copy_trade_service._get_poly_proxy_wallet_address",
+                "app.services.trading.copy_trade_service._get_poly_proxy_wallet_address",
                 proxy_lookup,
             ),
             patch(
-                "app.services.copy_trade_service.order_landed_on_clob",
+                "app.services.trading.copy_trade_service.order_landed_on_clob",
                 MagicMock(return_value=""),
             ),
         ):
@@ -610,7 +610,7 @@ class MultiPhaseTests(CopyTradeServiceTestCase):
             return results[len(calls) - 1]
 
         patcher = patch(
-            "app.services.copy_trade_service._place_order_on_polymarket",
+            "app.services.trading.copy_trade_service._place_order_on_polymarket",
             MagicMock(side_effect=side_effect),
         )
         patcher.start()
@@ -831,27 +831,27 @@ class CalculateTradeSizeTests(unittest.TestCase):
 class PlanCopyTradeSizeTests(CopyTradeServiceTestCase):
     def _patch_kelly(self, p_market=0.6, edge_source="assessment", bankroll=1000.0):
         kelly_patcher = patch(
-            "app.services.kelly_service.resolve_edge_probability",
+            "app.services.trading.kelly_service.resolve_edge_probability",
             MagicMock(return_value=(p_market, edge_source)),
         )
         bankroll_patcher = patch(
-            "app.services.kelly_service.compute_bankroll",
+            "app.services.trading.kelly_service.compute_bankroll",
             AsyncMock(return_value=bankroll),
         )
         params_patcher = patch(
-            "app.services.kelly_service.effective_trade_params",
+            "app.services.trading.kelly_service.effective_trade_params",
             MagicMock(return_value=(p_market or 0.0, 0.5)),
         )
         fraction_patcher = patch(
-            "app.services.kelly_service.kelly_fraction",
+            "app.services.trading.kelly_service.kelly_fraction",
             MagicMock(return_value=0.1),
         )
         size_patcher = patch(
-            "app.services.kelly_service.size",
+            "app.services.trading.kelly_service.size",
             MagicMock(return_value=42.0),
         )
         service_patcher = patch(
-            "app.services.copy_trade_service.get_polymarket_service",
+            "app.services.trading.copy_trade_service.get_polymarket_service",
             MagicMock(return_value=MagicMock()),
         )
         for patcher in (
@@ -991,7 +991,7 @@ class PlanCopyTradeSizeTests(CopyTradeServiceTestCase):
         service = MagicMock()
         service.get_wallet_balance = AsyncMock(side_effect=[trader_balance, main_balance])
         service_patcher = patch(
-            "app.services.copy_trade_service.get_polymarket_service",
+            "app.services.trading.copy_trade_service.get_polymarket_service",
             MagicMock(return_value=service),
         )
         service_patcher.start()
@@ -1291,7 +1291,7 @@ class ExecuteCopyTradeTests(CopyTradeServiceTestCase):
     def _patch_plan(self, plan=None, rejection=None):
         plan = plan or make_plan(rejection=rejection)
         patcher = patch(
-            "app.services.copy_trade_service._plan_copy_trade_size",
+            "app.services.trading.copy_trade_service._plan_copy_trade_size",
             AsyncMock(return_value=plan),
         )
         patcher.start()
@@ -1300,7 +1300,7 @@ class ExecuteCopyTradeTests(CopyTradeServiceTestCase):
 
     def _patch_caps(self, size=50.0, rejection=None):
         patcher = patch(
-            "app.services.copy_trade_service._apply_global_safety_caps",
+            "app.services.trading.copy_trade_service._apply_global_safety_caps",
             MagicMock(return_value=(size, rejection)),
         )
         patcher.start()
@@ -1308,7 +1308,7 @@ class ExecuteCopyTradeTests(CopyTradeServiceTestCase):
 
     def _patch_order(self, result):
         patcher = patch(
-            "app.services.copy_trade_service._place_order_on_polymarket",
+            "app.services.trading.copy_trade_service._place_order_on_polymarket",
             MagicMock(return_value=result),
         )
         patcher.start()
@@ -1317,7 +1317,7 @@ class ExecuteCopyTradeTests(CopyTradeServiceTestCase):
     def _patch_idempotency(self, prior=None):
         stored = []
         get_patcher = patch(
-            "app.services.copy_trade_service.get_idempotent_order_result",
+            "app.services.trading.copy_trade_service.get_idempotent_order_result",
             MagicMock(return_value=prior),
         )
         get_patcher.start()
@@ -1327,7 +1327,7 @@ class ExecuteCopyTradeTests(CopyTradeServiceTestCase):
             stored.append((user_id, key, result))
 
         store_patcher = patch(
-            "app.services.copy_trade_service.store_idempotent_order_result",
+            "app.services.trading.copy_trade_service.store_idempotent_order_result",
             MagicMock(side_effect=store),
         )
         store_patcher.start()
@@ -1341,7 +1341,7 @@ class ExecuteCopyTradeTests(CopyTradeServiceTestCase):
             return stored
 
         patcher = patch(
-            "app.services.copy_trade_service.load_wallet_credentials",
+            "app.services.trading.copy_trade_service.load_wallet_credentials",
             MagicMock(side_effect=load),
         )
         patcher.start()
@@ -1759,7 +1759,10 @@ class HistoryTests(CopyTradeServiceTestCase):
 
 class ExecuteAggregatedTradeTests(CopyTradeServiceTestCase):
     def _patch_session(self, db):
-        patcher = patch("app.services.copy_trade_service.SessionLocal", MagicMock(return_value=db))
+        patcher = patch(
+            "app.services.trading.copy_trade_service.SessionLocal",
+            MagicMock(return_value=db),
+        )
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -1777,7 +1780,7 @@ class ExecuteAggregatedTradeTests(CopyTradeServiceTestCase):
 
     def _patch_multi_phase(self, result):
         patcher = patch(
-            "app.services.copy_trade_service._place_order_multi_phase",
+            "app.services.trading.copy_trade_service._place_order_multi_phase",
             MagicMock(return_value=result),
         )
         patcher.start()

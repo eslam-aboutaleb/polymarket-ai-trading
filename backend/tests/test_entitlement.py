@@ -48,7 +48,7 @@ from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (register models on Base.metadata)
 from app.api.deps import get_db
-from app.api.routes import billing as billing_routes
+from app.api.routes.billing import billing as billing_routes
 from app.main import app as fastapi_app
 from app.models.account import Account, AccountKind
 from app.models.api_key import ApiKey
@@ -61,11 +61,11 @@ from app.models.subscription import Subscription
 from app.models.user import User
 from app.models.user_trade import UserTrade
 from app.security.auth import create_access_token
-from app.services.account_service import create_sub_account, resolve_account
-from app.services.api_key_service import SCOPE_READ, SCOPE_TRADE, create_api_key
 from app.services.billing import StripeBillingProvider, WebhookSignatureError
 from app.services.billing.stripe_provider import _WEBHOOK_TOLERANCE_SECONDS
-from app.services.entitlement_service import (
+from app.services.users.account_service import create_sub_account, resolve_account
+from app.services.users.api_key_service import SCOPE_READ, SCOPE_TRADE, create_api_key
+from app.services.users.entitlement_service import (
     ALL_CAPABILITIES,
     CAP_BACKTESTING,
     CAP_COPY_TRADING,
@@ -139,7 +139,7 @@ class EntitlementBaseTest(unittest.TestCase):
 
         # Enforcement is ON for every test here: the point of this module
         # is the gate, and the default-off behaviour is asserted separately.
-        patcher = patch("app.services.entitlement_service.get_settings")
+        patcher = patch("app.services.users.entitlement_service.get_settings")
         mocked = patcher.start()
         mocked.return_value.entitlements_enabled = True
         self.addCleanup(patcher.stop)
@@ -282,7 +282,7 @@ class RolloutGateTest(EntitlementBaseTest):
     """The default-off enforcement switch (master plan I12)."""
 
     def test_enforcement_disabled_means_no_gate(self):
-        with patch("app.services.entitlement_service.get_settings") as mocked:
+        with patch("app.services.users.entitlement_service.get_settings") as mocked:
             mocked.return_value.entitlements_enabled = False
             account = self._account()
             service = EntitlementService(self.db)
@@ -298,7 +298,7 @@ class GatedRouteTest(EntitlementBaseTest):
     """Capability matrix enforcement on every gated route."""
 
     def _enable_accounts(self):
-        patcher = patch("app.api.routes.accounts.get_settings")
+        patcher = patch("app.api.routes.auth.accounts.get_settings")
         mocked = patcher.start()
         mocked.return_value.accounts_enabled = True
         self.addCleanup(patcher.stop)
@@ -459,7 +459,7 @@ class GatedRouteTest(EntitlementBaseTest):
             scopes=[SCOPE_READ, SCOPE_TRADE],
             expires_in_days=None,
         )
-        from app.api.routes import external as external_routes
+        from app.api.routes.platform import external as external_routes
 
         with (
             patch.object(external_routes, "_load_credentials") as load,
@@ -503,7 +503,7 @@ class DowngradeSafetyTest(EntitlementBaseTest):
                 price=0.5,
                 status="executed",
                 strategy_source="manual",
-            )
+            ),
         )
         self.db.add(
             StopLossOrder(
@@ -513,7 +513,7 @@ class DowngradeSafetyTest(EntitlementBaseTest):
                 token_id=TOKEN_ID,
                 size=42.0,
                 stop_price=0.4,
-            )
+            ),
         )
         self.db.add(FollowedTrader(user_id=1, trader_wallet="0xtrader", is_active=True))
         self.db.add(
@@ -523,7 +523,7 @@ class DowngradeSafetyTest(EntitlementBaseTest):
                 token_id_yes="0xyes",
                 token_id_no="0xno",
                 enabled=True,
-            )
+            ),
         )
         self.db.add(LatencyArbConfig(user_id=1, enabled=True))
         _, raw_key = create_api_key(
@@ -634,7 +634,7 @@ class QuotaTest(EntitlementBaseTest):
         return account
 
     def _cache(self):
-        from app.services.entitlement_service import quota_cache
+        from app.services.users.entitlement_service import quota_cache
 
         return quota_cache
 
@@ -844,7 +844,7 @@ class WebhookApplicationTest(EntitlementBaseTest):
 
     def _patch_provider(self):
         provider = StripeBillingProvider(secret_key="sk_test_x", webhook_secret=WEBHOOK_SECRET)
-        patcher = patch("app.api.routes.billing._provider", return_value=provider)
+        patcher = patch("app.api.routes.billing.billing._provider", return_value=provider)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -950,7 +950,7 @@ class WebhookApplicationTest(EntitlementBaseTest):
                 price=0.5,
                 status="executed",
                 strategy_source="manual",
-            )
+            ),
         )
         self.db.commit()
 
@@ -1062,7 +1062,7 @@ class BillingRoutesTest(EntitlementBaseTest):
     def test_checkout_creates_a_customer_and_session(self):
         account = self._account()
         provider = StripeBillingProvider(secret_key="sk_test_x", webhook_secret=WEBHOOK_SECRET)
-        patcher = patch("app.api.routes.billing._provider", return_value=provider)
+        patcher = patch("app.api.routes.billing.billing._provider", return_value=provider)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -1099,7 +1099,7 @@ class BillingRoutesTest(EntitlementBaseTest):
     def test_checkout_without_billing_configured_is_503(self):
         self._account()
         provider = StripeBillingProvider(secret_key="", webhook_secret="")
-        patcher = patch("app.api.routes.billing._provider", return_value=provider)
+        patcher = patch("app.api.routes.billing.billing._provider", return_value=provider)
         patcher.start()
         self.addCleanup(patcher.stop)
         response = self.client.post(

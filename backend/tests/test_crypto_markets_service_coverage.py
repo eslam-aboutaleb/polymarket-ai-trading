@@ -1,4 +1,4 @@
-"""Coverage tests for :mod:`app.services.crypto_markets_service`.
+"""Coverage tests for :mod:`app.services.market_data.crypto_markets_service`.
 
 The discovery service is a pure parser (``parse_crypto_markets``) plus a
 Gamma-API fetcher, a runtime mapping with staleness tracking and a
@@ -18,8 +18,8 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import app.services.crypto_markets_service as crypto_markets_service
-from app.services.crypto_markets_service import (
+import app.services.market_data.crypto_markets_service as crypto_markets_service
+from app.services.market_data.crypto_markets_service import (
     CryptoMarket,
     current_window_start,
     parse_crypto_markets,

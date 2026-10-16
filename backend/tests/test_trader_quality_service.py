@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 from app.models.winner import Winner
-from app.services.trader_quality_service import (
+from app.services.analytics.trader_quality_service import (
     _activity_score,
     _consistency_score,
     _risk_adjusted_score,

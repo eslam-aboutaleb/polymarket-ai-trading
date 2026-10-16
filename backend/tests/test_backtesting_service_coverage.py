@@ -1,4 +1,4 @@
-"""Coverage tests for the backtesting service (``app.services.backtesting_service``).
+"""Coverage tests for the backtesting service (``app.services.analytics.backtesting_service``).
 
 All external I/O is mocked: the SQLAlchemy session factory, the
 Polymarket data HTTP API (httpx) and the indicator helpers.
@@ -25,8 +25,8 @@ import unittest
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import app.services.backtesting_service as backtesting_service
-from app.services.backtesting_service import (
+import app.services.analytics.backtesting_service as backtesting_service
+from app.services.analytics.backtesting_service import (
     _calculate_metrics,
     _parse_backtest_date,
     _validate_backtest_date_range,
@@ -174,7 +174,10 @@ class FetchHistoricalPricesTests(unittest.IsolatedAsyncioTestCase):
         response = _response(200, data)
         with (
             patch("httpx.AsyncClient", return_value=_httpx_client(response)),
-            patch("app.services.polymarket_service.POLYMARKET_DATA_API", "https://data.example"),
+            patch(
+                "app.services.market_data.polymarket_service.POLYMARKET_DATA_API",
+                "https://data.example",
+            ),
         ):
             prices = await backtesting_service._fetch_historical_prices(
                 "cond-1", "2024-01-01", "2024-01-02"
@@ -186,7 +189,10 @@ class FetchHistoricalPricesTests(unittest.IsolatedAsyncioTestCase):
         response = _response(200, {"history": history})
         with (
             patch("httpx.AsyncClient", return_value=_httpx_client(response)),
-            patch("app.services.polymarket_service.POLYMARKET_DATA_API", "https://data.example"),
+            patch(
+                "app.services.market_data.polymarket_service.POLYMARKET_DATA_API",
+                "https://data.example",
+            ),
         ):
             prices = await backtesting_service._fetch_historical_prices(
                 "cond-1", "2024-01-01", "2024-01-02"
@@ -197,7 +203,10 @@ class FetchHistoricalPricesTests(unittest.IsolatedAsyncioTestCase):
         response = _response(200, {"foo": "bar"})
         with (
             patch("httpx.AsyncClient", return_value=_httpx_client(response)),
-            patch("app.services.polymarket_service.POLYMARKET_DATA_API", "https://data.example"),
+            patch(
+                "app.services.market_data.polymarket_service.POLYMARKET_DATA_API",
+                "https://data.example",
+            ),
         ):
             prices = await backtesting_service._fetch_historical_prices(
                 "cond-1", "2024-01-01", "2024-01-02"
@@ -208,7 +217,10 @@ class FetchHistoricalPricesTests(unittest.IsolatedAsyncioTestCase):
         response = _response(500, [{"price": 1.0}])
         with (
             patch("httpx.AsyncClient", return_value=_httpx_client(response)),
-            patch("app.services.polymarket_service.POLYMARKET_DATA_API", "https://data.example"),
+            patch(
+                "app.services.market_data.polymarket_service.POLYMARKET_DATA_API",
+                "https://data.example",
+            ),
         ):
             prices = await backtesting_service._fetch_historical_prices(
                 "cond-1", "2024-01-01", "2024-01-02"
@@ -222,7 +234,10 @@ class FetchHistoricalPricesTests(unittest.IsolatedAsyncioTestCase):
         client.__aexit__ = AsyncMock(return_value=False)
         with (
             patch("httpx.AsyncClient", return_value=client),
-            patch("app.services.polymarket_service.POLYMARKET_DATA_API", "https://data.example"),
+            patch(
+                "app.services.market_data.polymarket_service.POLYMARKET_DATA_API",
+                "https://data.example",
+            ),
             self.assertLogs(backtesting_service.logger, level="WARNING"),
         ):
             prices = await backtesting_service._fetch_historical_prices(

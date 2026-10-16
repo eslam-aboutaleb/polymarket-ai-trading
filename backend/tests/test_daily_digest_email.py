@@ -10,8 +10,8 @@ delivery line. Same pattern as ``test_email_service_coverage.py``.
 import unittest
 from unittest.mock import patch
 
-from app.services import email_service
-from app.services.email_service import send_daily_digest_email
+from app.services.users import email_service
+from app.services.users.email_service import send_daily_digest_email
 
 
 class SendDailyDigestEmailTests(unittest.IsolatedAsyncioTestCase):

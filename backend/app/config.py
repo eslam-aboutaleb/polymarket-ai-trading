@@ -252,6 +252,11 @@ class Settings(BaseSettings):
     stripe_webhook_secret: str = ""
     stripe_price_pro: str = ""
     stripe_price_institutional: str = ""
+    # Which registered BillingProvider the billing routes use. The
+    # Stripe provider is the only built-in implementation today; adding a
+    # second provider means implementing the protocol and registering it
+    # in app.services.billing — no route change.
+    billing_provider: str = "stripe"
 
     # ── Venue adapters (plan 05 Phase A) ───────────────────────
     # Read-only, signal-only cross-venue market data. Off by default
@@ -259,6 +264,7 @@ class Settings(BaseSettings):
     # endpoint, once per refresh, behind a TTL cache, and never places
     # an order. Kalshi leads because it is CFTC-regulated with a public
     # API, so nothing here scrapes or circumvents a venue's terms.
+    venue_adapters: str = "kalshi,manifold,predictit"
     venue_kalshi_enabled: bool = False
     venue_manifold_enabled: bool = False
     venue_predictit_enabled: bool = False
@@ -268,6 +274,16 @@ class Settings(BaseSettings):
     # Empty (default) leaves those services on user-JWT auth only — the
     # MCP tool falls back to unauthenticated reads of the same rows.
     venue_api_token: str = ""
+
+    # ── Market-data provider endpoints ─────────────────────────
+    # Overridable endpoints for the external market-data providers. The
+    # defaults preserve the historical hard-coded values; overriding them
+    # (or pointing at a proxy) is a config change, not a code change.
+    polymarket_gamma_api: str = "https://gamma-api.polymarket.com"
+    polymarket_clob_api: str = "https://clob.polymarket.com"
+    polymarket_data_api: str = "https://data-api.polymarket.com"
+    polymarket_clob_ws_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/"
+    polygon_rpc_url: str = "https://polygon-bor-rpc.publicnode.com"
 
     # ── External API (plan 06 Phase B) ─────────────────────────
     # Dedicated HMAC secret for API-key digests. Follows the refresh-token
@@ -400,7 +416,7 @@ class Settings(BaseSettings):
     def cors_allowed_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
 
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
 
 
 @lru_cache

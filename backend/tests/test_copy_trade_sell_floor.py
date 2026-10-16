@@ -17,7 +17,7 @@ import contextlib
 import unittest
 from unittest.mock import MagicMock, patch
 
-import app.services.copy_trade_service as copy_trade_service
+import app.services.trading.copy_trade_service as copy_trade_service
 
 
 @contextlib.contextmanager
@@ -56,7 +56,7 @@ def _patched_exchange(client: MagicMock, proxy: str | None = "0xproxy"):
         patch("py_clob_client.order_builder.constants.SELL", "SELL"),
         patch("py_clob_client.signer.Signer", signer),
         patch(
-            "app.services.copy_trade_service._get_poly_proxy_wallet_address",
+            "app.services.trading.copy_trade_service._get_poly_proxy_wallet_address",
             proxy_lookup,
         ),
     ):

@@ -31,14 +31,14 @@ import app.models  # noqa: F401  (register models on Base.metadata)
 from app.models.app_event import AppEvent
 from app.models.base import Base
 from app.models.user import User
-from app.services.event_log import (
+from app.services.platform.event_log import (
     MAX_PAYLOAD_CHARS,
     append,
     append_non_blocking,
     get_event_log_metrics,
     get_events,
 )
-from app.services.trade_recorder import record_user_trade
+from app.services.trading.trade_recorder import record_user_trade
 from app.utils.time import utc_now
 
 WALLET = "0xevent-log-wallet"
@@ -61,11 +61,11 @@ class AppendOnlyTest(unittest.TestCase):
     def test_no_application_mutation_verbs_registered(self):
         """Guard against a future ``db.delete(AppEvent)`` or UPDATE.
 
-        ``app.services.event_log`` is the module that owns the table;
+        ``app.services.platform.event_log`` is the module that owns the table;
         asserting it never imports the mutation helpers is a cheap
         regression guard for the append-only invariant.
         """
-        import app.services.event_log as event_log_module
+        import app.services.platform.event_log as event_log_module
 
         with Path(event_log_module.__file__).open(encoding="utf-8") as handle:
             source = handle.read()
@@ -164,7 +164,7 @@ class AppendTest(unittest.TestCase):
         from unittest.mock import patch
 
         with patch(
-            "app.services.event_log.json.dumps",
+            "app.services.platform.event_log.json.dumps",
             side_effect=[ValueError("nope"), '{"_unserializable": true}'],
         ):
             row = append(
@@ -314,7 +314,7 @@ class MoneyPathEmissionTest(unittest.TestCase):
         self.assertEqual(self.db.query(AppEvent).one().event_type, "order_failed")
 
     def test_fill_emits_order_fill_observed(self):
-        from app.services.trade_monitor import _mark_pending_trades_filled
+        from app.services.trading.trade_monitor import _mark_pending_trades_filled
 
         record_user_trade(
             self.db,
@@ -366,7 +366,7 @@ class NonBlockingAppendTest(unittest.TestCase):
     """The queue path drops rather than blocks, and never raises."""
 
     def test_append_non_blocking_without_started_writer_is_a_noop(self):
-        import app.services.event_log as event_log_module
+        import app.services.platform.event_log as event_log_module
 
         # No writer started: the queue does not exist, so the call is a
         # safe no-op rather than an AttributeError on the money path.

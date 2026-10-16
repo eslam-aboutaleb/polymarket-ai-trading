@@ -16,8 +16,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
-from app.services import portfolio_risk_service
-from app.services.portfolio_risk_service import (
+from app.services.analytics import portfolio_risk_service
+from app.services.analytics.portfolio_risk_service import (
     build_positions_payload,
     cluster_positions,
     compute_metrics,

@@ -1,4 +1,4 @@
-"""Coverage tests for ``app.api.routes.settings``.
+"""Coverage tests for ``app.api.routes.platform.settings``.
 
 Every external boundary is replaced with a double:
 
@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from app.api.routes.auth import get_current_user_from_token
+from app.api.routes.auth.auth import get_current_user_from_token
 from app.main import app
 from app.models.user import User
 from app.models.user_settings import UserSettings
@@ -210,7 +210,7 @@ class SettingsRouteTestCase(unittest.TestCase):
         """Patch ``get_llm_gateway`` in the settings route namespace."""
         gateway = MagicMock()
         gateway.list_providers.return_value = providers
-        return patch("app.api.routes.settings.get_llm_gateway", return_value=gateway)
+        return patch("app.api.routes.platform.settings.get_llm_gateway", return_value=gateway)
 
     def _patch_analysis_clients(self, llm_health, cli_health):
         """Patch ``AnalysisClient`` so each backend gets its own mock.
@@ -636,7 +636,7 @@ class PaperSummaryTests(SettingsRouteTestCase):
             "simulated_trades": 3,
         }
         with patch(
-            "app.services.simulation.get_paper_summary",
+            "app.services.analytics.simulation.get_paper_summary",
             return_value=service_summary,
         ) as mock_summary:
             response = self.client.get("/api/settings/paper-summary")

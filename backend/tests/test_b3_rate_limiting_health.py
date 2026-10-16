@@ -29,14 +29,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 from limits import parse
 
-from app.api.routes.auth import get_current_user_from_token
-from app.api.routes.debug import (
+from app.api.routes.auth.auth import get_current_user_from_token
+from app.api.routes.platform.debug import (
     _check_grpc_service,
     _check_postgres,
     _check_redis,
     _check_research_mcp,
 )
-from app.api.routes.health import _cache_backend, _grpc_backend_health
+from app.api.routes.platform.health import _cache_backend, _grpc_backend_health
 from app.main import app
 from app.security import rate_limit as rate_limit_module
 from app.security.rate_limit import _resolve_storage_uri, limiter
@@ -165,25 +165,25 @@ class HealthDetailMaskingTests(unittest.TestCase):
     def _patch_database_down(self, message):
         engine = MagicMock()
         engine.connect.side_effect = RuntimeError(message)
-        self._patch("app.api.routes.health.engine", new=engine)
+        self._patch("app.api.routes.platform.health.engine", new=engine)
 
     def _patch_dependencies_ok(self):
-        self._patch("app.api.routes.health._cache_backend", return_value="memory")
+        self._patch("app.api.routes.platform.health._cache_backend", return_value="memory")
         self._patch(
-            "app.api.routes.health._grpc_backend_health",
+            "app.api.routes.platform.health._grpc_backend_health",
             AsyncMock(return_value={"llm_chain": True, "cli_agent": True}),
         )
-        self._patch("app.api.routes.health.scheduler_heartbeat_age", return_value=None)
-        self._patch("app.api.routes.health.scheduler_stale_threshold", return_value=300)
+        self._patch("app.api.routes.platform.health.scheduler_heartbeat_age", return_value=None)
+        self._patch("app.api.routes.platform.health.scheduler_stale_threshold", return_value=300)
 
     def _patch_database_ok(self):
-        self._patch("app.api.routes.health.engine", new=MagicMock())
+        self._patch("app.api.routes.platform.health.engine", new=MagicMock())
 
     def test_database_failure_reports_503_without_exception_text(self):
         self._patch_database_down("could not translate host name db.internal:5432")
         self._patch_dependencies_ok()
 
-        with self.assertLogs("app.api.routes.health", level="ERROR") as captured:
+        with self.assertLogs("app.api.routes.platform.health", level="ERROR") as captured:
             response = self.client.get("/health")
 
         self.assertEqual(response.status_code, 503)
@@ -239,7 +239,7 @@ class DebugDetailMaskingTests(unittest.TestCase):
         with (
             patch.dict("os.environ", {"REDIS_URL": "redis://localhost:6379"}),
             patch("redis.from_url", MagicMock(side_effect=RuntimeError("redis-secret"))),
-            self.assertLogs("app.api.routes.debug", level="ERROR") as redis_logs,
+            self.assertLogs("app.api.routes.platform.debug", level="ERROR") as redis_logs,
         ):
             redis_check = self._run(_check_redis())
         self.assertEqual(redis_check.status, "unhealthy")
@@ -248,7 +248,7 @@ class DebugDetailMaskingTests(unittest.TestCase):
 
         with (
             patch("asyncio.open_connection", AsyncMock(side_effect=RuntimeError("grpc-secret"))),
-            self.assertLogs("app.api.routes.debug", level="ERROR") as grpc_logs,
+            self.assertLogs("app.api.routes.platform.debug", level="ERROR") as grpc_logs,
         ):
             grpc_check = self._run(_check_grpc_service("LLM Chain (gRPC)", "llm-chain", 50051))
         self.assertEqual(grpc_check.status, "unhealthy")
@@ -260,7 +260,7 @@ class DebugDetailMaskingTests(unittest.TestCase):
                 "app.utils.database.SessionLocal",
                 MagicMock(side_effect=RuntimeError("db-secret")),
             ),
-            self.assertLogs("app.api.routes.debug", level="ERROR") as db_logs,
+            self.assertLogs("app.api.routes.platform.debug", level="ERROR") as db_logs,
         ):
             postgres_check = self._run(_check_postgres())
         self.assertEqual(postgres_check.status, "unhealthy")
@@ -269,7 +269,7 @@ class DebugDetailMaskingTests(unittest.TestCase):
 
         with (
             patch("pathlib.Path.exists", MagicMock(side_effect=RuntimeError("mcp-secret"))),
-            self.assertLogs("app.api.routes.debug", level="ERROR") as mcp_logs,
+            self.assertLogs("app.api.routes.platform.debug", level="ERROR") as mcp_logs,
         ):
             mcp_check = self._run(_check_research_mcp())
         self.assertEqual(mcp_check.status, "unhealthy")
@@ -314,7 +314,7 @@ class DebugDetailMaskingTests(unittest.TestCase):
         import inspect
         import re
 
-        from app.api.routes import debug
+        from app.api.routes.platform import debug
 
         source = inspect.getsource(debug)
         self.assertIsNone(
@@ -327,7 +327,7 @@ class PerEndpointLimitTests(unittest.TestCase):
     """Expensive routes carry their own budget below the global one (B3.4)."""
 
     def test_news_generation_stubs_are_limited_to_five_per_minute(self):
-        from app.api.routes.news import (
+        from app.api.routes.markets.news import (
             _news_generate_rate_limit,
             _news_generate_stream_rate_limit,
             _news_refresh_feed_rate_limit,
@@ -342,13 +342,13 @@ class PerEndpointLimitTests(unittest.TestCase):
                 self.assertEqual(_route_limit(function), parse("5/minute"))
 
     def test_public_analysis_routes_are_limited_below_the_global_budget(self):
-        from app.api.routes.analysis import _analysis_rate_limit, _analysis_scan_rate_limit
+        from app.api.routes.analysis.analysis import _analysis_rate_limit, _analysis_scan_rate_limit
 
         self.assertEqual(_route_limit(_analysis_rate_limit), parse("10/minute"))
         self.assertEqual(_route_limit(_analysis_scan_rate_limit), parse("20/minute"))
 
     def test_markets_trader_analysis_stream_is_limited(self):
-        from app.api.routes.markets import _trader_analysis_stream_rate_limit
+        from app.api.routes.markets.markets import _trader_analysis_stream_rate_limit
 
         self.assertEqual(_route_limit(_trader_analysis_stream_rate_limit), parse("5/minute"))
 
@@ -361,7 +361,7 @@ class PerEndpointLimitTests(unittest.TestCase):
         app.dependency_overrides[get_current_user_from_token] = lambda: {"user_id": 1}
         self.addCleanup(app.dependency_overrides.clear)
 
-        with patch("app.api.routes.news.get_news_service", return_value=service):
+        with patch("app.api.routes.markets.news.get_news_service", return_value=service):
             client = TestClient(app)
             body = {"condition_id": "c1", "question": "Q?"}
             for _ in range(5):

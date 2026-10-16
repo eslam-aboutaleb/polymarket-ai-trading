@@ -28,8 +28,8 @@ from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (register every model on Base.metadata)
 from app.api.deps import get_active_account
-from app.api.routes.auth import get_current_user_from_token
-from app.api.routes.collaboration import (
+from app.api.routes.auth.auth import get_current_user_from_token
+from app.api.routes.platform.collaboration import (
     _collaboration_read_rate_limit,
     _collaboration_write_rate_limit,
     router,
@@ -45,7 +45,7 @@ from app.models.collaboration import (
 )
 from app.models.market import Market
 from app.models.user import User
-from app.services.consensus_service import (
+from app.services.intelligence.consensus_service import (
     CONSENSUS_CACHE_TTL_SECONDS,
     MAX_VOTES_PER_HOUR,
     MIN_RESOLVED_FOR_SKILL,
@@ -60,7 +60,7 @@ from app.services.consensus_service import (
     submit_vote,
     vote_weight,
 )
-from app.services.forecaster_follow_service import (
+from app.services.intelligence.forecaster_follow_service import (
     FollowRejected,
     follow_user,
     following_forecasts,
@@ -373,7 +373,7 @@ class AnnotationPrivacyTest(ConsensusTestCase):
         save_annotation(self.db, 1, CONDITION, body="my secret thesis", probability=0.7)
         save_annotation(self.db, 2, CONDITION, body="public thesis", visibility=VISIBILITY_PUBLIC)
 
-        from app.services.consensus_service import list_annotations
+        from app.services.intelligence.consensus_service import list_annotations
 
         rows = list_annotations(self.db, CONDITION, 1)
         self.assertEqual([row.user_id for row in rows], [1, 2])
@@ -503,7 +503,7 @@ class ConsensusNarrativeTest(ConsensusTestCase):
     """The optional/degradable narration renders without a live model."""
 
     def test_prompt_template_is_rendered_when_present(self):
-        from app.services.consensus_service import render_consensus_prompt
+        from app.services.intelligence.consensus_service import render_consensus_prompt
 
         rendered = render_consensus_prompt(
             CONDITION,
@@ -521,10 +521,10 @@ class ConsensusNarrativeTest(ConsensusTestCase):
     def test_narration_degrades_when_the_template_is_missing(self):
         from unittest.mock import patch
 
-        from app.services.consensus_service import render_consensus_prompt
+        from app.services.intelligence.consensus_service import render_consensus_prompt
 
         with patch(
-            "app.services.consensus_service._consensus_summary_template",
+            "app.services.intelligence.consensus_service._consensus_summary_template",
             return_value="",
         ):
             rendered = render_consensus_prompt(CONDITION, n_votes=0)
@@ -761,7 +761,7 @@ class CollaborationRouteTest(unittest.TestCase):
 
     def test_vote_is_attributed_to_the_active_account(self):
         """The account seam stamps account_id while accounts stay optional."""
-        from app.services.account_service import ensure_personal_account
+        from app.services.users.account_service import ensure_personal_account
 
         account = ensure_personal_account(self.db, 1)
         self.app.dependency_overrides.pop(get_active_account, None)

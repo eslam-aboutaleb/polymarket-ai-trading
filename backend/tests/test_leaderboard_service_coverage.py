@@ -1,4 +1,4 @@
-"""Coverage tests for ``app.services.leaderboard_service``.
+"""Coverage tests for ``app.services.analytics.leaderboard_service``.
 
 All external I/O is mocked: ``httpx.AsyncClient`` is replaced with a mock
 whose ``get`` returns canned responses, and the module-level caches are
@@ -13,7 +13,7 @@ import unittest
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services import leaderboard_service as lbs
+from app.services.analytics import leaderboard_service as lbs
 
 FALLBACK_IMG = "https://polymarket-upload.s3.us-east-2.amazonaws.com/fallback-image.png"
 

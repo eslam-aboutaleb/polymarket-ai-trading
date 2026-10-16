@@ -1,4 +1,4 @@
-"""Coverage tests for ``app.services.arbitrage_service``.
+"""Coverage tests for ``app.services.analytics.arbitrage_service``.
 
 Exercises both arbitrage detectors (complement and spread)
 with every guard branch, the market scan (including upstream
@@ -14,8 +14,8 @@ import contextlib
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services import arbitrage_service as arb_mod
-from app.services.arbitrage_service import (
+from app.services.analytics import arbitrage_service as arb_mod
+from app.services.analytics.arbitrage_service import (
     _check_complement_arbitrage,
     _check_spread_arbitrage,
     _fetch_markets_with_rate_limit,
@@ -171,7 +171,7 @@ class ScanForArbitrageTests(unittest.IsolatedAsyncioTestCase):
         instance = MagicMock()
         instance.get_active_markets = AsyncMock(return_value=markets, side_effect=side_effect)
         patcher = patch(
-            "app.services.polymarket_service.get_polymarket_service",
+            "app.services.market_data.polymarket_service.get_polymarket_service",
             return_value=instance,
         )
         factory = patcher.start()

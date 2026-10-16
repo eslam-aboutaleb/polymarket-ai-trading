@@ -21,8 +21,8 @@ import app.models  # noqa: F401  (register models on Base.metadata)
 from app.models.base import Base
 from app.models.user import User
 from app.models.user_trade import UserTrade
-from app.services import trade_monitor
-from app.services.pre_trade_gate import OrderIdempotencyKey  # noqa: F401
+from app.services.trading import trade_monitor
+from app.services.trading.pre_trade_gate import OrderIdempotencyKey  # noqa: F401
 from app.utils.time import utc_now
 
 WALLET = "0xfill-tracking-wallet"

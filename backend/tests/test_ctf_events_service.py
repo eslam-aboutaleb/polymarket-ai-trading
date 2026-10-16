@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import eth_abi
 from web3 import Web3
 
-from app.services import ctf_events_service as svc
+from app.services.market_data import ctf_events_service as svc
 
 WHALE = "0x1111111111111111111111111111111111111111"
 OTHER = "0x2222222222222222222222222222222222222222"

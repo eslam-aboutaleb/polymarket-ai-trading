@@ -33,8 +33,8 @@ from app.models.stop_loss import StopLossOrder
 from app.models.take_profit import TakeProfitOrder
 from app.models.user import User
 from app.models.user_trade import UserTrade
-from app.services.execution_analytics import get_strategy_breakdown
-from app.services.stop_loss_monitor import (
+from app.services.analytics.execution_analytics import get_strategy_breakdown
+from app.services.trading.stop_loss_monitor import (
     _execute_stop_loss,
     _execute_stop_loss_simulated,
     _execute_take_profit,
@@ -112,7 +112,7 @@ class StopLossAttributionTest(_AttributionTestBase):
 
         async def _run():
             with patch(
-                "app.services.stop_loss_monitor._place_order_on_polymarket",
+                "app.services.trading.stop_loss_monitor._place_order_on_polymarket",
                 MagicMock(return_value={"success": True, "order_hash": "0xhash-sl"}),
             ):
                 await _execute_stop_loss(self.db, order, "0xpk", None, 0.35)
@@ -140,7 +140,7 @@ class StopLossAttributionTest(_AttributionTestBase):
 
         async def _run():
             with patch(
-                "app.services.stop_loss_monitor._place_order_on_polymarket",
+                "app.services.trading.stop_loss_monitor._place_order_on_polymarket",
                 MagicMock(return_value={"success": False, "error": "book empty"}),
             ):
                 await _execute_stop_loss(self.db, order, "0xpk", None, 0.35)
@@ -179,7 +179,7 @@ class TakeProfitAttributionTest(_AttributionTestBase):
 
         async def _run():
             with patch(
-                "app.services.stop_loss_monitor._place_order_on_polymarket",
+                "app.services.trading.stop_loss_monitor._place_order_on_polymarket",
                 MagicMock(return_value={"success": True, "order_hash": "0xhash-tp"}),
             ):
                 await _execute_take_profit(self.db, order, "0xpk", None, 0.95)
@@ -231,7 +231,7 @@ class InverseBotAttributionTest(_AttributionTestBase):
 
     def _reversal(self, place_side_effect):
         """Run ``_execute_reversal`` then record its legs, as the caller does."""
-        import app.services.inverse_bot_monitor as monitor
+        import app.services.trading.inverse_bot_monitor as monitor
 
         row = self._row()
         settings = SimpleNamespace(
@@ -314,7 +314,7 @@ class InverseBotAttributionTest(_AttributionTestBase):
 
     def test_paper_reversal_records_simulated_legs(self):
         """Paper reversals are attributed too, so paper P&L is measurable."""
-        import app.services.inverse_bot_monitor as monitor
+        import app.services.trading.inverse_bot_monitor as monitor
 
         row = self._row()
         settings = SimpleNamespace(
@@ -454,7 +454,7 @@ class EmergencyStopAttributionTest(_AttributionTestBase):
     def test_panic_sells_are_recorded_as_emergency(self):
         from unittest.mock import AsyncMock, patch
 
-        from app.api.routes.trades import emergency_stop
+        from app.api.routes.trading.trades import emergency_stop
 
         position = {
             "asset_id": TOKEN_ID,
@@ -468,15 +468,15 @@ class EmergencyStopAttributionTest(_AttributionTestBase):
         async def _run():
             with (
                 patch(
-                    "app.api.routes.trades.load_wallet_credentials",
+                    "app.api.routes.trading.trades.load_wallet_credentials",
                     return_value={
                         "private_key": "0xpk",
                         "clob_creds": {"api_key": "k"},
                     },
                 ),
-                patch("app.api.routes.trades.get_polymarket_service", return_value=service),
+                patch("app.api.routes.trading.trades.get_polymarket_service", return_value=service),
                 patch(
-                    "app.api.routes.trades._place_order_on_polymarket",
+                    "app.api.routes.trading.trades._place_order_on_polymarket",
                     MagicMock(return_value={"success": True, "order_hash": "0xemerg"}),
                 ),
             ):

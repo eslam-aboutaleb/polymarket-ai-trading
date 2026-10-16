@@ -33,7 +33,7 @@ from app.models.user import User
 from app.models.user_settings import UserSettings
 from app.models.user_trade import UserTrade
 from app.models.winner import Winner
-from app.services import copy_trade_service, kelly_service
+from app.services.trading import copy_trade_service, kelly_service
 from app.utils.time import utc_now
 
 WALLET = "0xkelly-user-wallet"
@@ -186,7 +186,7 @@ class ResolveEdgeProbabilityTests(unittest.TestCase):
                 risk_level="medium",
                 confidence=confidence,
                 ai_probability=ai_probability,
-            )
+            ),
         )
         session.commit()
 
@@ -277,7 +277,7 @@ class ResolveEdgeProbabilityTests(unittest.TestCase):
                 wallet_address=TRADER_WALLET,
                 win_rate=64.0,
                 trade_count=50,
-            )
+            ),
         )
         self.db.commit()
         p, source = kelly_service.resolve_edge_probability(
@@ -312,7 +312,7 @@ class ResolveEdgeProbabilityTests(unittest.TestCase):
                 wallet_address=TRADER_WALLET,
                 win_rate=64.0,
                 trade_count=50,
-            )
+            ),
         )
         self.db.commit()
         p, source = kelly_service.resolve_edge_probability(
@@ -331,7 +331,7 @@ class ResolveEdgeProbabilityTests(unittest.TestCase):
                 wallet_address=TRADER_WALLET,
                 win_rate=64.0,
                 trade_count=50,
-            )
+            ),
         )
         self.db.commit()
         p, source = kelly_service.resolve_edge_probability(
@@ -354,7 +354,7 @@ class ResolveEdgeProbabilityTests(unittest.TestCase):
                     price=0.5,
                     status="executed",
                     pnl=pnl,
-                )
+                ),
             )
         self.db.commit()
         p, source = kelly_service.resolve_edge_probability(self.db, USER_ID, MARKET_ID)
@@ -371,7 +371,7 @@ class ResolveEdgeProbabilityTests(unittest.TestCase):
                 price=0.5,
                 status="pending",
                 pnl=10.0,
-            )
+            ),
         )
         self.db.commit()
         p, source = kelly_service.resolve_edge_probability(self.db, USER_ID, MARKET_ID)
@@ -419,7 +419,7 @@ class KellyCopyTradeIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 max_position_size=100.0,
                 daily_loss_limit=500.0,
                 kelly_fraction=0.25,
-            )
+            ),
         )
         self.db.add(
             FollowedTrader(
@@ -427,14 +427,14 @@ class KellyCopyTradeIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 trader_wallet=TRADER_WALLET,
                 is_active=True,
                 sizing_mode="kelly",
-            )
+            ),
         )
         self.db.add(
             Winner(
                 wallet_address=TRADER_WALLET,
                 win_rate=80.0,
                 trade_count=50,
-            )
+            ),
         )
         self.db.commit()
 
@@ -514,7 +514,7 @@ class KellyCopyTradeIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 risk_level="medium",
                 confidence=10.0,
                 ai_probability=0.62,
-            )
+            ),
         )
         self.db.commit()
 

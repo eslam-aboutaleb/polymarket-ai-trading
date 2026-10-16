@@ -1,4 +1,4 @@
-"""Coverage for :mod:`app.services.email_service`.
+"""Coverage for :mod:`app.services.users.email_service`.
 
 Sender resolution, SMTP configuration detection, the synchronous
 SMTP send path (TLS / login branches), and the follow-event email
@@ -8,7 +8,7 @@ formatter. All SMTP I/O is mocked.
 import unittest
 from unittest.mock import MagicMock, patch
 
-from app.services import email_service
+from app.services.users import email_service
 
 
 def _settings(
@@ -73,7 +73,7 @@ class SendEmailSyncTests(unittest.TestCase):
         settings = _settings()
         with (
             patch.object(email_service, "get_settings", return_value=settings),
-            patch("app.services.email_service.smtplib.SMTP") as smtp_cls,
+            patch("app.services.users.email_service.smtplib.SMTP") as smtp_cls,
         ):
             smtp = smtp_cls.return_value.__enter__.return_value
             email_service._send_email_sync("to@example.com", "Subject", "Body")
@@ -92,7 +92,7 @@ class SendEmailSyncTests(unittest.TestCase):
         settings = _settings(smtp_use_tls=False, smtp_user="", smtp_password="")
         with (
             patch.object(email_service, "get_settings", return_value=settings),
-            patch("app.services.email_service.smtplib.SMTP") as smtp_cls,
+            patch("app.services.users.email_service.smtplib.SMTP") as smtp_cls,
         ):
             smtp = smtp_cls.return_value.__enter__.return_value
             email_service._send_email_sync("to@example.com", "S", "B")

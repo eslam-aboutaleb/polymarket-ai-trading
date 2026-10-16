@@ -6,7 +6,7 @@ moves data in and out of the provider or verifies a signature — **none of
 them writes to the database**. Applying a result is
 :meth:`EntitlementService.apply_billing_event`, which is the only writer of
 the plan column. That is what makes adding a USDC provider later a matter
-of producing the same :class:`~app.services.entitlement_service.BillingEvent`
+of producing the same :class:`~app.services.users.entitlement_service.BillingEvent`
 dataclass, with no caller changes and no second place that can grant a
 plan.
 
@@ -39,7 +39,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
 from app.config import get_settings
-from app.services.entitlement_service import (
+from app.services.users.entitlement_service import (
     BillingEvent,
     PlanTier,
     Subscription,

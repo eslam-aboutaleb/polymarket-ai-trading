@@ -27,25 +27,25 @@ from app.models.assessment import Assessment
 from app.models.base import Base
 from app.models.governance import LLMExperiment, VerdictFeedback
 from app.models.user import User
-from app.services.experiment_service import (
-    assign_variant,
-    compare_experiment_arms,
-    create_experiment,
-    resolve_experiment,
-    set_experiment_status,
-)
-from app.services.forecast_recorder import record_verdict
-from app.services.model_drift import (
+from app.services.intelligence.forecast_recorder import record_verdict
+from app.services.intelligence.model_drift import (
     BASELINE_BRIER,
     MIN_SAMPLES_FOR_DRIFT,
     detect_drift,
     model_leaderboard,
     model_skill_trend,
 )
-from app.services.prompt_version import (
+from app.services.intelligence.prompt_version import (
     PROMPT_VERSION_LENGTH,
     current_prompt_version,
     reset_prompt_version,
+)
+from app.services.platform.experiment_service import (
+    assign_variant,
+    compare_experiment_arms,
+    create_experiment,
+    resolve_experiment,
+    set_experiment_status,
 )
 from app.utils.time import utc_now
 
@@ -84,8 +84,8 @@ class PromptVersionTest(unittest.TestCase):
             "b": {"x": 1, "y": 2},
             "a": {"z": 3},
         }
-        with patch("app.services.prompt_version._load_store", return_value=store):
-            from app.services.prompt_version import _compute_version
+        with patch("app.services.intelligence.prompt_version._load_store", return_value=store):
+            from app.services.intelligence.prompt_version import _compute_version
 
             reformatted = _compute_version({"a": {"z": 3}, "b": {"y": 2, "x": 1}})
             same = _compute_version(store)
@@ -94,7 +94,7 @@ class PromptVersionTest(unittest.TestCase):
         self.assertIsInstance(first, str)
 
     def test_changing_a_prompt_changes_the_version(self):
-        from app.services.prompt_version import _compute_version
+        from app.services.intelligence.prompt_version import _compute_version
 
         before = _compute_version({"market_analysis": {"system": "one"}})
         after = _compute_version({"market_analysis": {"system": "two"}})
@@ -103,9 +103,9 @@ class PromptVersionTest(unittest.TestCase):
     def test_missing_store_versions_the_empty_store(self):
         """A misconfigured store still yields a stable version, not a crash."""
         with (
-            patch("app.services.prompt_version._load_store", return_value={}),
+            patch("app.services.intelligence.prompt_version._load_store", return_value={}),
             patch(
-                "app.services.prompt_version._candidate_paths",
+                "app.services.intelligence.prompt_version._candidate_paths",
                 return_value=["/nonexistent/prompts.json"],
             ),
         ):
@@ -429,7 +429,7 @@ class DriftDetectionTest(unittest.TestCase):
                 ai_probability=None,
                 brier_score=None,
                 created_at=now,
-            )
+            ),
         )
         self.db.commit()
         self.assertEqual(model_skill_trend(self.db, None, None, 14)["samples"], 0)
@@ -461,7 +461,7 @@ class VerdictFeedbackTest(unittest.TestCase):
                 confidence=50.0,
                 ai_probability=0.6,
                 condition_id="0xcond",
-            )
+            ),
         )
         self.db.commit()
         self.addCleanup(self.engine.dispose)

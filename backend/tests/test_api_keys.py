@@ -40,15 +40,15 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from starlette.requests import Request
 
-import app.api.routes.external as external_module
+import app.api.routes.platform.external as external_module
 import app.models  # noqa: F401  (register models on Base.metadata)
 from app.api.deps import external_api_rate_limit_key, require_api_key
-from app.api.routes.auth import get_current_user_from_token
+from app.api.routes.auth.auth import get_current_user_from_token
 from app.models.api_key import ApiKey
 from app.models.base import Base
 from app.models.user import User
-from app.services import api_key_service
-from app.services.api_key_service import (
+from app.services.users import api_key_service
+from app.services.users.api_key_service import (
     KEY_PREFIX_LENGTH,
     SCOPES,
     AuthContext,

@@ -18,9 +18,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-import app.api.routes.portfolio as portfolio_module
-from app.api.routes.auth import get_current_user_from_token
-from app.api.routes.portfolio import (
+import app.api.routes.portfolio.portfolio as portfolio_module
+from app.api.routes.auth.auth import get_current_user_from_token
+from app.api.routes.portfolio.portfolio import (
     RedemptionAttemptResponse,
     _attempt_response,
     _sse_frame,
@@ -457,7 +457,10 @@ class RedeemRouteTests(PortfolioRouteTestBase):
     def test_redeem_success(self):
         attempt = self._attempt()
         redeem_mock = AsyncMock(return_value=attempt)
-        with patch("app.services.redemption_service.redeem_market_for_user", new=redeem_mock):
+        with patch(
+            "app.services.trading.redemption_service.redeem_market_for_user",
+            new=redeem_mock,
+        ):
             resp = self.client.post("/api/portfolio/redeem", json={"market_id": "market-1"})
 
         self.assertEqual(resp.status_code, 200)
@@ -481,7 +484,10 @@ class RedeemRouteTests(PortfolioRouteTestBase):
     def test_redeem_with_winner_outcome_index(self):
         attempt = self._attempt()
         redeem_mock = AsyncMock(return_value=attempt)
-        with patch("app.services.redemption_service.redeem_market_for_user", new=redeem_mock):
+        with patch(
+            "app.services.trading.redemption_service.redeem_market_for_user",
+            new=redeem_mock,
+        ):
             resp = self.client.post(
                 "/api/portfolio/redeem",
                 json={"market_id": "market-1", "winner_outcome_index": 1},
@@ -497,7 +503,10 @@ class RedeemRouteTests(PortfolioRouteTestBase):
 
     def test_redeem_no_redeemable_position_is_404(self):
         redeem_mock = AsyncMock(return_value=None)
-        with patch("app.services.redemption_service.redeem_market_for_user", new=redeem_mock):
+        with patch(
+            "app.services.trading.redemption_service.redeem_market_for_user",
+            new=redeem_mock,
+        ):
             resp = self.client.post("/api/portfolio/redeem", json={"market_id": "market-1"})
 
         self.assertEqual(resp.status_code, 404)

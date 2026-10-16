@@ -9,7 +9,8 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models.token import RefreshToken
+from app.models.users.token import RefreshToken
+from app.repositories.users.refresh_token_repository import RefreshTokenRepository
 
 
 def _refresh_token_hash_secret() -> str:
@@ -46,8 +47,7 @@ def create_refresh_token_record(
         token_hash=hash_refresh_token(raw_refresh_token),
         expires_at=expires_at,
     )
-    db.add(record)
-    return record
+    return RefreshTokenRepository(db).add(record)
 
 
 def find_active_refresh_token_record(
@@ -56,11 +56,4 @@ def find_active_refresh_token_record(
     raw_refresh_token: str,
 ) -> RefreshToken | None:
     """Find active refresh-token row by hash."""
-    return (
-        db.query(RefreshToken)
-        .filter(
-            RefreshToken.token_hash == hash_refresh_token(raw_refresh_token),
-            RefreshToken.is_revoked == False,  # noqa: E712
-        )
-        .first()
-    )
+    return RefreshTokenRepository(db).find_active_by_hash(hash_refresh_token(raw_refresh_token))

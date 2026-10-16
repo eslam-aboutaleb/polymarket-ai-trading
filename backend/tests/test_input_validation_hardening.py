@@ -5,9 +5,9 @@ from types import SimpleNamespace
 
 os.environ.setdefault("JWT_SECRET_KEY", "a" * 32)
 
-import app.services.arbitrage_service as arbitrage_service
-import app.services.backtesting_service as backtesting_service
-import app.services.market_maker_service as market_maker_service
+import app.services.analytics.arbitrage_service as arbitrage_service
+import app.services.analytics.backtesting_service as backtesting_service
+import app.services.trading.market_maker_service as market_maker_service
 from app.models.user import validate_profile_picture_url
 
 
