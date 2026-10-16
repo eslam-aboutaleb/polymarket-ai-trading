@@ -88,6 +88,8 @@ def configure_builtin_adapters(configured: str | None = None) -> None:
             registry.register(name, adapter_factory())
 
 
+configure_builtin_adapters()
+
 _refresh_task: asyncio.Task | None = None
 _stop_event: asyncio.Event | None = None
 _running = False

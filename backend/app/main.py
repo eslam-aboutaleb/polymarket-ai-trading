@@ -6,21 +6,31 @@ from contextlib import asynccontextmanager
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from app.application import add_security_headers, create_app
 from app.config import get_settings
 from app.lifecycle.background_services import start_background_services
 from app.lifecycle.runtime import application_lifespan
 from app.lifecycle.validation import (
-    sync_admin_wallets,
     validate_database_connectivity,
     validate_startup_security,
 )
 from app.logging_config import configure_logging
 from app.security.crypto import get_fernet_keyring
-from app.utils.database import check_database_connectivity, session_scope
+from app.utils.database import (
+    SessionLocal,
+    engine,
+)
 
-__all__ = ["add_security_headers", "app", "general_exception_handler", "lifespan"]
+__all__ = [
+    "SessionLocal",
+    "add_security_headers",
+    "app",
+    "engine",
+    "general_exception_handler",
+    "lifespan",
+]
 
 configure_logging()
 
@@ -38,17 +48,40 @@ def _validate_startup_security() -> None:
 
 def _validate_database_connectivity() -> None:
     """Validate database connectivity before serving traffic."""
-    validate_database_connectivity(check_database_connectivity)
+
+    def _check() -> None:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+
+    validate_database_connectivity(_check)
 
 
 def _sync_admin_wallets() -> None:
     """Synchronize the configured administrator wallets during startup."""
-    sync_admin_wallets(settings, session_scope)
+    raw = settings.admin_wallets.strip()
+    if not raw and not settings.admin_sync_allow_empty:
+        return
+
+    db = SessionLocal()
+    try:
+        from app.services.users.admin_sync_service import sync_admin_wallets as sync
+
+        sync(
+            db,
+            settings.admin_wallets,
+            allow_empty=settings.admin_sync_allow_empty,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 async def _start_background_services() -> None:
     """Start schedulers and attach long-running tasks to this process."""
-    await start_background_services(_background_tasks)
+    await start_background_services(_background_tasks, session_factory=SessionLocal)
 
 
 @asynccontextmanager

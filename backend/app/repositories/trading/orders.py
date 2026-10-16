@@ -9,8 +9,8 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.analytics.assessment import Assessment
-from app.models.analytics.winner import Winner
 from app.models.market_data.market import Market
+from app.models.market_data.winner import Winner
 from app.models.trading.followed_trader import FollowedTrader
 from app.models.trading.stop_loss import StopLossOrder
 from app.models.trading.take_profit import TakeProfitOrder
@@ -90,12 +90,16 @@ class TradingOrderRepository(SQLAlchemyRepository[object]):
     def list_strategy_trades(
         self, strategy_source: str, status: str, pnl_is_null: bool
     ) -> list[UserTrade]:
-        query = self.db.query(UserTrade).filter(
-            UserTrade.strategy_source == strategy_source,
-            UserTrade.status == status,
+        pnl_filter = UserTrade.pnl.is_(None) if pnl_is_null else UserTrade.pnl.isnot(None)
+        return (
+            self.db.query(UserTrade)
+            .filter(
+                UserTrade.strategy_source == strategy_source,
+                UserTrade.status == status,
+                pnl_filter,
+            )
+            .all()
         )
-        query = query.filter(UserTrade.pnl.is_(None) if pnl_is_null else UserTrade.pnl.isnot(None))
-        return query.all()
 
     def list_trade_rows_for_position_lifecycle(
         self, user_id: int
@@ -168,9 +172,12 @@ class TradingOrderRepository(SQLAlchemyRepository[object]):
 
     def list_active_wallets(self) -> list[str]:
         """Return distinct wallets watched by any active copy-trade follow."""
-        return [
-            row.trader_wallet for row in self.list_active_followed_wallets() if row.trader_wallet
-        ]
+        wallets = []
+        for row in self.list_active_followed_wallets():
+            w = row[0] if isinstance(row, (tuple, list)) else getattr(row, "trader_wallet", None)
+            if w:
+                wallets.append(w)
+        return wallets
 
     def list_active_follows_for_wallet(self, wallet: str) -> list[FollowedTrader]:
         return (

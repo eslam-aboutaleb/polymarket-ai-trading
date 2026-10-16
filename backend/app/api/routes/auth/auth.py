@@ -30,6 +30,7 @@ from app.security.auth import (
     create_refresh_token,
     generate_challenge_message,
     get_current_user_from_token,
+    get_optional_user_from_token,
     sign_message_with_key,
     verify_eth_signature,
     verify_token,
@@ -40,6 +41,7 @@ from app.security.credential_store import (
     store_wallet_credentials,
 )
 from app.security.rate_limit import limiter
+from app.security.refresh_tokens import create_refresh_token_record
 from app.services.users import auth_service
 from app.services.users.user_lookup_service import get_user_by_id
 from app.utils.cache import challenge_cache
@@ -48,6 +50,13 @@ from app.utils.database import get_db
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "create_refresh_token_record",
+    "get_current_user_from_token",
+    "get_optional_user_from_token",
+    "router",
+]
 
 ACCESS_TOKEN_COOKIE_NAME = PM_ACCESS_TOKEN_COOKIE
 REFRESH_TOKEN_COOKIE_NAME = "pm_refresh_token"  # noqa: S105 - cookie name, not a secret

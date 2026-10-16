@@ -12,9 +12,9 @@ from app.services.trading.latency_arb_service import (
     get_config,
     get_engine_status,
     get_latest_opportunities,
+    get_or_create_config,
     get_trade_page,
     latency_stats,
-    update_user_config,
 )
 from app.services.users.entitlement_service import CAP_LATENCY_ARB
 from app.utils.database import get_db
@@ -186,8 +186,35 @@ async def update_latency_arb_config(
     db: Session = Depends(get_db),
 ):
     """Update latency-arbitrage thresholds and market selection."""
+    from app.services.market_data.crypto_markets_service import (
+        SYMBOLS,
+        WINDOW_MINUTES,
+    )
+
     user_id = int(current_user["user_id"])
-    config = update_user_config(user_id, db, body.model_dump(exclude_none=True))
+    config = get_or_create_config(user_id, db)
+
+    if body.enabled is not None:
+        config.enabled = body.enabled
+    if body.edge_threshold is not None:
+        config.edge_threshold = body.edge_threshold
+    if body.max_notional is not None:
+        config.max_notional = body.max_notional
+    if body.symbols is not None:
+        config.symbols = [
+            item.strip().upper() for item in body.symbols if item.strip().upper() in SYMBOLS
+        ]
+    if body.windows is not None:
+        config.windows = [int(item) for item in body.windows if int(item) in WINDOW_MINUTES]
+    if body.late_entry is not None:
+        config.late_entry = body.late_entry
+    if body.daily_loss_limit is not None:
+        config.daily_loss_limit = body.daily_loss_limit
+    if body.alert_on_opportunity is not None:
+        config.alert_on_opportunity = body.alert_on_opportunity
+
+    db.commit()
+    db.refresh(config)
     return _config_to_response(config)
 
 

@@ -18,7 +18,12 @@ class NotificationFollowRepository(SQLAlchemyRepository[NotificationFollowedTrad
             .distinct()
             .all()
         )
-        return [row.trader_wallet for row in rows if row.trader_wallet]
+        wallets = []
+        for row in rows:
+            w = row[0] if isinstance(row, (tuple, list)) else getattr(row, "trader_wallet", None)
+            if w:
+                wallets.append(w)
+        return wallets
 
     def list_active_wallets_for_user(self, user_id: int) -> list[str]:
         rows = (

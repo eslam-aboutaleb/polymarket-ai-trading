@@ -87,6 +87,34 @@ class FakeQuery:
         return self.db.scalar_result
 
 
+class FakeResult:
+    def __init__(self, items):
+        if items is None:
+            self._items = []
+        elif isinstance(items, list):
+            self._items = items
+        else:
+            self._items = [items]
+
+    def scalars(self):
+        return self
+
+    def first(self):
+        return self._items[0] if self._items else None
+
+    def all(self):
+        return list(self._items)
+
+    def scalar_one_or_none(self):
+        return self._items[0] if self._items else None
+
+    def scalar_one(self):
+        return self._items[0] if self._items else None
+
+    def scalar(self):
+        return self.first()
+
+
 class FakeDB:
     """In-memory stand-in for a SQLAlchemy session."""
 
@@ -112,6 +140,21 @@ class FakeDB:
 
     def query(self, *entities):
         return FakeQuery(self, self._key(*entities))
+
+    def execute(self, stmt, *args, **kwargs):
+        entity = None
+        if hasattr(stmt, "column_descriptions") and stmt.column_descriptions:
+            desc = stmt.column_descriptions[0]
+            entity = desc.get("entity") or desc.get("type")
+        key = self._key(entity) if entity is not None else ()
+        res = self.all_results.get(key)
+        if res is None:
+            res = self.first_results.get(key)
+        return FakeResult(res)
+
+    def get(self, model, entity_id):
+        key = self._key(model)
+        return self.first_results.get(key)
 
     def add(self, obj):
         self.added.append(obj)

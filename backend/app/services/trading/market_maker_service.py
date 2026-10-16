@@ -71,11 +71,15 @@ def upsert_market_maker_config(
     """Create or update a user's config for one market and commit it."""
     repository = TradingBotRepository(db)
     config = repository.find_market_maker_config(user_id, values["condition_id"])
-    if config is None:
+    is_new = config is None
+    if is_new:
         config = MarketMakerConfig(user_id=user_id)
     for field, value in values.items():
         setattr(config, field, value)
-    return repository.save_market_maker_config(config, refresh=True)
+    if is_new:
+        return repository.save_market_maker_config(config, refresh=True)
+    repository.commit()
+    return repository.refresh(config)
 
 
 def set_market_maker_config_state(
