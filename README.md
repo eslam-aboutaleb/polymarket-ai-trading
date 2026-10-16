@@ -1,837 +1,228 @@
-# Polymarket AI Trading Automation
+# Polymarket Research & Trading Workspace
 
-AI-assisted trading automation for [Polymarket](https://polymarket.com). The system
-tracks leading traders on the Polymarket leaderboard, analyses markets and trader
-behaviour with LLM backends, and executes copy-trade, contrarian, market-making and
-stop-loss/take-profit strategies on a user's Polygon wallet.
+A self-hosted workspace for exploring prediction markets, researching opportunities,
+following your portfolio, and managing trading strategies from one place. Connect a
+wallet, choose how much automation you want, and use the research agents to turn a
+question into a clear, reviewable analysis.
 
-> **This repository ships exactly one Markdown document at its root — this file.**
-> Working notes, owner handbooks and archived planning documents live under `docs/`
-> and are intentionally untracked (see [Documentation](#documentation)).
+## What you can do
 
----
+### Explore markets and compare prices
 
-## Table of contents
+- Search and browse markets by category, activity, and event; view related outcomes
+  together and see live prices.
+- Compare supported prediction-market venues, inspect price differences, and see
+  when venue data is stale or incomplete. Comparisons are informational and are not
+  executable quotes.
+- Follow market news, view generated market briefings, and monitor large-wallet
+  activity.
 
-- [Architecture](#architecture)
-- [Features](#features)
-- [Repository layout](#repository-layout)
-- [Technology stack](#technology-stack)
-- [Prerequisites](#prerequisites)
-- [Quick start](#quick-start)
-- [Configuration](#configuration)
-- [Authentication](#authentication)
-- [Trading strategies](#trading-strategies)
-- [API reference](#api-reference)
-- [Development](#development)
-- [Code quality and pre-commit](#code-quality-and-pre-commit)
-- [Testing](#testing)
-- [Security notes](#security-notes)
-- [Operations and troubleshooting](#operations-and-troubleshooting)
-- [Documentation](#documentation)
+### Research markets and traders
 
----
+- Request a quick view or a deeper analysis of a market or event.
+- Scan a group of markets for opportunities, review sentiment, and request a risk
+  assessment or written trade plan.
+- Review a trader's history and quality, and ask whether a particular trade fits
+  your copy-trading approach.
+- See forecast accuracy and calibration summaries to understand how past forecasts
+  performed.
+- Find related markets using indexed market research.
+- Group wallets with similar activity to surface additional research leads.
 
-## Architecture
+### Use the AI agents
 
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                         Browser (React 18 + TypeScript)                        │
-│  Dashboard · Markets · Opportunities · Copy Trading · Market Making          │
-│  Stop Loss / Take Profit · Inverse Bot · Backtesting · News · Leaderboard     │
-│  Whale Feed · Latency Arb · Execution Analytics · Notification Center         │
-│  Settings · Ops Center (admin) · WalletConnect / injected wallet             │
-└──────────────────────────────────────┬───────────────────────────────────────┘
-                                       │ HTTPS  /api/*   (same-origin in prod)
-┌──────────────────────────────────────▼───────────────────────────────────────┐
-│                       nginx  (production)  ·  :5173 dev                       │
-│   static assets + security headers + reverse proxy  /api/  →  backend        │
-└──────────────────────────────────────┬───────────────────────────────────────┘
-                                       │
-┌──────────────────────────────────────▼───────────────────────────────────────┐
-│                          FastAPI backend  ·  :8002                            │
-│                                                                              │
-│  api/routes/     auth · analysis · markets · trades · portfolio · settings    │
-│                  news · backtesting · inverse-bot · market-maker · binance   │
-│                  debug (admin only)                                           │
-│  security/       JWT issuance/verification · Fernet credential vault         │
-│                  refresh-token hashing · EIP-191 signature recovery          │
-│  services/       polymarket_service (py-clob-client) · copy_trade_service    │
-│                  market_maker_service · trade_monitor · stop_loss_monitor    │
-│                  inverse_bot_monitor · arbitrage · leaderboard · news · …     │
-│                  whale_monitor · latency_arb · kelly_sizing · redemption     │
-│                  pnl_reconciliation · pre_trade_gate · alert_service · …      │
-│  llm/            LangChain assessment chains (web-search-augmented)          │
-│  grpc_clients/   pooled gRPC client for the AI backends                      │
-└───────┬──────────────────────────────────┬────────────────────────────────────┘
-        │                                  │
-        │ gRPC :50051 / :50052             │ SQL
-┌───────▼──────────────────────┐  ┌────────▼─────────────────────────────────┐
-│  llm-chain  ·  cli-agent      │  │  PostgreSQL :5432   ·   Redis :6379     │
-│  Python AI microservices      │  │  36 SQLAlchemy models · 25 migrations    │
-│  LLM providers + MCP research │  │  token/credential cache · rate limiting  │
-└───────────────────────────────┘  └──────────────────────────────────────────┘
-```
+The workspace has three complementary AI capabilities:
 
-**Request path in production** is deliberately same-origin: the browser issues
-relative `/api/...` requests, nginx proxies them to the backend, and cookies stay
-first-party. This removes CORS and cross-origin credential handling from the
-production path entirely.
+#### Research agent
 
-### AI backends (gRPC)
+- Finds context from web search, X posts, and news sources.
+- When enabled, adds Binance smart-money signals, active buys, social-hype and
+  inflow rankings, trending tokens, token details, and a smart-money P&L leaderboard.
+- Looks up cached markets across supported venues to add comparison context.
 
-Both services implement the `AnalysisService` contract defined in
-`services/proto/analysis.proto` and are selected via `DEFAULT_AI_BACKEND`:
+#### Analysis agent
 
-| Service            | Port   | Role                                                             |
-| ------------------ | ------ | ---------------------------------------------------------------- |
-| `llm-chain`        | `50051`| LangChain pipelines, multi-provider LLM access, streaming analysis |
-| `cli-agent`        | `50052`| CLI-driven agent with MCP tools (web research)                    |
+- Produces market and event analysis, multi-market scans, trader profiles, and
+  sentiment summaries.
+- Evaluates copy-trade and inverse-position ideas, assesses risk, and writes trade
+  plans.
+- Uses available market research and crypto signals as supporting evidence.
 
-RPCs include `AnalyzeMarket`, `QuickAnalysis`, `ScanMarkets`, `AssessRisk`,
-`GenerateTradePlan`, `AnalyzeMarketStream`, `AnalyzeTrader`, `EvaluateCopyTrade`,
-`EvaluateInversePosition`, `AnalyzeSentiment`, `DiscoverBestTrade`,
-`IndexMarketsRAG`, `GenerateNews`, `GenerateNewsBatch` and `HealthCheck`.
+#### AI Orchestrator
 
-The backend keeps a **pooled, shared gRPC channel** per address
-(`app/grpc_clients/analysis_client.py`) rather than opening a channel per request.
+- **Market Deep Dive:** gathers market context, assesses risk, and drafts a trade
+  plan.
+- **Opportunity Sweep:** scans a supplied group of markets, examines active
+  candidates, and assesses a leading opportunity.
+- **Trader Diligence:** profiles a trader, evaluates a possible copy trade, and
+  assesses its risk.
+- Shows each step as it finishes and combines the results. The command palette also
+  accepts plain-language questions; voice input is available in supported browsers.
 
----
+Agents can explain evidence and suggest next steps. The command palette and
+Orchestrator do not place or approve orders. Trading is handled separately through
+manual order entry or a strategy you explicitly enable. AI provider access and some
+research integrations depend on how the workspace is configured.
 
-## Features
+### Trade and automate
 
-### Trading & execution
+- Place manual limit orders, cash out positions, and review trade history and P&L.
+- Copy selected traders with configurable sizing, loss limits, and safety caps.
+- Configure market-making strategies, including band and AMM modes.
+- Review and manage contrarian positions with the inverse bot.
+- Monitor latency-arbitrage opportunities, including paper-trading workflows.
+- Set position-level stop-loss and take-profit rules.
+- Scan related markets for arbitrage opportunities and track conditional-token
+  redemptions.
+- Run backtests for copy-trading and indicator strategies against historical data.
+- Use paper trading to review decisions and order construction without signing or
+  submitting an order.
 
-- **Manual execution** — explicit limit orders, cash-out, trade history, P&L
-- **Copy trading** — mirror followed traders with risk modes, daily-loss limits
-  and safety caps; per-trader quality scoring and evaluation
-- **Market making** — band and AMM strategies with configurable spread,
-  collateral and sync interval
-- **Inverse (contrarian) bot** — contrarian positions sized by configured mode,
-  evaluated by the AI backend
-- **Latency arbitrage** — exploits price lag between venues, with paper-trading
-  mode and pre-trade safety gates
-- **Stop loss / take profit** — per-position resting orders evaluated on a
-  price-order cycle
-- **Cross-market arbitrage** — opportunity scanning across related markets
-- **Redemption** — conditional-token (CTF) redemption with per-attempt tracking
+### Understand portfolio risk and performance
 
-### AI-powered analysis
+- View balances, open positions, live marks, portfolio value, and realized and
+  unrealized performance from the dashboard.
+- Review equity snapshots, portfolio risk reports, strategy results, and trader
+  performance.
+- Inspect execution quality, including fill timing, slippage, and price impact.
+- Use optional Kelly-based sizing suggestions alongside the configured position
+  limits.
 
-- **Market analysis** — deep single-market analysis, streamed over SSE
-- **Quick analysis** — single-market and grouped-event (multi-option) analysis
-- **Market scan** — multi-market opportunity scanning
-- **Risk assessment** and **trade plan** generation
-- **Trader analysis** — evaluate any trader's track record, streamed
-- **Copy-trade evaluation** — should-you-copy verdicts for a wallet
-- **RAG market discovery** — vector search over indexed markets
-- **Per-task model tiering** — CHEAP / STANDARD / STRONG / WRITER model
-  routing with a kill switch
+### Stay informed and in control
 
-### Risk management
+- Follow leaderboard traders and receive updates when their tracked positions
+  change.
+- Monitor whale activity, Binance signals, market news, and live price streams.
+- Receive in-app, email, or webhook notifications, with preferences, digest options,
+  and controls to limit notification bursts.
+- Apply pre-trade checks, account cooldowns, daily and monthly loss limits, maximum
+  drawdown and position limits, and strategy loss circuit breakers.
+- Pause automated trading with the emergency stop; where configured, it can also
+  close open positions.
 
-- **Pre-trade gate** — re-checks halt, cooldown and loss limits immediately
-  before an order is signed
-- **Kelly criterion sizing** — scale position size to the modelled edge
-- **Paper trading** — full decision and order-construction path against live
-  prices, never signing or submitting an order
-- **Global trading halt**, per-user cooldown, monthly/daily loss limits,
-  maximum drawdown, total-loss halt, maximum position size
-- **Consecutive-loss circuit breaker** per strategy
-- **Emergency stop** — halt trading and market-close all positions
-- **Realized P&L reconciliation** — FIFO lot matching writes `UserTrade.pnl`,
-  the basis for every loss limit
+### Work across accounts and with a team
 
-### Monitoring & signals
+- Keep separate accounts or workspaces under one login, with account-specific
+  settings.
+- Sign in with an injected browser wallet or WalletConnect. Trading credentials are
+  configured separately from sign-in and encrypted when stored.
+- Share forecasts, build group consensus, and review contributor attribution.
+- Create experiments and compare their results.
+- Keep an audit trail of key account and trading actions.
+- Manage subscriptions and plan-based features when billing is configured.
+- Create scoped API keys for the external REST API and stream positions and fills
+  through the WebSocket API.
 
-- **Whale monitoring** — large-wallet movement tracking with configurable alerts
-- **Trade monitor**, **stop-loss monitor**, **inverse-bot monitor**,
-  **position-lifecycle** and **trade-aggregation** background workers
-- **Binance signals** — smart-money, active buys, social-hype rankings,
-  trending, P&L leaderboard, token search/data
-- **Live price stream** — SSE price feed for positions and markets
-- **Execution analytics** — fill quality: slippage, fill latency, price impact
+### Administration
 
-### Notifications
+When administrator access is enabled, available tools include service health and
+diagnostics, user and AI-provider settings, model approval and drift monitoring,
+and operational logs. Forecast quality tools compare results across models and
+prompt versions.
 
-- **Multi-channel alerts** — webhook, email and in-app channels with
-  per-channel rate limiting and Fernet-encrypted config
-- **Preference routing**, digest mode and storm protection
-- **Notification center** — feed events with read-state tracking
+## System design
 
-### Market data & portfolio
+The web app is the main workspace. It sends requests to the application backend,
+which handles accounts, market and trading operations, safety checks, and data
+storage. AI requests are routed to the configured analysis services. The research
+tools gather supporting context, and notifications can be delivered through the
+channels enabled for the account.
 
-- **Markets** — browse, search, categories, newest, combined view, event groups
-- **CTF events** and **crypto markets** services
-- **Portfolio** — balance, positions, mark prices, dashboard summary
-- **Leaderboard** — top traders and followed-trader feed
-
-### Backtesting & news
-
-- **Backtesting** — replay copy-trade and indicator strategies over historical
-  data; run management and strategy catalog
-- **News generation** — LLM-generated news items and feeds, streamed over SSE
-
-### Platform, accounts & intelligence
-
-- **Accounts & workspaces** — multiple accounts per user with per-account
-  settings and an `X-Account-Id` isolation context threaded through every
-  internal route
-- **API keys** — hashed, scope-gated (`read` / `trade` / `admin`) keys with a
-  separate *management* surface that an API key can never use to mint another key
-- **External REST API** — `/api/v1/external/*`, API-key authenticated and
-  rate-limited per key; its order route mirrors the internal manual path
-  including the pre-trade gate, safety caps and audit event
-- **Billing & subscriptions** — Stripe Checkout, customer portal and a
-  signature-verified webhook; plan tiers with entitlements and usage quotas
-- **Collaborative forecasting** — shared forecasts, consensus building and
-  contributor attribution
-- **Experiments (A/B)** — experiment definitions, variant assignment and results
-- **Orchestration engine** — multi-step agentic plans with a live execution
-  timeline (Orchestrator page)
-- **Cross-venue arbitrage** — opportunity discovery across venues
-- **Wallet clustering** — co-occurrence graph over whale events, surfaced as a
-  *labelled signal* for review (never an automatic action)
-- **Venues & venue markets** — venue registry, market sync and mismatch detection
-- **Model governance & drift** — model registry, approval workflow and drift
-  monitoring with in-app alerts
-- **Prompt versioning** — versioned prompt management for the AI services
-- **Event log & audit** — append-only `AppEvent` audit trail plus the
-  entitlement service that backs plan limits
-- **Live WebSocket API** — `/ws/v1` streaming positions and fills for API clients
-
-### Authentication & security
-
-- **Wallet-signature login** (EIP-191 `personal_sign`) and **private-key login**
-- **JWT access + refresh tokens** — refresh tokens HMAC-hashed at rest, rotated,
-  single-use, revocable; delivered as httpOnly SameSite cookies
-- **Fernet credential vault** with key rotation (optional GCP KMS envelope)
-- **Rate limiting** (global + per-endpoint), SSRF guard on webhooks
-- **Admin** — wallet-gated admin, user LLM overrides, debug endpoints
-
-### Frontend
-
-- Dashboard, Markets, Opportunities, Copy Trading, Market Making, Inverse Bot,
-  Backtesting, News, Leaderboard, Whale Feed, Latency Arb, Execution Analytics,
-  Notification Center, Stop Loss / Take Profit, Trade History, Settings,
-  Ops Center (admin), Debug Dashboard, Tutorial Overlay and User Guide
-- WalletConnect and injected-wallet (MetaMask/Rabby/Coinbase) support
-- React 18 + TypeScript, TanStack Query, Zustand, React Hook Form, Recharts,
-  React Virtuoso, Tailwind CSS
-
----
-
-## Repository layout
-
-```
-polymarket/
-├── backend/                      FastAPI service
-│   ├── app/
-│   │   ├── main.py               application entry point, lifespan, middleware
-│   │   ├── config.py             pydantic-settings configuration
-│   │   ├── api/routes/           27 routers
-│   │   ├── models/               36 SQLAlchemy models
-│   │   ├── schemas/              Pydantic request/response models
-│   │   ├── security/             auth.py · crypto.py · credential_store.py
-│   │   ├── services/             trading, monitoring and data services
-│   │   ├── llm/                  LangChain assessment chains
-│   │   ├── grpc_clients/         pooled gRPC client (+ generated stubs)
-│   │   ├── repositories/         data-access helpers
-│   │   ├── middleware/           request logging
-│   │   └── utils/                cache · database · indicators · time
-│   ├── migrations/               Alembic (25 revisions)
-│   ├── tests/                    pytest suite
-│   ├── pyproject.toml            dependencies + ruff + pytest config
-│   └── Dockerfile / .prod
-│
-├── frontend/                     React 18 + Vite SPA
-│   ├── src/
-│   │   ├── components/           48 components
-│   │   ├── pages/                route-level pages
-│   │   ├── services/             typed API clients
-│   │   ├── store/authStore.ts    in-memory Zustand session state
-│   │   ├── hooks/ · utils/ · types/ · context/
-│   │   └── config/api.ts         API origin resolution
-│   ├── nginx.conf                production static server + /api proxy
-│   └── package.json
-│
-├── services/
-│   ├── llm-chain/                LangChain gRPC microservice
-│   ├── cli-agent/                CLI-agent gRPC microservice
-│   ├── mcps/research/            MCP research server
-│   ├── shared/                   packages shared by the AI services
-│   │                             (polymarket_mcp, polymarket_settings,
-│   │                              binance_chains)
-│   └── proto/analysis.proto      shared gRPC contract
-│
-├── prompts/                      prompt templates (prompts.json)
-├── docs/                         local study notes — NOT tracked
-├── docker-compose.yml            local development stack
-├── docker-compose.prod.yml       production stack
-├── start.sh                      local dev launcher
-├── ruff.toml                     Ruff config for backend + services
-├── .pre-commit-config.yaml       ruff · prettier · repo hygiene
-├── .prettierrc.json              frontend formatting rules
-└── README.md                     this file
+```mermaid
+flowchart LR
+    user["You"] --> app["Web workspace<br/>Markets · Portfolio · Analysis · Trading"]
+    wallet["Browser wallet or WalletConnect"] -->|"sign-in signature"| app
+    app <-->|"secure app requests"| backend["Application backend<br/>Accounts · trading · safety checks"]
+    backend <--> data[("Database")]
+    backend <-->|"market data and orders"| polymarket["Polymarket / Polygon"]
+    backend <-->|"comparison data"| venues["Enabled venues"]
+    backend --> ai["AI services"]
+    ai --> analysis["Analysis agent"]
+    analysis <--> research["Research tools<br/>Web · X · News · Binance"]
+    backend --> alerts["In-app · email · webhook alerts"]
 ```
 
----
+### Agent orchestration
 
-## Technology stack
+The Orchestrator expands a request into ordered steps, sends each step to the
+analysis backend selected for the configured AI provider, and gathers the results.
+Progress and the final combined summary stream back to the workspace.
 
-**Backend** — Python 3.11+, FastAPI, Uvicorn, SQLAlchemy 2.x, Alembic,
-Pydantic v2 / pydantic-settings, `python-jose` (JWT), `cryptography` (Fernet),
-`py-clob-client` + `web3` / `eth-account` (Polymarket + Ethereum), `httpx`,
-`slowapi` (rate limiting), `redis`, `grpcio`.
+```mermaid
+flowchart TD
+    user["Your question"] --> orchestrator["Agent Orchestrator"]
+    orchestrator --> intent{"Choose a plan"}
+    intent --> deep["Market Deep Dive<br/>Research → Risk → Trade plan"]
+    intent --> sweep["Opportunity Sweep<br/>Scan → Deep dives → Risk review"]
+    intent --> diligence["Trader Diligence<br/>Profile → Copy review → Risk review"]
+    deep --> router["Step router<br/>Uses configured AI provider"]
+    sweep --> router
+    diligence --> router
+    router --> llmchain["LLM Chain agent"]
+    router --> cliagent["CLI Agent"]
+    llmchain --> result["Step result"]
+    cliagent --> result
+    result --> orchestrator
+    orchestrator --> stream["Live progress and<br/>combined summary"]
+    stream --> user
+```
 
-**AI services** — LangChain, LangChain Community, OpenAI SDK, MCP research tooling.
+### Agent tools and MCP delegation
 
-**Frontend** — React 18, TypeScript 5, Vite 5, React Router 6, TanStack Query v3
-(`react-query`), Zustand, React Hook Form, Axios, Tailwind CSS 3, Recharts,
-React Virtuoso, Ethers + WalletConnect.
+Both analysis agents share the `polymarket_mcp` client. Its current research path
+delegates web search, X-post search, and (when enabled) Binance market context to
+the Research MCP server. The LLM Chain also has direct web/news integrations and
+indexed-market retrieval.
 
-**Infrastructure** — PostgreSQL, Redis, Docker, Docker Compose, nginx.
+```mermaid
+flowchart TD
+    llmchain["LLM Chain agent"] --> native["Direct analysis tools<br/>DuckDuckGo · Tavily · NewsAPI · Market RAG"]
+    llmchain --> client["Shared client<br/>polymarket_mcp"]
+    cliagent["CLI Agent"] --> client
+    client --> server["Research MCP server"]
+    server --> primary["Current delegated calls<br/>web_search · x_posts_search<br/>binance_market_context"]
+    server --> extra["Additional registered tools<br/>tavily_search · news_search<br/>Binance signal/token tools · cross_venue_markets"]
+```
 
----
+The Research MCP registry also includes Binance smart-money signals, active buys,
+social hype and inflow rankings, trending tokens, token search and data, and a P&L
+leaderboard. Tavily, NewsAPI, Binance Skills, and cross-venue data depend on
+deployment configuration; not every registered tool runs on every request.
+Research results provide context and are not automatically converted into orders.
 
-## Prerequisites
+An AI response is a research aid. The Orchestrator and command palette stop at an
+analysis summary or written plan; they do not submit or approve orders. A separately
+enabled trading strategy follows its own account settings and safety limits.
 
-- Python **3.11+** and [uv](https://docs.astral.sh/uv/)
-- Node.js **18+** and npm
-- PostgreSQL **15+**
-- Redis (optional locally; required in production for credential caching)
-- Docker + Docker Compose (if running the full stack)
-- A browser wallet (MetaMask, Rabby, Coinbase Wallet) or a WalletConnect wallet
+## How to use the project
 
----
-
-## Quick start
-
-### Docker Compose (full stack)
+This project is self-hosted. The simplest way to run the full workspace is with
+Docker Compose:
 
 ```bash
-cp .env.example .env          # then edit: JWT_SECRET_KEY, OPENAI_API_KEY, …
+cp .env.example .env
+# Follow .env.example to generate the required application secrets.
+# Add an API key for the AI provider you want to use.
 docker compose up --build
 ```
 
-| Service       | URL                            |
-| ------------- | ------------------------------ |
-| Frontend      | http://localhost:5173          |
-| Backend API   | http://localhost:8002          |
-| OpenAPI docs  | http://localhost:8002/docs     |
-| PostgreSQL    | `localhost:5435`               |
-| Redis         | `127.0.0.1:6379`               |
-| llm-chain     | gRPC `localhost:50051`         |
-| cli-agent     | gRPC `localhost:50052`         |
-
-Production uses `docker-compose.prod.yml`, which serves the built SPA from nginx
-on port 80 and proxies `/api/` to the backend.
-
-### Local development
-
-```bash
-# Backend
-cd backend
-cp .env.example .env
-uv sync
-uv run alembic upgrade head
-uv run uvicorn app.main:app --reload
-
-# Frontend (second terminal)
-cd frontend
-cp .env.example .env
-npm install
-npm run dev
-```
-
-`./start.sh` performs the same steps interactively and starts Postgres via Docker
-when it is not already running.
-
----
-
-## Configuration
-
-Configuration is environment-driven. `.env.example` and `.env.prod.example` are
-committed templates; real `.env` files are gitignored.
-
-### Security-critical variables
-
-| Variable                      | Purpose                                                             |
-| ----------------------------- | ------------------------------------------------------------------- |
-| `JWT_SECRET_KEY`              | Signs access and refresh tokens. **Required**, min 32 chars, no placeholder. |
-| `REFRESH_TOKEN_HASH_SECRET`   | HMAC key for hashing refresh tokens at rest.                         |
-| `ENCRYPTION_MASTER_KEYS`      | Comma-separated Fernet keyring for encrypting wallet private keys.  |
-| `CREDENTIAL_ENCRYPTION_BACKEND` | Envelope backend for stored credentials: `fernet` (default) or `gcp_kms`. |
-| `GCP_KMS_KEY_NAME`            | Full GCP KMS key resource path (`projects/PROJECT/locations/LOCATION/keyRings/RING/cryptoKeys/KEY`), required when `CREDENTIAL_ENCRYPTION_BACKEND=gcp_kms`. |
-| `REQUIRE_REDIS_FOR_CREDENTIALS` | Fail instead of silently using an in-process credential cache.     |
-| `ADMIN_WALLETS`               | Comma-separated wallet addresses granted admin.                      |
-| `ENVIRONMENT`                 | `production` enables secure cookies, disables debug endpoints and stack-trace leakage. |
-
-### Database, cache and networking
-
-`DATABASE_URL`, `REDIS_URL`, `REDIS_PASSWORD`, `CREDENTIAL_CACHE_TTL_SECONDS`,
-`CORS_ALLOWED_ORIGINS`, `HOST`, `PORT`.
-
-### LLM providers
-
-`LLM_PROVIDER`, `LLM_MODEL`, `LLM_TEMPERATURE`, `LLM_MAX_TOKENS`,
-`DEFAULT_AI_BACKEND`, `GRPC_TIMEOUT`, plus credentials for any of
-`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`,
-`OLLAMA_BASE_URL`, `GITHUB_TOKEN`, `TAVILY_API_KEY`.
-
-### Feature flags and observability
-
-`BINANCE_SKILLS_ENABLED`, `NEWSAPI_ENABLED`, `TAVILY_ENABLED`, `RAG_ENABLED`,
-`POLYMARKET_PRIVATE_KEY`, `POLYMARKET_CHAIN_ID`, `LOG_LEVEL`,
-`DEBUG_ENDPOINTS_ENABLED`, `DEBUG_LOG_HASH_SALT`, `ADMIN_SYNC_ALLOW_EMPTY`.
-
-#### Research MCP (AI services)
-
-| Variable | Default | Purpose |
-| -------- | ------- | ------- |
-| `BINANCE_SKILLS_ENABLED` | `true` | Single gate for Binance Skills enrichment on the AI path. Read directly by the shared MCP client, so one switch covers `llm-chain` and `cli-agent` (the backend dashboard path keeps its own settings field). |
-| `RESEARCH_MCP_SERVER_PATH` | *(unset)* | Absolute path to the research MCP server script. Unset means the client falls back to the container/local layouts. |
-| `RESEARCH_MCP_BATCH_ENABLED` | `true` | Batches all tool calls of one research pass into a single MCP subprocess (3 spawns → 1). Set `false` to fall back to one subprocess per call if the batched transport ever misbehaves. |
-
-Both AI services get `BINANCE_SKILLS_ENABLED` from `docker-compose.yml` /
-`docker-compose.prod.yml`; the other two variables are optional overrides.
-
-### Frontend variables
-
-| Variable                        | Notes                                                          |
-| ------------------------------- | -------------------------------------------------------------- |
-| `VITE_API_URL`                  | **Empty in production** → same-origin `/api` via nginx. Absolute `https://origin` only if the API is genuinely cross-origin. A value of `/api` is wrong — service calls already include `/api`. |
-| `VITE_WALLETCONNECT_PROJECT_ID` | Required for the WalletConnect QR login flow.                  |
-
-> Anything prefixed `VITE_` is **inlined into the public browser bundle**. Never
-> place a secret in a `VITE_` variable.
-
----
-
-## Authentication
-
-Two login paths are implemented.
-
-**Wallet signature (preferred).** The frontend requests a challenge from
-`POST /api/auth/login`, the wallet signs it with `personal_sign`, and the backend
-recovers the address using EIP-191 (`encode_defunct`) and compares checksummed
-addresses. No key material is involved.
-
-**Private key login.** `POST /api/auth/login-with-key` accepts a raw private key
-directly so orders can be signed server-side. This key is encrypted at rest with
-Fernet (with key rotation) and is purged on logout.
-
-Session handling:
-
-- Short-lived **JWT access token** plus a longer-lived **refresh token**.
-- Refresh tokens are **HMAC-hashed at rest**, rotated on use, single-use and
-  revocable (`jti`).
-- Tokens are delivered as **httpOnly, SameSite=strict cookies** in addition to the
-  JSON body; `Secure` is set automatically outside local environments.
-- Logout revokes the refresh token and deletes stored wallet credentials.
-
-Session state lives **in memory only** (Zustand) — never in `localStorage`.
-
----
-
-## Trading strategies
-
-| Capability              | Endpoint prefix        | Description                                                                     |
-| ----------------------- | ---------------------- | ------------------------------------------------------------------------------- |
-| Manual execution        | `/api/trades`          | Explicit limit orders via `POST /api/trades/execute`; cash-out, history, P&L.   |
-| Copy trading            | `/api/trades`          | Mirror followed traders with risk modes, daily-loss limits and safety caps.     |
-| Market making           | `/api/market-maker`    | Bands and AMM strategies with configurable spread, collateral and sync interval. |
-| Inverse bot             | `/api/inverse-bot`     | Contrarian positions sized by configured mode, evaluated by the AI backend.     |
-| Stop loss / take profit | `/api/trades`          | Per-position resting orders, evaluated on a price-order cycle.                  |
-| Arbitrage               | `/api/trades`          | Cross-market opportunity scanning.                                              |
-| Backtesting             | `/api/backtesting`     | Replays copy-trade and indicator strategies over historical data.               |
-| News generation         | `/api/news`            | LLM-generated news items and feeds, streamed over SSE.                          |
-| Whale monitoring        | `/api/whales`          | Tracks large wallet movements and configurable whale alerts.                    |
-| Latency arbitrage       | `/api/latency-arb`     | Exploits price lag between venues with paper-trading and safety gates.          |
-
-Safety controls on the automated path include a global trading halt, per-user
-cooldown, monthly and daily loss limits, maximum drawdown, total-loss halt, and
-maximum position size. `POST /api/trades/emergency-stop` halts trading and can
-market-close all positions; `POST /api/trades/resume-trading` reverses it.
-
----
-
-## API reference
-
-Interactive documentation is served at `/docs` (Swagger UI) and `/redoc`.
-
-### Authentication — `/api/auth`
-`POST /login` · `POST /verify` · `POST /login-with-key` ·
-`POST /refresh` · `POST /logout` · `GET /me`
-
-### Analysis — `/api/analysis`
-`POST /market` · `POST /market/stream` · `POST /quick` ·
-`POST /quick-group` · `POST /scan` · `POST /risk` · `POST /trade-plan` ·
-`POST /trader` · `POST /trader/stream` · `POST /copy-trade-eval` ·
-`POST /opportunities/analyze-markets` · `POST /opportunities/stream` ·
-`GET /health` · `GET /calibration/summary` ·
-`GET /calibration/forecasts` (AI forecast accuracy: Brier score,
-reliability buckets, per-model/per-task breakdown)
-
-### Markets — `/api/markets`
-`GET /search` · `GET /categories` · `GET /browse` ·
-`POST /trader-analysis/stream`
-
-### Trades — `/api/trades`
-`POST /execute` · `POST /cash-out` · `GET /history` ·
-`GET /leaderboard` · `GET /trader/{wallet}` ·
-`GET /trader/{wallet}/quality` · `POST /traders/rescore` ·
-`POST /follow/{wallet}` · `DELETE /follow/{wallet}` ·
-`DELETE /notification-follow/{wallet}` · `GET /following` ·
-`GET /following-feed` · `GET /copy-trades` · `GET /copy-trades/pnl` ·
-`GET /copy-evaluation/{wallet}` · `POST /copy-trade-eval` ·
-`GET /copy-trades/pnl/by-trader` (per-trader realized PnL & win rate,
-`?window_days=` 1–365, default 30) ·
-`GET/POST /stop-loss` · `DELETE /stop-loss/{stop_loss_id}` ·
-`GET/POST /take-profit` · `DELETE /take-profit/{take_profit_id}` ·
-`GET /arbitrage/opportunities` · `POST /arbitrage/scan` ·
-`GET /analytics/summary` · `GET /analytics/edge-score` ·
-`GET /analytics/trades` · `GET /size-suggestion` ·
-`POST /emergency-stop` · `POST /resume-trading`
-
-### Portfolio — `/api/portfolio`
-`GET /balance` · `GET /positions` · `GET /positions/prices` ·
-`GET /summary` · `GET /markets` · `GET /markets/newest` ·
-`GET /markets/combined` · `GET /markets/prices` · `GET /prices/stream` ·
-`POST /redeem` · `GET /redemptions` · `GET /risk-report` ·
-`GET /equity/snapshots` · `GET /equity/summary`
-
-### Settings — `/api/settings`
-`GET/PUT /` · `GET/PUT /copy-trading` · `GET /paper-summary` ·
-`GET/PUT /profile` · `GET /llm/current` · `PATCH /llm` ·
-`GET /llm/providers` · `GET /backends/status` · admin-only:
-`GET /admin/providers`, `GET /admin/users`,
-`PATCH /admin/users/{user_id}/llm`, `PATCH /admin/defaults`
-
-### News — `/api/news`
-`GET /feed` · `GET /market/{condition_id}` · `POST /generate` ·
-`POST /generate/stream` · `POST /refresh-feed`
-
-### Backtesting — `/api/backtesting`
-`GET /strategies` · `GET/POST /runs` · `GET /runs/{run_id}` ·
-`DELETE /runs/{run_id}`
-
-### Market maker — `/api/market-maker`
-`GET/POST /configs` · `DELETE /configs/{config_id}` ·
-`POST /configs/{config_id}/start` · `/stop` · `/sync` ·
-`GET /metrics`
-
-### Inverse bot — `/api/inverse-bot`
-`GET/POST /positions` · `DELETE /positions/{position_id}` ·
-`POST /positions/{position_id}/evaluate` · `GET /metrics`
-
-### Binance signals — `/api/binance`
-`GET /dashboard` · `GET /signals/smart-money` · `GET /signals/active-buys` ·
-`GET /rankings/social-hype` · `/trending` · `/smart-money-inflow` ·
-`/pnl-leaderboard` · `GET /token/search` · `GET /token/data`
-
-### Whale monitoring — `/api/whales`
-`GET /events` · `GET /config` · `PUT /config`
-
-### Latency arbitrage — `/api/latency-arb`
-`GET /config` · `POST /config` · `GET /opportunities` · `GET /trades`
-
-### Notifications — `/api/notifications`
-`GET /channels` · `POST /channels` · `DELETE /channels/{channel_id}` ·
-`GET /` · `PATCH /{event_id}/read` · `GET /preferences` ·
-`PUT /preferences` · `POST /test`
-
-### Health & metrics — `/health`
-`GET /health` · `GET /metrics`
-
-### Trading key — `/api/auth`
-`POST /trading-key` · `GET /trading-key` · `DELETE /trading-key`
-
-### Accounts — `/api/accounts`
-`GET /` · `GET /{account_id}` · `GET/PUT /{account_id}/settings` · `POST /` (account-switching context)
-
-### API keys (management) — `/api/settings/api-keys`
-`GET` · `POST` · `DELETE /{key_id}` — mint, list and revoke scoped API keys.
-
-### External REST API — `/api/v1/external`
-`X-API-Key` authenticated, rate-limited per key, scope-gated.
-`GET /markets` · `GET /portfolio` · `POST /orders` (requires `trade` scope).
-
-### Billing — `/api/billing`
-`GET /subscription` · `GET /plans` · `POST /checkout-session` ·
-`POST /portal-session` · `POST /webhook` (signature-verified, no auth).
-
-### Orchestration — `/api/orchestration`
-`GET /plans` · `POST /plans` · `GET /plans/{plan_id}` · `POST /plans/{plan_id}/run`
-
-### Venues — `/api/venues`
-`GET /` · `GET /markets` · `GET /mismatches` · `POST /sync`
-
-### Experiments — `/api/experiments`
-`GET /` · `POST /` · `GET /{experiment_id}` · `POST /{experiment_id}/assign`
-
-### Collaboration — `/api/collaboration`
-`GET /forecasts` · `POST /forecasts` · `POST /forecasts/{id}/consensus` · `GET /contributors`
-
-### WebSocket — `/ws/v1`
-Streaming positions and fills for API-key clients (query/header key, throttled).
-
-### Debug (admin only, disabled unless `DEBUG_ENDPOINTS_ENABLED=true`)
-`GET /health` · `GET /stats` · `GET/DELETE /logs`
-
----
-
-## Development
-
-### Backend
-
-```bash
-cd backend
-uv sync
-uv run uvicorn app.main:app --reload     # http://localhost:8002
-```
-
-Add a database change with Alembic:
-
-```bash
-uv run alembic revision --autogenerate -m "describe the change"
-uv run alembic upgrade head
-```
-
-### Frontend
-
-```bash
-cd frontend
-npm run dev            # vite dev server
-npm run build          # tsc -b && vite build
-npm run type-check     # tsc --noEmit
-npm run format         # prettier --write
-npm run format:check   # prettier --check
-```
-
-> **Config-file gotcha.** `frontend/tsconfig.node.json` emits build artefacts to
-> `node_modules/.tmp/tsconfig.node`. Do not remove that `outDir`: when
-> `tsc -b` writes `vite.config.js` next to `vite.config.ts`, Vite prefers the
-> emitted `.js` and silently ignores edits to the TypeScript source.
-
----
-
-## Code quality and pre-commit
-
-The repository pins its formatters and linters through
-[`.pre-commit-config.yaml`](.pre-commit-config.yaml).
-
-| Hook          | Applies to                     | What it enforces                                              |
-| ------------- | ------------------------------ | ------------------------------------------------------------- |
-| `ruff-check`  | `backend/`, `services/`        | pyflakes, pycodestyle, isort, pyupgrade, bugbear, bandit, simplifications |
-| `ruff-format` | `backend/`, `services/`        | Black-compatible formatting at 100 columns                     |
-| `prettier`    | `frontend/`                    | Consistent frontend formatting                                  |
-| `jscpd`       | `backend/`, `services/`, `frontend/` | Total duplication must stay under **3%**                 |
-| hygiene hooks | repository                     | trailing whitespace, EOF newline, merge conflicts, YAML validity, large files, private-key detection |
-
-Ruff's `bandit` (`S`) rules are enabled deliberately — this codebase handles
-private keys, signs real orders and executes SQL, so security lint is part of the
-gate.
-
-Lint and format rules live in a single repository-wide [`ruff.toml`](ruff.toml);
-`backend/pyproject.toml` inherits it via `extend`, so results are identical
-whether Ruff is run from the repository root or from `backend/`. Frontend
-formatting rules live in [`.prettierrc.json`](.prettierrc.json).
-
-Ruff and Prettier are invoked through the tools the project itself installs
-(`uv.lock` and `package.json`), so a hook can never disagree with a local run.
-
-### SonarQube
-
-[`sonar-project.properties`](sonar-project.properties) configures analysis and
-records the quality gate:
-
-| Metric               | Target |
-| -------------------- | ------ |
-| Duplicated lines     | < 3%   |
-| Line coverage        | ≥ 80%  |
-| New code issues      | 0      |
-| CRITICAL / BLOCKER   | 0      |
-
-```bash
-cd backend && uv run pytest          # writes backend/coverage.xml for the scanner
-sonar-scanner -Dsonar.projectKey=polymarket
-```
-
-Lint and duplication are also enforced locally and in pre-commit, so most
-regressions can be caught without a SonarQube server.
-
-### Duplication budget
-
-`scripts/check-duplication.sh` runs `jscpd`, which implements the same
-token-based algorithm as SonarQube's CPD, and fails above 3%. Override the
-threshold with `MAX_DUPLICATION=5 ./scripts/check-duplication.sh`.
-
-Current shared abstractions worth knowing before adding code:
-
-- `services/shared/polymarket_mcp/` — the research MCP client used by both AI
-  services (it was duplicated and had drifted).
-- `services/shared/binance_chains/` — the canonical Binance web3 chain-id map,
-  shared by the research MCP server and the backend dashboard routes.
-- `frontend/src/services/sseStream.ts` — SSE consumption shared by the analysis,
-  markets and news clients.
-- `frontend/src/components/PriceTriggerModal.tsx` — the stop-loss and take-profit
-  modals, which are one component with opposite direction.
-
-Install the hooks once per clone:
-
-```bash
-pre-commit install
-```
-
-Run across the whole repository:
-
-```bash
-pre-commit run --all-files
-```
-
-Run the same checks directly:
-
-```bash
-uv run --project backend --frozen ruff check --config ruff.toml backend services
-uv run --project backend --frozen ruff format --check --config ruff.toml backend services
-npx prettier --check "frontend/**/*.{ts,tsx,css,json,html}"
-```
-
----
-
-## Testing
-
-The backend suite is large and hermetic (all I/O is mocked) — roughly **4,300
-tests across ~120 modules at ~96% statement coverage** of `app/`, comfortably
-above the 80% SonarQube gate. Coverage is produced by `pytest-cov` and written to
-`backend/coverage.xml` for SonarQube.
-
-```bash
-cd backend
-uv run pytest                      # full suite + coverage report
-uv run pytest tests/test_security_config.py -v
-uv run pytest --cov=app.services.market_data.polymarket_service --cov-report=term-missing
-```
-
-Every module and frontend file carries a header docstring describing its role, so
-the test layout, the request path and the shared helpers can be understood from
-the file itself.
-
----
-
-## Risk controls and known gaps
-
-Safety controls on the automated copy-trade path include a global trading halt,
-per-user cooldown, monthly and daily loss limits, maximum drawdown, total-loss
-halt, and maximum position size. `POST /api/trades/emergency-stop` halts trading
-and can market-close all positions; `POST /api/trades/resume-trading` reverses
-it, including the copy-trading kill switch.
-
-### Realized PnL
-
-Every loss limit derives from `UserTrade.pnl`. That column is written **only** by
-`app/services/pnl_reconciliation.py`, which matches sell trades against open buy
-lots FIFO and records realized profit/loss on each closing sell. It runs for every
-user on each position-lifecycle cycle (`LIFECYCLE_CHECK_INTERVAL`, five minutes).
-
-### Pre-trade gate, Kelly sizing and paper trading
-
-Automated strategies pass through `app/services/pre_trade_gate.py`, which
-re-checks the halt, cooldown and loss limits immediately before an order is
-signed — the last line of defence between a stale cached decision and a real
-order. Position sizing can use the Kelly criterion
-(`app/services/kelly_service.py`) to scale size to the modelled edge. Every
-automated strategy (latency arb, inverse bot, market maker) supports a
-**paper-trading mode** that walks the full decision and order-construction path
-against live prices but never signs or submits an order, so new strategies can
-be validated against real market data with zero capital at risk.
-
-### Redemption and execution analytics
-
-`app/services/redemption_service.py` tracks conditional-token redemption
-attempts (the CTF redeem flow) with per-attempt persistence, and
-`app/services/execution_analytics.py` records fill quality — slippage,
-fill latency and price impact — for every executed order, surfaced through the
-Execution Analytics dashboard.
-
-Before this existed nothing wrote `pnl`, so the daily-loss, monthly-loss,
-drawdown and total-loss layers all evaluated against a permanent zero and the bot
-had **no working loss circuit breaker**. If you operate this system, confirm
-`GET /api/settings/admin/providers`-style reconciliation output is non-trivial —
-a user with executed trades but zero PnL everywhere means reconciliation is not
-running.
-
-### Operational guidance
-
-Scheduled jobs run behind Postgres advisory locks with heartbeats
-(`app/utils/scheduler_lock.py`), and trade-event deduplication is shared
-through the cache backend, so the backend scales to multiple workers
-without duplicate monitors or duplicate orders. A dead-man's-switch
-watchdog in the lifespan alerts if the scheduler loop stops heartbeating.
-
----
-
-## Security notes
-
-- Private keys are encrypted at rest with Fernet under a configurable keyring and
-  are never logged; refresh tokens are hashed before storage.
-- All database access goes through the SQLAlchemy ORM with bound parameters.
-- Production serves the SPA from the same origin as the API, so cookies remain
-  first-party and CORS is not part of the production request path.
-- nginx sets `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy` and
-  `Permissions-Policy`; the Vite build injects a restrictive CSP.
-- Rate limiting is applied globally through `slowapi` at 100 requests/minute per
-  client IP.
-- Keep `ENVIRONMENT=production` in every deployed environment. It is the single
-  switch that enables secure cookies, disables the debug router and stops raw
-  exception text from reaching clients.
-
----
-
-## Operations and troubleshooting
-
-**Backend will not start** — confirm PostgreSQL is reachable, that `uv sync`
-completed, and that `DATABASE_URL` and `JWT_SECRET_KEY` are set.
-
-**Frontend cannot reach the API in development** — the backend must be listening
-on `http://localhost:8002`, `VITE_API_URL` must be set in `frontend/.env`, and
-`CORS_ALLOWED_ORIGINS` must include the frontend origin. In development Vite
-proxies `/api` to the backend.
-
-**Production returns 404 on every API call** — `VITE_API_URL` must be empty
-(same-origin) or a bare `https://origin`. Setting it to `/api` produces
-`/api/api/...` paths.
-
-**Migrations fail** — run `uv run alembic upgrade head` from `backend/` and read
-the reported revision; `alembic.ini` and `migrations/` are excluded from linting
-by design.
-
-**Signature verification fails** — reconnect the wallet, request a fresh
-challenge, and confirm the wallet supports `personal_sign`. Set
-`VITE_WALLETCONNECT_PROJECT_ID` if the QR flow is required.
-
-**AI backend unhealthy** — `GET /api/settings/backends/status` reports health per
-backend; check that the gRPC services are listening on 50051 / 50052 and that the
-required provider API keys are configured.
-
----
-
-## Documentation
-
-This `README.md` is the only tracked Markdown file in the repository.
-
-Study notes, the owner handbook and superseded planning documents are stored under
-`docs/` (including `docs/owner-handbook/` and `docs/study/`) and are **excluded
-from version control** by `.gitignore`. They remain available locally and on the
-deploying machine but are not part of the repository history.
-
----
-
-## License
-
-MIT
-
-## Support
-
-Please open an issue on GitHub for questions or problems.
+Then use the workspace:
+
+1. Open the application at your deployment URL. Connect a browser wallet or
+   WalletConnect wallet and sign the login request.
+2. Start with **Markets**, **Opportunities**, or **Leaderboard** to browse markets,
+   compare activity, and find traders to research.
+3. Open **Analysis** for a focused market or trader review. Choose **Ask the AI** or
+   **Orchestrator** to run a Market Deep Dive, Opportunity Sweep, or Trader Diligence
+   plan and follow its progress.
+4. Review your balances and positions on the **Dashboard**. Use **Risk Report**,
+   **AI Calibration**, and **Execution Analytics** to inspect portfolio risk,
+   forecast performance, and trade quality.
+5. To automate trading, add a trading key separately in **Settings**, configure the
+   strategy and its limits, and use paper trading first. Enable a live strategy only
+   when its settings are correct. Use the emergency stop to pause automation.
+
+An AI provider key is needed for AI analysis. Optional research services can add
+news, premium search, and crypto signals. Check `.env.example` for configuration
+details. Set provider credentials on the server; never put secrets in `VITE_`
+browser settings or commit them to the project.
