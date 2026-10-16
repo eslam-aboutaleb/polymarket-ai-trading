@@ -5,20 +5,36 @@ Falls back to OpenAI API if GITHUB_TOKEN is not available.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
-from polymarket_settings import TASK_TIERS, ModelTier
+from polymarket_settings import TASK_TIERS, ModelTier, resolve_tier_config
 from src.config import get_settings
 from src.mcp_client import ResearchMCPClient
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class LLMConfig:
+    """Resolved per-call LLM parameters (model plus sampling settings).
+
+    Mirrors the tuple ``resolve_tier_config`` returns so a tier can be
+    applied in full — not just through its model name.
+    """
+
+    model: str | None
+    temperature: float
+    max_tokens: int
+    reasoning_effort: str | None = None
 
 
 class PromptManager:
@@ -84,21 +100,44 @@ class CopilotCLIAgent:
         self._client = httpx.AsyncClient(timeout=self.settings.copilot_timeout)
         self.research_mcp = ResearchMCPClient()
 
-    def _model_for_tier(self, tier: ModelTier) -> str | None:
-        """Return the model configured for a task tier."""
-        if tier is ModelTier.STRONG:
-            return self.strong_model or self.model
-        return self.model
+    def _llm_config_for_task(self, task: str, model: str | None = None) -> LLMConfig:
+        """Resolve the full tier configuration for an analysis task.
 
-    def _tier_for_task(self, task: str) -> ModelTier:
-        """Resolve the tier for an analysis task."""
-        return TASK_TIERS.get(task, ModelTier.STANDARD)
+        Mirrors llm-chain's ``create_llm_for_task``: the tier's sampling
+        settings (temperature, max_tokens, reasoning_effort) come from
+        ``resolve_tier_config`` — per-tier env overrides included, and
+        ``llm_tiering_enabled=false`` collapses them to the service
+        globals — so a tier is applied in full, not just by model name.
+        An explicit per-request model wins over the tier model, exactly
+        like llm-chain's ``llm_override``.
+        """
+        tier_model, temperature, max_tokens, reasoning_effort = resolve_tier_config(
+            task, self.settings
+        )
+        if model:
+            return LLMConfig(model, temperature, max_tokens, reasoning_effort)
+
+        # The GitHub Models endpoint only serves the models this service is
+        # configured for, so the tier's model stays the configured one.
+        if TASK_TIERS.get(task, ModelTier.STANDARD) is ModelTier.STRONG:
+            model = self.strong_model or self.model or tier_model
+        else:
+            model = self.model or tier_model
+        return LLMConfig(model, temperature, max_tokens, reasoning_effort)
+
+    def _default_llm_config(self) -> LLMConfig:
+        """Service-default sampling parameters (no tier resolution)."""
+        return LLMConfig(
+            model=self.model,
+            temperature=self.settings.github_model_temperature,
+            max_tokens=self.settings.github_model_max_tokens,
+        )
 
     async def _call_llm(
         self,
         prompt: str,
         system_prompt: str = None,
-        model: str | None = None,
+        llm: LLMConfig | None = None,
     ) -> str:
         """
         Call the GitHub Models API (OpenAI-compatible chat completions).
@@ -106,23 +145,26 @@ class CopilotCLIAgent:
         if not self.api_key:
             return "Error: No API key configured. Set GITHUB_TOKEN or OPENAI_API_KEY."
 
+        llm = llm or self._default_llm_config()
+
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
         # Build endpoint URL
-        if "azure.com" in self.api_base:
-            url = f"{self.api_base}/chat/completions"
-        else:
-            url = f"{self.api_base}/chat/completions"
+        url = f"{self.api_base}/chat/completions"
 
         payload = {
-            "model": model or self.model,
+            "model": llm.model or self.model,
             "messages": messages,
-            "temperature": self.settings.github_model_temperature,
-            "max_tokens": self.settings.github_model_max_tokens,
+            "temperature": llm.temperature,
+            "max_tokens": llm.max_tokens,
         }
+        if llm.reasoning_effort:
+            # Same OpenAI reasoning parameter llm-chain sends as
+            # model_kwargs; only set for tiers that ask for it (STRONG).
+            payload["reasoning_effort"] = llm.reasoning_effort
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -156,19 +198,19 @@ class CopilotCLIAgent:
         self,
         prompt: str,
         system_prompt: str = None,
-        model: str | None = None,
+        llm: LLMConfig | None = None,
     ) -> str:
         """Run an analysis prompt through the LLM. Replaces old _run_copilot."""
         default_system = (
             "You are an expert AI trading analyst specializing in Polymarket prediction markets. "
             "Provide concise, data-driven analysis with clear recommendations."
         )
-        return await self._call_llm(prompt, system_prompt or default_system, model)
+        return await self._call_llm(prompt, system_prompt or default_system, llm)
 
     async def _run_analysis_with_context(
         self,
         prompt: str,
-        model: str | None = None,
+        llm: LLMConfig | None = None,
     ) -> str:
         """
         Run analysis with a structured system prompt.
@@ -183,7 +225,7 @@ Provide a structured analysis with:
 4. Recommendation (buy_yes/buy_no/hold)
 5. Risk factors"""
 
-        return await self._run_analysis(prompt, system_prompt, model)
+        return await self._run_analysis(prompt, system_prompt, llm)
 
     async def analyze_market(
         self,
@@ -245,7 +287,7 @@ End Date: {end_date}
         result = await self._run_analysis(
             prompt,
             system_prompt=system_prompt,
-            model=model or self._model_for_tier(self._tier_for_task("market_assessment")),
+            llm=self._llm_config_for_task("market_assessment", model),
         )
 
         return {
@@ -322,7 +364,7 @@ Provide a brief 2-3 sentence assessment:
 """
         return await self._run_analysis(
             prompt,
-            model=model or self._model_for_tier(self._tier_for_task("quick_analysis")),
+            llm=self._llm_config_for_task("quick_analysis", model),
         )
 
     async def scan_markets(self, markets: list[dict], model: str | None = None) -> dict[str, Any]:
@@ -340,7 +382,7 @@ For each, provide: name, mispricing estimate, confidence, rationale.
 
         result = await self._run_analysis_with_context(
             prompt,
-            model=model or self._model_for_tier(self._tier_for_task("multi_market_scan")),
+            llm=self._llm_config_for_task("multi_market_scan", model),
         )
 
         return {
@@ -377,7 +419,7 @@ Analyze:
 
         result = await self._run_analysis(
             prompt,
-            model=model or self._model_for_tier(self._tier_for_task("risk_assessment")),
+            llm=self._llm_config_for_task("risk_assessment", model),
         )
 
         return {"analysis": result, "timestamp": datetime.utcnow().isoformat()}
@@ -411,7 +453,7 @@ Provide:
 
         result = await self._run_analysis_with_context(
             prompt,
-            model=model or self._model_for_tier(self._tier_for_task("trade_execution_plan")),
+            llm=self._llm_config_for_task("trade_execution_plan", model),
         )
 
         return {"analysis": result, "timestamp": datetime.utcnow().isoformat()}
@@ -476,7 +518,7 @@ Provide:
         result = await self._call_llm(
             prompt,
             system_prompt,
-            model=model or self._model_for_tier(self._tier_for_task("scan_opportunity")),
+            llm=self._llm_config_for_task("scan_opportunity", model),
         )
 
         # Parse JSON
@@ -546,7 +588,7 @@ Provide:
         result = await self._run_analysis(
             prompt,
             system_prompt=system_prompt,
-            model=model or self._model_for_tier(self._tier_for_task("trader_profile")),
+            llm=self._llm_config_for_task("trader_profile", model),
         )
 
         return {
@@ -594,7 +636,7 @@ Provide:
         result = await self._run_analysis(
             prompt,
             system_prompt=system_prompt,
-            model=model or self._model_for_tier(self._tier_for_task("copy_trade_eval")),
+            llm=self._llm_config_for_task("copy_trade_eval", model),
         )
 
         # Parse recommendation. The prompt asks for a numbered
@@ -719,7 +761,7 @@ Provide:
         raw = await self._call_llm(
             prompt,
             system_prompt,
-            model=model or self._model_for_tier(self._tier_for_task("inverse_position_eval")),
+            llm=self._llm_config_for_task("inverse_position_eval", model),
         )
 
         parsed: dict[str, Any] = {}
@@ -755,6 +797,11 @@ Provide:
             "timestamp": datetime.utcnow().isoformat(),
         }
 
+    async def aclose(self) -> None:
+        """Release the shared HTTP client (idempotent graceful shutdown)."""
+        with contextlib.suppress(Exception):
+            await self._client.aclose()
+
 
 # Singleton instance
 _agent_instance: CopilotCLIAgent | None = None
@@ -766,3 +813,9 @@ def get_cli_agent() -> CopilotCLIAgent:
     if _agent_instance is None:
         _agent_instance = CopilotCLIAgent()
     return _agent_instance
+
+
+async def aclose_cli_agent() -> None:
+    """Release the singleton agent's HTTP client (graceful shutdown)."""
+    if _agent_instance is not None:
+        await _agent_instance.aclose()
