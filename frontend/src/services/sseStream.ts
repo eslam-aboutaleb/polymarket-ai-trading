@@ -13,10 +13,16 @@
  * meant five near-identical 40-line blocks that had already started to drift.
  * `consumeSSEStream` is the single implementation; endpoint-specific payload
  * fields are handled through the optional `onEvent` escape hatch.
+ *
+ * Streaming is the one place axios cannot help, so `fetchStream` keeps the
+ * transport on the same auth footing as `services/apiClient`: cookies, the
+ * active-account header, and a single-flight session refresh on 401.
  */
 
 import { API_BASE_URL } from "../config/api";
-import { getApiErrorMessage } from "../utils/apiError";
+import { describeApiError, getApiErrorMessage } from "../utils/apiError";
+import { getActiveAccountHeader } from "./accountService";
+import { refreshSession } from "./apiClient";
 
 /** Callbacks invoked as SSE payloads arrive. */
 export interface SSEHandlers {
@@ -83,7 +89,26 @@ export async function streamLines(
 export async function consumeSSEStream(res: Response, handlers: SSEHandlers): Promise<void> {
   if (!res.ok) {
     const errBody = await res.text().catch(() => "");
-    handlers.onError?.(errBody || `HTTP ${res.status}`);
+    let data: unknown = errBody;
+    if (errBody) {
+      try {
+        data = JSON.parse(errBody);
+      } catch {
+        // Keep plain-text error responses available to the common formatter.
+      }
+    }
+    const retryAfterHeader = res.headers.get("retry-after");
+    const retryAfterValue = Number(retryAfterHeader);
+    handlers.onError?.(
+      describeApiError(
+        {
+          status: res.status,
+          data,
+          retryAfter: Number.isFinite(retryAfterValue) ? retryAfterValue : null,
+        },
+        `HTTP ${res.status}`,
+      ),
+    );
     return;
   }
 
@@ -149,6 +174,42 @@ export interface SSEFetchOptions {
   signal: AbortSignal;
 }
 
+/** Merge the cookie + active-account credentials onto a stream request. */
+function withStreamAuth(init: RequestInit = {}): RequestInit {
+  const headers = new Headers(init.headers);
+  for (const [name, value] of Object.entries(getActiveAccountHeader())) {
+    headers.set(name, value);
+  }
+  return { ...init, headers, credentials: "include" };
+}
+
+/**
+ * Open a stream over the authenticated transport.
+ *
+ * `fetch` is the only way to read a streaming body, so the pieces axios owns
+ * are re-applied here: the session cookie, the active-account header, and —
+ * on a 401 — the very same single-flight refresh the apiClient response
+ * interceptor performs, followed by one replay of the request.
+ *
+ * A refresh that fails leaves the original 401 response in place: the caller
+ * sees the same non-ok response it would have seen without this helper, and
+ * the session has already been cleared by `refreshSession`.
+ *
+ * @param url - Absolute URL to open.
+ * @param init - Standard `fetch` init; credentials/headers are merged in.
+ */
+export async function fetchStream(url: string, init: RequestInit = {}): Promise<Response> {
+  const response = await fetch(url, withStreamAuth(init));
+  if (response.status !== 401) return response;
+
+  try {
+    await refreshSession();
+  } catch {
+    return response;
+  }
+  return fetch(url, withStreamAuth(init));
+}
+
 /**
  * POST to an SSE endpoint and stream the response.
  *
@@ -156,10 +217,9 @@ export interface SSEFetchOptions {
  * @param handlers - Callbacks for the streamed payloads.
  */
 export async function streamSSE(options: SSEFetchOptions, handlers: SSEHandlers): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}${options.path}`, {
+  const res = await fetchStream(`${API_BASE_URL}${options.path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    credentials: "include",
     body: JSON.stringify(options.body),
     signal: options.signal,
   });

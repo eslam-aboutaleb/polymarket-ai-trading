@@ -26,7 +26,6 @@ import {
   LLMCurrentSettings,
 } from "../services/settingsService";
 import {
-  CreateChannelRequest,
   NotificationChannel,
   NotificationChannelType,
   NotificationPreference,
@@ -37,6 +36,7 @@ import {
   sendTestAlert,
   updateNotificationPreferences,
 } from "../services/notificationsService";
+import { CHANNEL_REGISTRY } from "../services/channelRegistry";
 import { getApiErrorMessage } from "../utils/apiError";
 import { tradingKeyService } from "../services/tradingKeyService";
 import { useTradingKeyStatus } from "../hooks/useTradingKeyStatus";
@@ -185,16 +185,15 @@ export default function SettingsPage() {
     try {
       setNotifSaving(true);
       setError(null);
-      const request: CreateChannelRequest = {
-        channel_type: channelType,
+      // The registry owns which fields each channel type sends, so a new
+      // channel type needs no new branch here.
+      const request = CHANNEL_REGISTRY[channelType].buildRequest({
         name: channelName,
-      };
-      if (channelType === "telegram") request.chat_id = chatId;
-      if (channelType === "discord") request.webhook_url = discordUrl;
-      if (channelType === "webhook") {
-        request.url = webhookUrl;
-        request.secret = webhookSecret;
-      }
+        chat_id: chatId,
+        webhook_url: discordUrl,
+        url: webhookUrl,
+        secret: webhookSecret,
+      });
       const created = await createNotificationChannel(request);
       setNotifChannels((prev) => [...prev, created]);
       setChannelName("");

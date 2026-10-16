@@ -214,3 +214,20 @@ export async function connectWalletConnect(): Promise<WalletSession> {
     throw coerceWalletError(error);
   }
 }
+
+/**
+ * Factory for connecting to a wallet provider by type.
+ * Ensures the presentation layer (UI) does not couple to concrete provider connection flows.
+ */
+export async function connectWallet(type: WalletProviderType): Promise<WalletSession> {
+  switch (type) {
+    case "injected":
+      return connectInjectedWallet();
+    case "walletconnect":
+      return connectWalletConnect();
+    default: {
+      const _exhaustiveCheck: never = type;
+      throw new Error(`Unsupported wallet provider: ${_exhaustiveCheck}`);
+    }
+  }
+}

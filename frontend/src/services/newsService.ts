@@ -6,13 +6,15 @@
  * dialect (`event: status|article|done|error` followed by a `data:` line), not
  * the JSON envelope the analysis endpoints use; it shares the line-buffering
  * primitive from `sseStream` and returns both an AbortController and a promise
- * so callers can cancel and can await completion.
+ * so callers can cancel and can await completion. `fetchStream` keeps that
+ * fetch on the authenticated transport, so the stream carries cookies, the
+ * active-account header and the shared session refresh.
  *
  * @module services/newsService
  */
 import { apiClient } from "./apiClient";
 import { API_BASE_URL } from "../config/api";
-import { streamLines } from "./sseStream";
+import { fetchStream, streamLines } from "./sseStream";
 import { getApiErrorMessage } from "../utils/apiError";
 
 // ── Types ──────────────────────────────────────────────────
@@ -92,10 +94,9 @@ export function streamGenerate(
   const done = (async () => {
     let resp: Response;
     try {
-      resp = await fetch(`${API_BASE_URL}/api/news/generate/stream`, {
+      resp = await fetchStream(`${API_BASE_URL}/api/news/generate/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify(payload),
         signal: abort.signal,
       });
