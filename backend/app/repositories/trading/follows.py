@@ -26,7 +26,12 @@ class TradingFollowRepository(SQLAlchemyRepository[FollowedTrader]):
             .distinct()
             .all()
         )
-        return [row.trader_wallet for row in rows if row.trader_wallet]
+        wallets = []
+        for row in rows:
+            w = row[0] if isinstance(row, (tuple, list)) else getattr(row, "trader_wallet", None)
+            if w:
+                wallets.append(w)
+        return wallets
 
     def has_active_watcher(self, wallet: str) -> bool:
         return (

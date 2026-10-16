@@ -50,6 +50,9 @@ def sync_admin_wallets(
     session_scope: Callable[[], AbstractContextManager[Any]],
 ) -> None:
     """Promote or demote users based on the configured admin wallets."""
+    raw = settings.admin_wallets.strip()
+    if not raw and not settings.admin_sync_allow_empty:
+        return
     try:
         from app.services.users.admin_sync_service import sync_admin_wallets as sync
 

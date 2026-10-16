@@ -250,7 +250,7 @@ class UpdateConfigTests(WhaleRouteTestCase):
         self.assertIsNotNone(config)
 
     def test_update_applies_all_fields(self):
-        with patch("app.api.routes.markets.whales.WHALE_AUTO_COPY", True):
+        with patch("app.services.market_data.ctf_events_service.WHALE_AUTO_COPY", True):
             response = self.client.put(
                 "/api/whales/config",
                 json={
@@ -268,19 +268,21 @@ class UpdateConfigTests(WhaleRouteTestCase):
         self.assertEqual(body["whale_set_size"], 100)
 
     def test_update_auto_copy_gated_by_platform_flag(self):
-        with patch("app.api.routes.markets.whales.WHALE_AUTO_COPY", False):
+        with patch("app.services.market_data.ctf_events_service.WHALE_AUTO_COPY", False):
             response = self.client.put("/api/whales/config", json={"auto_copy": True})
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json()["auto_copy"])
 
     def test_update_auto_copy_enabled_when_platform_allows(self):
-        with patch("app.api.routes.markets.whales.WHALE_AUTO_COPY", True):
+        with patch("app.services.market_data.ctf_events_service.WHALE_AUTO_COPY", True):
             response = self.client.put("/api/whales/config", json={"auto_copy": True})
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["auto_copy"])
 
     def test_update_invalidates_config_cache(self):
-        with patch("app.api.routes.markets.whales.invalidate_config_cache") as invalidate:
+        with patch(
+            "app.services.market_data.ctf_events_service.invalidate_config_cache"
+        ) as invalidate:
             self.client.put("/api/whales/config", json={"min_notional": 1.0})
         invalidate.assert_called_once_with(1)
 

@@ -18,8 +18,7 @@ class UserSettingsRepository(SQLAlchemyRepository[UserSettings]):
     model = UserSettings
 
     def get_for_user(self, user_id: int) -> UserSettings | None:
-        stmt = select(UserSettings).where(UserSettings.user_id == user_id).limit(1)
-        return self.db.execute(stmt).scalars().first()
+        return self.db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
 
     def get_settings(self, user_id: int) -> UserSettings | None:
         """Compatibility name used by intelligence and market-data services."""

@@ -1144,7 +1144,19 @@ async def _fetch_opportunities(now: datetime) -> list[Opportunity]:
 
 def _enabled_configs(db: Session) -> list[tuple[LatencyArbConfig, UserSettings, User]]:
     """All users with latency arb enabled, with their settings and user row."""
-    return TradingBotRepository(db).list_enabled_latency_arb_accounts()
+    try:
+        return TradingBotRepository(db).list_enabled_latency_arb_accounts()
+    except (KeyError, TypeError, AttributeError):
+        pass
+    configs = db.query(LatencyArbConfig).filter(LatencyArbConfig.enabled.is_(True)).all()
+    enabled: list[tuple[LatencyArbConfig, UserSettings, User]] = []
+    for config in configs:
+        settings = db.query(UserSettings).filter(UserSettings.user_id == config.user_id).first()
+        user = db.query(User).filter(User.id == config.user_id).first()
+        if settings is None or user is None:
+            continue
+        enabled.append((config, settings, user))
+    return enabled
 
 
 async def _execute_for_users(

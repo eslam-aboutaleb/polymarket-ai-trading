@@ -53,7 +53,11 @@ async def _scheduler_watchdog() -> None:
                 )
 
 
-async def start_background_services(background_tasks: list[asyncio.Task]) -> None:
+async def start_background_services(
+    background_tasks: list[asyncio.Task],
+    *,
+    session_factory=None,
+) -> None:
     """Start scheduled services and retain tasks for graceful shutdown."""
     from app.repositories.notifications.followed_traders import NotificationFollowRepository
     from app.repositories.trading.follows import TradingFollowRepository
@@ -61,9 +65,17 @@ async def start_background_services(background_tasks: list[asyncio.Task]) -> Non
     from app.services.trading.trade_monitor import start_trade_monitor
 
     # Load currently-followed wallets so the monitor can subscribe.
-    with session_scope() as db:
-        copy_wallets = TradingFollowRepository(db).list_active_wallets()
-        notification_wallets = NotificationFollowRepository(db).list_active_wallets()
+    if session_factory is not None:
+        db = session_factory()
+        try:
+            copy_wallets = TradingFollowRepository(db).list_active_wallets()
+            notification_wallets = NotificationFollowRepository(db).list_active_wallets()
+        finally:
+            db.close()
+    else:
+        with session_scope() as db:
+            copy_wallets = TradingFollowRepository(db).list_active_wallets()
+            notification_wallets = NotificationFollowRepository(db).list_active_wallets()
     initial_wallets = sorted(
         {wallet.lower() for wallet in copy_wallets + notification_wallets if wallet}
     )

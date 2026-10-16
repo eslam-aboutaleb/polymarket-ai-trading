@@ -7,8 +7,6 @@ import re
 
 from sqlalchemy.orm import Session
 
-from app.models.platform.audit_log import AdminAuditLog
-from app.repositories.platform.audit_repository import AdminAuditLogRepository
 from app.repositories.users.user_repository import UserRepository
 
 logger = logging.getLogger(__name__)
@@ -44,8 +42,10 @@ def sync_admin_wallets(
             continue
         admin_wallets.add(candidate.lower())
 
-    users = UserRepository(db).list_all()
-    audits = AdminAuditLogRepository(db)
+    from app.models.platform.audit_log import AdminAuditLog
+    from app.models.users.user import User
+
+    users = db.query(User).all() if hasattr(db, "query") else UserRepository(db).list_all()
     for user in users:
         should_be_admin = user.wallet_address.lower() in admin_wallets
         if user.is_admin == should_be_admin:
@@ -53,7 +53,7 @@ def sync_admin_wallets(
 
         previous_state = user.is_admin
         user.is_admin = should_be_admin
-        audits.add(
+        db.add(
             AdminAuditLog(
                 wallet_address=user.wallet_address,
                 action="promoted" if should_be_admin else "demoted",

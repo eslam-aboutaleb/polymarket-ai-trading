@@ -205,9 +205,21 @@ async def _positions_loop(websocket: WebSocket, context: AuthContext, db: Sessio
             return
 
 
+def _auth_scoped_trade_query(db: Session, auth: AuthContext, statuses: tuple[str, ...]):
+    """Orders for the key's owner, narrowed to the key's account when scoped."""
+    from app.models.trading.user_trade import UserTrade
+
+    query = db.query(UserTrade).filter(
+        UserTrade.user_id == auth.user_id,
+        UserTrade.status.in_(statuses),
+    )
+    if auth.account_id is not None:
+        query = query.filter(UserTrade.account_id == auth.account_id)
+    return query.order_by(UserTrade.id.desc())
+
+
 async def _fills_loop(websocket: WebSocket, context: AuthContext, db: Session) -> None:
     """Poll newly observed fills and emit each one once."""
-    from app.api.routes.platform.external import _auth_scoped_trade_query
     from app.models.trading.user_trade import UserTrade
 
     try:
@@ -218,6 +230,7 @@ async def _fills_loop(websocket: WebSocket, context: AuthContext, db: Session) -
         return
     while True:
         await asyncio.sleep(FILLS_POLL_SECONDS)
+        db.expire_all()
         query = _auth_scoped_trade_query(db, context, _FILLED_STATUSES)
         if last_seen_id is not None:
             query = query.filter(UserTrade.id > last_seen_id)
@@ -253,8 +266,6 @@ def _latest_trade_id(db: Session, context: AuthContext) -> int | None:
     longer holds is refused here exactly as it is over REST instead of
     being served over the socket.
     """
-    from app.api.routes.platform.external import _auth_scoped_trade_query
-
     latest = _auth_scoped_trade_query(db, context, _FILLED_STATUSES).first()
     return int(latest.id) if latest is not None else None
 

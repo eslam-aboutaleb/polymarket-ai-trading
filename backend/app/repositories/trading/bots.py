@@ -51,7 +51,10 @@ class TradingBotRepository(SQLAlchemyRepository[object]):
 
     def list_inverse_bot_user_ids(self) -> list[int]:
         rows = self.db.query(UserSettings.user_id).filter(UserSettings.inverse_bot_enabled).all()
-        return [row.user_id for row in rows]
+        return [
+            row[0] if isinstance(row, (tuple, list)) else getattr(row, "user_id", None)
+            for row in rows
+        ]
 
     def list_settings_for_users(self, user_ids: list[int]) -> list[UserSettings]:
         return self.db.query(UserSettings).filter(UserSettings.user_id.in_(user_ids)).all()
