@@ -17,9 +17,9 @@ from sqlalchemy.pool import StaticPool
 import app.models  # noqa: F401  (register models on Base.metadata)
 from app.api.routes.trading.trades import ExecuteTradeRequest, execute_trade
 from app.models.base import Base
-from app.models.user import User
-from app.models.user_settings import UserSettings
-from app.models.user_trade import UserTrade
+from app.models.trading.user_trade import UserTrade
+from app.models.users.user import User
+from app.models.users.user_settings import UserSettings
 from app.services.trading import copy_trade_service
 from app.services.trading.pre_trade_gate import (
     OrderIdempotencyKey,  # noqa: F401

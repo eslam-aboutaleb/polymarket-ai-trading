@@ -33,9 +33,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import app.services.trading.inverse_bot_monitor as inverse_bot_monitor
-from app.models.inverse_bot_action import InverseBotAction
-from app.models.inverse_bot_position import InverseBotPosition
-from app.models.user_settings import AIBackendType, InverseBotSizeMode
+from app.models.trading.inverse_bot_action import InverseBotAction
+from app.models.trading.inverse_bot_position import InverseBotPosition
+from app.models.users.user_settings import AIBackendType, InverseBotSizeMode
 from app.security.credential_store import CredentialStoreError
 
 CLOB_API = inverse_bot_monitor.POLYMARKET_CLOB_API

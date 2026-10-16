@@ -78,14 +78,14 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import app.services.trading.trade_monitor as trade_monitor
-from app.models.followed_trader import FollowedTrader
-from app.models.market import Market
-from app.models.notification_feed_event import NotificationFeedEvent
-from app.models.notification_followed_trader import NotificationFollowedTrader
-from app.models.trader_position_state import TraderPositionState
-from app.models.user import User
-from app.models.user_settings import UserSettings
-from app.models.user_trade import UserTrade
+from app.models.market_data.market import Market
+from app.models.notifications.notification_feed_event import NotificationFeedEvent
+from app.models.notifications.notification_followed_trader import NotificationFollowedTrader
+from app.models.trading.followed_trader import FollowedTrader
+from app.models.trading.trader_position_state import TraderPositionState
+from app.models.trading.user_trade import UserTrade
+from app.models.users.user import User
+from app.models.users.user_settings import UserSettings
 from app.security.credential_store import CredentialStoreError
 from app.services.analytics.execution_analytics import (
     compute_latency_ms,

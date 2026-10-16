@@ -25,7 +25,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import app.services.users.price_alert_service as price_alert_service
 from app.config import AIBackend
-from app.models.user_settings import AIBackendType
+from app.models.users.user_settings import AIBackendType
 
 
 def _order(**overrides):

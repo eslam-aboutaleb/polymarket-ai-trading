@@ -34,12 +34,12 @@ from sqlalchemy.pool import StaticPool
 import app.models  # noqa: F401  (register models on Base.metadata)
 from app.api.deps import get_active_account
 from app.main import app as fastapi_app
-from app.models.account import Account, AccountKind
-from app.models.account_settings import AccountSettings
 from app.models.base import Base
-from app.models.user import User
-from app.models.user_settings import UserSettings
-from app.models.user_trade import UserTrade
+from app.models.trading.user_trade import UserTrade
+from app.models.users.account import Account, AccountKind
+from app.models.users.account_settings import AccountSettings
+from app.models.users.user import User
+from app.models.users.user_settings import UserSettings
 from app.security.auth import create_access_token
 from app.services.users.account_service import (
     AccountAccessDenied,

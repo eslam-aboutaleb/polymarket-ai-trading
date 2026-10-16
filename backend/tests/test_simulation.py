@@ -22,8 +22,8 @@ from sqlalchemy.orm import sessionmaker
 
 from app.config import get_settings
 from app.models.base import Base
-from app.models.user_settings import UserSettings
-from app.models.user_trade import UserTrade
+from app.models.trading.user_trade import UserTrade
+from app.models.users.user_settings import UserSettings
 from app.services.analytics.simulation import (
     average_entry_price,
     get_paper_summary,

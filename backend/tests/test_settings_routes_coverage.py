@@ -22,8 +22,8 @@ from fastapi.testclient import TestClient
 
 from app.api.routes.auth.auth import get_current_user_from_token
 from app.main import app
-from app.models.user import User
-from app.models.user_settings import UserSettings
+from app.models.users.user import User
+from app.models.users.user_settings import UserSettings
 from app.utils.database import get_db
 
 WALLET = "0x" + "ab" * 20

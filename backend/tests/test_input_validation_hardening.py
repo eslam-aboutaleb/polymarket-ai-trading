@@ -8,7 +8,7 @@ os.environ.setdefault("JWT_SECRET_KEY", "a" * 32)
 import app.services.analytics.arbitrage_service as arbitrage_service
 import app.services.analytics.backtesting_service as backtesting_service
 import app.services.trading.market_maker_service as market_maker_service
-from app.models.user import validate_profile_picture_url
+from app.models.users.user import validate_profile_picture_url
 
 
 class BacktestDateValidationTests(unittest.TestCase):

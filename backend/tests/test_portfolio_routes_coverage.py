@@ -26,8 +26,8 @@ from app.api.routes.portfolio.portfolio import (
     _sse_frame,
 )
 from app.main import app
-from app.models.redemption_attempt import RedemptionAttempt
-from app.models.user import User
+from app.models.trading.redemption_attempt import RedemptionAttempt
+from app.models.users.user import User
 from app.security.credential_store import CredentialStoreError
 from app.utils.database import get_db
 from app.utils.time import utc_now

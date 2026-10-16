@@ -19,8 +19,8 @@ from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (register models on Base.metadata)
 from app.models.base import Base
-from app.models.user import User
-from app.models.user_trade import UserTrade
+from app.models.trading.user_trade import UserTrade
+from app.models.users.user import User
 from app.services.analytics.execution_analytics import (
     STRATEGY_SOURCES,
     compute_latency_ms,

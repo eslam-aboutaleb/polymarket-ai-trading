@@ -19,12 +19,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import app.services.trading.copy_trade_service as copy_trade_service
-from app.models.assessment import Assessment
-from app.models.followed_trader import FollowedTrader
-from app.models.trade_history import TradeHistory
-from app.models.user import User
-from app.models.user_settings import RiskMode, UserSettings
-from app.models.user_trade import UserTrade
+from app.models.analytics.assessment import Assessment
+from app.models.trading.followed_trader import FollowedTrader
+from app.models.trading.trade_history import TradeHistory
+from app.models.trading.user_trade import UserTrade
+from app.models.users.user import User
+from app.models.users.user_settings import RiskMode, UserSettings
 from app.security.credential_store import CredentialStoreError
 
 WALLET = "0x" + "ab" * 20

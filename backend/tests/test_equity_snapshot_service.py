@@ -23,11 +23,11 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (register models on Base.metadata)
-from app.models.assessment import Assessment
+from app.models.analytics.assessment import Assessment
+from app.models.analytics.portfolio_snapshot import PortfolioSnapshot
 from app.models.base import Base
-from app.models.portfolio_snapshot import PortfolioSnapshot
-from app.models.user import User
-from app.models.user_settings import UserSettings
+from app.models.users.user import User
+from app.models.users.user_settings import UserSettings
 from app.services.analytics import equity_snapshot_service as svc
 from app.utils.time import utc_now
 

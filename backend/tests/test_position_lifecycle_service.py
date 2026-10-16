@@ -27,7 +27,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import app.services.trading.position_lifecycle_service as lifecycle
-from app.models.user_trade import UserTrade
+from app.models.trading.user_trade import UserTrade
 from app.utils.time import utc_now
 
 

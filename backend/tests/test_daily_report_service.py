@@ -27,13 +27,13 @@ from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (register models on Base.metadata)
 from app.models.base import Base
-from app.models.notification_channel import NotificationChannel
-from app.models.notification_feed_event import NotificationFeedEvent
-from app.models.stop_loss import StopLossOrder
-from app.models.user import User
-from app.models.user_settings import UserSettings
-from app.models.user_trade import UserTrade
-from app.models.whale_event import WhaleEvent
+from app.models.market_data.whale_event import WhaleEvent
+from app.models.notifications.notification_channel import NotificationChannel
+from app.models.notifications.notification_feed_event import NotificationFeedEvent
+from app.models.trading.stop_loss import StopLossOrder
+from app.models.trading.user_trade import UserTrade
+from app.models.users.user import User
+from app.models.users.user_settings import UserSettings
 from app.services.users import daily_report_service
 from app.utils.time import utc_now
 

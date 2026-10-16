@@ -14,8 +14,8 @@ from app.api.routes.auth.auth import (
     refresh_access_token,
 )
 from app.config import get_settings
-from app.models.token import RefreshToken
-from app.models.user import User
+from app.models.users.token import RefreshToken
+from app.models.users.user import User
 from app.schemas.auth import LogoutRequest, TokenRefresh
 from app.security.refresh_tokens import (
     create_refresh_token_record,

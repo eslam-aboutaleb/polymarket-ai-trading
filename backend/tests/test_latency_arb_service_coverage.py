@@ -35,9 +35,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import app.services.trading.latency_arb_service as latency_arb_service
-from app.models.latency_arb_config import LatencyArbConfig
-from app.models.user import User
-from app.models.user_settings import UserSettings
+from app.models.trading.latency_arb_config import LatencyArbConfig
+from app.models.users.user import User
+from app.models.users.user_settings import UserSettings
 from app.services.market_data.crypto_markets_service import CryptoMarket
 from app.services.trading.latency_arb_service import (
     Opportunity,

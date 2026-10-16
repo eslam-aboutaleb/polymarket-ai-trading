@@ -29,10 +29,10 @@ from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (register models on Base.metadata)
 from app.models.base import Base
-from app.models.stop_loss import StopLossOrder
-from app.models.take_profit import TakeProfitOrder
-from app.models.user import User
-from app.models.user_trade import UserTrade
+from app.models.trading.stop_loss import StopLossOrder
+from app.models.trading.take_profit import TakeProfitOrder
+from app.models.trading.user_trade import UserTrade
+from app.models.users.user import User
 from app.services.analytics.execution_analytics import get_strategy_breakdown
 from app.services.trading.stop_loss_monitor import (
     _execute_stop_loss,
@@ -212,7 +212,7 @@ class InverseBotAttributionTest(_AttributionTestBase):
     """A reversal records both legs as attributed trades (plan 03 Phase A)."""
 
     def _row(self):
-        from app.models.inverse_bot_position import InverseBotPosition
+        from app.models.trading.inverse_bot_position import InverseBotPosition
 
         row = InverseBotPosition(
             id=11,

@@ -28,9 +28,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (register models on Base.metadata)
-from app.models.app_event import AppEvent
 from app.models.base import Base
-from app.models.user import User
+from app.models.platform.app_event import AppEvent
+from app.models.users.user import User
 from app.services.platform.event_log import (
     MAX_PAYLOAD_CHARS,
     append,

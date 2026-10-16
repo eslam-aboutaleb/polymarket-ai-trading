@@ -19,7 +19,7 @@ from app.api.routes.markets.markets import _get_analysis_client
 from app.config import AIBackend
 from app.grpc_clients.analysis_client import AnalysisClient
 from app.main import app
-from app.models.user_settings import AIBackendType
+from app.models.users.user_settings import AIBackendType
 from app.security.rate_limit import limiter
 from app.utils.database import get_db
 

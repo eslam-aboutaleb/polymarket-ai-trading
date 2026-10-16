@@ -34,8 +34,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import eth_abi
 from web3 import Web3
 
-from app.models.followed_trader import FollowedTrader
-from app.models.whale_config import WhaleConfig
+from app.models.market_data.whale_config import WhaleConfig
+from app.models.trading.followed_trader import FollowedTrader
 from app.services.market_data import ctf_events_service as svc
 
 WHALE = "0x" + "1" * 40

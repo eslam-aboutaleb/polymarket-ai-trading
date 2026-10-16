@@ -39,8 +39,8 @@ from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (register models on Base.metadata)
 from app.models.base import Base
-from app.models.user import User
-from app.models.venue_market import VenueMarket
+from app.models.market_data.venue_market import VenueMarket
+from app.models.users.user import User
 from app.schemas.market import NormalizedMarket
 from app.security.auth import create_access_token
 from app.services.venues import base as venues_base

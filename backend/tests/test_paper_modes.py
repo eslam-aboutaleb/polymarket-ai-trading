@@ -31,10 +31,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import app.services.trading.inverse_bot_monitor as inverse_bot_monitor
 import app.services.trading.market_maker_service as market_maker_service
 import app.services.trading.stop_loss_monitor as stop_loss_monitor
-from app.models.inverse_bot_action import InverseBotAction
-from app.models.stop_loss import StopLossOrder
-from app.models.take_profit import TakeProfitOrder
-from app.models.user_trade import UserTrade
+from app.models.trading.inverse_bot_action import InverseBotAction
+from app.models.trading.stop_loss import StopLossOrder
+from app.models.trading.take_profit import TakeProfitOrder
+from app.models.trading.user_trade import UserTrade
 
 # ─────────────── shared doubles ───────────────
 

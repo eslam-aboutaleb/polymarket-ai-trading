@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 import app.api.routes.platform.health as health_module
 from app.api.routes.auth.auth import get_current_user_from_token
 from app.main import app
-from app.models.user import User
+from app.models.users.user import User
 from app.utils.database import get_db
 
 WALLET = "0x" + "ab" * 20
