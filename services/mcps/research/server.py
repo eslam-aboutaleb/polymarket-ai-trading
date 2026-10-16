@@ -8,19 +8,25 @@ pipeline several requests in one process. The special ``__shutdown__`` tool
 acknowledges and then stops the read loop (a client that simply closes stdin
 gets the same outcome via EOF).
 
-Tools:
+Tools (the dispatch table is :data:`TOOLS`, built at import):
 - web_search(query, recency_hours=24, max_results=8)        — DuckDuckGo free search
 - x_posts_search(query, recency_hours=24, max_results=8)    — X/Twitter via DDG
 - tavily_search(query, max_results=5, search_depth="basic")  — Tavily premium search (opt-in)
 - news_search(query, max_results=5, sort_by="relevancy")     — NewsAPI headlines (opt-in)
 - binance_smart_signals(chain, page_size)                     — Smart money buy/sell signals
+- binance_active_buy_signals(chain, min_smart_money)          — Active smart-money buy signals
 - binance_social_hype(chain)                                  — Social hype sentiment rankings
 - binance_smart_money_inflow(chain, period)                   — Smart money net inflow rankings
 - binance_trending_tokens(chain, rank_type)                   — Trending/top-search token rankings
 - binance_token_search(keyword)                               — Search tokens by name/symbol
 - binance_token_data(chain_id, contract_address)              — Real-time token market data
 - binance_market_context(query_tokens, chain)                 — Aggregated Binance context for LLM
+- binance_pnl_leaderboard(period, page_size)                  — Smart-money PnL leaderboard
 - cross_venue_markets(query, limit)                           — Cached cross-venue rows (backend)
+
+The Binance tools register only when the optional ``binance_skills`` module
+imports; when it is missing they answer with the same "module unavailable"
+error as before.
 """
 
 from __future__ import annotations
@@ -217,113 +223,171 @@ async def cross_venue_markets(query: str, limit: int = 50) -> list[dict[str, Any
     return [group for group in groups if isinstance(group, dict)]
 
 
+# ── Tool registry ───────────────────────────────────────────
+# Name → callable(args dict), built once at import. The Binance tools are
+# added only when the optional module imported above; when it is missing the
+# lookup below answers with the same "module unavailable" error as before.
+
+
+def _tool_web_search(args: dict[str, Any]) -> list[dict[str, str]]:
+    return web_search(
+        query=str(args.get("query") or ""),
+        recency_hours=int(args.get("recency_hours", 24) or 24),
+        max_results=int(args.get("max_results", 8) or 8),
+    )
+
+
+def _tool_x_posts_search(args: dict[str, Any]) -> list[dict[str, str]]:
+    return x_posts_search(
+        query=str(args.get("query") or ""),
+        recency_hours=int(args.get("recency_hours", 24) or 24),
+        max_results=int(args.get("max_results", 8) or 8),
+    )
+
+
+def _tool_tavily_search(args: dict[str, Any]) -> list[dict[str, str]]:
+    return tavily_search(
+        query=str(args.get("query") or ""),
+        max_results=int(args.get("max_results", 5) or 5),
+        search_depth=str(args.get("search_depth", "basic") or "basic"),
+    )
+
+
+def _tool_news_search(args: dict[str, Any]) -> list[dict[str, str]]:
+    return news_search(
+        query=str(args.get("query") or ""),
+        max_results=int(args.get("max_results", 5) or 5),
+        sort_by=str(args.get("sort_by", "relevancy") or "relevancy"),
+    )
+
+
+def _tool_cross_venue_markets(args: dict[str, Any]) -> list[dict[str, Any]]:
+    return _run_async(
+        cross_venue_markets(
+            query=str(args.get("query") or ""),
+            limit=int(args.get("limit", 50) or 50),
+        )
+    )
+
+
+def _tool_binance_smart_signals(args: dict[str, Any]):
+    return _run_async(
+        binance_skills.get_smart_money_signals(
+            chain=str(args.get("chain", "solana")),
+            page_size=int(args.get("page_size", 50) or 50),
+        )
+    )
+
+
+def _tool_binance_active_buy_signals(args: dict[str, Any]):
+    return _run_async(
+        binance_skills.get_active_buy_signals(
+            chain=str(args.get("chain", "solana")),
+            min_smart_money=int(args.get("min_smart_money", 2) or 2),
+        )
+    )
+
+
+def _tool_binance_social_hype(args: dict[str, Any]):
+    return _run_async(
+        binance_skills.get_social_hype_ranking(
+            chain=str(args.get("chain", "solana")),
+        )
+    )
+
+
+def _tool_binance_smart_money_inflow(args: dict[str, Any]):
+    return _run_async(
+        binance_skills.get_smart_money_inflow(
+            chain=str(args.get("chain", "solana")),
+            period=str(args.get("period", "24h")),
+        )
+    )
+
+
+def _tool_binance_trending_tokens(args: dict[str, Any]):
+    return _run_async(
+        binance_skills.get_trending_tokens(
+            chain=str(args.get("chain", "solana")),
+            rank_type=int(args.get("rank_type", 10) or 10),
+        )
+    )
+
+
+def _tool_binance_token_search(args: dict[str, Any]):
+    return _run_async(
+        binance_skills.search_token(
+            keyword=str(args.get("keyword", "")),
+        )
+    )
+
+
+def _tool_binance_token_data(args: dict[str, Any]):
+    return _run_async(
+        binance_skills.get_token_dynamic_data(
+            chain_id=str(args.get("chain_id", "")),
+            contract_address=str(args.get("contract_address", "")),
+        )
+    )
+
+
+def _tool_binance_market_context(args: dict[str, Any]):
+    query_tokens = args.get("query_tokens", [])
+    if isinstance(query_tokens, str):
+        query_tokens = [t.strip() for t in query_tokens.split(",") if t.strip()]
+    return _run_async(
+        binance_skills.get_crypto_market_context(
+            query_tokens=query_tokens or None,
+            chain=str(args.get("chain", "solana")),
+        )
+    )
+
+
+def _tool_binance_pnl_leaderboard(args: dict[str, Any]):
+    return _run_async(
+        binance_skills.get_pnl_leaderboard(
+            period=str(args.get("period", "30d")),
+            page_size=int(args.get("page_size", 25) or 25),
+        )
+    )
+
+
+TOOLS: dict[str, Any] = {
+    "web_search": _tool_web_search,
+    "x_posts_search": _tool_x_posts_search,
+    "tavily_search": _tool_tavily_search,
+    "news_search": _tool_news_search,
+    "cross_venue_markets": _tool_cross_venue_markets,
+}
+
+if _BINANCE_AVAILABLE:
+    TOOLS.update(
+        {
+            "binance_smart_signals": _tool_binance_smart_signals,
+            "binance_active_buy_signals": _tool_binance_active_buy_signals,
+            "binance_social_hype": _tool_binance_social_hype,
+            "binance_smart_money_inflow": _tool_binance_smart_money_inflow,
+            "binance_trending_tokens": _tool_binance_trending_tokens,
+            "binance_token_search": _tool_binance_token_search,
+            "binance_token_data": _tool_binance_token_data,
+            "binance_market_context": _tool_binance_market_context,
+            "binance_pnl_leaderboard": _tool_binance_pnl_leaderboard,
+        }
+    )
+
+
 def _run_one(payload: dict[str, Any]) -> dict[str, Any]:
     tool = str(payload.get("tool") or "").strip()
     args = payload.get("args") or {}
     if not isinstance(args, dict):
         args = {}
 
-    if tool.startswith("binance_") and not _BINANCE_AVAILABLE:
-        return {"ok": False, "error": "Binance skills module unavailable"}
-
-    if tool == "web_search":
-        result = web_search(
-            query=str(args.get("query") or ""),
-            recency_hours=int(args.get("recency_hours", 24) or 24),
-            max_results=int(args.get("max_results", 8) or 8),
-        )
-    elif tool == "x_posts_search":
-        result = x_posts_search(
-            query=str(args.get("query") or ""),
-            recency_hours=int(args.get("recency_hours", 24) or 24),
-            max_results=int(args.get("max_results", 8) or 8),
-        )
-    elif tool == "tavily_search":
-        result = tavily_search(
-            query=str(args.get("query") or ""),
-            max_results=int(args.get("max_results", 5) or 5),
-            search_depth=str(args.get("search_depth", "basic") or "basic"),
-        )
-    elif tool == "news_search":
-        result = news_search(
-            query=str(args.get("query") or ""),
-            max_results=int(args.get("max_results", 5) or 5),
-            sort_by=str(args.get("sort_by", "relevancy") or "relevancy"),
-        )
-    # ── Binance Skills tools ──────────────────────────────
-    elif tool == "binance_smart_signals":
-        result = _run_async(
-            binance_skills.get_smart_money_signals(
-                chain=str(args.get("chain", "solana")),
-                page_size=int(args.get("page_size", 50) or 50),
-            )
-        )
-    elif tool == "binance_active_buy_signals":
-        result = _run_async(
-            binance_skills.get_active_buy_signals(
-                chain=str(args.get("chain", "solana")),
-                min_smart_money=int(args.get("min_smart_money", 2) or 2),
-            )
-        )
-    elif tool == "binance_social_hype":
-        result = _run_async(
-            binance_skills.get_social_hype_ranking(
-                chain=str(args.get("chain", "solana")),
-            )
-        )
-    elif tool == "binance_smart_money_inflow":
-        result = _run_async(
-            binance_skills.get_smart_money_inflow(
-                chain=str(args.get("chain", "solana")),
-                period=str(args.get("period", "24h")),
-            )
-        )
-    elif tool == "binance_trending_tokens":
-        result = _run_async(
-            binance_skills.get_trending_tokens(
-                chain=str(args.get("chain", "solana")),
-                rank_type=int(args.get("rank_type", 10) or 10),
-            )
-        )
-    elif tool == "binance_token_search":
-        result = _run_async(
-            binance_skills.search_token(
-                keyword=str(args.get("keyword", "")),
-            )
-        )
-    elif tool == "binance_token_data":
-        result = _run_async(
-            binance_skills.get_token_dynamic_data(
-                chain_id=str(args.get("chain_id", "")),
-                contract_address=str(args.get("contract_address", "")),
-            )
-        )
-    elif tool == "binance_market_context":
-        query_tokens = args.get("query_tokens", [])
-        if isinstance(query_tokens, str):
-            query_tokens = [t.strip() for t in query_tokens.split(",") if t.strip()]
-        result = _run_async(
-            binance_skills.get_crypto_market_context(
-                query_tokens=query_tokens or None,
-                chain=str(args.get("chain", "solana")),
-            )
-        )
-    elif tool == "binance_pnl_leaderboard":
-        result = _run_async(
-            binance_skills.get_pnl_leaderboard(
-                period=str(args.get("period", "30d")),
-                page_size=int(args.get("page_size", 25) or 25),
-            )
-        )
-    elif tool == "cross_venue_markets":
-        result = _run_async(
-            cross_venue_markets(
-                query=str(args.get("query") or ""),
-                limit=int(args.get("limit", 50) or 50),
-            )
-        )
-    else:
+    handler = TOOLS.get(tool)
+    if handler is None:
+        if tool.startswith("binance_") and not _BINANCE_AVAILABLE:
+            return {"ok": False, "error": "Binance skills module unavailable"}
         return {"ok": False, "error": f"Unsupported tool: {tool}"}
+    result = handler(args)
     return {"ok": True, "result": result}
 
 
