@@ -43,8 +43,20 @@ const EVENT_LABELS: Record<string, string> = {
 const POLL_INTERVAL_MS = 30_000;
 const FETCH_LIMIT = 100;
 
+/**
+ * Title-case an unknown event type so a type the backend added after this
+ * build still reads as a sentence instead of a raw snake_case slug.
+ */
+function humanizeEventType(eventType: string): string {
+  return eventType
+    .split("_")
+    .filter((word) => word.length > 0)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 function eventLabel(eventType: string): string {
-  return EVENT_LABELS[eventType] || eventType.replace(/_/g, " ");
+  return EVENT_LABELS[eventType] || humanizeEventType(eventType) || eventType;
 }
 
 function eventSummary(event: NotificationEvent): string {

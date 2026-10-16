@@ -11,7 +11,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { API_BASE_URL } from "../config/api";
-import { consumeSSEStream } from "../services/sseStream";
+import { consumeSSEStream, fetchStream } from "../services/sseStream";
 
 export type PriceStreamStatus = "connecting" | "live" | "delayed";
 
@@ -132,9 +132,9 @@ export function usePriceStream(options: UsePriceStreamOptions): {
       const params = new URLSearchParams();
       params.set("token_ids", tokens.join(","));
       try {
-        const res = await fetch(
+        const res = await fetchStream(
           `${API_BASE_URL}/api/portfolio/prices/stream?${params.toString()}`,
-          { credentials: "include", signal: controller.signal },
+          { signal: controller.signal },
         );
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}`);

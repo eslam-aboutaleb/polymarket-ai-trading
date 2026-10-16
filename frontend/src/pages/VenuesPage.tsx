@@ -22,8 +22,10 @@ import {
   VenueAdapterHealth,
   VenueMarketRow,
   VenueMismatch,
+  isPlayMoneyAdapter,
   venueService,
 } from "../services/venueService";
+import { getApiErrorMessage } from "../utils/apiError";
 
 const POLL_INTERVAL_MS = 60000;
 /** Below this price gap a pair is not worth a reviewer's attention. */
@@ -72,7 +74,7 @@ export default function VenuesPage() {
       setMarkets(marketResponse.markets);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load venue data");
+      setError(getApiErrorMessage(err, "Failed to load venue data"));
     } finally {
       setLoading(false);
     }
@@ -90,8 +92,10 @@ export default function VenuesPage() {
   const enabledAdapters = adapters.filter((adapter) => adapter.enabled);
   const neverFetched = enabledAdapters.filter((adapter) => !adapter.last_fetch_at);
   const failedFetches = adapters.filter((adapter) => adapter.last_error);
-  const playMoneyVenues = enabledAdapters.filter((adapter) => adapter.name === "manifold");
-  const realMoneyVenues = enabledAdapters.filter((adapter) => adapter.name !== "manifold");
+  // The API says which adapters are play money when it knows; otherwise fall
+  // back to the adapter name so the banner is right on older backends too.
+  const playMoneyVenues = enabledAdapters.filter((adapter) => isPlayMoneyAdapter(adapter));
+  const realMoneyVenues = enabledAdapters.filter((adapter) => !isPlayMoneyAdapter(adapter));
 
   return (
     <div className="space-y-6">

@@ -41,6 +41,14 @@ export interface VenueAdapterHealth {
   last_fetch_at: string | null;
   last_error: string | null;
   markets: number;
+  /**
+   * How the venue classifies its own money. Optional: the backend only
+   * started sending this alongside the play-money flags, so the frontend
+   * keeps the name-based fallback until it does.
+   */
+  money_class?: "real" | "play";
+  /** Convenience mirror of `money_class === "play"`, when sent. */
+  is_play_money?: boolean;
 }
 
 export interface VenueAdaptersResponse {
@@ -152,6 +160,19 @@ export interface VenueMarketQuery {
 export interface CrossVenueQuery {
   q: string;
   limit?: number;
+}
+
+/**
+ * Adapters known to trade play money, used only while the backend omits
+ * `money_class` / `is_play_money` from the adapters payload.
+ */
+const PLAY_MONEY_ADAPTER_NAMES = new Set(["manifold"]);
+
+/** True when the adapter's markets are play money, per the API when it says so. */
+export function isPlayMoneyAdapter(adapter: VenueAdapterHealth): boolean {
+  if (typeof adapter.is_play_money === "boolean") return adapter.is_play_money;
+  if (adapter.money_class) return adapter.money_class === "play";
+  return PLAY_MONEY_ADAPTER_NAMES.has(adapter.name);
 }
 
 // ── Service ─────────────────────────────────────────────────

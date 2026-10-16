@@ -13,8 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { authService } from "../services/authService";
 import {
-  connectInjectedWallet,
-  connectWalletConnect,
+  connectWallet,
   MISSING_WALLETCONNECT_PROJECT_ID_MESSAGE,
   type WalletProviderType,
   type WalletSession,
@@ -133,10 +132,7 @@ export default function LoginForm({ onLogin, loading }: LoginFormProps) {
         throw new Error(MISSING_WALLETCONNECT_PROJECT_ID_MESSAGE);
       }
 
-      const session =
-        walletProviderType === "walletconnect"
-          ? await connectWalletConnect()
-          : await connectInjectedWallet();
+      const session = await connectWallet(walletProviderType);
 
       setWalletSession(session);
       setWalletStep("ready");

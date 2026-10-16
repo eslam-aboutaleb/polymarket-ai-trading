@@ -8,6 +8,10 @@
  * `accounts_enabled` flag is on and otherwise falls back to the personal
  * account, so a stale selection is never an error.
  *
+ * The selection is resolved once per request by the apiClient request
+ * interceptor, not here: a call site that forgets the header silently
+ * reads the personal account while the UI shows the sub one.
+ *
  * The active selection lives in `localStorage` under
  * `polymarket_active_account` because the rest of the app reads server
  * state through per-component `useState` (no react-query here): one
@@ -141,7 +145,12 @@ export function getActiveAccountSelection(): Account | null {
   return readStoredAccount();
 }
 
-/** Header value for the active account, or `undefined` for none. */
+/**
+ * Header value for the active account, or an empty map for none.
+ *
+ * Exported for transports that cannot use the apiClient interceptor — the
+ * SSE streams in `services/sseStream` build their own request.
+ */
 export function getActiveAccountHeader(): Record<string, string> {
   const account = readStoredAccount();
   return account ? { "X-Account-Id": String(account.id) } : {};
@@ -169,44 +178,26 @@ export function onActiveAccountChange(listener: (account: Account | null) => voi
 export const accountService = {
   /** Resolve the selection against the server so a stale id self-heals. */
   async getActiveAccount(): Promise<ActiveAccount> {
-    return apiClient.get<ActiveAccount>("/api/accounts/active", {
-      headers: getActiveAccountHeader(),
-    });
+    return apiClient.get<ActiveAccount>("/api/accounts/active");
   },
 
   async listAccounts(): Promise<Account[]> {
-    return apiClient.get<Account[]>("/api/accounts", {
-      headers: getActiveAccountHeader(),
-    });
+    return apiClient.get<Account[]>("/api/accounts");
   },
 
   async createAccount(name: string): Promise<Account> {
-    return apiClient.post<Account>(
-      "/api/accounts",
-      { name },
-      { headers: getActiveAccountHeader() },
-    );
+    return apiClient.post<Account>("/api/accounts", { name });
   },
 
   async renameAccount(id: number, name: string): Promise<Account> {
-    return apiClient.patch<Account>(
-      `/api/accounts/${id}`,
-      { name },
-      {
-        headers: getActiveAccountHeader(),
-      },
-    );
+    return apiClient.patch<Account>(`/api/accounts/${id}`, { name });
   },
 
   async getAccountSettings(id: number): Promise<AccountSettings> {
-    return apiClient.get<AccountSettings>(`/api/accounts/${id}/settings`, {
-      headers: getActiveAccountHeader(),
-    });
+    return apiClient.get<AccountSettings>(`/api/accounts/${id}/settings`);
   },
 
   async updateAccountSettings(id: number, update: AccountSettingsUpdate): Promise<AccountSettings> {
-    return apiClient.patch<AccountSettings>(`/api/accounts/${id}/settings`, update, {
-      headers: getActiveAccountHeader(),
-    });
+    return apiClient.patch<AccountSettings>(`/api/accounts/${id}/settings`, update);
   },
 };

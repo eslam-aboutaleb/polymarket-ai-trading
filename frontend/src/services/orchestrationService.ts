@@ -12,6 +12,7 @@
 
 import { apiClient } from "./apiClient";
 import { streamSSE } from "./sseStream";
+import { getApiErrorMessage } from "../utils/apiError";
 
 // --- Types ---
 
@@ -93,7 +94,7 @@ export const orchestrationService = {
         onError: callbacks.onError,
       },
     ).catch((err: unknown) => {
-      callbacks.onError(err instanceof Error ? err.message : "Stream failed");
+      callbacks.onError(getApiErrorMessage(err, "Stream failed"));
     });
 
     return controller;

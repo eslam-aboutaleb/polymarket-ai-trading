@@ -25,7 +25,7 @@ import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import OrchestratorTimeline from "./OrchestratorTimeline";
 import { useVoiceInput } from "../hooks/useVoiceInput";
-import { sanitizeAIError } from "../utils/apiError";
+import { getApiErrorMessage, sanitizeAIError } from "../utils/apiError";
 import {
   EXAMPLE_QUERIES,
   PALETTE_INTENT_LABEL,
@@ -166,7 +166,7 @@ export function CommandPaletteDialog({ onClose }: CommandPaletteDialogProps) {
         setPlan(run.plan);
         setRecent(rememberQuery(text));
       } catch (err) {
-        setError(err instanceof Error ? err.message : "That question could not be started.");
+        setError(getApiErrorMessage(err, "That question could not be started."));
         finishRun();
       }
     },
