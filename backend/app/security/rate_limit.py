@@ -1,10 +1,10 @@
 """Shared SlowAPI rate limiter instance.
 
-The limiter lives here rather than in ``app.main`` so route modules can
-apply per-endpoint limits without a circular import: ``app.main`` imports
-the route modules, and the route modules need the limiter. ``app.main``
-still owns the wiring (``app.state.limiter``, the ``RateLimitExceeded``
-handler and the middleware).
+The limiter lives here rather than in the application factory so route
+modules can apply per-endpoint limits without a circular import: the
+factory imports the route modules, and the route modules need the limiter.
+The factory owns the wiring (``app.state.limiter``, the
+``RateLimitExceeded`` handler and the middleware).
 
 Storage selection — per-worker behaviour of ``memory://``
 ---------------------------------------------------------
@@ -28,7 +28,7 @@ The environment is read straight from ``os.environ`` first, falling back
 to the ``environment`` setting only when the variable is absent. That
 keeps limiter construction independent of the settings cache and of
 ``app.config`` import order (this module is imported *by* the route
-modules, which are imported *by* ``app.main``), while still honouring a
+modules, which are imported by the application factory), while honouring a
 deployment that configures ``ENVIRONMENT`` only through ``.env`` /
 compose. See ``_LOCAL_ENVIRONMENTS`` for the values treated as "a single
 worker is fine".

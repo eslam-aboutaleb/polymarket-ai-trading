@@ -9,7 +9,7 @@ releases them automatically when the connection closes, so a crashed
 worker can never hold a lock forever.
 
 Heartbeats implement the dead-man's switch: each loop iteration writes
-``heartbeat:<name>`` (24h TTL) and the watchdog in ``app.main`` alerts
+``heartbeat:<name>`` (24h TTL) and the lifecycle watchdog alerts
 when a heartbeat goes stale. The TTL is deliberately long so a dead
 scheduler's last heartbeat stays readable — and keeps alerting — until
 an operator intervenes.
