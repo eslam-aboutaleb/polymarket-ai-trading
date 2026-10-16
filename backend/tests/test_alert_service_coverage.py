@@ -25,10 +25,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.models.base import Base
-from app.models.notification_channel import NotificationChannel
-from app.models.notification_delivery import NotificationDelivery
-from app.models.notification_feed_event import NotificationFeedEvent
-from app.models.user_notification_preference import UserNotificationPreference
+from app.models.notifications.notification_channel import NotificationChannel
+from app.models.notifications.notification_delivery import NotificationDelivery
+from app.models.notifications.notification_feed_event import NotificationFeedEvent
+from app.models.notifications.user_notification_preference import UserNotificationPreference
 from app.security.crypto import encrypt_text
 from app.services.users import alert_service as alert_mod
 from app.services.users.alert_service import (

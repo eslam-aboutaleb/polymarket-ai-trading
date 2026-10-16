@@ -31,7 +31,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import app.services.trading.latency_arb_service as latency_arb_service
 from app.config import Settings
-from app.models.user_trade import UserTrade
+from app.models.trading.user_trade import UserTrade
 from app.services.market_data.crypto_markets_service import CryptoMarket
 
 

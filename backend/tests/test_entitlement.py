@@ -50,16 +50,16 @@ import app.models  # noqa: F401  (register models on Base.metadata)
 from app.api.deps import get_db
 from app.api.routes.billing import billing as billing_routes
 from app.main import app as fastapi_app
-from app.models.account import Account, AccountKind
-from app.models.api_key import ApiKey
 from app.models.base import Base
-from app.models.followed_trader import FollowedTrader
-from app.models.latency_arb_config import LatencyArbConfig
-from app.models.market_maker_config import MarketMakerConfig
-from app.models.stop_loss import StopLossOrder
-from app.models.subscription import Subscription
-from app.models.user import User
-from app.models.user_trade import UserTrade
+from app.models.billing.subscription import Subscription
+from app.models.trading.followed_trader import FollowedTrader
+from app.models.trading.latency_arb_config import LatencyArbConfig
+from app.models.trading.market_maker_config import MarketMakerConfig
+from app.models.trading.stop_loss import StopLossOrder
+from app.models.trading.user_trade import UserTrade
+from app.models.users.account import Account, AccountKind
+from app.models.users.api_key import ApiKey
+from app.models.users.user import User
 from app.security.auth import create_access_token
 from app.services.billing import StripeBillingProvider, WebhookSignatureError
 from app.services.billing.stripe_provider import _WEBHOOK_TOLERANCE_SECONDS
@@ -234,7 +234,7 @@ class PlanMatrixTest(EntitlementBaseTest):
 
     def test_out_of_vocabulary_plan_cannot_even_be_persisted(self):
         """The check constraint is the second line of defence after coerce."""
-        from app.models.subscription import PlanTier
+        from app.models.billing.subscription import PlanTier
 
         account = self._account()
         row = self._service().subscription_for(account)
@@ -576,7 +576,7 @@ class DowngradeSafetyTest(EntitlementBaseTest):
         self.assertIsNone(key.revoked_at)
 
     def test_downgrade_leaves_risk_state_alone(self):
-        from app.models.account_settings import AccountSettings
+        from app.models.users.account_settings import AccountSettings
 
         account = self._account()
         self._set_plan(account, "pro")
@@ -600,7 +600,7 @@ class DowngradeSafetyTest(EntitlementBaseTest):
     def test_downgrade_flips_copy_trading_off_once(self):
         account = self._account()
         self._set_plan(account, "pro")
-        from app.models.user_settings import UserSettings
+        from app.models.users.user_settings import UserSettings
 
         row = self.db.query(UserSettings).filter_by(user_id=1).first()
         if row is None:
@@ -906,7 +906,7 @@ class WebhookApplicationTest(EntitlementBaseTest):
         self.assertNotIn("authorization", {k.lower() for k in response.headers})
 
     def test_event_for_an_unknown_account_is_recorded_not_applied(self):
-        from app.models.subscription import BillingWebhookEvent
+        from app.models.billing.subscription import BillingWebhookEvent
 
         self._patch_provider()
         payload = json.dumps(

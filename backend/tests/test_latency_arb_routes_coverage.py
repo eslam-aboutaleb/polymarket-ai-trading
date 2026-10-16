@@ -25,7 +25,7 @@ from app.api.routes.trading.latency_arb import (
 )
 from app.main import app
 from app.models.base import Base
-from app.models.user_trade import UserTrade
+from app.models.trading.user_trade import UserTrade
 from app.utils.database import get_db
 
 WALLET = "0x" + "ab" * 20

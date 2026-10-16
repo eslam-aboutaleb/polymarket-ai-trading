@@ -34,17 +34,17 @@ from app.api.routes.platform.collaboration import (
     _collaboration_write_rate_limit,
     router,
 )
-from app.models.assessment import Assessment
+from app.models.analytics.assessment import Assessment
 from app.models.base import Base
-from app.models.collaboration import (
+from app.models.intelligence.collaboration import (
     VISIBILITY_PRIVATE,
     VISIBILITY_PUBLIC,
     ForecastVote,
     MarketAnnotation,
     UserFollow,
 )
-from app.models.market import Market
-from app.models.user import User
+from app.models.market_data.market import Market
+from app.models.users.user import User
 from app.services.intelligence.consensus_service import (
     CONSENSUS_CACHE_TTL_SECONDS,
     MAX_VOTES_PER_HOUR,

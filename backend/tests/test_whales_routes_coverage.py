@@ -21,8 +21,8 @@ from app.api.routes.auth.auth import get_current_user_from_token
 from app.api.routes.markets.whales import _event_to_response
 from app.main import app
 from app.models.base import Base
-from app.models.whale_config import WhaleConfig
-from app.models.whale_event import WhaleEvent
+from app.models.market_data.whale_config import WhaleConfig
+from app.models.market_data.whale_event import WhaleEvent
 from app.services.market_data.ctf_events_service import invalidate_config_cache
 from app.utils.database import get_db
 

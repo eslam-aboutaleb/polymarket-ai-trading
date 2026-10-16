@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (register models on Base)
-from app.models.assessment import Assessment
+from app.models.analytics.assessment import Assessment
 from app.models.base import Base
 from app.services.intelligence.forecast_recorder import record_verdict
 from app.utils.time import utc_now

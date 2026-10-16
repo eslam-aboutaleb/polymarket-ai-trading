@@ -56,7 +56,7 @@ from app.middleware.request_logger import (
     clear_logs,
     get_log_entries,
 )
-from app.models.followed_trader import FollowedTrader
+from app.models.trading.followed_trader import FollowedTrader
 from app.security.crypto import EncryptionConfigError
 from app.security.rate_limit import limiter
 
@@ -159,7 +159,7 @@ class SyncAdminWalletsTests(unittest.TestCase):
         with (
             self._patch_settings(f"garbage, {ADMIN_WALLET}"),
             patch("app.main.SessionLocal", session_local),
-            patch("app.models.audit_log.AdminAuditLog", FakeAuditLog),
+            patch("app.models.platform.audit_log.AdminAuditLog", FakeAuditLog),
         ):
             _sync_admin_wallets()
 
@@ -184,7 +184,7 @@ class SyncAdminWalletsTests(unittest.TestCase):
         with (
             self._patch_settings(ADMIN_WALLET),
             patch("app.main.SessionLocal", session_local),
-            patch("app.models.audit_log.AdminAuditLog", FakeAuditLog),
+            patch("app.models.platform.audit_log.AdminAuditLog", FakeAuditLog),
         ):
             _sync_admin_wallets()
 
@@ -210,7 +210,7 @@ class SyncAdminWalletsTests(unittest.TestCase):
         with (
             self._patch_settings(ADMIN_WALLET),
             patch("app.main.SessionLocal", session_local),
-            patch("app.models.audit_log.AdminAuditLog", MagicMock()),
+            patch("app.models.platform.audit_log.AdminAuditLog", MagicMock()),
         ):
             _sync_admin_wallets()
         db.add.assert_not_called()

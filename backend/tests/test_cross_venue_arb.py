@@ -38,9 +38,9 @@ from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (register models on Base.metadata)
 from app.models.base import Base
-from app.models.user import User
-from app.models.venue_market import VenueMarket
-from app.models.whale_event import WhaleEvent
+from app.models.market_data.venue_market import VenueMarket
+from app.models.market_data.whale_event import WhaleEvent
+from app.models.users.user import User
 from app.security.auth import create_access_token
 from app.services.analytics.cross_venue_arb import (
     MATCH_EXACT,

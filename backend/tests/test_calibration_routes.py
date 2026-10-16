@@ -18,11 +18,11 @@ from sqlalchemy.pool import StaticPool
 import app.models  # noqa: F401  (register models on Base)
 from app.api.routes.analysis.calibration import BASELINE_BRIER, router
 from app.api.routes.auth.auth import get_current_user_from_token
-from app.models.assessment import Assessment
+from app.models.analytics.assessment import Assessment
 from app.models.base import Base
-from app.models.trade_history import TradeHistory
-from app.models.user import User
-from app.models.user_trade import UserTrade
+from app.models.trading.trade_history import TradeHistory
+from app.models.trading.user_trade import UserTrade
+from app.models.users.user import User
 from app.utils.database import get_db
 from app.utils.time import utc_now
 

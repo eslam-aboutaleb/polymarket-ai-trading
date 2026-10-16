@@ -20,7 +20,7 @@ from app.api.routes.auth.auth import get_current_user_from_token
 from app.api.routes.trading.inverse_bot import _to_response
 from app.main import app
 from app.models.base import Base
-from app.models.inverse_bot_position import InverseBotPosition
+from app.models.trading.inverse_bot_position import InverseBotPosition
 from app.utils.database import get_db
 
 WALLET = "0x" + "ab" * 20

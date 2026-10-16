@@ -65,14 +65,14 @@ from app.api.routes.auth.auth import (
 )
 from app.api.routes.trading.trades import _safe_json_obj
 from app.main import app
-from app.models.followed_trader import FollowedTrader
-from app.models.notification_feed_event import NotificationFeedEvent
-from app.models.notification_followed_trader import NotificationFollowedTrader
-from app.models.stop_loss import StopLossOrder
-from app.models.take_profit import TakeProfitOrder
-from app.models.user import User
-from app.models.user_settings import UserSettings
-from app.models.user_trade import UserTrade
+from app.models.notifications.notification_feed_event import NotificationFeedEvent
+from app.models.notifications.notification_followed_trader import NotificationFollowedTrader
+from app.models.trading.followed_trader import FollowedTrader
+from app.models.trading.stop_loss import StopLossOrder
+from app.models.trading.take_profit import TakeProfitOrder
+from app.models.trading.user_trade import UserTrade
+from app.models.users.user import User
+from app.models.users.user_settings import UserSettings
 from app.security.credential_store import CredentialStoreError
 from app.services.trading import kelly_service
 from app.utils.database import get_db

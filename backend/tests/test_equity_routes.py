@@ -18,8 +18,8 @@ from sqlalchemy.pool import StaticPool
 from app.api.routes.auth.auth import get_current_user_from_token
 from app.api.routes.portfolio.portfolio import _equity_window, _parse_moment
 from app.main import app
-from app.models.portfolio_snapshot import PortfolioSnapshot
-from app.models.user import User
+from app.models.analytics.portfolio_snapshot import PortfolioSnapshot
+from app.models.users.user import User
 from app.services.analytics import equity_snapshot_service as svc
 from app.utils.database import get_db
 from app.utils.time import utc_now

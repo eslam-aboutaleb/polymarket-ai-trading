@@ -23,10 +23,10 @@ from app.api.routes.auth.auth import get_current_user_from_token
 from app.api.routes.platform import notifications as notifications_module
 from app.main import app
 from app.models.base import Base
-from app.models.notification_channel import NotificationChannel
-from app.models.notification_feed_event import NotificationFeedEvent
-from app.models.user import User
-from app.models.user_notification_preference import UserNotificationPreference
+from app.models.notifications.notification_channel import NotificationChannel
+from app.models.notifications.notification_feed_event import NotificationFeedEvent
+from app.models.notifications.user_notification_preference import UserNotificationPreference
+from app.models.users.user import User
 from app.services.users.alert_service import ALERT_EVENT_TYPES
 from app.utils.database import get_db
 

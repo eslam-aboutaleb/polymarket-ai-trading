@@ -24,7 +24,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from app.config import AIBackend
-from app.models.user_settings import AIBackendType
+from app.models.users.user_settings import AIBackendType
 from app.services.intelligence import llm_gateway
 from app.services.intelligence.llm_gateway import (
     MODEL_SUGGESTIONS,

@@ -35,9 +35,9 @@ from app.api.routes.auth.auth import (
 from app.config import AIBackend
 from app.grpc_clients.analysis_client import AnalysisClient
 from app.main import app
-from app.models.assessment import Assessment
+from app.models.analytics.assessment import Assessment
 from app.models.base import Base
-from app.models.user_settings import AIBackendType
+from app.models.users.user_settings import AIBackendType
 from app.security.rate_limit import limiter
 from app.services.intelligence.llm_gateway import LLMConfig, LLMProviderType
 from app.utils.database import get_db

@@ -37,11 +37,11 @@ import app.api.routes.platform.external as external_module
 import app.api.routes.platform.ws_v1 as ws_module
 import app.models  # noqa: F401  (register models on Base.metadata)
 from app.api.routes.auth.auth import get_current_user_from_token
-from app.models.api_key import ApiKey
 from app.models.base import Base
-from app.models.user import User
-from app.models.user_settings import UserSettings
-from app.models.user_trade import UserTrade
+from app.models.trading.user_trade import UserTrade
+from app.models.users.api_key import ApiKey
+from app.models.users.user import User
+from app.models.users.user_settings import UserSettings
 from app.services.platform import audit_service, event_log
 from app.services.users import api_key_service
 from app.utils.database import get_db

@@ -1,8 +1,7 @@
-"""SQLAlchemy model registry and compatibility exports.
+"""SQLAlchemy model registry for Alembic and application startup.
 
-Importing this package registers every mapped entity with ``Base.metadata``
-for Alembic and application startup. Model definitions live under their
-bounded-context package; the flat module shims preserve historical imports.
+Importing this package registers every mapped entity with ``Base.metadata``.
+Model definitions live under their bounded-context packages.
 """
 
 from app.models.analytics.assessment import Assessment

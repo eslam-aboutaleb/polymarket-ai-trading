@@ -38,8 +38,8 @@ from app.api.routes.auth.auth import (
 )
 from app.config import get_settings
 from app.main import app
-from app.models.token import RefreshToken
-from app.models.user import User
+from app.models.users.token import RefreshToken
+from app.models.users.user import User
 from app.schemas.auth import (
     PrivateKeyLoginRequest,
     SignatureVerification,

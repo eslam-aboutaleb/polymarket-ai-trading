@@ -23,10 +23,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (register models on Base.metadata)
-from app.models.assessment import Assessment
+from app.models.analytics.assessment import Assessment
 from app.models.base import Base
-from app.models.governance import LLMExperiment, VerdictFeedback
-from app.models.user import User
+from app.models.intelligence.governance import LLMExperiment, VerdictFeedback
+from app.models.users.user import User
 from app.services.intelligence.forecast_recorder import record_verdict
 from app.services.intelligence.model_drift import (
     BASELINE_BRIER,

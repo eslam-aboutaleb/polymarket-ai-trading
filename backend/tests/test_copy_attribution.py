@@ -29,8 +29,8 @@ from app.api.routes.auth.auth import get_current_user_from_token
 from app.config import get_settings
 from app.main import app
 from app.models.base import Base
-from app.models.followed_trader import FollowedTrader
-from app.models.user_trade import UserTrade
+from app.models.trading.followed_trader import FollowedTrader
+from app.models.trading.user_trade import UserTrade
 from app.services.trading.copy_trade_service import get_trader_copy_stats
 from app.utils.database import get_db
 
