@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import signal
 from concurrent import futures
 from datetime import datetime
 
@@ -15,11 +16,14 @@ import analysis_pb2
 import analysis_pb2_grpc
 import grpc
 from grpc_reflection.v1alpha import reflection
-from src.cli_agent import get_cli_agent
+from src.cli_agent import aclose_cli_agent, get_cli_agent
 from src.config import get_settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Seconds in-flight RPCs get to drain once a shutdown signal arrives.
+SHUTDOWN_GRACE_SECONDS = 5.0
 
 
 def _get_request_model(request) -> str | None:
@@ -28,6 +32,22 @@ def _get_request_model(request) -> str | None:
     if llm_config is not None and llm_config.model:
         return llm_config.model
     return None
+
+
+def _grpc_status_code(exc: BaseException) -> grpc.StatusCode:
+    """Map a handler failure onto a gRPC status code.
+
+    The in-band ``success=False`` payload is kept for existing clients;
+    the code only tells gRPC-aware callers what kind of failure it was.
+    """
+    message = str(exc).lower()
+    if isinstance(exc, ValueError | KeyError | TypeError):
+        return grpc.StatusCode.INVALID_ARGUMENT
+    if isinstance(exc, TimeoutError) or "timed out" in message or "timeout" in message:
+        return grpc.StatusCode.DEADLINE_EXCEEDED
+    if isinstance(exc, ConnectionError) or "connection" in message or "unavailable" in message:
+        return grpc.StatusCode.UNAVAILABLE
+    return grpc.StatusCode.INTERNAL
 
 
 class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
@@ -63,6 +83,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"AnalyzeMarket error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.AnalysisResponse(
                 success=False, error=str(e), timestamp=datetime.utcnow().isoformat()
             )
@@ -94,6 +115,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"QuickAnalysis error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.AnalysisResponse(
                 success=False, error=str(e), timestamp=datetime.utcnow().isoformat()
             )
@@ -129,6 +151,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"ScanMarkets error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.AnalysisResponse(
                 success=False, error=str(e), timestamp=datetime.utcnow().isoformat()
             )
@@ -155,6 +178,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"AssessRisk error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.AnalysisResponse(
                 success=False, error=str(e), timestamp=datetime.utcnow().isoformat()
             )
@@ -186,6 +210,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"GenerateTradePlan error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.AnalysisResponse(
                 success=False, error=str(e), timestamp=datetime.utcnow().isoformat()
             )
@@ -210,6 +235,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 )
         except Exception as e:
             logger.error(f"AnalyzeMarketStream error: {e}")
+            context.set_code(_grpc_status_code(e))
             yield analysis_pb2.AnalysisChunk(
                 chunk=f"Error: {str(e)}", is_final=True, chunk_type="error"
             )
@@ -239,6 +265,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"AnalyzeTrader error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.AnalysisResponse(
                 success=False,
                 error=str(e),
@@ -287,6 +314,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"EvaluateCopyTrade error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.AnalysisResponse(
                 success=False,
                 error=str(e),
@@ -332,6 +360,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"EvaluateInversePosition error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.AnalysisResponse(
                 success=False,
                 error=str(e),
@@ -350,6 +379,12 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 "engine": "gh-copilot-cli",
             },
         )
+
+
+async def _shutdown(server: grpc.aio.Server) -> None:
+    """Drain in-flight RPCs, then release the agent's cached clients."""
+    await server.stop(SHUTDOWN_GRACE_SECONDS)
+    await aclose_cli_agent()
 
 
 async def serve():
@@ -372,7 +407,26 @@ async def serve():
     logger.info(f"Starting {settings.service_name} on {listen_addr}")
 
     await server.start()
-    await server.wait_for_termination()
+
+    # SIGTERM/SIGINT: stop accepting new RPCs, let in-flight ones drain for
+    # the grace period, then release cached clients instead of being killed
+    # mid-request.
+    loop = asyncio.get_running_loop()
+
+    def _request_shutdown() -> None:
+        logger.info("Shutdown signal received; draining %s", settings.service_name)
+        loop.create_task(_shutdown(server))
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        with contextlib.suppress(NotImplementedError, ValueError):
+            loop.add_signal_handler(sig, _request_shutdown)
+
+    try:
+        await server.wait_for_termination()
+    finally:
+        # ``stop()`` is idempotent, so this also covers the signal path and
+        # a server that terminated on its own.
+        await _shutdown(server)
 
 
 if __name__ == "__main__":

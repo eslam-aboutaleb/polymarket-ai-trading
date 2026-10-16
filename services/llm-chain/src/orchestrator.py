@@ -21,6 +21,7 @@ testable) without the AI stack installed.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -813,6 +814,7 @@ async def execute_plan(
 # ── Step executors ───────────────────────────────────────────
 
 _cli_agent_stub: Any = None
+_cli_agent_channel: Any = None
 
 
 def _cli_agent_address() -> str:
@@ -834,7 +836,7 @@ def _get_cli_agent_stub() -> Any:
     service name as the default — both services share the default compose
     network, so no extra plumbing is needed.
     """
-    global _cli_agent_stub
+    global _cli_agent_stub, _cli_agent_channel
     if _cli_agent_stub is None:
         import analysis_pb2_grpc
         import grpc
@@ -846,14 +848,26 @@ def _get_cli_agent_stub() -> Any:
                 ("grpc.keepalive_time_ms", 10000),
             ],
         )
+        _cli_agent_channel = channel
         _cli_agent_stub = analysis_pb2_grpc.AnalysisServiceStub(channel)
     return _cli_agent_stub
 
 
 def reset_cli_agent_stub() -> None:
     """Drop the cached cli-agent stub (tests, or a redeployed agent)."""
-    global _cli_agent_stub
+    global _cli_agent_stub, _cli_agent_channel
     _cli_agent_stub = None
+    _cli_agent_channel = None
+
+
+async def close_cli_agent_stub() -> None:
+    """Close the cached cli-agent channel (idempotent graceful shutdown)."""
+    global _cli_agent_stub, _cli_agent_channel
+    channel, _cli_agent_channel = _cli_agent_channel, None
+    _cli_agent_stub = None
+    if channel is not None:
+        with contextlib.suppress(Exception):
+            await channel.close()
 
 
 def _response_to_dict(response: Any) -> dict[str, Any]:

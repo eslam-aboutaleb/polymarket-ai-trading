@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import signal
 from concurrent import futures
 from datetime import datetime
 
@@ -22,6 +23,7 @@ from src.llm_factory import get_available_providers, parse_llm_config_from_proto
 from src.orchestrator import (
     OrchestrationError,
     build_plan,
+    close_cli_agent_stub,
     get_orchestration_metrics,
     run_plan,
     stream_plan,
@@ -29,6 +31,25 @@ from src.orchestrator import (
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Seconds in-flight RPCs get to drain once a shutdown signal arrives.
+SHUTDOWN_GRACE_SECONDS = 5.0
+
+
+def _grpc_status_code(exc: BaseException) -> grpc.StatusCode:
+    """Map a handler failure onto a gRPC status code.
+
+    The in-band ``success=False`` payload is kept for existing clients;
+    the code only tells gRPC-aware callers what kind of failure it was.
+    """
+    message = str(exc).lower()
+    if isinstance(exc, ValueError | KeyError | TypeError | OrchestrationError):
+        return grpc.StatusCode.INVALID_ARGUMENT
+    if isinstance(exc, TimeoutError) or "timed out" in message or "timeout" in message:
+        return grpc.StatusCode.DEADLINE_EXCEEDED
+    if isinstance(exc, ConnectionError) or "connection" in message or "unavailable" in message:
+        return grpc.StatusCode.UNAVAILABLE
+    return grpc.StatusCode.INTERNAL
 
 
 def _get_chain_for_request(request):
@@ -104,6 +125,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"AnalyzeMarket error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.AnalysisResponse(
                 success=False, error=str(e), timestamp=datetime.utcnow().isoformat()
             )
@@ -131,6 +153,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"QuickAnalysis error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.AnalysisResponse(
                 success=False, error=str(e), timestamp=datetime.utcnow().isoformat()
             )
@@ -169,6 +192,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"ScanMarkets error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.AnalysisResponse(
                 success=False, error=str(e), timestamp=datetime.utcnow().isoformat()
             )
@@ -200,6 +224,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"AssessRisk error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.AnalysisResponse(
                 success=False, error=str(e), timestamp=datetime.utcnow().isoformat()
             )
@@ -236,6 +261,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"GenerateTradePlan error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.AnalysisResponse(
                 success=False, error=str(e), timestamp=datetime.utcnow().isoformat()
             )
@@ -261,6 +287,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 )
         except Exception as e:
             logger.error(f"AnalyzeMarketStream error: {e}")
+            context.set_code(_grpc_status_code(e))
             yield analysis_pb2.AnalysisChunk(
                 chunk=f"Error: {str(e)}", is_final=True, chunk_type="error"
             )
@@ -295,6 +322,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"AnalyzeTrader error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.AnalysisResponse(
                 success=False,
                 error=str(e),
@@ -340,6 +368,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"EvaluateCopyTrade error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.AnalysisResponse(
                 success=False,
                 error=str(e),
@@ -392,6 +421,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"EvaluateInversePosition error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.AnalysisResponse(
                 success=False,
                 error=str(e),
@@ -446,6 +476,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"AnalyzeSentiment error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.AnalysisResponse(
                 success=False,
                 error=str(e),
@@ -508,6 +539,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"DiscoverBestTrade error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.AnalysisResponse(
                 success=False,
                 error=str(e),
@@ -537,6 +569,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"IndexMarketsRAG error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.AnalysisResponse(
                 success=False,
                 error=str(e),
@@ -584,6 +617,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"GenerateNews error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.GenerateNewsResponse(
                 success=False,
                 error=str(e),
@@ -603,6 +637,9 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                     articles.append(resp)
                 except Exception as e:
                     logger.error(f"Batch news error for {mkt.market_question}: {e}")
+                    # Per-article failure: the article payload carries it, and
+                    # the batch RPC stays OK unless the whole call fails below.
+                    context.set_code(grpc.StatusCode.OK)
                     articles.append(
                         analysis_pb2.GenerateNewsResponse(
                             success=False,
@@ -619,6 +656,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         except Exception as e:
             logger.error(f"GenerateNewsBatch error: {e}")
+            context.set_code(_grpc_status_code(e))
             return analysis_pb2.GenerateNewsBatchResponse(
                 success=False,
                 error=str(e),
@@ -646,6 +684,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             plan = self._parse_orchestrate_request(request)
         except OrchestrationError as exc:
             logger.warning(f"OrchestrateAnalysis rejected: {exc}")
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             return analysis_pb2.OrchestrateResponse(
                 success=False,
                 metadata={"error": str(exc), "intent": request.intent},
@@ -686,6 +725,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             plan = self._parse_orchestrate_request(request)
         except OrchestrationError as exc:
             logger.warning(f"OrchestrateAnalysisStream rejected: {exc}")
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             yield analysis_pb2.AnalysisChunk(
                 chunk=json.dumps({"error": str(exc), "intent": request.intent}),
                 chunk_type="error",
@@ -709,6 +749,12 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
 
 
+async def _shutdown(server: grpc.aio.Server) -> None:
+    """Drain in-flight RPCs, then release cached downstream channels."""
+    await server.stop(SHUTDOWN_GRACE_SECONDS)
+    await close_cli_agent_stub()
+
+
 async def serve():
     """Start the gRPC server."""
     settings = get_settings()
@@ -729,7 +775,26 @@ async def serve():
     logger.info(f"Starting {settings.service_name} on {listen_addr}")
 
     await server.start()
-    await server.wait_for_termination()
+
+    # SIGTERM/SIGINT: stop accepting new RPCs, let in-flight ones drain for
+    # the grace period, then close cached channels instead of being killed
+    # mid-request.
+    loop = asyncio.get_running_loop()
+
+    def _request_shutdown() -> None:
+        logger.info("Shutdown signal received; draining %s", settings.service_name)
+        loop.create_task(_shutdown(server))
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        with contextlib.suppress(NotImplementedError, ValueError):
+            loop.add_signal_handler(sig, _request_shutdown)
+
+    try:
+        await server.wait_for_termination()
+    finally:
+        # ``stop()`` is idempotent, so this also covers the signal path and
+        # a server that terminated on its own.
+        await _shutdown(server)
 
 
 if __name__ == "__main__":
