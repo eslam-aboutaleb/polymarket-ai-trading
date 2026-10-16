@@ -23,8 +23,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 from starlette.requests import Request
 
-import app.api.routes.auth as auth_module
-from app.api.routes.auth import (
+import app.api.routes.auth.auth as auth_module
+from app.api.routes.auth.auth import (
     ACCESS_TOKEN_COOKIE_NAME,
     REFRESH_TOKEN_COOKIE_NAME,
     _login_rate_limit,
@@ -815,7 +815,7 @@ class RefreshAccessTokenTests(AuthRouteTestBase):
 
         # Old token revoked, new token persisted.
         self.assertIsNone(
-            find_active_refresh_token_record(self.db, raw_refresh_token="old-refresh-token")
+            find_active_refresh_token_record(self.db, raw_refresh_token="old-refresh-token"),
         )
         new_record = find_active_refresh_token_record(
             self.db, raw_refresh_token="new-refresh-token"

@@ -19,8 +19,8 @@ from sqlalchemy.pool import StaticPool
 import app.models  # noqa: F401  (register models on Base)
 from app.models.assessment import Assessment
 from app.models.base import Base
-from app.services import forecast_resolution
-from app.services.forecast_resolution import (
+from app.services.intelligence import forecast_resolution
+from app.services.intelligence.forecast_resolution import (
     ResolutionRun,
     brier_score,
     fetch_resolutions,
@@ -131,7 +131,7 @@ class WinningOutcomeTests(unittest.TestCase):
         self.assertIsNone(winning_outcome({"outcomes": "not json", "outcomePrices": "[]"}))
         self.assertIsNone(winning_outcome({"outcomes": '["Yes"]', "outcomePrices": '["1", "0"]'}))
         self.assertIsNone(
-            winning_outcome({"outcomes": '["Yes", "No"]', "outcomePrices": '["x", "y"]'})
+            winning_outcome({"outcomes": '["Yes", "No"]', "outcomePrices": '["x", "y"]'}),
         )
 
     def test_already_parsed_lists_are_accepted(self):
@@ -161,7 +161,7 @@ class BrierScoreTests(unittest.TestCase):
 class FetchResolutionsTests(unittest.IsolatedAsyncioTestCase):
     def _patch_client(self, client):
         patcher = patch(
-            "app.services.forecast_resolution.httpx.AsyncClient",
+            "app.services.intelligence.forecast_resolution.httpx.AsyncClient",
             lambda **kwargs: client,
         )
         patcher.start()

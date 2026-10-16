@@ -21,8 +21,7 @@ import app.models  # noqa: F401  (register models on Base.metadata)
 from app.models.base import Base
 from app.models.user import User
 from app.models.user_trade import UserTrade
-from app.services import trade_monitor
-from app.services.execution_analytics import (
+from app.services.analytics.execution_analytics import (
     STRATEGY_SOURCES,
     compute_latency_ms,
     compute_slippage_bps,
@@ -31,6 +30,7 @@ from app.services.execution_analytics import (
     get_strategy_stats,
     get_trade_details,
 )
+from app.services.trading import trade_monitor
 from app.utils.time import utc_now
 
 WALLET = "0xexecution-analytics-wallet"
@@ -301,7 +301,7 @@ class EdgeScoreTests(AnalyticsTestBase):
         )
 
     def test_edge_score_bounded_and_centered(self):
-        from app.services.execution_analytics import _normalize_edge_score
+        from app.services.analytics.execution_analytics import _normalize_edge_score
 
         self.assertAlmostEqual(_normalize_edge_score(0.0), 50.0, places=6)
         self.assertGreater(_normalize_edge_score(1.0), 50.0)
@@ -474,7 +474,7 @@ class EndpointAuthTests(unittest.TestCase):
         return TestClient(app), app
 
     def _override(self, app):
-        from app.api.routes.auth import get_current_user_from_token
+        from app.api.routes.auth.auth import get_current_user_from_token
         from app.utils.database import get_db
 
         app.dependency_overrides[get_current_user_from_token] = lambda: {

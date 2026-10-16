@@ -1,4 +1,4 @@
-"""Unit tests for the news service (``app.services.news_service``).
+"""Unit tests for the news service (``app.services.intelligence.news_service``).
 
 Articles are ephemeral: they live in an in-memory cache with a 20-minute TTL
 and are never persisted, so the cache is the source of truth for both the
@@ -36,8 +36,8 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.config import AIBackend
-from app.services import news_service as news_mod
-from app.services.news_service import (
+from app.services.intelligence import news_service as news_mod
+from app.services.intelligence.news_service import (
     NewsService,
     get_news_service,
     start_news_generator,
@@ -307,7 +307,10 @@ class _TrendingMarketCase(_NewsServiceTestCase):
         instance = MagicMock()
         instance.get_active_markets = AsyncMock(return_value=markets, side_effect=side_effect)
         factory = MagicMock(return_value=instance)
-        patcher = patch("app.services.polymarket_service.get_polymarket_service", factory)
+        patcher = patch(
+            "app.services.market_data.polymarket_service.get_polymarket_service",
+            factory,
+        )
         factory_mock = patcher.start()
         self.addCleanup(patcher.stop)
         self.polymarket = factory_mock
@@ -504,7 +507,7 @@ class BackgroundGeneratorTests(_NewsServiceTestCase):
         ):
             await start_news_generator()
         self.assertTrue(
-            any("News background generator started" in line for line in captured.output)
+            any("News background generator started" in line for line in captured.output),
         )
 
     async def test_stop_announces_itself(self):
@@ -512,7 +515,7 @@ class BackgroundGeneratorTests(_NewsServiceTestCase):
         with self.assertLogs(news_mod.logger, level="INFO") as captured:
             await stop_news_generator()
         self.assertTrue(
-            any("News background generator stopped" in line for line in captured.output)
+            any("News background generator stopped" in line for line in captured.output),
         )
 
 

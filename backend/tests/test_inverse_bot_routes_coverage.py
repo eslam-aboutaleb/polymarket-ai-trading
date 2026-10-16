@@ -16,8 +16,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api.routes.auth import get_current_user_from_token
-from app.api.routes.inverse_bot import _to_response
+from app.api.routes.auth.auth import get_current_user_from_token
+from app.api.routes.trading.inverse_bot import _to_response
 from app.main import app
 from app.models.base import Base
 from app.models.inverse_bot_position import InverseBotPosition
@@ -224,7 +224,7 @@ class EvaluatePositionTests(InverseBotRouteTestCase):
     def test_evaluate_success(self):
         row = self._add_position()
         with patch(
-            "app.api.routes.inverse_bot.manual_evaluate_inverse_position",
+            "app.api.routes.trading.inverse_bot.manual_evaluate_inverse_position",
             new_callable=AsyncMock,
             return_value={"success": True, "result": {"signal": "buy"}},
         ) as evaluate:
@@ -239,7 +239,7 @@ class EvaluatePositionTests(InverseBotRouteTestCase):
     def test_evaluate_failure_with_detail(self):
         row = self._add_position()
         with patch(
-            "app.api.routes.inverse_bot.manual_evaluate_inverse_position",
+            "app.api.routes.trading.inverse_bot.manual_evaluate_inverse_position",
             new_callable=AsyncMock,
             return_value={"success": False, "detail": "not found"},
         ):
@@ -253,7 +253,7 @@ class EvaluatePositionTests(InverseBotRouteTestCase):
     def test_evaluate_failure_without_detail_uses_default(self):
         row = self._add_position()
         with patch(
-            "app.api.routes.inverse_bot.manual_evaluate_inverse_position",
+            "app.api.routes.trading.inverse_bot.manual_evaluate_inverse_position",
             new_callable=AsyncMock,
             return_value={"success": False},
         ):
@@ -272,7 +272,7 @@ class MetricsRouteTests(InverseBotRouteTestCase):
 
     def test_metrics_returns_monitor_metrics(self):
         with patch(
-            "app.api.routes.inverse_bot.get_inverse_bot_metrics",
+            "app.api.routes.trading.inverse_bot.get_inverse_bot_metrics",
             return_value={"positions_tracked": 3, "evaluations": 7},
         ):
             response = self.client.get("/api/inverse-bot/metrics")

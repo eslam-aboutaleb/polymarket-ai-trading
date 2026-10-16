@@ -24,8 +24,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from web3 import Web3
 
-import app.services.redemption_service as redemption_service
-from app.services.redemption_service import (
+import app.services.trading.redemption_service as redemption_service
+from app.services.trading.redemption_service import (
     _CONDITIONAL_TOKENS,
     _CTF_EXCHANGE,
     DAILY_REDEEM_CAP_PER_USER,
@@ -303,7 +303,7 @@ class ExecuteRedeemTests(unittest.IsolatedAsyncioTestCase):
 
     def _execute(self, w3, position=None, db=None, dry_run=False):
         with patch(
-            "app.services.redemption_service.load_wallet_credentials",
+            "app.services.trading.redemption_service.load_wallet_credentials",
             return_value={"private_key": TEST_PRIVATE_KEY, "clob_creds": None},
         ):
             return redemption_service._execute_redeem(
@@ -361,7 +361,7 @@ class ExecuteRedeemTests(unittest.IsolatedAsyncioTestCase):
             proxy_redeem_error=RuntimeError("proxy redeem reverted"),
         )
         with patch(
-            "app.services.redemption_service.dispatch_alert",
+            "app.services.trading.redemption_service.dispatch_alert",
             new=AsyncMock(),
         ) as mock_dispatch:
             attempt = self._execute(w3)
@@ -384,7 +384,7 @@ class ExecuteRedeemTests(unittest.IsolatedAsyncioTestCase):
     def test_insufficient_gas_notifies_and_fails(self):
         w3 = _fake_w3(gas_wei=Web3.to_wei(0.001, "ether"))
         with patch(
-            "app.services.redemption_service.dispatch_alert",
+            "app.services.trading.redemption_service.dispatch_alert",
             new=AsyncMock(),
         ) as mock_dispatch:
             attempt = self._execute(w3)
@@ -415,7 +415,7 @@ class ExecuteRedeemTests(unittest.IsolatedAsyncioTestCase):
     def test_missing_credentials_fail_the_attempt(self):
         w3 = _fake_w3()
         with patch(
-            "app.services.redemption_service.load_wallet_credentials",
+            "app.services.trading.redemption_service.load_wallet_credentials",
             return_value=None,
         ):
             attempt = redemption_service._execute_redeem(
@@ -428,11 +428,11 @@ class ExecuteRedeemTests(unittest.IsolatedAsyncioTestCase):
     def test_unreachable_rpc_fails_the_attempt(self):
         with (
             patch(
-                "app.services.redemption_service._connect_web3",
+                "app.services.trading.redemption_service._connect_web3",
                 return_value=None,
             ),
             patch(
-                "app.services.redemption_service.load_wallet_credentials",
+                "app.services.trading.redemption_service.load_wallet_credentials",
                 return_value={"private_key": TEST_PRIVATE_KEY, "clob_creds": None},
             ),
         ):
@@ -471,19 +471,19 @@ class OrchestrationTests(unittest.IsolatedAsyncioTestCase):
         w3 = _fake_w3()
         with (
             patch(
-                "app.services.redemption_service.SessionLocal",
+                "app.services.trading.redemption_service.SessionLocal",
                 return_value=db,
             ),
             patch(
-                "app.services.polymarket_service.get_polymarket_service",
+                "app.services.market_data.polymarket_service.get_polymarket_service",
                 return_value=service,
             ),
             patch(
-                "app.services.redemption_service._connect_web3",
+                "app.services.trading.redemption_service._connect_web3",
                 return_value=w3,
             ),
             patch(
-                "app.services.redemption_service.load_wallet_credentials",
+                "app.services.trading.redemption_service.load_wallet_credentials",
                 return_value={"private_key": TEST_PRIVATE_KEY, "clob_creds": None},
             ),
         ):
@@ -502,23 +502,23 @@ class OrchestrationTests(unittest.IsolatedAsyncioTestCase):
         w3 = _fake_w3()
         with (
             patch(
-                "app.services.redemption_service.SessionLocal",
+                "app.services.trading.redemption_service.SessionLocal",
                 return_value=db,
             ),
             patch(
-                "app.services.redemption_service.REDEEM_DRY_RUN",
+                "app.services.trading.redemption_service.REDEEM_DRY_RUN",
                 False,
             ),
             patch(
-                "app.services.polymarket_service.get_polymarket_service",
+                "app.services.market_data.polymarket_service.get_polymarket_service",
                 return_value=service,
             ),
             patch(
-                "app.services.redemption_service._connect_web3",
+                "app.services.trading.redemption_service._connect_web3",
                 return_value=w3,
             ),
             patch(
-                "app.services.redemption_service.load_wallet_credentials",
+                "app.services.trading.redemption_service.load_wallet_credentials",
                 return_value={"private_key": TEST_PRIVATE_KEY, "clob_creds": None},
             ),
         ):
@@ -533,23 +533,23 @@ class OrchestrationTests(unittest.IsolatedAsyncioTestCase):
         w3 = _fake_w3()
         with (
             patch(
-                "app.services.redemption_service.SessionLocal",
+                "app.services.trading.redemption_service.SessionLocal",
                 return_value=db,
             ),
             patch(
-                "app.services.redemption_service.REDEEM_DRY_RUN",
+                "app.services.trading.redemption_service.REDEEM_DRY_RUN",
                 False,
             ),
             patch(
-                "app.services.polymarket_service.get_polymarket_service",
+                "app.services.market_data.polymarket_service.get_polymarket_service",
                 return_value=service,
             ),
             patch(
-                "app.services.redemption_service._connect_web3",
+                "app.services.trading.redemption_service._connect_web3",
                 return_value=w3,
             ),
             patch(
-                "app.services.redemption_service.load_wallet_credentials",
+                "app.services.trading.redemption_service.load_wallet_credentials",
                 return_value={"private_key": TEST_PRIVATE_KEY, "clob_creds": None},
             ),
         ):
@@ -565,23 +565,23 @@ class OrchestrationTests(unittest.IsolatedAsyncioTestCase):
         w3 = _fake_w3()
         with (
             patch(
-                "app.services.redemption_service.SessionLocal",
+                "app.services.trading.redemption_service.SessionLocal",
                 return_value=db,
             ),
             patch(
-                "app.services.redemption_service.REDEEM_DRY_RUN",
+                "app.services.trading.redemption_service.REDEEM_DRY_RUN",
                 False,
             ),
             patch(
-                "app.services.polymarket_service.get_polymarket_service",
+                "app.services.market_data.polymarket_service.get_polymarket_service",
                 return_value=service,
             ),
             patch(
-                "app.services.redemption_service._connect_web3",
+                "app.services.trading.redemption_service._connect_web3",
                 return_value=w3,
             ),
             patch(
-                "app.services.redemption_service.load_wallet_credentials",
+                "app.services.trading.redemption_service.load_wallet_credentials",
                 return_value={"private_key": TEST_PRIVATE_KEY, "clob_creds": None},
             ),
         ):
@@ -595,7 +595,7 @@ class OrchestrationTests(unittest.IsolatedAsyncioTestCase):
         service = MagicMock()
         service.get_positions = AsyncMock(return_value=[])
         with patch(
-            "app.services.polymarket_service.get_polymarket_service",
+            "app.services.market_data.polymarket_service.get_polymarket_service",
             return_value=service,
         ):
             attempt = await redemption_service.redeem_market_for_user(1, TEST_EOA, CID_AB)
@@ -608,23 +608,23 @@ class OrchestrationTests(unittest.IsolatedAsyncioTestCase):
         w3 = _fake_w3()
         with (
             patch(
-                "app.services.redemption_service.SessionLocal",
+                "app.services.trading.redemption_service.SessionLocal",
                 return_value=db,
             ),
             patch(
-                "app.services.redemption_service.REDEEM_DRY_RUN",
+                "app.services.trading.redemption_service.REDEEM_DRY_RUN",
                 False,
             ),
             patch(
-                "app.services.polymarket_service.get_polymarket_service",
+                "app.services.market_data.polymarket_service.get_polymarket_service",
                 return_value=service,
             ),
             patch(
-                "app.services.redemption_service._connect_web3",
+                "app.services.trading.redemption_service._connect_web3",
                 return_value=w3,
             ),
             patch(
-                "app.services.redemption_service.load_wallet_credentials",
+                "app.services.trading.redemption_service.load_wallet_credentials",
                 return_value={"private_key": TEST_PRIVATE_KEY, "clob_creds": None},
             ),
         ):
@@ -638,11 +638,11 @@ class OrchestrationTests(unittest.IsolatedAsyncioTestCase):
         # this process must not start its loop.
         with (
             patch(
-                "app.services.redemption_service.acquire_scheduler_lock",
+                "app.services.trading.redemption_service.acquire_scheduler_lock",
                 return_value=False,
             ),
             patch(
-                "app.services.redemption_service.run_redeem_cycle",
+                "app.services.trading.redemption_service.run_redeem_cycle",
                 new=AsyncMock(),
             ) as mock_cycle,
         ):
@@ -657,19 +657,19 @@ class OrchestrationTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "app.services.redemption_service.acquire_scheduler_lock",
+                "app.services.trading.redemption_service.acquire_scheduler_lock",
                 None,
             ),
             patch(
-                "app.services.redemption_service.release_scheduler_lock",
+                "app.services.trading.redemption_service.release_scheduler_lock",
                 None,
             ),
             patch(
-                "app.services.redemption_service.scheduler_heartbeat",
+                "app.services.trading.redemption_service.scheduler_heartbeat",
                 None,
             ),
             patch(
-                "app.services.redemption_service.run_redeem_cycle",
+                "app.services.trading.redemption_service.run_redeem_cycle",
                 new=AsyncMock(side_effect=_cancel_after_first_cycle),
             ) as mock_cycle,
         ):
@@ -680,10 +680,10 @@ class OrchestrationTests(unittest.IsolatedAsyncioTestCase):
         # plan 09 absent: notification is log-only.
         with (
             patch(
-                "app.services.redemption_service.dispatch_alert",
+                "app.services.trading.redemption_service.dispatch_alert",
                 None,
             ),
-            self.assertLogs("app.services.redemption_service", level="INFO"),
+            self.assertLogs("app.services.trading.redemption_service", level="INFO"),
         ):
             redemption_service._notify_user(1, "redeem_available", "message", "https://x")
 
@@ -696,17 +696,17 @@ class OrchestrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_start_and_stop_redemption_manager(self):
         with (
             patch(
-                "app.services.redemption_service.acquire_scheduler_lock",
+                "app.services.trading.redemption_service.acquire_scheduler_lock",
                 return_value=True,
             ) as mock_acquire,
             patch(
-                "app.services.redemption_service.release_scheduler_lock",
+                "app.services.trading.redemption_service.release_scheduler_lock",
             ) as mock_release,
             patch(
-                "app.services.redemption_service.scheduler_heartbeat",
+                "app.services.trading.redemption_service.scheduler_heartbeat",
             ),
             patch(
-                "app.services.redemption_service.run_redeem_cycle",
+                "app.services.trading.redemption_service.run_redeem_cycle",
                 new=AsyncMock(return_value={"attempts": 0}),
             ),
         ):

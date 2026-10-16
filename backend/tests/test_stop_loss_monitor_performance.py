@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import app.services.stop_loss_monitor as stop_loss_monitor
+import app.services.trading.stop_loss_monitor as stop_loss_monitor
 from app.models.stop_loss import StopLossOrder
 from app.models.take_profit import TakeProfitOrder
 

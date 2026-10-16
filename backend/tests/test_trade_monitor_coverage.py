@@ -1,4 +1,4 @@
-"""Coverage tests for the trade monitor (``app.services.trade_monitor``).
+"""Coverage tests for the trade monitor (``app.services.trading.trade_monitor``).
 
 All external I/O is mocked: the DB session factory, the CLOB HTTP
 API (httpx), the WebSocket client, ``asyncio.to_thread`` (used for
@@ -77,7 +77,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import app.services.trade_monitor as trade_monitor
+import app.services.trading.trade_monitor as trade_monitor
 from app.models.followed_trader import FollowedTrader
 from app.models.market import Market
 from app.models.notification_feed_event import NotificationFeedEvent
@@ -87,7 +87,7 @@ from app.models.user import User
 from app.models.user_settings import UserSettings
 from app.models.user_trade import UserTrade
 from app.security.credential_store import CredentialStoreError
-from app.services.execution_analytics import (
+from app.services.analytics.execution_analytics import (
     compute_latency_ms,
     compute_slippage_bps,
 )
@@ -1178,7 +1178,7 @@ class TriggerCopyTradeTests(_MonitorTestCase):
     async def test_no_settings_executes_without_assessment(self):
         db = self._db(None)
         execute = AsyncMock()
-        with patch("app.services.copy_trade_service.execute_copy_trade", execute):
+        with patch("app.services.trading.copy_trade_service.execute_copy_trade", execute):
             await trade_monitor._trigger_copy_trade(
                 db=db,
                 user_id=1,
@@ -1200,7 +1200,7 @@ class TriggerCopyTradeTests(_MonitorTestCase):
         execute = AsyncMock()
         with (
             patch.object(trade_monitor, "_run_ai_evaluation", ai),
-            patch("app.services.copy_trade_service.execute_copy_trade", execute),
+            patch("app.services.trading.copy_trade_service.execute_copy_trade", execute),
         ):
             await trade_monitor._trigger_copy_trade(
                 db=db,
@@ -1224,7 +1224,7 @@ class TriggerCopyTradeTests(_MonitorTestCase):
         execute = AsyncMock()
         with (
             patch.object(trade_monitor, "_run_ai_evaluation", ai),
-            patch("app.services.copy_trade_service.execute_copy_trade", execute),
+            patch("app.services.trading.copy_trade_service.execute_copy_trade", execute),
         ):
             await trade_monitor._trigger_copy_trade(
                 db=db,
@@ -1247,7 +1247,7 @@ class TriggerCopyTradeTests(_MonitorTestCase):
         execute = AsyncMock()
         with (
             patch.object(trade_monitor, "_run_ai_evaluation", ai),
-            patch("app.services.copy_trade_service.execute_copy_trade", execute),
+            patch("app.services.trading.copy_trade_service.execute_copy_trade", execute),
         ):
             await trade_monitor._trigger_copy_trade(
                 db=db,
@@ -1269,7 +1269,7 @@ class TriggerCopyTradeTests(_MonitorTestCase):
         execute = AsyncMock()
         with (
             patch.object(trade_monitor, "_run_ai_evaluation", ai),
-            patch("app.services.copy_trade_service.execute_copy_trade", execute),
+            patch("app.services.trading.copy_trade_service.execute_copy_trade", execute),
         ):
             await trade_monitor._trigger_copy_trade(
                 db=db,
@@ -2004,7 +2004,7 @@ class ResolveProxyAddressTests(_MonitorTestCase):
         with (
             patch("py_clob_client.signer.Signer", signer),
             patch(
-                "app.services.copy_trade_service._get_poly_proxy_wallet_address",
+                "app.services.trading.copy_trade_service._get_poly_proxy_wallet_address",
                 return_value="0xproxy",
             ) as proxy,
         ):
@@ -2026,7 +2026,7 @@ class ResolveProxyAddressTests(_MonitorTestCase):
         with (
             patch("py_clob_client.signer.Signer", signer),
             patch(
-                "app.services.copy_trade_service._get_poly_proxy_wallet_address",
+                "app.services.trading.copy_trade_service._get_poly_proxy_wallet_address",
                 side_effect=RuntimeError("boom"),
             ),
         ):

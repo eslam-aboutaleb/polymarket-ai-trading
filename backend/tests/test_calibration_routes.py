@@ -16,8 +16,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (register models on Base)
-from app.api.routes.auth import get_current_user_from_token
-from app.api.routes.calibration import BASELINE_BRIER, router
+from app.api.routes.analysis.calibration import BASELINE_BRIER, router
+from app.api.routes.auth.auth import get_current_user_from_token
 from app.models.assessment import Assessment
 from app.models.base import Base
 from app.models.trade_history import TradeHistory
@@ -86,7 +86,7 @@ class CalibrationRouteTestBase(unittest.TestCase):
                 price=0.5,
                 status="executed",
                 source_trade_history_id=TRADE_HISTORY_ID,
-            )
+            ),
         )
         self.db.commit()
 

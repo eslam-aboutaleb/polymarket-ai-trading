@@ -711,7 +711,7 @@ above the 80% SonarQube gate. Coverage is produced by `pytest-cov` and written t
 cd backend
 uv run pytest                      # full suite + coverage report
 uv run pytest tests/test_security_config.py -v
-uv run pytest --cov=app.services.polymarket_service --cov-report=term-missing
+uv run pytest --cov=app.services.market_data.polymarket_service --cov-report=term-missing
 ```
 
 Every module and frontend file carries a header docstring describing its role, so

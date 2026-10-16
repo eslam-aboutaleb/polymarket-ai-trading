@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock, patch
 
-import app.services.trade_monitor as trade_monitor
+import app.services.trading.trade_monitor as trade_monitor
 
 
 class _FakeResponse:
@@ -60,7 +60,7 @@ class TradeMonitorPerformanceTests(unittest.IsolatedAsyncioTestCase):
         trade_monitor._poll_http_client = fake_client
 
         with patch(
-            "app.services.trade_monitor.httpx.AsyncClient",
+            "app.services.trading.trade_monitor.httpx.AsyncClient",
             side_effect=AssertionError("unexpected new client"),
         ):
             result_one = await trade_monitor._poll_trader_trades("0xabc")

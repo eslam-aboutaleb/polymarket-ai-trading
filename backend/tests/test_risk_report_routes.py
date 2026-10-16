@@ -17,12 +17,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-import app.api.routes.risk_report as risk_report_module
-from app.api.routes.auth import get_current_user_from_token
+import app.api.routes.portfolio.risk_report as risk_report_module
+from app.api.routes.auth.auth import get_current_user_from_token
 from app.models.user import User
 from app.models.user_settings import UserSettings
 from app.security.credential_store import CredentialStoreError
-from app.services import portfolio_risk_service
+from app.services.analytics import portfolio_risk_service
 from app.utils.cache import InMemoryCache
 from app.utils.database import get_db
 

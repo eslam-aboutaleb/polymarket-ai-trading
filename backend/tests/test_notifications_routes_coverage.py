@@ -1,4 +1,4 @@
-"""Coverage tests for ``app.api.routes.notifications``.
+"""Coverage tests for ``app.api.routes.platform.notifications``.
 
 Exercises every route handler (channel CRUD, in-app feed,
 preference defaults/upserts, test-alert dispatch) plus the
@@ -19,15 +19,15 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (register models on Base.metadata)
-from app.api.routes import notifications as notifications_module
-from app.api.routes.auth import get_current_user_from_token
+from app.api.routes.auth.auth import get_current_user_from_token
+from app.api.routes.platform import notifications as notifications_module
 from app.main import app
 from app.models.base import Base
 from app.models.notification_channel import NotificationChannel
 from app.models.notification_feed_event import NotificationFeedEvent
 from app.models.user import User
 from app.models.user_notification_preference import UserNotificationPreference
-from app.services.alert_service import ALERT_EVENT_TYPES
+from app.services.users.alert_service import ALERT_EVENT_TYPES
 from app.utils.database import get_db
 
 USER_ID = 1
@@ -57,7 +57,7 @@ class NotificationsRouteTests(unittest.TestCase):
         }
 
         encrypt_patcher = patch(
-            "app.api.routes.notifications.encrypt_text",
+            "app.api.routes.platform.notifications.encrypt_text",
             side_effect=lambda value: (value, "key-id-1"),
         )
         encrypt_patcher.start()
@@ -66,7 +66,7 @@ class NotificationsRouteTests(unittest.TestCase):
         self.alert_service = MagicMock()
         self.alert_service.send_test_alert = AsyncMock(return_value={"status": "dispatched"})
         alert_patcher = patch(
-            "app.api.routes.notifications.get_alert_service",
+            "app.api.routes.platform.notifications.get_alert_service",
             return_value=self.alert_service,
         )
         alert_patcher.start()
@@ -376,7 +376,7 @@ class NotificationsRouteTests(unittest.TestCase):
         self.db.add(
             UserNotificationPreference(
                 user_id=USER_ID, event_type="fill", channel_ids="not-json", enabled=True
-            )
+            ),
         )
         self.db.commit()
 

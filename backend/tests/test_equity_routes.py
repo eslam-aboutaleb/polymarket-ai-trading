@@ -15,12 +15,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api.routes.auth import get_current_user_from_token
-from app.api.routes.portfolio import _equity_window, _parse_moment
+from app.api.routes.auth.auth import get_current_user_from_token
+from app.api.routes.portfolio.portfolio import _equity_window, _parse_moment
 from app.main import app
 from app.models.portfolio_snapshot import PortfolioSnapshot
 from app.models.user import User
-from app.services import equity_snapshot_service as svc
+from app.services.analytics import equity_snapshot_service as svc
 from app.utils.database import get_db
 from app.utils.time import utc_now
 
@@ -441,7 +441,7 @@ class EquityWindowHelperTests(unittest.TestCase):
         self.assertIsNotNone(_parse_moment("2026-10-11T00:30:00Z"))
 
     def test_window_defaults_to_the_last_seven_days(self):
-        with patch("app.api.routes.portfolio.utc_now") as now:
+        with patch("app.api.routes.portfolio.portfolio.utc_now") as now:
             now.return_value = utc_now().replace(microsecond=0)
             start, end = _equity_window(None, None, None)
         self.assertIsNone(end)

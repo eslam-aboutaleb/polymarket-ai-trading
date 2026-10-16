@@ -28,7 +28,7 @@ from app.models.base import Base
 from app.models.portfolio_snapshot import PortfolioSnapshot
 from app.models.user import User
 from app.models.user_settings import UserSettings
-from app.services import equity_snapshot_service as svc
+from app.services.analytics import equity_snapshot_service as svc
 from app.utils.time import utc_now
 
 WALLET = "0x" + "ab" * 20
@@ -714,7 +714,7 @@ class AlembicChainTests(unittest.TestCase):
                         confidence=70.0,
                         ai_probability=0.55,
                         task="opportunity_scan",
-                    )
+                    ),
                 )
                 session.commit()
             finally:

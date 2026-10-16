@@ -15,9 +15,9 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import app.api.routes.portfolio as portfolio_module
-import app.services.clob_ws_manager as clob_ws_manager
-from app.services.clob_ws_manager import ClobWsManager, is_stale_tick
+import app.api.routes.portfolio.portfolio as portfolio_module
+import app.services.market_data.clob_ws_manager as clob_ws_manager
+from app.services.market_data.clob_ws_manager import ClobWsManager, is_stale_tick
 
 TOKEN_A = "107505882767731489358349912513945399560393482969656700824895970500493757150417"
 TOKEN_B = "7305630249804085635496399869905769372294302716159034447326228509068694952392"
@@ -612,7 +612,7 @@ class PriceStreamEndpointTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 401)
 
     def test_per_user_client_cap_returns_429(self):
-        from app.api.routes.auth import get_current_user_from_token
+        from app.api.routes.auth.auth import get_current_user_from_token
 
         client, app = self._client()
         tracker = portfolio_module.SseClientTracker(max_per_user=0)
@@ -629,7 +629,7 @@ class PriceStreamEndpointTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 429)
 
     def test_rejects_too_many_token_ids(self):
-        from app.api.routes.auth import get_current_user_from_token
+        from app.api.routes.auth.auth import get_current_user_from_token
 
         client, app = self._client()
         app.dependency_overrides[get_current_user_from_token] = lambda: {

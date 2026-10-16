@@ -24,7 +24,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.routes.auth import get_current_user_from_token
+from app.api.routes.auth.auth import get_current_user_from_token
 from app.config import AIBackend
 from app.grpc_clients import analysis_pb2
 from app.utils.database import get_db
@@ -544,7 +544,7 @@ class TestCliAgentDispatch:
         asyncio.run(
             orchestrator._run_on_cli_agent(
                 step, {"action": "buy_yes", "order_book": {"bids": [["0.61", 100]]}}
-            )
+            ),
         )
 
         assert json.loads(captured["request"].order_book_json) == {"bids": [["0.61", 100]]}
@@ -707,13 +707,15 @@ def _client_double(*, orchestrate_result=None, stream_events=None) -> MagicMock:
 
 
 def _patch_client(monkeypatch, client: MagicMock) -> None:
-    monkeypatch.setattr("app.api.routes.orchestration.AnalysisClient", lambda **kwargs: client)
+    monkeypatch.setattr(
+        "app.api.routes.analysis.orchestration.AnalysisClient", lambda **kwargs: client
+    )
 
 
 @pytest.fixture
 def api():
     """An app mounting only the orchestration router (main.py is owned elsewhere)."""
-    from app.api.routes.orchestration import router as orchestration_router
+    from app.api.routes.analysis.orchestration import router as orchestration_router
 
     app = FastAPI()
     app.include_router(orchestration_router)

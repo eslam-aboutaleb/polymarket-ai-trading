@@ -42,7 +42,7 @@ from app.models.user import User
 from app.models.venue_market import VenueMarket
 from app.models.whale_event import WhaleEvent
 from app.security.auth import create_access_token
-from app.services.cross_venue_arb import (
+from app.services.analytics.cross_venue_arb import (
     MATCH_EXACT,
     MATCH_FUZZY,
     find_mismatches,
@@ -51,9 +51,9 @@ from app.services.cross_venue_arb import (
     mismatches_from_rows,
     token_overlap_score,
 )
+from app.services.analytics.wallet_clustering import clusters_from_events
 from app.services.venues.manifold import ManifoldAdapter, parse_manifold_markets
 from app.services.venues.predictit import PredictItAdapter, parse_predictit_markets
-from app.services.wallet_clustering import clusters_from_events
 from app.utils.database import get_db
 from app.utils.time import utc_now
 
@@ -697,7 +697,7 @@ class MismatchMathTests(unittest.TestCase):
         self.assertIsNone(
             match_questions(
                 "Will the Fed cut rates in December?", "Will the Fed hike rates in December?"
-            )
+            ),
         )
 
     def test_boilerplate_overlap_is_rejected(self):
@@ -752,7 +752,7 @@ class ScanGuardTests(unittest.TestCase):
         self.assertTrue(all(mismatch["match_type"] == MATCH_EXACT for mismatch in mismatches))
 
     def test_the_candidate_scan_is_bounded(self):
-        from app.services.cross_venue_arb import MAX_CANDIDATES_PER_ROW, _candidate_pairs
+        from app.services.analytics.cross_venue_arb import MAX_CANDIDATES_PER_ROW, _candidate_pairs
 
         rows = self._table(30)
         pairs = _candidate_pairs(rows)
@@ -768,7 +768,7 @@ class ScanGuardTests(unittest.TestCase):
         self.assertGreaterEqual(len({pair[0]["venue"] for pair in pairs}), 2)
 
     def test_question_facts_are_memoized(self):
-        from app.services.cross_venue_arb import _question
+        from app.services.analytics.cross_venue_arb import _question
 
         first = _question("Will the Fed cut rates in December?")
         second = _question("Will the Fed cut rates in December?")
@@ -777,7 +777,7 @@ class ScanGuardTests(unittest.TestCase):
     """The new module reads, and never reimplements, the existing detector."""
 
     def test_spots_are_read_from_arbitrage_service(self):
-        from app.services import arbitrage_service
+        from app.services.analytics import arbitrage_service
 
         spot = {
             "type": "complement",
@@ -803,7 +803,7 @@ class ScanGuardTests(unittest.TestCase):
         asserting on whatever a previously-run test left there makes
         this pass or fail on execution order.
         """
-        from app.services import arbitrage_service
+        from app.services.analytics import arbitrage_service
 
         with patch.object(arbitrage_service, "_arb_opportunities", []):
             self.assertEqual(get_intra_polymarket_signals(), [])
@@ -995,7 +995,8 @@ class WalletClusterTests(unittest.TestCase):
         clusters = clusters_from_events(events, min_co_occurrence=1)
         self.assertEqual([c["size"] for c in clusters], [2, 2])
         self.assertEqual(
-            [c["wallets"][0] for c in clusters], sorted([c["wallets"][0] for c in clusters])
+            [c["wallets"][0] for c in clusters],
+            sorted([c["wallets"][0] for c in clusters]),
         )
         self.assertEqual([c["cluster_id"] for c in clusters], ["c1", "c2"])
 
@@ -1004,7 +1005,7 @@ class WalletClusterServiceTests(unittest.TestCase):
     """``ctf_events_service.build_wallet_clusters`` over the whale_events table."""
 
     def setUp(self):
-        from app.services import ctf_events_service as svc
+        from app.services.market_data import ctf_events_service as svc
 
         self.svc = svc
         svc._cache.clear()
@@ -1077,8 +1078,8 @@ class NewRouteTests(unittest.TestCase):
     """
 
     def setUp(self):
-        from app.api.routes.venues import router as venues_router
-        from app.api.routes.whales import router as whales_router
+        from app.api.routes.markets.venues import router as venues_router
+        from app.api.routes.markets.whales import router as whales_router
 
         self.engine = create_engine(
             "sqlite://",
@@ -1098,7 +1099,7 @@ class NewRouteTests(unittest.TestCase):
         self.client = TestClient(self.app)
         self.addCleanup(self._cleanup)
 
-        from app.services import ctf_events_service as svc
+        from app.services.market_data import ctf_events_service as svc
 
         self.svc = svc
         svc._cache.clear()
@@ -1130,7 +1131,7 @@ class NewRouteTests(unittest.TestCase):
                 question="Will the Fed cut rates in December?",
                 prices_json='{"yes": 0.42, "no": 0.58}',
                 liquidity=900.0,
-            )
+            ),
         )
         self.db.add(
             VenueMarket(
@@ -1139,7 +1140,7 @@ class NewRouteTests(unittest.TestCase):
                 question="Will the Fed cut rates in December?",
                 prices_json='{"yes": 0.55, "no": 0.45}',
                 liquidity=100.0,
-            )
+            ),
         )
         self.db.commit()
         response = self.client.get("/api/venues/mismatches", headers=_auth_headers())

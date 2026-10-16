@@ -20,8 +20,8 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MONITOR = REPO_ROOT / "backend" / "app" / "services" / "inverse_bot_monitor.py"
-TRADE_MONITOR = REPO_ROOT / "backend" / "app" / "services" / "trade_monitor.py"
+MONITOR = REPO_ROOT / "backend" / "app" / "services" / "trading" / "inverse_bot_monitor.py"
+TRADE_MONITOR = REPO_ROOT / "backend" / "app" / "services" / "trading" / "trade_monitor.py"
 LLM_CHAIN = REPO_ROOT / "services" / "llm-chain" / "src" / "analysis_chain.py"
 CLI_AGENT = REPO_ROOT / "services" / "cli-agent" / "src" / "cli_agent.py"
 

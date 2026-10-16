@@ -1,4 +1,4 @@
-"""Additional coverage tests for :mod:`app.services.redemption_service`.
+"""Additional coverage tests for :mod:`app.services.trading.redemption_service`.
 
 Complements ``tests/test_redemption_service.py`` (which owns the
 happy paths and the known collectionId vectors). This file targets
@@ -43,9 +43,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from web3 import Web3
 
-import app.services.redemption_service as redemption_service
+import app.services.trading.redemption_service as redemption_service
 from app.security.credential_store import CredentialStoreError
-from app.services.redemption_service import (
+from app.services.trading.redemption_service import (
     _CONDITIONAL_TOKENS,
     _CTF_EXCHANGE,
     _POLYGON_RPCS,
@@ -442,7 +442,7 @@ class ConnectWeb3Tests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(web3_cls.call_count, len(_POLYGON_RPCS))
         self.assertTrue(
-            any("Could not connect to any Polygon RPC" in line for line in captured.output)
+            any("Could not connect to any Polygon RPC" in line for line in captured.output),
         )
 
     def test_provider_construction_errors_are_suppressed(self):
@@ -510,7 +510,7 @@ class DailyAttemptCountTests(unittest.TestCase):
 class ExecuteRedeemEdgeCases(unittest.IsolatedAsyncioTestCase):
     def _execute(self, w3, position=None, db=None, dry_run=False):
         with patch(
-            "app.services.redemption_service.load_wallet_credentials",
+            "app.services.trading.redemption_service.load_wallet_credentials",
             return_value=_credentials(),
         ):
             return redemption_service._execute_redeem(
@@ -526,7 +526,7 @@ class ExecuteRedeemEdgeCases(unittest.IsolatedAsyncioTestCase):
         w3 = _fake_w3()
 
         with patch(
-            "app.services.redemption_service.load_wallet_credentials",
+            "app.services.trading.redemption_service.load_wallet_credentials",
             side_effect=CredentialStoreError("keystore unavailable"),
         ):
             attempt = redemption_service._execute_redeem(
@@ -570,7 +570,7 @@ class ExecuteRedeemEdgeCases(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "app.services.redemption_service.load_wallet_credentials",
+                "app.services.trading.redemption_service.load_wallet_credentials",
                 return_value=_credentials(),
             ),
             patch.object(redemption_service, "REDEEM_DRY_RUN", True),
@@ -589,7 +589,7 @@ class ExecuteRedeemEdgeCases(unittest.IsolatedAsyncioTestCase):
         w3 = _fake_w3()
 
         with patch(
-            "app.services.redemption_service.load_wallet_credentials",
+            "app.services.trading.redemption_service.load_wallet_credentials",
             return_value=_credentials(),
         ):
             attempt = redemption_service._execute_redeem(
@@ -646,7 +646,7 @@ class RedeemUserPositionsTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "app.services.polymarket_service.get_polymarket_service",
+                "app.services.market_data.polymarket_service.get_polymarket_service",
                 return_value=service,
             ),
             self.assertLogs(redemption_service.logger, level="ERROR"),
@@ -662,13 +662,13 @@ class RedeemUserPositionsTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "app.services.polymarket_service.get_polymarket_service",
+                "app.services.market_data.polymarket_service.get_polymarket_service",
                 return_value=service,
             ),
             patch.object(redemption_service, "SessionLocal", return_value=db),
             patch.object(redemption_service, "_connect_web3", return_value=w3),
             patch(
-                "app.services.redemption_service.load_wallet_credentials",
+                "app.services.trading.redemption_service.load_wallet_credentials",
                 return_value=_credentials(),
             ),
         ):
@@ -683,7 +683,7 @@ class RedeemUserPositionsTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "app.services.polymarket_service.get_polymarket_service",
+                "app.services.market_data.polymarket_service.get_polymarket_service",
                 return_value=service,
             ),
             patch.object(
@@ -702,7 +702,7 @@ class RedeemUserPositionsTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "app.services.polymarket_service.get_polymarket_service",
+                "app.services.market_data.polymarket_service.get_polymarket_service",
                 return_value=service,
             ),
             patch.object(redemption_service, "_run_redeem_in_thread", return_value=None),
@@ -718,13 +718,13 @@ class RedeemUserPositionsTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "app.services.polymarket_service.get_polymarket_service",
+                "app.services.market_data.polymarket_service.get_polymarket_service",
                 return_value=service,
             ),
             patch.object(redemption_service, "SessionLocal", return_value=db),
             patch.object(redemption_service, "_connect_web3", return_value=w3),
             patch(
-                "app.services.redemption_service.load_wallet_credentials",
+                "app.services.trading.redemption_service.load_wallet_credentials",
                 return_value=_credentials(),
             ),
         ):
@@ -800,7 +800,7 @@ class RedeemMarketForUserTests(unittest.IsolatedAsyncioTestCase):
         service.get_positions = AsyncMock(return_value=["nope", {"size": "1"}])
 
         with patch(
-            "app.services.polymarket_service.get_polymarket_service",
+            "app.services.market_data.polymarket_service.get_polymarket_service",
             return_value=service,
         ):
             attempt = await redemption_service.redeem_market_for_user(1, TEST_EOA, CID_AB)
@@ -817,12 +817,12 @@ class RedeemMarketForUserTests(unittest.IsolatedAsyncioTestCase):
             patch.object(redemption_service, "SessionLocal", return_value=db),
             patch.object(redemption_service, "REDEEM_DRY_RUN", False),
             patch(
-                "app.services.polymarket_service.get_polymarket_service",
+                "app.services.market_data.polymarket_service.get_polymarket_service",
                 return_value=service,
             ),
             patch.object(redemption_service, "_connect_web3", return_value=w3),
             patch(
-                "app.services.redemption_service.load_wallet_credentials",
+                "app.services.trading.redemption_service.load_wallet_credentials",
                 return_value=_credentials(),
             ),
         ):
@@ -1024,7 +1024,7 @@ class NotifyUserTests(unittest.TestCase):
 class ImportDegradationTests(unittest.TestCase):
     def test_alert_service_absent_degrades_to_log_only(self):
         try:
-            with patch.dict(sys.modules, {"app.services.alert_service": None}):
+            with patch.dict(sys.modules, {"app.services.users.alert_service": None}):
                 reloaded = importlib.reload(redemption_service)
                 self.assertIsNone(reloaded.dispatch_alert)
         finally:

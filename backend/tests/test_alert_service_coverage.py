@@ -1,4 +1,4 @@
-"""Additional coverage for ``app.services.alert_service``.
+"""Additional coverage for ``app.services.users.alert_service``.
 
 Complements test_alert_service.py with the Redis connection
 helper, message formatting, constructor wiring, the dispatch
@@ -30,8 +30,8 @@ from app.models.notification_delivery import NotificationDelivery
 from app.models.notification_feed_event import NotificationFeedEvent
 from app.models.user_notification_preference import UserNotificationPreference
 from app.security.crypto import encrypt_text
-from app.services import alert_service as alert_mod
-from app.services.alert_service import (
+from app.services.users import alert_service as alert_mod
+from app.services.users.alert_service import (
     AlertDeliveryError,
     AlertService,
     TokenBucketRateLimiter,
@@ -39,7 +39,7 @@ from app.services.alert_service import (
     format_alert_message,
     get_alert_service,
 )
-from app.services.alert_service import dispatch as alert_dispatch
+from app.services.users.alert_service import dispatch as alert_dispatch
 
 
 def _session_factory():
@@ -106,7 +106,7 @@ def _fake_http_client():
 def _patched_http():
     fake_client = _fake_http_client()
     with mock.patch(
-        "app.services.alert_service.httpx.AsyncClient",
+        "app.services.users.alert_service.httpx.AsyncClient",
         return_value=fake_client,
     ):
         yield fake_client
@@ -117,7 +117,7 @@ def _patched_settings(token="123456:ABC-DEF"):
     fake_settings = mock.MagicMock()
     fake_settings.telegram_bot_token = token
     fake_settings.redis_url = ""
-    with mock.patch("app.services.alert_service.get_settings", return_value=fake_settings):
+    with mock.patch("app.services.users.alert_service.get_settings", return_value=fake_settings):
         yield fake_settings
 
 
@@ -527,7 +527,9 @@ class DeliveryInternalsTests(unittest.IsolatedAsyncioTestCase):
         service.rate_limiter.acquire = mock.AsyncMock(return_value=False)
         with (
             mock.patch.object(service, "_record_attempt") as record,
-            mock.patch("app.services.alert_service.asyncio.sleep", new_callable=mock.AsyncMock),
+            mock.patch(
+                "app.services.users.alert_service.asyncio.sleep", new_callable=mock.AsyncMock
+            ),
         ):
             result = await service._deliver_with_retry(1, "telegram", 5, {}, "fill", {})
         self.assertEqual(result["status"], "failed")
@@ -670,7 +672,7 @@ class GtcEventTypeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_trade_monitor_emits_both_gtc_events_through_dispatch(self):
         """End to end: ``_emit_alert`` → the real catalog-aware dispatcher."""
-        from app.services import trade_monitor
+        from app.services.trading import trade_monitor
 
         _add_channel(self.session, 1, "telegram")
         service = _make_service(self.factory)
@@ -697,7 +699,7 @@ class GtcEventTypeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_price_alert_event_types_accept_a_verdict_payload(self):
         """The stop-loss / take-profit payloads plan 03 dispatches are valid."""
-        from app.services.price_alert_service import (
+        from app.services.users.price_alert_service import (
             TAKE_PROFIT_EVENT,
             build_trigger_payload,
         )

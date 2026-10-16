@@ -1,6 +1,6 @@
 import unittest
 
-from app.services.leaderboard_service import _parse_next_data
+from app.services.analytics.leaderboard_service import _parse_next_data
 
 
 class LeaderboardParsingTests(unittest.TestCase):

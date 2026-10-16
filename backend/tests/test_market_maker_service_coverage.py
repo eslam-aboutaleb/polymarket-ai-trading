@@ -1,4 +1,4 @@
-"""Additional coverage tests for :mod:`app.services.market_maker_service`.
+"""Additional coverage tests for :mod:`app.services.trading.market_maker_service`.
 
 Complements ``tests/test_market_maker_service.py`` (which owns the
 strategy maths, the CLOB I/O helpers and the live sync cycle).
@@ -30,8 +30,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import app.services.market_maker_service as market_maker_service
-from app.services.market_maker_service import MAX_BANDS
+import app.services.trading.market_maker_service as market_maker_service
+from app.services.trading.market_maker_service import MAX_BANDS
 
 CLOB_API = market_maker_service.POLYMARKET_CLOB_API
 
@@ -329,9 +329,9 @@ class PaperSyncImplementationTests(unittest.IsolatedAsyncioTestCase):
         market = {"best_bid": 0.48, "best_ask": 0.52, "book_depth": 25.0}
 
         with (
-            patch("app.services.trade_recorder.UserTrade") as user_trade_cls,
+            patch("app.services.trading.trade_recorder.UserTrade") as user_trade_cls,
             patch(
-                "app.services.simulation.simulate_market_maker_fill",
+                "app.services.analytics.simulation.simulate_market_maker_fill",
                 return_value=fill,
             ) as simulate,
         ):
@@ -342,7 +342,7 @@ class PaperSyncImplementationTests(unittest.IsolatedAsyncioTestCase):
         # Each expected order is filled against the book and
         # recorded as a simulated UserTrade row. Since plan 03 Phase A
         # every strategy records through the shared
-        # ``app.services.trade_recorder``, so that is the patched
+        # ``app.services.trading.trade_recorder``, so that is the patched
         # symbol now — and the row carries its strategy source.
         self.assertEqual(
             simulate.call_args_list,
@@ -411,8 +411,8 @@ class PaperSyncImplementationTests(unittest.IsolatedAsyncioTestCase):
         book = {"best_bid": 0.48, "best_ask": 0.52, "depth": 25.0}
 
         with (
-            patch("app.services.trade_recorder.UserTrade") as user_trade_cls,
-            patch("app.services.simulation.simulate_market_maker_fill") as simulate,
+            patch("app.services.trading.trade_recorder.UserTrade") as user_trade_cls,
+            patch("app.services.analytics.simulation.simulate_market_maker_fill") as simulate,
         ):
             result = await market_maker_service._sync_market_maker_paper(db, config, 0.5, [], book)
 

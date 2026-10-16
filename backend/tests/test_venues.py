@@ -522,7 +522,7 @@ class VenueServiceTests(unittest.TestCase):
         self.session_factory = sessionmaker(bind=self.engine, expire_on_commit=False)
         self.db = self.session_factory()
 
-        from app.services import venue_market_service as service
+        from app.services.market_data import venue_market_service as service
 
         self.service = service
         # A fresh registry per class: the module-level bootstrap already
@@ -710,7 +710,7 @@ class VenueRouteTests(unittest.TestCase):
     def setUp(self):
         from fastapi import FastAPI
 
-        from app.api.routes.venues import router as venues_router
+        from app.api.routes.markets.venues import router as venues_router
 
         self.engine = create_engine(
             "sqlite://",
@@ -812,7 +812,7 @@ class VenueRouteTests(unittest.TestCase):
         self._seed("kalshi", "will it rain tomorrow", 0.3, 100.0)
         settings = MagicMock()
         settings.venue_api_token = SERVICE_TOKEN
-        with patch("app.api.routes.venues.get_settings", return_value=settings):
+        with patch("app.api.routes.markets.venues.get_settings", return_value=settings):
             ok = self.client.get(
                 "/api/venues/markets/cross",
                 params={"q": "rain"},

@@ -24,7 +24,7 @@ from app.config import get_settings
 from app.models.base import Base
 from app.models.user_settings import UserSettings
 from app.models.user_trade import UserTrade
-from app.services.simulation import (
+from app.services.analytics.simulation import (
     average_entry_price,
     get_paper_summary,
     simulate_fill,
@@ -221,7 +221,7 @@ class PaperSummaryTests(unittest.TestCase):
                 price=price,
                 status=status,
                 pnl=pnl,
-            )
+            ),
         )
         self.db.commit()
 
@@ -264,7 +264,7 @@ class PaperSummaryTests(unittest.TestCase):
                 amount=100.0,
                 price=0.9,
                 status="executed",
-            )
+            ),
         )
         self.db.commit()
         self.assertAlmostEqual(average_entry_price(self.db, 1, "tok-a"), 0.5)

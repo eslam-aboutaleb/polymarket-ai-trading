@@ -27,7 +27,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from app.api.routes.auth import get_current_user_from_token
+from app.api.routes.auth.auth import get_current_user_from_token
 from app.main import app
 from app.security.rate_limit import limiter
 
@@ -51,7 +51,7 @@ class NewsGenerationMaskingTests(unittest.TestCase):
         self.service.get_for_market.return_value = None
         self.service.generate_for_trending = AsyncMock(return_value=[])
         patcher = patch(
-            "app.api.routes.news.get_news_service",
+            "app.api.routes.markets.news.get_news_service",
             return_value=self.service,
         )
         patcher.start()
@@ -89,7 +89,7 @@ class NewsGenerationMaskingTests(unittest.TestCase):
         _authenticate()
         self.service.generate_for_market = AsyncMock(side_effect=RuntimeError("openai 502"))
 
-        with self.assertLogs("app.api.routes.news", level="ERROR") as captured:
+        with self.assertLogs("app.api.routes.markets.news", level="ERROR") as captured:
             response = self.client.post(
                 "/api/news/generate",
                 json={"condition_id": "c1", "question": "Q?"},
@@ -105,7 +105,7 @@ class NewsGenerationMaskingTests(unittest.TestCase):
         _authenticate()
         self.service.generate_for_market = AsyncMock(side_effect=RuntimeError("openai 502"))
 
-        with self.assertLogs("app.api.routes.news", level="ERROR") as captured:
+        with self.assertLogs("app.api.routes.markets.news", level="ERROR") as captured:
             response = self.client.post(
                 "/api/news/generate/stream",
                 json={"condition_id": "c1", "question": "Q?"},
@@ -124,7 +124,7 @@ class NewsGenerationMaskingTests(unittest.TestCase):
         _authenticate()
         self.service.generate_for_trending = AsyncMock(side_effect=RuntimeError("feed down"))
 
-        with self.assertLogs("app.api.routes.news", level="ERROR") as captured:
+        with self.assertLogs("app.api.routes.markets.news", level="ERROR") as captured:
             response = self.client.post("/api/news/refresh-feed", json={})
 
         self.assertEqual(response.status_code, 502)
@@ -154,22 +154,22 @@ class HealthPayloadMaskingTests(unittest.TestCase):
     def _patch_database_down(self):
         engine = MagicMock()
         engine.connect.side_effect = RuntimeError("could not translate host name db")
-        self._patch("app.api.routes.health.engine", new=engine)
+        self._patch("app.api.routes.platform.health.engine", new=engine)
 
     def _patch_dependencies_ok(self):
-        self._patch("app.api.routes.health._cache_backend", return_value="memory")
+        self._patch("app.api.routes.platform.health._cache_backend", return_value="memory")
         self._patch(
-            "app.api.routes.health._grpc_backend_health",
+            "app.api.routes.platform.health._grpc_backend_health",
             AsyncMock(return_value={"llm_chain": True, "cli_agent": True}),
         )
-        self._patch("app.api.routes.health.scheduler_heartbeat_age", return_value=None)
-        self._patch("app.api.routes.health.scheduler_stale_threshold", return_value=300)
+        self._patch("app.api.routes.platform.health.scheduler_heartbeat_age", return_value=None)
+        self._patch("app.api.routes.platform.health.scheduler_stale_threshold", return_value=300)
 
     def test_database_failure_payload_has_no_exception_text(self):
         self._patch_database_down()
         self._patch_dependencies_ok()
 
-        with self.assertLogs("app.api.routes.health", level="ERROR") as captured:
+        with self.assertLogs("app.api.routes.platform.health", level="ERROR") as captured:
             response = self.client.get("/health")
 
         # 503 and ok=False are preserved; only the message is generic.
@@ -188,7 +188,7 @@ class DebugCheckMaskingTests(unittest.TestCase):
         return asyncio.run(coro)
 
     def test_every_check_hides_exception_text(self):
-        from app.api.routes.debug import (
+        from app.api.routes.platform.debug import (
             _check_background_tasks,
             _check_inverse_bot_monitor,
             _check_redis,
@@ -211,7 +211,7 @@ class DebugCheckMaskingTests(unittest.TestCase):
         self.assertNotIn("bg-probe-secret", tasks.detail)
 
         with patch(
-            "app.services.inverse_bot_monitor.get_inverse_bot_metrics",
+            "app.services.trading.inverse_bot_monitor.get_inverse_bot_metrics",
             MagicMock(side_effect=RuntimeError("metrics-probe-secret")),
         ):
             monitor = self._run(_check_inverse_bot_monitor())
@@ -225,11 +225,11 @@ class DebugCheckMaskingTests(unittest.TestCase):
         self.assertNotIn("mcp-probe-secret", mcp.detail)
 
     def test_check_failures_still_log_the_exception(self):
-        from app.api.routes.debug import _check_research_mcp
+        from app.api.routes.platform.debug import _check_research_mcp
 
         with (
             patch("pathlib.Path.exists", MagicMock(side_effect=RuntimeError("mcp-probe-secret"))),
-            self.assertLogs("app.api.routes.debug", level="ERROR") as captured,
+            self.assertLogs("app.api.routes.platform.debug", level="ERROR") as captured,
         ):
             self._run(_check_research_mcp())
 
@@ -243,14 +243,17 @@ class OrchestrationMaskingTests(unittest.TestCase):
         self.addCleanup(app.dependency_overrides.clear)
         self.client = TestClient(app)
         _authenticate()
-        patcher = patch("app.api.routes.orchestration._orchestration_llm_config", return_value={})
+        patcher = patch(
+            "app.api.routes.analysis.orchestration._orchestration_llm_config",
+            return_value={},
+        )
         patcher.start()
         self.addCleanup(patcher.stop)
 
     def test_backend_outage_detail_is_generic(self):
         """A transport failure is logged in full and returned generic.
 
-        Patching ``app.api.routes.orchestration.AnalysisClient`` — the
+        Patching ``app.api.routes.analysis.orchestration.AnalysisClient`` — the
         symbol the route actually resolves — rather than the class in
         its defining module: the pooled-channel tests around it mutate
         module identity, which is exactly how an earlier version of this
@@ -258,7 +261,7 @@ class OrchestrationMaskingTests(unittest.TestCase):
         """
         with (
             patch(
-                "app.api.routes.orchestration.AnalysisClient",
+                "app.api.routes.analysis.orchestration.AnalysisClient",
                 return_value=SimpleNamespace(
                     orchestrate=AsyncMock(
                         side_effect=RuntimeError("connection refused 10.0.0.5:50051")
@@ -266,7 +269,7 @@ class OrchestrationMaskingTests(unittest.TestCase):
                     close=AsyncMock(),
                 ),
             ),
-            self.assertLogs("app.api.routes.orchestration", level="ERROR") as captured,
+            self.assertLogs("app.api.routes.analysis.orchestration", level="ERROR") as captured,
         ):
             response = self.client.post(
                 "/api/analysis/orchestrate",

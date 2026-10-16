@@ -31,8 +31,8 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
-from app.services import binance_ws_service as bs
-from app.services.binance_ws_service import (
+from app.services.market_data import binance_ws_service as bs
+from app.services.market_data.binance_ws_service import (
     KLINE_HISTORY_SIZE,
     Kline,
     SymbolState,
@@ -477,7 +477,7 @@ class AccessorTests(BinanceServiceTestCase):
                 close=201.5,
                 event_time_ms=5500,
                 is_closed=False,
-            )
+            ),
         )
         return state
 

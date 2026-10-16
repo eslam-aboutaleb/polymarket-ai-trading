@@ -32,17 +32,18 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-import app.api.routes.accounts as accounts_module
-import app.api.routes.external as external_module
-import app.api.routes.ws_v1 as ws_module
+import app.api.routes.auth.accounts as accounts_module
+import app.api.routes.platform.external as external_module
+import app.api.routes.platform.ws_v1 as ws_module
 import app.models  # noqa: F401  (register models on Base.metadata)
-from app.api.routes.auth import get_current_user_from_token
+from app.api.routes.auth.auth import get_current_user_from_token
 from app.models.api_key import ApiKey
 from app.models.base import Base
 from app.models.user import User
 from app.models.user_settings import UserSettings
 from app.models.user_trade import UserTrade
-from app.services import api_key_service, audit_service, event_log
+from app.services.platform import audit_service, event_log
+from app.services.users import api_key_service
 from app.utils.database import get_db
 from app.utils.time import utc_now
 
@@ -361,7 +362,7 @@ class ExternalReadTest(_ExternalBase):
         self.assertEqual([row["trade_id"] for row in body], [sub_account_row.id, mine.id])
 
     def test_trades_respect_an_account_scoped_key(self):
-        from app.services.account_service import create_sub_account, ensure_personal_account
+        from app.services.users.account_service import create_sub_account, ensure_personal_account
 
         ensure_personal_account(self.db, 1)
         alpha = create_sub_account(self.db, 1, "Alpha")
@@ -516,7 +517,7 @@ class ExternalOrderTest(_ExternalBase):
         )
 
     def test_order_is_attributed_to_a_scoped_account(self):
-        from app.services.account_service import create_sub_account, ensure_personal_account
+        from app.services.users.account_service import create_sub_account, ensure_personal_account
 
         ensure_personal_account(self.db, 1)
         alpha = create_sub_account(self.db, 1, "Alpha")
@@ -700,7 +701,7 @@ class ExposureTest(_ExternalBase):
         self.assertEqual(body["gross_notional"], 40.0)
 
     def test_exposure_is_account_scoped(self):
-        from app.services.account_service import create_sub_account, ensure_personal_account
+        from app.services.users.account_service import create_sub_account, ensure_personal_account
 
         personal = ensure_personal_account(self.db, 1)
         alpha = create_sub_account(self.db, 1, "Alpha")
@@ -711,7 +712,7 @@ class ExposureTest(_ExternalBase):
         self._trade(amount=25.0, account_id=alpha.id)
         self._trade(amount=5.0, account_id=personal.id)
 
-        import app.api.routes.external as external_routes
+        import app.api.routes.platform.external as external_routes
 
         with (
             patch("app.api.deps.get_settings") as mocked,
@@ -748,13 +749,13 @@ class AccountAuditEmissionTest(_ExternalBase):
         self._enable_accounts()
 
     def _enable_accounts(self):
-        patcher = patch("app.api.routes.accounts.get_settings")
+        patcher = patch("app.api.routes.auth.accounts.get_settings")
         mocked = patcher.start()
         mocked.return_value.accounts_enabled = True
         self.addCleanup(patcher.stop)
 
     def test_account_created_and_settings_changes_are_logged(self):
-        from app.services.account_service import ensure_personal_account
+        from app.services.users.account_service import ensure_personal_account
 
         # A sub-account is only ever created under an existing owner.
         ensure_personal_account(self.db, 1)
@@ -782,7 +783,7 @@ class AccountAuditEmissionTest(_ExternalBase):
         self.assertEqual(toggles[0]["aggregate_id"], "copy_trading")
 
     def test_account_switched_is_logged_only_for_an_explicit_switch(self):
-        from app.services.account_service import ensure_personal_account
+        from app.services.users.account_service import ensure_personal_account
 
         personal = ensure_personal_account(self.db, 1)
         with patch("app.api.deps.get_settings") as mocked:
@@ -802,7 +803,7 @@ class AccountAuditEmissionTest(_ExternalBase):
             self.assertEqual(switched[0]["aggregate_id"], str(personal.id))
 
     def test_audit_service_export_matches_the_log(self):
-        from app.services.trade_recorder import record_user_trade
+        from app.services.trading.trade_recorder import record_user_trade
 
         record_user_trade(
             self.db,

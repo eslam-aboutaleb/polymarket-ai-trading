@@ -41,7 +41,7 @@ from app.models.user import User
 from app.models.user_settings import UserSettings
 from app.models.user_trade import UserTrade
 from app.security.auth import create_access_token
-from app.services.account_service import (
+from app.services.users.account_service import (
     AccountAccessDenied,
     create_sub_account,
     list_accounts,
@@ -246,7 +246,7 @@ class AccountRoutesTest(AccountBaseTest):
     """HTTP surface: auth, header handling and per-account settings."""
 
     def _enable_accounts(self):
-        patcher = patch("app.api.routes.accounts.get_settings")
+        patcher = patch("app.api.routes.auth.accounts.get_settings")
         mocked = patcher.start()
         mocked.return_value.accounts_enabled = True
         self.addCleanup(patcher.stop)

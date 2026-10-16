@@ -1,4 +1,4 @@
-"""Coverage tests for ``app.services.pre_trade_gate``.
+"""Coverage tests for ``app.services.trading.pre_trade_gate``.
 
 Exercises every layer of ``apply_global_safety_caps`` (halt, cooldown,
 monthly loss, drawdown, total-loss halt, position cap with pending
@@ -19,8 +19,8 @@ from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (register models on Base.metadata)
 from app.models.base import Base
-from app.services import pre_trade_gate as gate
-from app.services.pre_trade_gate import (
+from app.services.trading import pre_trade_gate as gate
+from app.services.trading.pre_trade_gate import (
     IDEMPOTENCY_TTL_SECONDS,
     OrderIdempotencyKey,
     apply_global_safety_caps,
@@ -338,7 +338,7 @@ class GetIdempotentOrderResultTests(unittest.TestCase):
         db.add(
             OrderIdempotencyKey(
                 user_id=USER_ID, idempotency_key="key-1", result_json='{"success": true}'
-            )
+            ),
         )
         db.commit()
         with patch.object(gate, "_idempotency_cache", _FakeCache()):
@@ -351,7 +351,7 @@ class GetIdempotentOrderResultTests(unittest.TestCase):
         db.add(
             OrderIdempotencyKey(
                 user_id=USER_ID, idempotency_key="key-1", result_json='{"success": true}'
-            )
+            ),
         )
         db.commit()
         cache = _FakeCache(fail_get=True)
@@ -383,7 +383,7 @@ class GetIdempotentOrderResultTests(unittest.TestCase):
         db = _make_db()
         self.addCleanup(db.close)
         db.add(
-            OrderIdempotencyKey(user_id=USER_ID, idempotency_key="key-1", result_json="not-json{")
+            OrderIdempotencyKey(user_id=USER_ID, idempotency_key="key-1", result_json="not-json{"),
         )
         db.commit()
         with patch.object(gate, "_idempotency_cache", _FakeCache()):
@@ -422,7 +422,7 @@ class StoreIdempotentOrderResultTests(unittest.TestCase):
         db.add(
             OrderIdempotencyKey(
                 user_id=USER_ID, idempotency_key="key-1", result_json='{"success": false}'
-            )
+            ),
         )
         db.commit()
         with patch.object(gate, "_idempotency_cache", _FakeCache()):

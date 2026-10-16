@@ -21,8 +21,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from app.api.routes.auth import get_current_user_from_token
-from app.api.routes.news import _sse_event
+from app.api.routes.auth.auth import get_current_user_from_token
+from app.api.routes.markets.news import _sse_event
 from app.main import app
 from app.security.rate_limit import limiter
 
@@ -50,7 +50,7 @@ class NewsRouteTestCase(unittest.TestCase):
     def setUp(self):
         self.service = _fake_service()
         patcher = patch(
-            "app.api.routes.news.get_news_service",
+            "app.api.routes.markets.news.get_news_service",
             return_value=self.service,
         )
         patcher.start()
@@ -252,7 +252,7 @@ class GenerationAuthTests(unittest.TestCase):
         limiter.reset()
         self.addCleanup(limiter.reset)
         patcher = patch(
-            "app.api.routes.news.get_news_service",
+            "app.api.routes.markets.news.get_news_service",
             return_value=_fake_service(),
         )
         patcher.start()

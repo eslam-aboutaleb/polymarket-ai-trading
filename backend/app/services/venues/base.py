@@ -52,6 +52,11 @@ class VenueRegistry:
         with self._lock:
             self._adapters[name] = adapter
 
+    def unregister(self, name: str) -> None:
+        """Remove one adapter when configuration disables its built-in."""
+        with self._lock:
+            self._adapters.pop(name, None)
+
     def get(self, name: str) -> VenueAdapter | None:
         with self._lock:
             return self._adapters.get(name)

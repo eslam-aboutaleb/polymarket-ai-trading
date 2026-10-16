@@ -14,7 +14,7 @@ import contextlib
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import app.services.trade_monitor as trade_monitor
+import app.services.trading.trade_monitor as trade_monitor
 
 
 class _MonitorStateTestCase(unittest.IsolatedAsyncioTestCase):

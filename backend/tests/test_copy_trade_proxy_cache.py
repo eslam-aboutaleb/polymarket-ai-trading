@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-import app.services.copy_trade_service as copy_trade_service
+import app.services.trading.copy_trade_service as copy_trade_service
 
 
 class CopyTradeProxyCacheTests(unittest.TestCase):

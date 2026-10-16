@@ -23,6 +23,12 @@ capability, never a plan, and every decision comes from
 ``EntitlementService`` so there is exactly one place that knows what a
 tier includes. ``require_api_key`` is reused unchanged for the external
 namespace's variant.
+
+The gates are also where a service's domain error becomes a response.
+Services refuse with transport-free errors (``app.services.errors``);
+``_http_error`` is the single seam that maps one onto the status, body
+and headers the client has always seen, so no dependency re-implements
+the mapping and none can forget it into a 500.
 """
 
 from __future__ import annotations
@@ -34,25 +40,29 @@ from fastapi import Depends, Header, HTTPException, Request, status
 from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
-from app.api.routes.auth import (
+from app.config import get_settings
+from app.models.users.account import Account
+from app.security.auth import (
     get_current_user_from_token,
     get_optional_user_from_token,
 )
-from app.config import get_settings
-from app.models.account import Account, AccountKind
-from app.services.account_service import (
+from app.services import errors
+from app.services.errors import AccountAccessDeniedError, DomainError
+from app.services.users.account_service import (
     AccountAccessDenied,
     ensure_personal_account,
+    get_account_by_id,
+    get_personal_account_read_only,
     resolve_account,
 )
-from app.services.api_key_service import (
+from app.services.users.api_key_service import (
     KEY_PREFIX_LENGTH,
     SCOPE_READ,
     SCOPE_TRADE,
     AuthContext,
     authenticate_api_key,
 )
-from app.services.entitlement_service import EntitlementService
+from app.services.users.entitlement_service import EntitlementService
 from app.utils.database import get_db
 
 logger = logging.getLogger(__name__)
@@ -67,6 +77,19 @@ API_KEY_HEADER = "X-API-Key"
 # deliberately not supported because it leaks the account into logs,
 # referrers and browser history.
 ACCOUNT_HEADER = "X-Account-Id"
+
+
+def _http_error(exc: DomainError) -> HTTPException:
+    """Translate a service domain error into the response it always was.
+
+    The one seam where a refusal becomes HTTP: the service decides
+    *why* (402 paywall, 429 quota, 403 foreign account …) and
+    ``errors.to_http`` decides the status, body and headers. Catching
+    ``DomainError`` here is what keeps a new error code from surfacing
+    as a 500 from the one dependency that forgot to translate it.
+    """
+    status_code, kwargs = errors.to_http(exc)
+    return HTTPException(status_code=status_code, **kwargs)
 
 
 def get_active_account(
@@ -100,10 +123,11 @@ def get_active_account(
             current_user.get("user_id"),
             x_account_id,
         )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account not found or not owned by caller",
-        ) from exc
+        # Wrapped in the taxonomy error so the translation stays in
+        # ``_http_error`` rather than being spelled out per guard;
+        # ``account_service`` raises its own ``AccountAccessDenied``
+        # until it migrates.
+        raise _http_error(AccountAccessDeniedError()) from exc
 
 
 def _resolve_gate_account(db: Session, user_id: int | None, x_account_id: str | None) -> Account:
@@ -122,10 +146,7 @@ def _resolve_gate_account(db: Session, user_id: int | None, x_account_id: str | 
             user_id,
             x_account_id,
         )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account not found or not owned by caller",
-        ) from exc
+        raise _http_error(AccountAccessDeniedError()) from exc
 
 
 def external_api_rate_limit_key(request: Request) -> str:
@@ -228,6 +249,10 @@ def require_plan(capability: str) -> Callable[..., Account | None]:
             when the capability is not one any plan grants, and 401 from
             ``get_current_user_from_token`` when unauthenticated.
 
+    The service refuses with a transport-free domain error
+    (``app.services.errors``); ``_http_error`` is where it becomes the
+    402/403 the client sees.
+
     The account is resolved **lazily**, only when enforcement is on. That
     is not an optimisation: with ``entitlements_enabled`` false (the
     default) the gate is inert, and resolving an account would put a
@@ -247,7 +272,10 @@ def require_plan(capability: str) -> Callable[..., Account | None]:
         if not service.enforcement_enabled():
             return None
         account = _resolve_gate_account(db, current_user.get("user_id"), x_account_id)
-        service.assert_capability(account, capability)
+        try:
+            service.assert_capability(account, capability)
+        except DomainError as exc:
+            raise _http_error(exc) from exc
         return account
 
     return dependency
@@ -277,7 +305,10 @@ def require_plan_quota(capability: str) -> Callable[..., Account | None]:
         if not service.enforcement_enabled():
             return None
         account = _resolve_gate_account(db, current_user.get("user_id"), x_account_id)
-        service.consume_quota(account, capability)
+        try:
+            service.consume_quota(account, capability)
+        except DomainError as exc:
+            raise _http_error(exc) from exc
         return account
 
     return dependency
@@ -305,7 +336,10 @@ def optional_plan_quota(capability: str) -> Callable[..., Account | None]:
         if not current_user or not current_user.get("user_id"):
             return None
         account = _resolve_gate_account(db, current_user["user_id"], x_account_id)
-        service.consume_quota(account, capability)
+        try:
+            service.consume_quota(account, capability)
+        except DomainError as exc:
+            raise _http_error(exc) from exc
         return account
 
     return dependency
@@ -329,7 +363,10 @@ def require_external_plan(capability: str, scope: str = SCOPE_TRADE) -> Callable
     ) -> AuthContext:
         service = EntitlementService(db)
         if service.enforcement_enabled():
-            service.assert_capability(_account_for_key(db, auth), capability)
+            try:
+                service.assert_capability(_account_for_key(db, auth), capability)
+            except DomainError as exc:
+                raise _http_error(exc) from exc
         return auth
 
     return dependency
@@ -343,19 +380,11 @@ def _account_for_key(db: Session, auth: AuthContext) -> Account | None:
     longer holds is refused rather than silently widened.
     """
     if auth.account_id is not None:
-        account = db.get(Account, auth.account_id)
+        account = get_account_by_id(db, auth.account_id)
         if account is None or account.owner_user_id != auth.user_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="API key is scoped to an account the owner does not hold",
             )
         return account
-    return (
-        db.query(Account)
-        .filter(
-            Account.owner_user_id == auth.user_id,
-            Account.kind == AccountKind.PERSONAL.value,
-        )
-        .order_by(Account.id)
-        .first()
-    )
+    return get_personal_account_read_only(db, auth.user_id)

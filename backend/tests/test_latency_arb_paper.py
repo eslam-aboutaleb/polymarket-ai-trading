@@ -29,10 +29,10 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import app.services.latency_arb_service as latency_arb_service
+import app.services.trading.latency_arb_service as latency_arb_service
 from app.config import Settings
 from app.models.user_trade import UserTrade
-from app.services.crypto_markets_service import CryptoMarket
+from app.services.market_data.crypto_markets_service import CryptoMarket
 
 
 def _calm_closes(n: int = 60) -> list[float]:

@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from app.api.routes.auth import get_current_user_from_token
-from app.api.routes.debug import (
+from app.api.routes.auth.auth import get_current_user_from_token
+from app.api.routes.platform.debug import (
     ServiceHealth,
     _check_background_tasks,
     _check_grpc_service,
@@ -123,7 +123,7 @@ class RequireAdminTests(unittest.TestCase):
         app.dependency_overrides[get_current_user_from_token] = lambda: self.user
         app.dependency_overrides[get_db] = lambda: _fake_db()
         with patch(
-            "app.api.routes.debug.settings",
+            "app.api.routes.platform.debug.settings",
             MagicMock(debug_endpoints_active=False),
         ):
             response = self.client.get("/api/debug/logs")
@@ -131,7 +131,7 @@ class RequireAdminTests(unittest.TestCase):
         self.assertEqual(response.json()["detail"], "Debug endpoints disabled")
 
     def test_admin_dependency_returns_user_info(self):
-        from app.api.routes.debug import require_admin
+        from app.api.routes.platform.debug import require_admin
 
         app.dependency_overrides[get_current_user_from_token] = lambda: self.user
         app.dependency_overrides[get_db] = lambda: _fake_db()
@@ -173,7 +173,7 @@ class GetLogsTests(unittest.TestCase):
 
     def test_returns_entries(self):
         entries = self._entries()
-        with patch("app.api.routes.debug.get_log_entries", lambda: entries):
+        with patch("app.api.routes.platform.debug.get_log_entries", lambda: entries):
             response = self.client.get("/api/debug/logs")
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -183,7 +183,7 @@ class GetLogsTests(unittest.TestCase):
 
     def test_level_filter(self):
         entries = self._entries()
-        with patch("app.api.routes.debug.get_log_entries", lambda: entries):
+        with patch("app.api.routes.platform.debug.get_log_entries", lambda: entries):
             response = self.client.get("/api/debug/logs", params={"level": "ERROR"})
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -193,7 +193,7 @@ class GetLogsTests(unittest.TestCase):
 
     def test_path_filter(self):
         entries = self._entries()
-        with patch("app.api.routes.debug.get_log_entries", lambda: entries):
+        with patch("app.api.routes.platform.debug.get_log_entries", lambda: entries):
             response = self.client.get("/api/debug/logs", params={"path": "portfolio"})
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -202,7 +202,7 @@ class GetLogsTests(unittest.TestCase):
 
     def test_method_filter(self):
         entries = self._entries()
-        with patch("app.api.routes.debug.get_log_entries", lambda: entries):
+        with patch("app.api.routes.platform.debug.get_log_entries", lambda: entries):
             response = self.client.get("/api/debug/logs", params={"method": "post"})
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -215,7 +215,7 @@ class GetLogsTests(unittest.TestCase):
                 request_id="d", level="error", path="/api/trades", method="GET", status_code=500
             ),
         ]
-        with patch("app.api.routes.debug.get_log_entries", lambda: entries):
+        with patch("app.api.routes.platform.debug.get_log_entries", lambda: entries):
             response = self.client.get(
                 "/api/debug/logs",
                 params={"level": "error", "path": "trades", "method": "get"},
@@ -227,7 +227,7 @@ class GetLogsTests(unittest.TestCase):
 
     def test_limit_slices_results(self):
         entries = [_log_entry(request_id=str(i)) for i in range(10)]
-        with patch("app.api.routes.debug.get_log_entries", lambda: entries):
+        with patch("app.api.routes.platform.debug.get_log_entries", lambda: entries):
             response = self.client.get("/api/debug/logs", params={"limit": 3})
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -243,7 +243,7 @@ class GetLogsTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
 
     def test_empty_entries(self):
-        with patch("app.api.routes.debug.get_log_entries", list):
+        with patch("app.api.routes.platform.debug.get_log_entries", list):
             response = self.client.get("/api/debug/logs")
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -274,7 +274,7 @@ class GetStatsTests(unittest.TestCase):
                 total_duration_ms=50.0,
             ),
         }
-        with patch("app.api.routes.debug.get_endpoint_stats", lambda: raw):
+        with patch("app.api.routes.platform.debug.get_endpoint_stats", lambda: raw):
             response = self.client.get("/api/debug/stats")
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -292,7 +292,7 @@ class GetStatsTests(unittest.TestCase):
         raw = {
             "GET /api/trades": _endpoint_stat(call_count=0, total_duration_ms=0.0),
         }
-        with patch("app.api.routes.debug.get_endpoint_stats", lambda: raw):
+        with patch("app.api.routes.platform.debug.get_endpoint_stats", lambda: raw):
             response = self.client.get("/api/debug/stats")
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -301,7 +301,7 @@ class GetStatsTests(unittest.TestCase):
         self.assertEqual(data["endpoints"][0]["avg_duration_ms"], 0)
 
     def test_empty_stats(self):
-        with patch("app.api.routes.debug.get_endpoint_stats", dict):
+        with patch("app.api.routes.platform.debug.get_endpoint_stats", dict):
             response = self.client.get("/api/debug/stats")
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -321,7 +321,7 @@ class DeleteLogsTests(unittest.TestCase):
         self.addCleanup(app.dependency_overrides.clear)
 
     def test_deletes_logs(self):
-        with patch("app.api.routes.debug.clear_logs", lambda: 42):
+        with patch("app.api.routes.platform.debug.clear_logs", lambda: 42):
             response = self.client.delete("/api/debug/logs")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
@@ -330,7 +330,7 @@ class DeleteLogsTests(unittest.TestCase):
         )
 
     def test_deletes_zero_logs(self):
-        with patch("app.api.routes.debug.clear_logs", lambda: 0):
+        with patch("app.api.routes.platform.debug.clear_logs", lambda: 0):
             response = self.client.delete("/api/debug/logs")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["cleared"], 0)
@@ -514,7 +514,7 @@ class CheckInverseBotMonitorTests(unittest.TestCase):
             "inflight": 1,
         }
         with patch(
-            "app.services.inverse_bot_monitor.get_inverse_bot_metrics",
+            "app.services.trading.inverse_bot_monitor.get_inverse_bot_metrics",
             lambda: metrics,
         ):
             result = asyncio_result(_check_inverse_bot_monitor())
@@ -528,7 +528,7 @@ class CheckInverseBotMonitorTests(unittest.TestCase):
     def test_unhealthy_when_not_running(self):
         metrics = {"running": False, "evaluations_total": 0, "reversals_total": 0, "inflight": 0}
         with patch(
-            "app.services.inverse_bot_monitor.get_inverse_bot_metrics",
+            "app.services.trading.inverse_bot_monitor.get_inverse_bot_metrics",
             lambda: metrics,
         ):
             result = asyncio_result(_check_inverse_bot_monitor())
@@ -537,7 +537,7 @@ class CheckInverseBotMonitorTests(unittest.TestCase):
 
     def test_unknown_on_exception(self):
         with patch(
-            "app.services.inverse_bot_monitor.get_inverse_bot_metrics",
+            "app.services.trading.inverse_bot_monitor.get_inverse_bot_metrics",
             MagicMock(side_effect=RuntimeError("boom")),
         ):
             result = asyncio_result(_check_inverse_bot_monitor())
@@ -592,9 +592,9 @@ class ComprehensiveHealthTests(unittest.TestCase):
     def test_health_endpoint(self):
         grpc_mock = AsyncMock(return_value=ServiceHealth(name="gRPC", status="healthy"))
         with (
-            patch("app.api.routes.debug.get_uptime_seconds", lambda: 123.456),
+            patch("app.api.routes.platform.debug.get_uptime_seconds", lambda: 123.456),
             patch.multiple(
-                "app.api.routes.debug",
+                "app.api.routes.platform.debug",
                 _check_postgres=AsyncMock(
                     return_value=ServiceHealth(name="PostgreSQL", status="healthy"),
                 ),
@@ -642,9 +642,9 @@ class ComprehensiveHealthTests(unittest.TestCase):
         }
         with (
             patch.dict("os.environ", env),
-            patch("app.api.routes.debug.get_uptime_seconds", lambda: 1.0),
+            patch("app.api.routes.platform.debug.get_uptime_seconds", lambda: 1.0),
             patch.multiple(
-                "app.api.routes.debug",
+                "app.api.routes.platform.debug",
                 _check_postgres=AsyncMock(
                     return_value=ServiceHealth(name="PostgreSQL", status="healthy"),
                 ),

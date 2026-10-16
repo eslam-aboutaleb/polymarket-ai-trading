@@ -1,41 +1,46 @@
-"""SQLAlchemy models – import all so Base.metadata knows every table."""
+"""SQLAlchemy model registry and compatibility exports.
 
-from app.models.account import Account
-from app.models.account_settings import AccountSettings
-from app.models.api_key import ApiKey
-from app.models.app_event import AppEvent
-from app.models.assessment import Assessment
-from app.models.audit_log import AdminAuditLog
-from app.models.backtest_run import BacktestRun
+Importing this package registers every mapped entity with ``Base.metadata``
+for Alembic and application startup. Model definitions live under their
+bounded-context package; the flat module shims preserve historical imports.
+"""
+
+from app.models.analytics.assessment import Assessment
+from app.models.analytics.backtest_run import BacktestRun
+from app.models.analytics.portfolio_snapshot import PortfolioSnapshot
 from app.models.base import Base
-from app.models.collaboration import ForecastVote, MarketAnnotation, UserFollow
-from app.models.followed_trader import FollowedTrader
-from app.models.governance import LLMExperiment, VerdictFeedback
-from app.models.inverse_bot_action import InverseBotAction
-from app.models.inverse_bot_position import InverseBotPosition
-from app.models.latency_arb_config import LatencyArbConfig
-from app.models.market import Market
-from app.models.market_maker_config import MarketMakerConfig
-from app.models.notification_channel import NotificationChannel
-from app.models.notification_delivery import NotificationDelivery
-from app.models.notification_feed_event import NotificationFeedEvent
-from app.models.notification_followed_trader import NotificationFollowedTrader
-from app.models.portfolio_snapshot import PortfolioSnapshot
-from app.models.redemption_attempt import RedemptionAttempt
-from app.models.stop_loss import StopLossOrder
-from app.models.subscription import BillingWebhookEvent, Subscription
-from app.models.take_profit import TakeProfitOrder
-from app.models.token import RefreshToken
-from app.models.trade_history import TradeHistory
-from app.models.trader_position_state import TraderPositionState
-from app.models.user import User
-from app.models.user_notification_preference import UserNotificationPreference
-from app.models.user_settings import UserSettings
-from app.models.user_trade import UserTrade
-from app.models.venue_market import VenueMarket
-from app.models.whale_config import WhaleConfig
-from app.models.whale_event import WhaleEvent
-from app.models.winner import Winner
+from app.models.billing.subscription import BillingWebhookEvent, Subscription
+from app.models.intelligence.collaboration import ForecastVote, MarketAnnotation, UserFollow
+from app.models.intelligence.governance import LLMExperiment, VerdictFeedback
+from app.models.market_data.market import Market
+from app.models.market_data.venue_market import VenueMarket
+from app.models.market_data.whale_config import WhaleConfig
+from app.models.market_data.whale_event import WhaleEvent
+from app.models.market_data.winner import Winner
+from app.models.notifications.notification_channel import NotificationChannel
+from app.models.notifications.notification_delivery import NotificationDelivery
+from app.models.notifications.notification_feed_event import NotificationFeedEvent
+from app.models.notifications.notification_followed_trader import NotificationFollowedTrader
+from app.models.notifications.user_notification_preference import UserNotificationPreference
+from app.models.platform.app_event import AppEvent
+from app.models.platform.audit_log import AdminAuditLog
+from app.models.trading.followed_trader import FollowedTrader
+from app.models.trading.inverse_bot_action import InverseBotAction
+from app.models.trading.inverse_bot_position import InverseBotPosition
+from app.models.trading.latency_arb_config import LatencyArbConfig
+from app.models.trading.market_maker_config import MarketMakerConfig
+from app.models.trading.redemption_attempt import RedemptionAttempt
+from app.models.trading.stop_loss import StopLossOrder
+from app.models.trading.take_profit import TakeProfitOrder
+from app.models.trading.trade_history import TradeHistory
+from app.models.trading.trader_position_state import TraderPositionState
+from app.models.trading.user_trade import UserTrade
+from app.models.users.account import Account
+from app.models.users.account_settings import AccountSettings
+from app.models.users.api_key import ApiKey
+from app.models.users.token import RefreshToken
+from app.models.users.user import User
+from app.models.users.user_settings import UserSettings
 
 __all__ = [
     "Base",

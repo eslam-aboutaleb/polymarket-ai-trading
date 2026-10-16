@@ -1,4 +1,4 @@
-"""Behavioural tests for :mod:`app.services.stop_loss_monitor`.
+"""Behavioural tests for :mod:`app.services.trading.stop_loss_monitor`.
 
 Covers every branch of the background stop-loss / take-profit engine:
 
@@ -28,10 +28,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
-import app.services.price_alert_service as price_alert_service
-import app.services.stop_loss_monitor as stop_loss_monitor
+import app.services.trading.stop_loss_monitor as stop_loss_monitor
+import app.services.users.price_alert_service as price_alert_service
 from app.security.credential_store import CredentialStoreError
-from app.services.polymarket_service import PolymarketService
+from app.services.market_data.polymarket_service import PolymarketService
 
 
 class _LoopBreak(Exception):

@@ -234,52 +234,52 @@ class LifespanTests(unittest.IsolatedAsyncioTestCase):
     """Runs the real lifespan with every monitor mocked out."""
 
     START_TARGETS = [
-        ("start_trade_monitor", "app.services.trade_monitor", True),
-        ("start_clob_ws_manager", "app.services.clob_ws_manager", False),
-        ("refresh_leaderboard_background", "app.services.leaderboard_service", True),
-        ("start_stop_loss_monitor", "app.services.stop_loss_monitor", True),
-        ("start_inverse_bot_monitor", "app.services.inverse_bot_monitor", True),
+        ("start_trade_monitor", "app.services.trading.trade_monitor", True),
+        ("start_clob_ws_manager", "app.services.market_data.clob_ws_manager", False),
+        ("refresh_leaderboard_background", "app.services.analytics.leaderboard_service", True),
+        ("start_stop_loss_monitor", "app.services.trading.stop_loss_monitor", True),
+        ("start_inverse_bot_monitor", "app.services.trading.inverse_bot_monitor", True),
         (
             "start_all_enabled_market_makers",
-            "app.services.market_maker_service",
+            "app.services.trading.market_maker_service",
             True,
         ),
         (
             "start_position_lifecycle_manager",
-            "app.services.position_lifecycle_service",
+            "app.services.trading.position_lifecycle_service",
             True,
         ),
-        ("start_aggregation_service", "app.services.trade_aggregation_service", True),
-        ("start_arbitrage_monitor", "app.services.arbitrage_service", True),
-        ("start_news_generator", "app.services.news_service", True),
-        ("start_daily_report_service", "app.services.daily_report_service", True),
-        ("start_ctf_events_monitor", "app.services.ctf_events_service", True),
-        ("start_redemption_manager", "app.services.redemption_service", True),
-        ("start_latency_arb_engine", "app.services.latency_arb_service", True),
-        ("start_equity_snapshot_service", "app.services.equity_snapshot_service", True),
-        ("start_forecast_resolution", "app.services.forecast_resolution", True),
-        ("add_watched_wallet", "app.services.trade_monitor", False),
+        ("start_aggregation_service", "app.services.trading.trade_aggregation_service", True),
+        ("start_arbitrage_monitor", "app.services.analytics.arbitrage_service", True),
+        ("start_news_generator", "app.services.intelligence.news_service", True),
+        ("start_daily_report_service", "app.services.users.daily_report_service", True),
+        ("start_ctf_events_monitor", "app.services.market_data.ctf_events_service", True),
+        ("start_redemption_manager", "app.services.trading.redemption_service", True),
+        ("start_latency_arb_engine", "app.services.trading.latency_arb_service", True),
+        ("start_equity_snapshot_service", "app.services.analytics.equity_snapshot_service", True),
+        ("start_forecast_resolution", "app.services.intelligence.forecast_resolution", True),
+        ("add_watched_wallet", "app.services.trading.trade_monitor", False),
     ]
 
     STOP_TARGETS = [
-        ("stop_trade_monitor", "app.services.trade_monitor"),
-        ("stop_clob_ws_manager", "app.services.clob_ws_manager"),
-        ("stop_stop_loss_monitor", "app.services.stop_loss_monitor"),
-        ("stop_inverse_bot_monitor", "app.services.inverse_bot_monitor"),
-        ("stop_all_market_makers", "app.services.market_maker_service"),
+        ("stop_trade_monitor", "app.services.trading.trade_monitor"),
+        ("stop_clob_ws_manager", "app.services.market_data.clob_ws_manager"),
+        ("stop_stop_loss_monitor", "app.services.trading.stop_loss_monitor"),
+        ("stop_inverse_bot_monitor", "app.services.trading.inverse_bot_monitor"),
+        ("stop_all_market_makers", "app.services.trading.market_maker_service"),
         (
             "stop_position_lifecycle_manager",
-            "app.services.position_lifecycle_service",
+            "app.services.trading.position_lifecycle_service",
         ),
-        ("stop_aggregation_service", "app.services.trade_aggregation_service"),
-        ("stop_arbitrage_monitor", "app.services.arbitrage_service"),
-        ("stop_news_generator", "app.services.news_service"),
-        ("stop_daily_report_service", "app.services.daily_report_service"),
-        ("stop_ctf_events_monitor", "app.services.ctf_events_service"),
-        ("stop_redemption_manager", "app.services.redemption_service"),
-        ("stop_latency_arb_engine", "app.services.latency_arb_service"),
-        ("stop_equity_snapshot_service", "app.services.equity_snapshot_service"),
-        ("stop_forecast_resolution", "app.services.forecast_resolution"),
+        ("stop_aggregation_service", "app.services.trading.trade_aggregation_service"),
+        ("stop_arbitrage_monitor", "app.services.analytics.arbitrage_service"),
+        ("stop_news_generator", "app.services.intelligence.news_service"),
+        ("stop_daily_report_service", "app.services.users.daily_report_service"),
+        ("stop_ctf_events_monitor", "app.services.market_data.ctf_events_service"),
+        ("stop_redemption_manager", "app.services.trading.redemption_service"),
+        ("stop_latency_arb_engine", "app.services.trading.latency_arb_service"),
+        ("stop_equity_snapshot_service", "app.services.analytics.equity_snapshot_service"),
+        ("stop_forecast_resolution", "app.services.intelligence.forecast_resolution"),
         ("close_shared_channels", "app.grpc_clients.analysis_client"),
     ]
 
@@ -584,10 +584,12 @@ class SchedulerWatchdogTests(LifespanTests):
                 "app.utils.scheduler_lock.scheduler_stale_threshold",
                 lambda name: 100,
             ),
-            patch("app.services.alert_service.dispatch", dispatch_mock),
+            patch("app.services.users.alert_service.dispatch", dispatch_mock),
         ]
         if alert_module is not None:
-            patches.append(patch.dict(sys.modules, {"app.services.alert_service": alert_module}))
+            patches.append(
+                patch.dict(sys.modules, {"app.services.users.alert_service": alert_module}),
+            )
         for patcher in patches:
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -628,7 +630,7 @@ class SchedulerWatchdogTests(LifespanTests):
     async def test_watchdog_swallows_alert_import_error(self):
         scenarios = [{"stop_loss_monitor": 9999}]
         dispatch_mock = AsyncMock()
-        bare_module = types.ModuleType("app.services.alert_service")
+        bare_module = types.ModuleType("app.services.users.alert_service")
         await self._run_watchdog(scenarios, dispatch_mock, alert_module=bare_module)
         dispatch_mock.assert_not_awaited()
 

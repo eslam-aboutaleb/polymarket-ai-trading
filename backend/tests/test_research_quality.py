@@ -11,8 +11,8 @@ deterministic score — never raise, never fail a scan.
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from app.services import research_quality as rq
-from app.services.research_quality import (
+from app.services.analytics import research_quality as rq
+from app.services.analytics.research_quality import (
     BATCH_KEY,
     FRESHNESS_STALE_HOURS,
     GroupEvidence,
@@ -324,7 +324,8 @@ class ScoreBatchCredibilityTests(unittest.IsolatedAsyncioTestCase):
         result = await score_batch_credibility(client, [group])
         baseline = credibility_from_sources(build_scan_sources(group.markets, group.smart_money))
         self.assertEqual(
-            result["event-0"].credibility_score, rq._blend(baseline, 1.0, rq.SYNTHESIS_WEIGHT)
+            result["event-0"].credibility_score,
+            rq._blend(baseline, 1.0, rq.SYNTHESIS_WEIGHT),
         )
 
     async def test_batch_level_value_applies_to_every_group(self):
@@ -338,7 +339,8 @@ class ScoreBatchCredibilityTests(unittest.IsolatedAsyncioTestCase):
                 build_scan_sources(group.markets, group.smart_money)
             )
             self.assertEqual(
-                result[group.key].credibility_score, rq._blend(baseline, 1.0, rq.SYNTHESIS_WEIGHT)
+                result[group.key].credibility_score,
+                rq._blend(baseline, 1.0, rq.SYNTHESIS_WEIGHT),
             )
 
     async def test_source_ratings_are_capped(self):

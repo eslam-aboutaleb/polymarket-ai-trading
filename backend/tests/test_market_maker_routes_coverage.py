@@ -20,8 +20,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from app.api.routes.auth import get_current_user_from_token
-from app.api.routes.market_maker import (
+from app.api.routes.auth.auth import get_current_user_from_token
+from app.api.routes.trading.market_maker import (
     MarketMakerConfigRequest,
     _to_response,
 )
@@ -30,7 +30,7 @@ from app.utils.database import get_db
 
 WALLET = "0x" + "ab" * 20
 
-CONFIG_PATH = "app.api.routes.market_maker"
+CONFIG_PATH = "app.api.routes.trading.market_maker"
 
 
 def _config_row(**overrides) -> SimpleNamespace:

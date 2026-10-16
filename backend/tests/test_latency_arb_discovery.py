@@ -18,7 +18,7 @@ from __future__ import annotations
 import unittest
 from datetime import UTC, datetime
 
-from app.services.crypto_markets_service import (
+from app.services.market_data.crypto_markets_service import (
     CryptoMarket,
     current_window_start,
     get_active_markets,

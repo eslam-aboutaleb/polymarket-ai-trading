@@ -1,4 +1,4 @@
-"""Tests for :mod:`app.services.inverse_bot_monitor`.
+"""Tests for :mod:`app.services.trading.inverse_bot_monitor`.
 
 The monitor is a guard-railed auto-reverser, so the tests concentrate on the
 decision logic rather than on plumbing:
@@ -32,7 +32,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import app.services.inverse_bot_monitor as inverse_bot_monitor
+import app.services.trading.inverse_bot_monitor as inverse_bot_monitor
 from app.models.inverse_bot_action import InverseBotAction
 from app.models.inverse_bot_position import InverseBotPosition
 from app.models.user_settings import AIBackendType, InverseBotSizeMode

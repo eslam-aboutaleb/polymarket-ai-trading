@@ -1,4 +1,4 @@
-"""Behavioural tests for :mod:`app.services.price_alert_service`.
+"""Behavioural tests for :mod:`app.services.users.price_alert_service`.
 
 Covers the plan-03 verdict pipeline end to end:
 
@@ -23,7 +23,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import app.services.price_alert_service as price_alert_service
+import app.services.users.price_alert_service as price_alert_service
 from app.config import AIBackend
 from app.models.user_settings import AIBackendType
 
@@ -550,7 +550,9 @@ class EnrichTriggerAlertTests(_MetricsMixin, unittest.IsolatedAsyncioTestCase):
     async def test_average_entry_lookup_failure_is_survivable(self):
         self._patch_enabled()
         self._patch(
-            price_alert_service, "average_entry_price", side_effect=RuntimeError("no trades")
+            price_alert_service,
+            "average_entry_price",
+            side_effect=RuntimeError("no trades"),
         )
         client = self._patch_client(_verdict())
         self._patch_dispatch(AsyncMock())
@@ -653,7 +655,7 @@ class MetricsTests(_MetricsMixin, unittest.TestCase):
 
 class EventTypeTests(unittest.TestCase):
     def test_price_event_types_are_catalog_entries(self):
-        from app.services.alert_service import ALERT_EVENT_TYPES
+        from app.services.users.alert_service import ALERT_EVENT_TYPES
 
         for event_type in price_alert_service.PRICE_EVENT_TYPES:
             self.assertIn(event_type, ALERT_EVENT_TYPES)

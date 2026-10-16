@@ -1,4 +1,4 @@
-"""Unit tests for the trade aggregation buffer (``app.services.trade_aggregation_service``).
+"""Unit tests for the trade aggregation buffer (``app.services.trading.trade_aggregation_service``).
 
 Followed traders rarely emit one clean order; they dribble small trades. This
 service buffers those trades per ``(user_id, token_id, side)`` and hands back a
@@ -32,8 +32,8 @@ from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services import trade_aggregation_service as tas
-from app.services.trade_aggregation_service import (
+from app.services.trading import trade_aggregation_service as tas
+from app.services.trading.trade_aggregation_service import (
     DEFAULT_MAX_WINDOW_SECONDS,
     DEFAULT_WINDOW_SECONDS,
     add_trade_to_buffer,
@@ -426,7 +426,7 @@ class AggregationLoopTests(unittest.IsolatedAsyncioTestCase):
         execute = AsyncMock(return_value={"success": True})
 
         with (
-            patch("app.services.copy_trade_service.execute_aggregated_trade", execute),
+            patch("app.services.trading.copy_trade_service.execute_aggregated_trade", execute),
             self._stop_after_first_pass(),
             self.assertRaises(asyncio.CancelledError),
         ):
@@ -445,7 +445,7 @@ class AggregationLoopTests(unittest.IsolatedAsyncioTestCase):
         execute = AsyncMock()
 
         with (
-            patch("app.services.copy_trade_service.execute_aggregated_trade", execute),
+            patch("app.services.trading.copy_trade_service.execute_aggregated_trade", execute),
             self._stop_after_first_pass(),
             self.assertRaises(asyncio.CancelledError),
         ):
@@ -459,7 +459,7 @@ class AggregationLoopTests(unittest.IsolatedAsyncioTestCase):
         execute = AsyncMock(side_effect=RuntimeError("order rejected"))
 
         with (
-            patch("app.services.copy_trade_service.execute_aggregated_trade", execute),
+            patch("app.services.trading.copy_trade_service.execute_aggregated_trade", execute),
             self.assertLogs(tas.logger, level="ERROR") as captured,
             self._stop_after_first_pass() as sleep,
             self.assertRaises(asyncio.CancelledError),
@@ -467,14 +467,14 @@ class AggregationLoopTests(unittest.IsolatedAsyncioTestCase):
             await tas._aggregation_loop()
 
         self.assertTrue(
-            any("Failed to execute aggregated trade" in line for line in captured.output)
+            any("Failed to execute aggregated trade" in line for line in captured.output),
         )
         self.assertTrue(any("order rejected" in line for line in captured.output))
         sleep.assert_awaited_once_with(5)
 
     async def test_missing_execution_helper_degrades_to_logging_only(self):
         self._seed_ready_buffer()
-        import app.services.copy_trade_service as copy_trade_service
+        import app.services.trading.copy_trade_service as copy_trade_service
 
         helper = copy_trade_service.execute_aggregated_trade
         del copy_trade_service.execute_aggregated_trade
@@ -489,7 +489,7 @@ class AggregationLoopTests(unittest.IsolatedAsyncioTestCase):
             copy_trade_service.execute_aggregated_trade = helper
 
         self.assertTrue(
-            any("execute_aggregated_trade not available yet" in line for line in captured.output)
+            any("execute_aggregated_trade not available yet" in line for line in captured.output),
         )
 
     async def test_scan_failure_is_logged_and_the_loop_continues(self):
@@ -542,10 +542,10 @@ class AggregationLoopTests(unittest.IsolatedAsyncioTestCase):
             await tas._aggregation_loop()
 
         self.assertTrue(
-            any("Trade aggregation service started" in line for line in captured.output)
+            any("Trade aggregation service started" in line for line in captured.output),
         )
         self.assertTrue(
-            any("Trade aggregation service stopped" in line for line in captured.output)
+            any("Trade aggregation service stopped" in line for line in captured.output),
         )
 
     async def test_shutdown_skips_a_buffer_entry_with_no_trades(self):
@@ -564,7 +564,7 @@ class AggregationLoopTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(any("Flushed pending aggregation" in line for line in captured.output))
         self.assertTrue(
-            any("Trade aggregation service stopped" in line for line in captured.output)
+            any("Trade aggregation service stopped" in line for line in captured.output),
         )
 
     async def test_cancellation_inside_the_loop_releases_the_scheduler_lock(self):
@@ -585,7 +585,7 @@ class AggregationLoopTests(unittest.IsolatedAsyncioTestCase):
 
         release.assert_called_once_with("trade_aggregation")
         self.assertTrue(
-            any("Flushed pending aggregation on shutdown" in line for line in captured.output)
+            any("Flushed pending aggregation on shutdown" in line for line in captured.output),
         )
 
     async def test_cancellation_during_the_interval_sleep_releases_the_scheduler_lock(self):

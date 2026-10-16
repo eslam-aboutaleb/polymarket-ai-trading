@@ -1,4 +1,4 @@
-"""Coverage tests for the latency-arbitrage engine (``app.services.latency_arb_service``).
+"""Coverage tests for the latency-arbitrage engine (``app.services.trading.latency_arb_service``).
 
 Complements the existing paper/discovery/model tests by covering
 the engine's supporting machinery with every I/O boundary mocked:
@@ -34,12 +34,12 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import app.services.latency_arb_service as latency_arb_service
+import app.services.trading.latency_arb_service as latency_arb_service
 from app.models.latency_arb_config import LatencyArbConfig
 from app.models.user import User
 from app.models.user_settings import UserSettings
-from app.services.crypto_markets_service import CryptoMarket
-from app.services.latency_arb_service import (
+from app.services.market_data.crypto_markets_service import CryptoMarket
+from app.services.trading.latency_arb_service import (
     Opportunity,
     _book_gates,
     _calculation_details,
@@ -254,7 +254,7 @@ class EdgeModelEdgeCasesTests(unittest.TestCase):
     def test_realized_volatility_all_non_positive_closes(self):
         # No valid log returns can be computed from
         # non-positive closes → fallback σ.
-        from app.services.latency_arb_service import (
+        from app.services.trading.latency_arb_service import (
             DEFAULT_SIGMA,
             realized_volatility,
         )
@@ -598,7 +598,10 @@ class FetchBookTests(unittest.IsolatedAsyncioTestCase):
         response = _response(200, {"bids": [[0.5, 1.0]], "asks": [[0.51, 1.0]]})
         with (
             patch("httpx.AsyncClient", return_value=_httpx_client(response)),
-            patch("app.services.polymarket_service.POLYMARKET_CLOB_API", "https://clob.example"),
+            patch(
+                "app.services.market_data.polymarket_service.POLYMARKET_CLOB_API",
+                "https://clob.example",
+            ),
         ):
             book = await _fetch_book("token-1")
         self.assertEqual(book, {"bids": [[0.5, 1.0]], "asks": [[0.51, 1.0]]})
@@ -607,7 +610,10 @@ class FetchBookTests(unittest.IsolatedAsyncioTestCase):
         response = _response(200, [1, 2, 3])
         with (
             patch("httpx.AsyncClient", return_value=_httpx_client(response)),
-            patch("app.services.polymarket_service.POLYMARKET_CLOB_API", "https://clob.example"),
+            patch(
+                "app.services.market_data.polymarket_service.POLYMARKET_CLOB_API",
+                "https://clob.example",
+            ),
         ):
             self.assertIsNone(await _fetch_book("token-1"))
 
@@ -615,7 +621,10 @@ class FetchBookTests(unittest.IsolatedAsyncioTestCase):
         response = _response(404, {})
         with (
             patch("httpx.AsyncClient", return_value=_httpx_client(response)),
-            patch("app.services.polymarket_service.POLYMARKET_CLOB_API", "https://clob.example"),
+            patch(
+                "app.services.market_data.polymarket_service.POLYMARKET_CLOB_API",
+                "https://clob.example",
+            ),
         ):
             self.assertIsNone(await _fetch_book("token-1"))
 
@@ -626,7 +635,10 @@ class FetchBookTests(unittest.IsolatedAsyncioTestCase):
         client.__aexit__ = AsyncMock(return_value=False)
         with (
             patch("httpx.AsyncClient", return_value=client),
-            patch("app.services.polymarket_service.POLYMARKET_CLOB_API", "https://clob.example"),
+            patch(
+                "app.services.market_data.polymarket_service.POLYMARKET_CLOB_API",
+                "https://clob.example",
+            ),
             self.assertLogs(level="DEBUG"),
         ):
             self.assertIsNone(await _fetch_book("token-1"))
@@ -1293,7 +1305,7 @@ class DispatchAlertTests(unittest.IsolatedAsyncioTestCase):
     async def test_dispatch_alert_sends_payload(self):
         opportunity = _opportunity()
         dispatch = AsyncMock()
-        with patch("app.services.alert_service.dispatch", dispatch):
+        with patch("app.services.users.alert_service.dispatch", dispatch):
             _dispatch_opportunity_alert(7, opportunity, {"status": "simulated"})
             await asyncio.sleep(0)  # let the scheduled task run
         dispatch.assert_awaited_once()
@@ -1314,7 +1326,7 @@ class DispatchAlertTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_dispatch_alert_import_failure_is_swallowed(self):
         with (
-            patch.dict("sys.modules", {"app.services.alert_service": None}),
+            patch.dict("sys.modules", {"app.services.users.alert_service": None}),
             self.assertLogs(level="DEBUG"),
         ):
             _dispatch_opportunity_alert(7, _opportunity(), {"status": "simulated"})
