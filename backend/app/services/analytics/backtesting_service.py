@@ -130,34 +130,14 @@ async def _fetch_historical_prices(
     condition_id: str,
     start_date: str,
     end_date: str,
+    outcome: str = "Yes",
 ) -> list[dict[str, Any]]:
-    """Fetch historical price data from Polymarket data API."""
-    import httpx
+    """Resolve the outcome token and fetch validated CLOB history (not Data API)."""
+    from app.services.market_data.historical_prices import load_token_price_history
 
-    prices: list[dict[str, Any]] = []
-    try:
-        from app.services.market_data.polymarket_service import POLYMARKET_DATA_API
-
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(
-                f"{POLYMARKET_DATA_API}/prices",
-                params={
-                    "market": condition_id,
-                    "startDate": start_date,
-                    "endDate": end_date,
-                    "interval": "1h",
-                },
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                if isinstance(data, list):
-                    prices = data
-                elif isinstance(data, dict) and "history" in data:
-                    prices = data["history"]
-    except Exception as e:
-        logger.warning("Could not fetch historical prices for %s: %s", condition_id[:20], e)
-
-    return prices
+    return await load_token_price_history(
+        condition_id, start_date, end_date, outcome=outcome
+    )
 
 
 async def run_copy_trade_backtest(
@@ -254,28 +234,65 @@ async def run_indicator_backtest(
     rsi_oversold = float(params.get("rsi_oversold", 30))
     rsi_overbought = float(params.get("rsi_overbought", 70))
 
-    # Fetch historical prices
-    price_data = await _fetch_historical_prices(
-        condition_id,
-        params.get("start_date", "2024-01-01"),
-        params.get("end_date", "2025-12-31"),
-    )
+    # A missing/malformed feed must not produce nominally successful performance.
+    # Only the dedicated CLOB adapter accepts and validates raw t/p prices.
+    from app.services.market_data.historical_prices import PriceHistoryError
+
+    try:
+        price_data = await _fetch_historical_prices(
+            condition_id,
+            params.get("start_date", "2024-01-01"),
+            params.get("end_date", "2025-12-31"),
+            outcome=params.get("outcome", "Yes"),
+        )
+    except PriceHistoryError as exc:
+        return {
+            "trade_log": [],
+            "metrics": _calculate_metrics([]),
+            "error": str(exc),
+            "indicator_values": {"history_quality": "insufficient_data"},
+        }
 
     if not price_data:
         return {
             "trade_log": [],
             "metrics": _calculate_metrics([]),
             "error": "No historical price data available",
+            "indicator_values": {"history_quality": "insufficient_data"},
         }
 
-    prices = [float(p.get("price", p.get("mid", 0.5))) for p in price_data if p]
-    timestamps = [p.get("timestamp", p.get("t", "")) for p in price_data if p]
+    prices = []
+    timestamps = []
+    for point in price_data:
+        if not isinstance(point, dict) or "price" not in point:
+            return {
+                "trade_log": [],
+                "metrics": _calculate_metrics([]),
+                "error": "Malformed historical price row (price missing)",
+                "indicator_values": {"history_quality": "invalid_source"},
+            }
+        try:
+            value = float(point["price"])
+        except (ValueError, TypeError, OverflowError):
+            value = float("nan")
+        if not math.isfinite(value) or value <= 0:
+            return {
+                "trade_log": [],
+                "metrics": _calculate_metrics([]),
+                "error": "Malformed historical price row (invalid price)",
+                "indicator_values": {"history_quality": "invalid_source"},
+            }
+        prices.append(value)
+        timestamps.append(point.get("timestamp", point.get("t", "")))
+
+    provenance = getattr(price_data, "provenance", None)
 
     if len(prices) < 30:
         return {
             "trade_log": [],
             "metrics": _calculate_metrics([]),
             "error": "Insufficient price data (need at least 30 data points)",
+            "indicator_values": {"history_source": provenance, "history_quality": "insufficient_data"},
         }
 
     # Compute indicators
@@ -372,9 +389,13 @@ async def run_indicator_backtest(
         "metrics": _calculate_metrics(trade_log),
         "indicator_summary": generate_indicator_summary(indicators),
         "indicator_values": {
-            k: {kk: vv for kk, vv in v.items() if kk != "series"}
-            for k, v in indicators.items()
-            if isinstance(v, dict) and "series" in v
+            **{
+                k: {kk: vv for kk, vv in v.items() if kk != "series"}
+                for k, v in indicators.items()
+                if isinstance(v, dict) and "series" in v
+            },
+            "history_source": provenance,
+            "history_quality": "indicative_price_only" if provenance else "unverified_fixture",
         },
     }
 
@@ -456,7 +477,7 @@ async def create_and_run_backtest(
                 run.total_volume = metrics.get("total_volume")
                 run.trade_log = trade_log
                 run.indicator_values = result.get("indicator_values")
-                run.status = "completed"
+                run.status = "failed" if result.get("error") else "completed"
                 run.completed_at = utc_now()
                 if result.get("error"):
                     run.error_message = result["error"]
