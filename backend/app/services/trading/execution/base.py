@@ -159,6 +159,10 @@ class ExecutionEngineRegistry:
 
     def get(self, mode: str | ExecutionMode, **kwargs: Any) -> ExecutionEngine:
         key = str(mode).lower()
+        if key == ExecutionMode.LIVE:
+            from app.services.trading.live_trading_policy import block_legacy_live_execution
+
+            block_legacy_live_execution("manual")
         with self._lock:
             factory = self._factories.get(key)
         if factory is None:
@@ -174,13 +178,10 @@ execution_registry = ExecutionEngineRegistry()
 execution_registry.register(ExecutionMode.PAPER, lambda **kw: PaperExecutionEngine(**kw))
 
 
-def get_execution_engine(mode: str | ExecutionMode | bool, **kwargs: Any) -> ExecutionEngine:
+def get_execution_engine(mode: str | ExecutionMode, **kwargs: Any) -> ExecutionEngine:
     """Resolve an execution engine by mode.
 
-    Accepts boolean `is_paper` or string/enum `mode`.
+    Requires an explicit named mode. Booleans cannot authorize live execution.
     """
-    if isinstance(mode, bool):
-        selected_mode = ExecutionMode.PAPER if mode else ExecutionMode.LIVE
-    else:
-        selected_mode = ExecutionMode(str(mode).lower())
+    selected_mode = ExecutionMode(str(mode).lower())
     return execution_registry.get(selected_mode, **kwargs)

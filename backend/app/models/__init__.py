@@ -33,6 +33,7 @@ from app.models.trading.stop_loss import StopLossOrder
 from app.models.trading.take_profit import TakeProfitOrder
 from app.models.trading.trade_history import TradeHistory
 from app.models.trading.trader_position_state import TraderPositionState
+from app.models.trading.trading_control import EmergencyHaltOperation, TradingControlState
 from app.models.trading.user_trade import UserTrade
 from app.models.users.account import Account
 from app.models.users.account_settings import AccountSettings
@@ -43,6 +44,8 @@ from app.models.users.user_settings import UserSettings
 
 __all__ = [
     "Base",
+    "TradingControlState",
+    "EmergencyHaltOperation",
     "User",
     "UserSettings",
     "Market",

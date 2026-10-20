@@ -120,5 +120,6 @@ study-app/
 
 # Playwright e2e
 frontend/test-results/
+backend/test-results/
 frontend/playwright-report/
 frontend/e2e/.auth/

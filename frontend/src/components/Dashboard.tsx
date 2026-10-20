@@ -21,6 +21,7 @@ import {
   InverseBotPosition,
   InverseBotSizeOverride,
 } from "../services/inverseBotService";
+import EmergencyHaltStatus from "./EmergencyHaltStatus";
 import { emergencyService, ArbitrageOpportunity } from "../services/emergencyService";
 import { FollowingFeedEvent, tradesService } from "../services/tradesService";
 import { analysisService } from "../services/analysisService";
@@ -266,8 +267,10 @@ function DashboardContent() {
   const handleEmergencyStop = async () => {
     try {
       setRiskOpsBusy("emergency");
-      const res = await emergencyService.emergencyStop(true);
-      setRiskOpsMessage(res.message || "Emergency stop completed.");
+      const res = await emergencyService.emergencyStop(false);
+      setRiskOpsMessage(
+        res.message || "Trading halt persisted; cancellation verification pending.",
+      );
       await fetchData();
       await fetchStopLosses();
     } catch (err: unknown) {
@@ -281,10 +284,10 @@ function DashboardContent() {
     try {
       setRiskOpsBusy("resume");
       const res = await emergencyService.resumeTrading();
-      setRiskOpsMessage(res.message || "Trading resumed.");
+      setRiskOpsMessage(res.message || "Recovery requested. Trading remains halted.");
       await fetchData();
     } catch (err: unknown) {
-      setRiskOpsMessage(getApiErrorMessage(err, "Resume trading failed"));
+      setRiskOpsMessage(getApiErrorMessage(err, "Recovery request failed"));
     } finally {
       setRiskOpsBusy(null);
     }
@@ -659,15 +662,8 @@ function DashboardContent() {
     }
   };
 
-  const activePositionsCount = portfolio?.active_positions;
-  const hasPositionCount =
-    typeof activePositionsCount === "number" && Number.isFinite(activePositionsCount);
-  const positionCountPhrase = hasPositionCount
-    ? activePositionsCount === 1
-      ? "your 1 active position"
-      : `your ${activePositionsCount} active positions`
-    : "your open positions";
-  const emergencyStopBody = `Emergency stop halts all automated trading and closes ${positionCountPhrase} at market price. This cannot be undone — stop-losses, take-profit orders and inverse bots stop with it, and anything you want back has to be re-opened manually.`;
+  const emergencyStopBody =
+    "Emergency stop persists a trading halt and requests exchange-order cancellation. Cancellation and position closure need verification. Existing positions remain exposed; automatic position exits are currently unavailable.";
 
   const shortAddress = walletAddress
     ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
@@ -804,14 +800,14 @@ function DashboardContent() {
             disabled={riskOpsBusy !== null}
             className="btn-danger text-xs"
           >
-            {riskOpsBusy === "emergency" ? "Running..." : "Emergency Stop + Close Positions"}
+            {riskOpsBusy === "emergency" ? "Running..." : "Emergency Stop"}
           </button>
           <button
             onClick={handleResumeTrading}
             disabled={riskOpsBusy !== null}
             className="btn-success text-xs"
           >
-            {riskOpsBusy === "resume" ? "Running..." : "Resume Trading"}
+            {riskOpsBusy === "resume" ? "Running..." : "Request Recovery"}
           </button>
           <button
             onClick={handleRescoreTraders}
@@ -836,6 +832,7 @@ function DashboardContent() {
           </button>
         </div>
 
+        <EmergencyHaltStatus />
         {riskOpsMessage && (
           <p className="text-xs text-soft rounded border border-[var(--line)] bg-[var(--bg-soft)] px-3 py-2">
             {riskOpsMessage}
@@ -1458,7 +1455,7 @@ function DashboardContent() {
         open={emergencyStopOpen}
         title="Emergency stop trading?"
         body={emergencyStopBody}
-        confirmLabel="Close positions & stop"
+        confirmLabel="Persist halt & request cancellation"
         destructive
         confirmDisabled={riskOpsBusy !== null}
         onConfirm={() => {

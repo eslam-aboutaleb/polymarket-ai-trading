@@ -376,13 +376,17 @@ export const tradesService = {
   },
 
   async executeTrade(request: ExecuteTradeRequest): Promise<ExecuteTradeResponse> {
-    return apiClient.post<ExecuteTradeResponse>("/api/trades/execute", request);
+    return apiClient.post<ExecuteTradeResponse>("/api/trades/execute", {
+      ...request,
+      execution_mode: "live",
+    });
   },
 
   async cashOut(request: ExecuteTradeRequest): Promise<ExecuteTradeResponse> {
     return apiClient.post<ExecuteTradeResponse>("/api/trades/cash-out", {
       ...request,
       side: "SELL",
+      execution_mode: "live",
     });
   },
 };

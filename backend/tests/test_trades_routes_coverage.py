@@ -37,11 +37,8 @@ Covered:
   out-of-range 422, auth, and the unchanged daily-PnL response shape.
 * ``POST/GET/DELETE /stop-loss`` and ``/take-profit`` -- create, update,
   list (status filter + all), cancel (404 / non-active / success).
-* ``POST /emergency-stop`` -- halt with and without settings, SL/TP
-  cancellation counts, close_positions on/off, missing user, missing
-  credentials, position-fetch failure, per-position sell outcomes
-  (success / failure / exception / zero size / missing token).
-* ``POST /resume-trading`` -- 404, copy-trading restore.
+* ``POST /emergency-stop`` -- durable operation acknowledgment without signing.
+* ``POST /resume-trading`` -- verified recovery required (409).
 * ``GET /trader/{wallet}/quality`` and ``POST /traders/rescore``.
 * ``GET /arbitrage/opportunities`` and ``POST /arbitrage/scan``.
 * ``GET /analytics/summary|edge-score|trades`` -- including the
@@ -71,7 +68,6 @@ from app.models.trading.followed_trader import FollowedTrader
 from app.models.trading.stop_loss import StopLossOrder
 from app.models.trading.take_profit import TakeProfitOrder
 from app.models.trading.user_trade import UserTrade
-from app.models.users.user import User
 from app.models.users.user_settings import UserSettings
 from app.security.credential_store import CredentialStoreError
 from app.services.trading import kelly_service
@@ -214,6 +210,9 @@ def _execute_env(
     app.dependency_overrides[get_db] = lambda: session
     try:
         with (
+            # Legacy handler branches use fake DB/SDK I/O; security tests
+            # separately assert the production release barrier.
+            patch("app.services.trading.live_trading_policy.block_legacy_live_execution"),
             patch("app.api.routes.trading.trades.load_wallet_credentials", creds),
             patch("app.api.routes.trading.trades.get_idempotent_order_result", idem_get),
             patch("app.api.routes.trading.trades.store_idempotent_order_result", idem_store),
@@ -226,6 +225,7 @@ def _execute_env(
 
 
 EXECUTE_BODY = {
+    "execution_mode": "live",
     "token_id": "tok",
     "market_id": "mkt",
     "side": "BUY",
@@ -1634,232 +1634,33 @@ class TakeProfitTests(_TradesRouteTestCase):
 
 
 class EmergencyStopTests(_TradesRouteTestCase):
-    def _settings(self):
-        return SimpleNamespace(
-            copy_trading_enabled=True,
-            trading_halted=False,
-            halt_reason=None,
-            updated_at=None,
-        )
-
-    def test_emergency_stop_without_close_positions(self):
+    def test_emergency_stop_acknowledges_durable_work_without_signing(self):
         session = FakeSession()
-        session.register(UserSettings, first=self._settings())
-        session.register(StopLossOrder, update_count=2)
-        session.register(TakeProfitOrder, update_count=1)
         app.dependency_overrides[get_db] = lambda: session
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
-        resp = self.client.post("/api/trades/emergency-stop?close_positions=false")
-
-        self.assertEqual(resp.status_code, 200)
-        data = resp.json()
-        self.assertTrue(data["halted"])
-        self.assertEqual(data["stop_losses_cancelled"], 2)
-        self.assertEqual(data["take_profits_cancelled"], 1)
-        self.assertEqual(data["positions_closed"], 0)
-        self.assertEqual(data["errors"], [])
-        settings = session.query(UserSettings).first()
-        self.assertFalse(settings.copy_trading_enabled)
-        self.assertTrue(settings.trading_halted)
-        self.assertEqual(settings.halt_reason, "Emergency stop triggered by user")
-
-    def test_emergency_stop_creates_settings_when_missing(self):
-        session = FakeSession()
-        session.register(UserSettings, first=None)
-        session.register(StopLossOrder, update_count=0)
-        session.register(TakeProfitOrder, update_count=0)
-        app.dependency_overrides[get_db] = lambda: session
-        self.addCleanup(app.dependency_overrides.pop, get_db, None)
-        resp = self.client.post("/api/trades/emergency-stop?close_positions=false")
-
-        self.assertEqual(resp.status_code, 200)
-        data = resp.json()
-        self.assertIn("User settings not found; created halt record", data["errors"])
-        self.assertIsInstance(session.added[0], UserSettings)
-
-    def test_emergency_stop_user_not_found(self):
-        session = FakeSession()
-        session.register(UserSettings, first=self._settings())
-        session.register(StopLossOrder, update_count=0)
-        session.register(TakeProfitOrder, update_count=0)
-        session.register(User, first=None)
-        app.dependency_overrides[get_db] = lambda: session
-        self.addCleanup(app.dependency_overrides.pop, get_db, None)
-        resp = self.client.post("/api/trades/emergency-stop")
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("User not found – cannot close positions", resp.json()["errors"])
-
-    def test_emergency_stop_no_credentials(self):
-        session = FakeSession()
-        session.register(UserSettings, first=self._settings())
-        session.register(StopLossOrder, update_count=0)
-        session.register(TakeProfitOrder, update_count=0)
-        session.register(User, first=SimpleNamespace(wallet_address=WALLET))
-        app.dependency_overrides[get_db] = lambda: session
-        self.addCleanup(app.dependency_overrides.pop, get_db, None)
-        with patch("app.api.routes.trading.trades.load_wallet_credentials", return_value=None):
-            resp = self.client.post("/api/trades/emergency-stop")
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("No wallet credentials – cannot close positions", resp.json()["errors"])
-
-    def test_emergency_stop_credential_store_error(self):
-        session = FakeSession()
-        session.register(UserSettings, first=self._settings())
-        session.register(StopLossOrder, update_count=0)
-        session.register(TakeProfitOrder, update_count=0)
-        session.register(User, first=SimpleNamespace(wallet_address=WALLET))
-        app.dependency_overrides[get_db] = lambda: session
-        self.addCleanup(app.dependency_overrides.pop, get_db, None)
-        with patch(
-            "app.api.routes.trading.trades.load_wallet_credentials",
-            side_effect=CredentialStoreError("down"),
-        ):
-            resp = self.client.post("/api/trades/emergency-stop")
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("No wallet credentials – cannot close positions", resp.json()["errors"])
-
-    def test_emergency_stop_positions_fetch_failure(self):
-        session = FakeSession()
-        session.register(UserSettings, first=self._settings())
-        session.register(StopLossOrder, update_count=0)
-        session.register(TakeProfitOrder, update_count=0)
-        session.register(User, first=SimpleNamespace(wallet_address=WALLET))
-        app.dependency_overrides[get_db] = lambda: session
-        self.addCleanup(app.dependency_overrides.pop, get_db, None)
-        service = MagicMock()
-        service.get_positions = AsyncMock(side_effect=RuntimeError("boom"))
+        report = {"operation_id": "op-1", "halted": True, "positions_confirmed_closed": 0}
         with (
             patch(
-                "app.api.routes.trading.trades.load_wallet_credentials",
-                return_value={"private_key": PRIVATE_KEY, "clob_creds": CLOB_CREDS},
-            ),
-            patch("app.api.routes.trading.trades.get_polymarket_service", return_value=service),
-        ):
-            resp = self.client.post("/api/trades/emergency-stop")
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("Failed to fetch positions", resp.json()["errors"])
-
-    def test_emergency_stop_closes_positions(self):
-        session = FakeSession()
-        session.register(UserSettings, first=self._settings())
-        session.register(StopLossOrder, update_count=0)
-        session.register(TakeProfitOrder, update_count=0)
-        session.register(User, first=SimpleNamespace(wallet_address=WALLET))
-        app.dependency_overrides[get_db] = lambda: session
-        self.addCleanup(app.dependency_overrides.pop, get_db, None)
-        service = MagicMock()
-        service.get_positions = AsyncMock(
-            return_value=[
-                {"size": 0},  # zero size → skipped
-                {"size": -1},  # negative → skipped
-                {"size": 5},  # no token id → skipped
-                {"size": 5, "asset_id": "tok1"},  # sold successfully
-                {"size": 5, "token_id": "tok2"},  # sell fails
-                {"size": 5, "asset_id": "tok3"},  # sell raises
-            ]
-        )
-        place = MagicMock(
-            side_effect=[
-                {"success": True},
-                {"success": False, "error": "nope"},
-                RuntimeError("boom"),
-            ]
-        )
-        with (
+                "app.services.trading.trading_halt_service.request_halt",
+                return_value=[SimpleNamespace(id="op-1")],
+            ) as halt,
             patch(
-                "app.api.routes.trading.trades.load_wallet_credentials",
-                return_value={"private_key": PRIVATE_KEY, "clob_creds": CLOB_CREDS},
+                "app.services.trading.trading_halt_service.operation_status", return_value=report
             ),
-            patch("app.api.routes.trading.trades.get_polymarket_service", return_value=service),
-            patch("app.api.routes.trading.trades._place_order_on_polymarket", place),
+            patch("app.api.routes.trading.trades._place_order_on_polymarket") as place,
         ):
-            resp = self.client.post("/api/trades/emergency-stop")
-
-        self.assertEqual(resp.status_code, 200)
-        data = resp.json()
-        self.assertEqual(data["positions_closed"], 1)
-        errors = data["errors"]
-        self.assertTrue(any(e.startswith("Failed to sell tok2") for e in errors))
-        self.assertIn("Exception selling position", errors)
-        # The successful sell used a market price of 0.
-        self.assertEqual(place.call_args_list[0].kwargs["price"], 0.0)
-        self.assertEqual(place.call_args_list[0].kwargs["side"], "SELL")
-
-    def test_emergency_stop_message(self):
-        session = FakeSession()
-        session.register(UserSettings, first=self._settings())
-        session.register(StopLossOrder, update_count=2)
-        session.register(TakeProfitOrder, update_count=3)
-        app.dependency_overrides[get_db] = lambda: session
-        self.addCleanup(app.dependency_overrides.pop, get_db, None)
-        resp = self.client.post("/api/trades/emergency-stop?close_positions=false")
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(
-            resp.json()["message"],
-            "Emergency stop complete. Trading halted, "
-            "2 SL + 3 TP orders cancelled, 0 positions closed.",
-        )
+            response = self.client.post("/api/trades/emergency-stop?close_positions=true")
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json(), report)
+        halt.assert_called_once_with(session, user_id=1, close_positions=True)
+        place.assert_not_called()
 
 
 class ResumeTradingTests(_TradesRouteTestCase):
-    def test_resume_trading_restores_flags(self):
-        settings = SimpleNamespace(
-            copy_trading_enabled=False,
-            trading_halted=True,
-            halt_reason="stop",
-            cooldown_until=datetime(2026, 1, 1, tzinfo=UTC),
-            updated_at=None,
-        )
-        session = FakeSession()
-        session.register(UserSettings, first=settings)
-        app.dependency_overrides[get_db] = lambda: session
-        self.addCleanup(app.dependency_overrides.pop, get_db, None)
-        resp = self.client.post("/api/trades/resume-trading")
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(
-            resp.json(),
-            {
-                "resumed": True,
-                "copy_trading_enabled": True,
-                "message": "Trading resumed successfully",
-            },
-        )
-        self.assertFalse(settings.trading_halted)
-        self.assertIsNone(settings.halt_reason)
-        self.assertIsNone(settings.cooldown_until)
-        self.assertTrue(settings.copy_trading_enabled)
-
-    def test_resume_trading_keeps_copy_trading_enabled(self):
-        settings = SimpleNamespace(
-            copy_trading_enabled=True,
-            trading_halted=True,
-            halt_reason="stop",
-            cooldown_until=None,
-            updated_at=None,
-        )
-        session = FakeSession()
-        session.register(UserSettings, first=settings)
-        app.dependency_overrides[get_db] = lambda: session
-        self.addCleanup(app.dependency_overrides.pop, get_db, None)
-        resp = self.client.post("/api/trades/resume-trading")
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertTrue(resp.json()["copy_trading_enabled"])
-
-    def test_resume_trading_without_settings_returns_404(self):
-        session = FakeSession()
-        session.register(UserSettings, first=None)
-        app.dependency_overrides[get_db] = lambda: session
-        self.addCleanup(app.dependency_overrides.pop, get_db, None)
-        resp = self.client.post("/api/trades/resume-trading")
-
-        self.assertEqual(resp.status_code, 404)
+    def test_resume_requires_verified_recovery(self):
+        response = self.client.post("/api/trades/resume-trading")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["detail"], "RECOVERY_REQUIRES_VERIFIED_EXECUTION_GATEWAY")
 
 
 # ────────────── Trader quality / rescore ──────────────

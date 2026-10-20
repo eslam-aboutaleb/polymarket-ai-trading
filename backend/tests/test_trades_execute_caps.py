@@ -50,6 +50,7 @@ def _make_db():
 
 def _body(size: float) -> ExecuteTradeRequest:
     return ExecuteTradeRequest(
+        execution_mode="live",
         token_id="0xtoken",
         market_id="0xmarket",
         side="BUY",
@@ -66,6 +67,11 @@ class ExecuteCapsTests(unittest.IsolatedAsyncioTestCase):
     """The pre-trade gate guards manual execution."""
 
     def setUp(self):
+        # Only legacy accounting is under test here; exchange I/O is mocked.
+        # The real production barrier is covered by tests/security/.
+        barrier = patch("app.services.trading.live_trading_policy.block_legacy_live_execution")
+        barrier.start()
+        self.addCleanup(barrier.stop)
         self.db = _make_db()
 
     def tearDown(self):

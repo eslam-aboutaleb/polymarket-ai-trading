@@ -337,6 +337,14 @@ def _fake_exchange(post_response=None):
 
 
 class PlaceOrderTests(CopyTradeServiceTestCase):
+    def setUp(self):
+        super().setUp()
+        # Isolate legacy math against mocked exchange I/O; production freeze
+        # is exercised without this override in tests/security/.
+        barrier = patch("app.services.trading.live_trading_policy.block_legacy_live_execution")
+        barrier.start()
+        self.addCleanup(barrier.stop)
+
     def _patch_exchange(self, client, proxy="0xproxy"):
         proxy_lookup = MagicMock(return_value=proxy)
         signer = MagicMock()

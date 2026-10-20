@@ -55,6 +55,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         inverse_bot,
         latency_arb,
         market_maker,
+        risk,
         trades,
     )
 
@@ -68,6 +69,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         experiments,
         portfolio,
         risk_report,
+        risk,
         settings_routes,
         trades,
         markets,
@@ -99,6 +101,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
     # (key-authenticated), /api/settings/api-keys/* (browser session),
     # /api/portfolio/exposure (user-authenticated), and /ws/v1.
     app.include_router(external.router)
+    app.include_router(trades.safety_router)
     app.include_router(external.api_keys_router)
     app.include_router(external.exposure_router)
     app.include_router(ws_v1.router)
