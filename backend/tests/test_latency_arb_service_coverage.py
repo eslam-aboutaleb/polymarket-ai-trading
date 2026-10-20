@@ -685,6 +685,13 @@ class BookGatesTests(unittest.TestCase):
 
 
 class PlaceFokOrderTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # Isolate legacy math against mocked exchange I/O; production freeze
+        # is exercised without this override in tests/security/.
+        barrier = patch("app.services.trading.live_trading_policy.block_legacy_live_execution")
+        barrier.start()
+        self.addCleanup(barrier.stop)
+
     async def test_place_fok_order_rounds_shares_up(self):
         client = MagicMock(name="clob_client")
         client.create_order.return_value = "signed-order"

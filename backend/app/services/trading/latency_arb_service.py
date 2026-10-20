@@ -725,6 +725,16 @@ async def _place_fok_order(
     the event loop is never blocked. Returns the exchange
     response dict.
     """
+    from app.services.trading.live_trading_policy import (
+        LiveTradingBlocked,
+        block_legacy_live_execution,
+    )
+
+    try:
+        block_legacy_live_execution("latency_arb")
+    except LiveTradingBlocked as exc:
+        return {"success": False, "status": "blocked", "errorMsg": str(exc)}
+
     from py_clob_client.clob_types import OrderArgs, OrderType
     from py_clob_client.order_builder.constants import BUY
 

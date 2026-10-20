@@ -62,6 +62,7 @@ async def start_background_services(
     from app.repositories.notifications.followed_traders import NotificationFollowRepository
     from app.repositories.trading.follows import TradingFollowRepository
     from app.services.analytics.leaderboard_service import refresh_leaderboard_background
+    from app.services.trading.halt_cancellation_worker import run_halt_cancellation_worker
     from app.services.trading.trade_monitor import start_trade_monitor
 
     # Load currently-followed wallets so the monitor can subscribe.
@@ -85,6 +86,8 @@ async def start_background_services(
 
         for wallet in initial_wallets:
             add_watched_wallet(wallet)
+
+    background_tasks.append(asyncio.create_task(run_halt_cancellation_worker()))
 
     monitor_task = asyncio.create_task(start_trade_monitor())
     background_tasks.append(monitor_task)

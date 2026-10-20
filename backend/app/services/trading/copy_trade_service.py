@@ -249,6 +249,16 @@ def _place_order_on_polymarket(
     Tries multiple (signature_type, creds_source) combinations to handle
     different wallet configurations (proxy, EOA, gnosis safe).
     """
+    from app.services.trading.live_trading_policy import (
+        LiveTradingBlocked,
+        block_legacy_live_execution,
+    )
+
+    try:
+        block_legacy_live_execution("copy")
+    except LiveTradingBlocked as exc:
+        return {"success": False, "status": "blocked", "order_hash": None, "error": str(exc)}
+
     from py_clob_client.client import ClobClient
     from py_clob_client.clob_types import (
         ApiCreds,

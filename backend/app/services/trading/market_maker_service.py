@@ -377,6 +377,17 @@ async def _place_maker_order(
     size: float,
 ) -> str | None:
     """Place a GTC limit order for market making. Returns order ID or None."""
+    from app.services.trading.live_trading_policy import (
+        LiveTradingBlocked,
+        block_legacy_live_execution,
+    )
+
+    try:
+        block_legacy_live_execution("market_making")
+    except LiveTradingBlocked as exc:
+        logger.warning("Maker order blocked: %s", exc)
+        return None
+
     from py_clob_client.client import ClobClient
     from py_clob_client.clob_types import OrderArgs, OrderType
     from py_clob_client.order_builder.constants import BUY, SELL

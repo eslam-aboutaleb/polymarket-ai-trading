@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "type-check": "tsc --noEmit",
     "test:e2e": "playwright test",
+    "test:safety": "playwright test --config playwright.safety.config.ts",
     "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
