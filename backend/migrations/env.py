@@ -5,7 +5,7 @@ from logging.config import fileConfig
 from pathlib import Path
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, text
 
 # Alembic runs outside pytest, so the shared settings package must be
 # importable directly from the repository layout (backend/../services/shared).
@@ -49,6 +49,20 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
+        if connection.dialect.name == "postgresql":
+            # Historical descriptive revision IDs exceed Alembic's default
+            # VARCHAR(32). Widen the bookkeeping column before running them;
+            # no financial or application data is changed.
+            connection.execute(
+                text(
+                    "CREATE TABLE IF NOT EXISTS alembic_version "
+                    "(version_num VARCHAR(128) NOT NULL PRIMARY KEY)"
+                )
+            )
+            connection.execute(
+                text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(128)")
+            )
+            connection.commit()
         context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
 
         with context.begin_transaction():

@@ -71,6 +71,7 @@ EXTERNAL_TEST_APP.dependency_overrides[external_module._external_write_rate_limi
 EXTERNAL_TEST_APP.dependency_overrides[external_module._api_key_create_rate_limit] = lambda: None
 
 ORDER_BODY = {
+    "execution_mode": "live",
     "token_id": TOKEN_ID,
     "market_id": MARKET_ID,
     "side": "BUY",
@@ -273,7 +274,7 @@ class ExternalAuthTest(_ExternalBase):
         place.assert_not_called()
         self.assertEqual(self.db.query(UserTrade).count(), 0)
 
-    def test_trade_scope_key_can_submit_an_order(self):
+    def test_trade_scope_key_still_requires_release_authorization(self):
         _, secret = self._make_key(scopes=("read", "trade"))
         self._settings()
         self._credentials()
@@ -287,8 +288,8 @@ class ExternalAuthTest(_ExternalBase):
                 json=ORDER_BODY,
                 headers={"X-API-Key": secret},
             )
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.json()["success"])
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["detail"], "LIVE_TRADING_DISABLED")
 
     def test_external_key_cannot_reach_internal_routes(self):
         _, secret = self._make_key(scopes=("read", "trade"))
@@ -390,6 +391,11 @@ class ExternalOrderTest(_ExternalBase):
     """An external order must be indistinguishable from a manual order."""
 
     def setUp(self):
+        # Only legacy accounting is under test here; exchange I/O is mocked.
+        # The real production barrier is covered by tests/security/.
+        barrier = patch("app.services.trading.live_trading_policy.block_legacy_live_execution")
+        barrier.start()
+        self.addCleanup(barrier.stop)
         super().setUp()
         self._settings()
         self._credentials()

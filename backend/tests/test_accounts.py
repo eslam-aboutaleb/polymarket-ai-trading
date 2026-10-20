@@ -489,7 +489,15 @@ class MigrationBackfillTest(unittest.TestCase):
 
     MIGRATION_MODULE = "migrations.versions.20261011_0015_add_accounts"
     #: Tables the migration itself creates or leaves alone.
-    EXCLUDED_TABLES = frozenset({"accounts", "account_settings", "app_events"})
+    EXCLUDED_TABLES = frozenset(
+        {
+            "accounts",
+            "account_settings",
+            "app_events",
+            "trading_control_states",
+            "emergency_halt_operations",
+        }
+    )
 
     def _tables_with_user_id(self, conn) -> list[str]:
         tables = [

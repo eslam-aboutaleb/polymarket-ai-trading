@@ -169,15 +169,15 @@ const sections: GuideSection[] = [
     items: [
       {
         heading: "Emergency Stop",
-        body: "Click the Emergency Stop button on the Dashboard or use the API endpoint POST /api/trades/emergency-stop. This immediately halts all copy-trading, cancels pending orders, and sets a global 'paused' flag so no new trades execute.",
+        body: "Click the Emergency Stop button on the Dashboard or use the API endpoint POST /api/trades/emergency-stop. This persists a wallet trading halt and queues exchange-order cancellation. Review the tracked operation for confirmed cancellations and unresolved exposure. Positions are not automatically closed.",
       },
       {
         heading: "Panic Sell All",
         body: "Pass { sell_all: true } when triggering emergency stop to also liquidate every open position at market price. The bot processes sells sequentially with a 200ms cooldown to avoid rate limits.",
       },
       {
-        heading: "Resume Trading",
-        body: "Once conditions stabilize, click Resume Trading or call POST /api/trades/resume-trading. This clears the paused flag so the bot resumes normal copy-trading activity.",
+        heading: "Request Recovery",
+        body: "Use Request Recovery to record a recovery review request. Trading remains halted until financial state and execution permissions are verified. The legacy resume endpoint cannot re-enable trading.",
       },
     ],
   },
@@ -378,7 +378,7 @@ const sections: GuideSection[] = [
       },
       {
         heading: "Risk Controls in Ops",
-        body: "Use Emergency Stop to halt activity instantly, Resume Trading to re-enable execution, Rescore Traders to refresh ranking quality, and Scan Arbitrage to refresh opportunity detection.",
+        body: "Use Emergency Stop to persist a halt and request cancellation, Request Recovery to request a review while trading remains halted, Rescore Traders to refresh ranking quality, and Scan Arbitrage to refresh opportunity detection.",
       },
       {
         heading: "Analysis Lab Output",

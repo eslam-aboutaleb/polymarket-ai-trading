@@ -30,6 +30,7 @@ safety terms from a manual one.
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import PlainTextResponse
@@ -135,6 +136,7 @@ class ExternalOrderRequest(BaseModel):
     reduce it (never raise it) before submission.
     """
 
+    execution_mode: Literal["live"]
     token_id: str = Field(..., min_length=1, description="Polymarket token ID (condition token)")
     market_id: str = Field(default="", description="Market slug or condition ID for record-keeping")
     side: str = Field(..., pattern="^(BUY|SELL)$", description="BUY or SELL")
@@ -577,6 +579,16 @@ async def external_create_order(
     external order appears in the audit trail exactly like a manual one
     and is never double-logged.
     """
+    from app.services.trading.live_trading_policy import (
+        LiveTradingBlocked,
+        block_legacy_live_execution,
+    )
+
+    try:
+        block_legacy_live_execution("external")
+    except LiveTradingBlocked as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     # Idempotency: a replayed key returns the stored result, so a
     # retried request can never place a second order.
     # Namespace the replay key by the key's account so a multi-account

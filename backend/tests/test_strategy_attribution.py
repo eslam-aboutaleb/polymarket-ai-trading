@@ -444,62 +444,27 @@ class StrategyBreakdownTest(_AttributionTestBase):
 
 
 class EmergencyStopAttributionTest(_AttributionTestBase):
-    """Emergency-stop panic sells are attributed too (master plan 5.4).
+    """An acknowledged halt cannot fabricate a trade or realized P&L."""
 
-    Emergency stop must cover every writer path. Without an attributed
-    row the position's realized P&L stays at zero, which understates the
-    loss that triggered the stop and corrupts the drawdown math.
-    """
-
-    def test_panic_sells_are_recorded_as_emergency(self):
-        from unittest.mock import AsyncMock, patch
+    def test_halt_does_not_record_unsubmitted_panic_sells(self):
+        import asyncio
+        from unittest.mock import patch
 
         from app.api.routes.trading.trades import emergency_stop
 
-        position = {
-            "asset_id": TOKEN_ID,
-            "condition_id": MARKET_ID,
-            "size": 50.0,
-            "curPrice": 0.3,
-        }
-        service = AsyncMock()
-        service.get_positions = AsyncMock(return_value=[position])
-
-        async def _run():
-            with (
-                patch(
-                    "app.api.routes.trading.trades.load_wallet_credentials",
-                    return_value={
-                        "private_key": "0xpk",
-                        "clob_creds": {"api_key": "k"},
-                    },
-                ),
-                patch("app.api.routes.trading.trades.get_polymarket_service", return_value=service),
-                patch(
-                    "app.api.routes.trading.trades._place_order_on_polymarket",
-                    MagicMock(return_value={"success": True, "order_hash": "0xemerg"}),
-                ),
-            ):
-                return await emergency_stop(
+        with patch("app.api.routes.trading.trades._place_order_on_polymarket") as place:
+            result = asyncio.run(
+                emergency_stop(
                     close_positions=True,
                     current_user={"user_id": USER_ID},
                     db=self.db,
                 )
-
-        import asyncio
-
-        result = asyncio.run(_run())
-
-        self.assertTrue(result.halted)
-        self.assertEqual(result.positions_closed, 1)
-        rows = self._trades(strategy_source="emergency")
-        self.assertEqual(len(rows), 1)
-        row = rows[0]
-        self.assertEqual(row.action, "sell")
-        self.assertEqual(row.status, "pending")
-        self.assertEqual(row.order_hash, "0xemerg")
-        self.assertEqual(row.token_id, TOKEN_ID)
-        self.assertEqual(row.market_id, MARKET_ID)
+            )
+        self.assertTrue(result["halted"])
+        self.assertEqual(result["positions_confirmed_closed"], 0)
+        self.assertEqual(result["close_requests_submitted"], 0)
+        self.assertEqual(self._trades(strategy_source="emergency"), [])
+        place.assert_not_called()
 
 
 if __name__ == "__main__":

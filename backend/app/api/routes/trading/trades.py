@@ -10,6 +10,7 @@ original result instead of placing a second order.
 import asyncio
 import json
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -45,11 +46,8 @@ from app.services.trading.order_management_service import (
 from app.services.trading.order_management_service import (
     commit_trading_settings,
     get_or_create_trading_settings,
-    get_trading_user,
-    halt_user_trading,
     list_stop_losses,
     list_take_profits,
-    resume_user_trading,
 )
 from app.services.trading.order_management_service import (
     set_stop_loss as set_stop_loss_service,
@@ -88,7 +86,6 @@ from app.services.trading.trade_api_service import (
 from app.services.trading.trade_api_service import (
     unfollow_trader as unfollow_trader_service,
 )
-from app.services.trading.trade_recorder import commit_recorded_trade, record_user_trade
 from app.services.users.entitlement_service import CAP_COPY_TRADING
 from app.utils.database import get_db
 from app.utils.time import utc_now
@@ -292,6 +289,7 @@ class CopyEvaluationResponse(BaseModel):
 class ExecuteTradeRequest(BaseModel):
     """Request to execute a Buy/Sell on Polymarket."""
 
+    execution_mode: Literal["live"]
     token_id: str = Field(..., description="Polymarket token ID (condition token)")
     market_id: str = Field(default="", description="Market slug or condition ID for record-keeping")
     market_title: str = Field(default="", description="Human-readable market title")
@@ -373,6 +371,16 @@ async def execute_trade(
     is submitted, and a replayed Idempotency-Key returns the stored
     result so a retried request can never place a second order.
     """
+    from app.services.trading.live_trading_policy import (
+        LiveTradingBlocked,
+        block_legacy_live_execution,
+    )
+
+    try:
+        block_legacy_live_execution("manual")
+    except LiveTradingBlocked as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     wallet_address = current_user["wallet_address"]
     user_id = current_user.get("user_id")
 
@@ -1146,171 +1154,69 @@ async def cancel_take_profit(
 # ────────────── Emergency Stop / Panic Sell ──────────────
 
 
-class EmergencyStopResponse(BaseModel):
-    halted: bool
-    positions_closed: int = 0
-    stop_losses_cancelled: int = 0
-    take_profits_cancelled: int = 0
-    errors: list[str] = []
-    message: str = ""
-
-
-@router.post("/emergency-stop", response_model=EmergencyStopResponse)
+@router.post("/emergency-stop", status_code=202)
 async def emergency_stop(
-    close_positions: bool = Query(
-        default=True, description="Also attempt to sell all open positions"
-    ),
+    close_positions: bool = Query(default=False),
     current_user: dict = Depends(get_current_user_from_token),
     db: Session = Depends(get_db),
 ):
-    """
-    Emergency stop: immediately halt all copy-trading and optionally
-    close every open position (panic sell at current market prices).
+    """Persist the wallet halt and cancellation work before returning an ID."""
+    from app.services.trading.trading_halt_service import operation_status, request_halt
 
-    Steps:
-      1. Disable copy-trading and set trading_halted flag.
-      2. Cancel all active stop-loss and take-profit orders.
-      3. If close_positions=true, sell every open position at market price.
-    """
-    user_id = current_user.get("user_id")
-    errors: list[str] = []
+    user_id = current_user["user_id"]
+    operations = request_halt(db, user_id=user_id, close_positions=close_positions)
+    return operation_status(db, operation_id=operations[0].id, user_id=user_id)
 
-    # 1 – Halt trading and cancel active conditional orders.
-    settings, sl_cancelled, tp_cancelled, settings_created = halt_user_trading(
-        db,
-        user_id,
-        now=utc_now(),
+
+@router.get("/emergency-stop")
+async def latest_emergency_stop(
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    from app.models.trading.trading_control import EmergencyHaltOperation
+    from app.services.trading.trading_halt_service import operation_status
+
+    user_id = current_user["user_id"]
+    operation = (
+        db.query(EmergencyHaltOperation)
+        .filter(EmergencyHaltOperation.user_id == user_id)
+        .order_by(EmergencyHaltOperation.created_at.desc(), EmergencyHaltOperation.id.desc())
+        .first()
     )
-    if settings_created:
-        errors.append("User settings not found; created halt record")
+    if operation is None:
+        return None
+    return operation_status(db, operation_id=operation.id, user_id=user_id)
 
-    positions_closed = 0
 
-    # 3 – Panic sell all positions
-    if close_positions:
-        user = get_trading_user(db, user_id)
-        if not user:
-            errors.append("User not found – cannot close positions")
-        else:
-            try:
-                stored = load_wallet_credentials(user.wallet_address)
-            except CredentialStoreError:
-                stored = None
+@router.get("/emergency-stop/{operation_id}")
+async def emergency_stop_status(
+    operation_id: str,
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    from app.services.trading.trading_halt_service import operation_status
 
-            if not stored:
-                errors.append("No wallet credentials – cannot close positions")
-            else:
-                pk = stored["private_key"]
-                creds = stored.get("clob_creds")
-                service = get_polymarket_service()
-                try:
-                    positions = await service.get_positions(
-                        user.wallet_address,
-                        private_key=pk,
-                        clob_creds=creds,
-                    )
-                except Exception:
-                    logger.exception("Emergency stop: could not fetch positions")
-                    positions = []
-                    errors.append("Failed to fetch positions")
+    result = operation_status(db, operation_id=operation_id, user_id=current_user["user_id"])
+    if result is None:
+        raise HTTPException(status_code=404, detail="Halt operation not found")
+    return result
 
-                for pos in positions:
-                    try:
-                        size = float(pos.get("size") or 0)
-                        if size <= 0:
-                            continue
-                        # Positions are keyed `asset_id` by PolymarketService.
-                        # The previous `asset`/`tokenId` lookups never matched,
-                        # so the panic-sell loop skipped every position while the
-                        # endpoint still reported "Emergency stop complete".
-                        token_id = pos.get("asset_id") or pos.get("token_id") or ""
-                        if not token_id:
-                            continue
-                        # Panic sell: price 0 selects immediate market execution
-                        # against the book. A limit sell here would leave the
-                        # position open, which defeats the purpose of a stop.
-                        sell_price = 0.0
 
-                        result = _place_order_on_polymarket(
-                            private_key=pk,
-                            clob_creds=creds,
-                            token_id=token_id,
-                            side="SELL",
-                            price=sell_price,
-                            size=size,
-                        )
-                        # Attributable row (plan 03 Phase A): a panic
-                        # sell that is not recorded leaves the position's
-                        # realized P&L at zero forever, understating the
-                        # loss that triggered the emergency stop.
-                        # A market sell (price 0) has no reference price
-                        # at submission, so the last observed position
-                        # price is the best available expectation; when
-                        # even that is unknown the row carries 0 and no
-                        # slippage is computed rather than a fake zero.
-                        ref_price = float(pos.get("curPrice") or pos.get("price") or 0.0) or 0.0
-                        record_user_trade(
-                            db,
-                            user_id=user_id,
-                            market_id=pos.get("condition_id") or token_id,
-                            token_id=token_id,
-                            action="sell",
-                            amount=size,
-                            price=ref_price,
-                            status="pending" if result.get("success") else "failed",
-                            strategy_source="emergency",
-                            order_hash=result.get("order_hash"),
-                            expected_price=ref_price or None,
-                        )
-                        commit_recorded_trade(db)
-                        if result.get("success"):
-                            positions_closed += 1
-                        else:
-                            errors.append(
-                                f"Failed to sell {token_id[:12]}…: {result.get('error', 'unknown')}"
-                            )
-                    except Exception:
-                        # One bad position must not abort the remaining sells.
-                        logger.exception("Emergency stop: failed to close position")
-                        errors.append("Exception selling position")
-
-    return EmergencyStopResponse(
-        halted=True,
-        positions_closed=positions_closed,
-        stop_losses_cancelled=sl_cancelled,
-        take_profits_cancelled=tp_cancelled,
-        errors=errors,
-        message=(
-            f"Emergency stop complete. Trading halted, "
-            f"{sl_cancelled} SL + {tp_cancelled} TP orders cancelled, "
-            f"{positions_closed} positions closed."
-        ),
-    )
+# Versioned safety endpoints share the same ownership and persistence handlers.
+safety_router = APIRouter(prefix="/api/v1/trading", tags=["trading-safety"])
+safety_router.add_api_route("/emergency-stop", emergency_stop, methods=["POST"], status_code=202)
+safety_router.add_api_route("/emergency-stop", latest_emergency_stop, methods=["GET"])
+safety_router.add_api_route(
+    "/emergency-stop/{operation_id}", emergency_stop_status, methods=["GET"]
+)
 
 
 @router.post("/resume-trading")
 async def resume_trading(
     current_user: dict = Depends(get_current_user_from_token),
-    db: Session = Depends(get_db),
 ):
-    """
-    Resume trading after an emergency stop or risk halt.
-
-    Clears the trading_halted flag and cooldown. Also restores
-    ``copy_trading_enabled``, which emergency stop switches off: leaving it
-    disabled meant execute_copy_trade kept short-circuiting while this endpoint
-    reported success, so the user believed they were trading again and was not.
-    """
-    user_id = current_user.get("user_id")
-    settings = resume_user_trading(db, user_id, now=utc_now())
-    if settings is None:
-        raise HTTPException(status_code=404, detail="User settings not found")
-
-    return {
-        "resumed": True,
-        "copy_trading_enabled": settings.copy_trading_enabled,
-        "message": "Trading resumed successfully",
-    }
+    """Legacy resume cannot override durable recovery and release checks."""
+    raise HTTPException(status_code=409, detail="RECOVERY_REQUIRES_VERIFIED_EXECUTION_GATEWAY")
 
 
 # ────────────── Trader Quality Scoring ──────────────
