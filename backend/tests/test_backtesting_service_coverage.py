@@ -169,81 +169,176 @@ def _response(status_code=200, json_data=None):
 
 
 class FetchHistoricalPricesTests(unittest.IsolatedAsyncioTestCase):
-    async def test_list_payload_returned_as_is(self):
-        data = [{"price": 1.0}, {"price": 2.0}]
-        response = _response(200, data)
-        with (
-            patch("httpx.AsyncClient", return_value=_httpx_client(response)),
-            patch(
-                "app.services.market_data.polymarket_service.POLYMARKET_DATA_API",
-                "https://data.example",
-            ),
-        ):
-            prices = await backtesting_service._fetch_historical_prices(
-                "cond-1", "2024-01-01", "2024-01-02"
-            )
-        self.assertEqual(prices, data)
+    """Fixture-contract tests for the actual CLOB prices-history interface."""
 
-    async def test_history_dict_payload_unwrapped(self):
-        history = [{"price": 1.0}]
-        response = _response(200, {"history": history})
-        with (
-            patch("httpx.AsyncClient", return_value=_httpx_client(response)),
-            patch(
-                "app.services.market_data.polymarket_service.POLYMARKET_DATA_API",
-                "https://data.example",
-            ),
-        ):
-            prices = await backtesting_service._fetch_historical_prices(
-                "cond-1", "2024-01-01", "2024-01-02"
-            )
-        self.assertEqual(prices, history)
+    CONDITION = "0x" + "a" * 64
+    YES = "12345678901234567890"
+    NO = "98765432109876543210"
 
-    async def test_dict_without_history_returns_empty(self):
-        response = _response(200, {"foo": "bar"})
-        with (
-            patch("httpx.AsyncClient", return_value=_httpx_client(response)),
-            patch(
-                "app.services.market_data.polymarket_service.POLYMARKET_DATA_API",
-                "https://data.example",
-            ),
-        ):
-            prices = await backtesting_service._fetch_historical_prices(
-                "cond-1", "2024-01-01", "2024-01-02"
-            )
-        self.assertEqual(prices, [])
+    def market(self):
+        return {
+            "condition_id": self.CONDITION,
+            "tokens": [
+                {"token_id": self.YES, "outcome": "Yes"},
+                {"token_id": self.NO, "outcome": "No"},
+            ],
+        }
 
-    async def test_non_200_returns_empty(self):
-        response = _response(500, [{"price": 1.0}])
-        with (
-            patch("httpx.AsyncClient", return_value=_httpx_client(response)),
-            patch(
-                "app.services.market_data.polymarket_service.POLYMARKET_DATA_API",
-                "https://data.example",
-            ),
-        ):
-            prices = await backtesting_service._fetch_historical_prices(
-                "cond-1", "2024-01-01", "2024-01-02"
-            )
-        self.assertEqual(prices, [])
+    def history(self, count=48):
+        anchor = int(datetime.fromisoformat("2024-01-01T00:00:00+00:00").timestamp())
+        return {"history": [{"t": anchor + i * 3600, "p": "0.40"} for i in range(count)]}
 
-    async def test_transport_error_returns_empty_and_logs(self):
-        client = MagicMock(name="async_client")
-        client.get = AsyncMock(side_effect=RuntimeError("connection reset"))
-        client.__aenter__ = AsyncMock(return_value=client)
-        client.__aexit__ = AsyncMock(return_value=False)
-        with (
-            patch("httpx.AsyncClient", return_value=client),
-            patch(
-                "app.services.market_data.polymarket_service.POLYMARKET_DATA_API",
-                "https://data.example",
-            ),
-            self.assertLogs(backtesting_service.logger, level="WARNING"),
+    def client_for(self, *responses):
+        client = _httpx_client(responses[0] if responses else _response())
+        client.get = AsyncMock(side_effect=list(responses))
+        return client
+
+    async def load(self, client, outcome="Yes"):
+        from app.services.market_data.historical_prices import load_token_price_history
+
+        with patch(
+            "app.services.market_data.historical_prices.httpx.AsyncClient",
+            return_value=client,
         ):
-            prices = await backtesting_service._fetch_historical_prices(
-                "cond-1", "2024-01-01", "2024-01-02"
+            return await load_token_price_history(
+                self.CONDITION, "2024-01-01", "2024-01-02", outcome=outcome
             )
-        self.assertEqual(prices, [])
+
+    async def test_valid_yes_token_and_clob_parameters(self):
+        from app.services.market_data.historical_prices import HistoricalPriceRows
+
+        client = self.client_for(
+            _response(200, self.market()), _response(200, self.history())
+        )
+        result = await self.load(client)
+        self.assertIsInstance(result, HistoricalPriceRows)
+        self.assertEqual(len(result), 48)
+        self.assertEqual(result[0]["price"], 0.4)
+        self.assertEqual(result.provenance["token_id"], self.YES)
+        self.assertEqual(result.provenance["outcome"], "Yes")
+        self.assertEqual(result.provenance["sample_count"], 48)
+        self.assertEqual(result.provenance["quality"], "indicative_price_only")
+        self.assertEqual(len(result.provenance["data_hash"]), 64)
+        self.assertEqual(client.get.await_count, 2)
+        self.assertTrue(client.get.await_args_list[0].args[0].endswith(
+            "/markets/" + self.CONDITION
+        ))
+        url = client.get.await_args_list[1].args[0]
+        params = client.get.await_args_list[1].kwargs["params"]
+        self.assertTrue(url.endswith("/prices-history"))
+        self.assertEqual(params["market"], self.YES)
+        self.assertEqual(params["fidelity"], 60)
+        self.assertIsInstance(params["startTs"], int)
+        self.assertIsInstance(params["endTs"], int)
+        self.assertNotIn("startDate", params)
+
+    async def test_no_token_side_mixing(self):
+        client = self.client_for(
+            _response(200, self.market()), _response(200, self.history())
+        )
+        result = await self.load(client, outcome="No")
+        self.assertEqual(result.provenance["token_id"], self.NO)
+        self.assertEqual(client.get.await_args_list[1].kwargs["params"]["market"], self.NO)
+
+    async def test_mismatched_market_identity_fails_closed(self):
+        from app.services.market_data.historical_prices import PriceHistoryError
+
+        market = self.market()
+        market["condition_id"] = "0x" + "b" * 64
+        client = self.client_for(_response(200, market))
+        with self.assertRaisesRegex(PriceHistoryError, "different"):
+            await self.load(client)
+        client.get.assert_awaited_once()
+
+    async def test_unknown_or_duplicate_outcome_mapping_rejected(self):
+        from app.services.market_data.historical_prices import PriceHistoryError
+
+        for tokens in (
+            [{"token_id": self.YES, "outcome": "Maybe"}],
+            [
+                {"token_id": self.YES, "outcome": "Yes"},
+                {"token_id": self.YES, "outcome": "No"},
+            ],
+        ):
+            market = self.market()
+            market["tokens"] = tokens
+            with self.subTest(tokens=tokens), self.assertRaises(PriceHistoryError):
+                await self.load(self.client_for(_response(200, market)))
+
+    async def test_malformed_json_contract_missing_p_or_nan_price_rejected(self):
+        from app.services.market_data.historical_prices import PriceHistoryError
+
+        cases = [
+            [{"price": 0.4}],
+            [{"t": 1704067200}],
+            [{"t": 1704067200, "p": "NaN"}],
+            [{"t": "not-a-timestamp", "p": 0.4}],
+            [{"t": 1704067200, "p": 1.2}],
+        ]
+        for payload in cases:
+            with self.subTest(payload=payload), self.assertRaises(PriceHistoryError):
+                await self.load(self.client_for(
+                    _response(200, self.market()), _response(200, {"history": payload})
+                ))
+
+    async def test_list_payload_rejected_instead_of_silently_used(self):
+        from app.services.market_data.historical_prices import PriceHistoryError
+
+        client = self.client_for(_response(200, self.market()), _response(200, [{"p": 0.5}]))
+        with self.assertRaisesRegex(PriceHistoryError, "history array"):
+            await self.load(client)
+
+    async def test_non_200_fails_closed_not_empty_success(self):
+        from app.services.market_data.historical_prices import PriceHistoryError
+
+        client = self.client_for(_response(200, self.market()), _response(404, {}))
+        with self.assertRaisesRegex(PriceHistoryError, "HTTP 404"):
+            await self.load(client)
+
+    async def test_http_transport_failure_is_reported(self):
+        import httpx
+        from app.services.market_data.historical_prices import PriceHistoryError
+
+        client = self.client_for(_response(200, self.market()))
+        client.get.side_effect = [
+            _response(200, self.market()), httpx.ConnectError("connection reset")
+        ]
+        with self.assertRaisesRegex(PriceHistoryError, "unavailable"):
+            await self.load(client)
+
+    async def test_empty_and_sparse_history_rejected(self):
+        from app.services.market_data.historical_prices import PriceHistoryError
+
+        for payload in ({"history": []}, self.history(count=2)):
+            with self.subTest(payload=payload), self.assertRaises(PriceHistoryError):
+                await self.load(self.client_for(
+                    _response(200, self.market()), _response(200, payload)
+                ))
+
+    async def test_conflicting_timestamp_values_rejected(self):
+        from app.services.market_data.historical_prices import PriceHistoryError
+
+        rows = self.history()["history"]
+        rows.append({"t": rows[0]["t"], "p": "0.99"})
+        with self.assertRaisesRegex(PriceHistoryError, "Contradictory"):
+            await self.load(self.client_for(
+                _response(200, self.market()), _response(200, {"history": rows})
+            ))
+
+    async def test_invalid_condition_rejected_before_network(self):
+        from app.services.market_data.historical_prices import (
+            PriceHistoryError,
+            load_token_price_history,
+        )
+
+        client = self.client_for()
+        with (
+            patch("app.services.market_data.historical_prices.httpx.AsyncClient",
+                  return_value=client),
+            self.assertRaisesRegex(PriceHistoryError, "Invalid Polymarket condition ID"),
+        ):
+            await load_token_price_history("cond-1", "2024-01-01", "2024-01-02")
+        client.get.assert_not_called()
 
 
 # ── Copy-trade replay ─────────────────────────────────────────
@@ -543,21 +638,19 @@ class RunIndicatorBacktestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["metrics"]["total_trades"], 0)
         self.assertEqual(result["indicator_summary"], "summary")
 
-    async def test_mid_and_t_payload_keys(self):
+    async def test_mid_without_price_is_rejected(self):
         prices = [100.0] * 60
         price_data = [{"mid": p, "t": f"t{i}"} for i, p in enumerate(prices)]
         result = await self._run({"condition_id": "c1"}, price_data)
         self.assertEqual(result["trade_log"], [])
-        self.assertEqual(result["metrics"]["total_trades"], 0)
+        self.assertIn("price missing", result["error"])
 
-    async def test_none_rows_filtered_from_price_data(self):
+    async def test_none_rows_cannot_be_silently_skipped(self):
         prices = [100.0] * 30
         price_data = [None] + _price_data(prices)
         result = await self._run({"condition_id": "c1"}, price_data)
-        # 30 valid rows survive the ``if p`` filter — exactly enough
-        # to proceed (loop range is empty).
         self.assertEqual(result["metrics"]["total_trades"], 0)
-        self.assertNotIn("error", result)
+        self.assertIn("price missing", result["error"])
 
     async def test_custom_thresholds_forwarded(self):
         prices = [100.0] * 60
@@ -689,7 +782,7 @@ class CreateAndRunBacktestTests(unittest.IsolatedAsyncioTestCase):
             run = await create_and_run_backtest(
                 1, "inverse_bot", "unknown", "2024-01-01", "2024-12-31", {}
             )
-        self.assertEqual(run.status, "completed")
+        self.assertEqual(run.status, "failed")
         self.assertIn("Unknown strategy type: inverse_bot", run.error_message)
 
     async def test_engine_error_marks_run_failed(self):

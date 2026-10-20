@@ -31,6 +31,7 @@ const defaultForm: FormState = {
     rsi_oversold: 30,
     rsi_overbought: 70,
     condition_id: "",
+    outcome: "Yes",
   },
 };
 
@@ -246,6 +247,22 @@ export default function Backtesting() {
                 />
               </div>
               <div>
+                <label className="block text-xs text-soft mb-1">Outcome token</label>
+                <select
+                  value={(form.parameters.outcome as string) || "Yes"}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      parameters: { ...form.parameters, outcome: e.target.value },
+                    })
+                  }
+                  className="input-field w-full"
+                >
+                  <option value="Yes">YES</option>
+                  <option value="No">NO</option>
+                </select>
+              </div>
+              <div>
                 <label className="block text-xs text-soft mb-1">RSI Oversold</label>
                 <input
                   type="number"
@@ -354,6 +371,37 @@ export default function Backtesting() {
             </button>
           </div>
 
+          {selectedRun.status === "failed" && (
+            <div role="alert" className="rounded bg-red-500/10 p-3 text-sm text-red-300">
+              This run failed validation. Its zero-value placeholders are not trading results.
+              {selectedRun.error_message && <p className="mt-1">{selectedRun.error_message}</p>}
+            </div>
+          )}
+          {selectedRun.strategy_type === "indicator" && (
+            <div className="rounded bg-surface-secondary p-3 text-xs text-soft" role="status">
+              <p>
+                {selectedRun.indicator_values?.history_quality === "indicative_price_only"
+                  ? "Verified-source CLOB sampled token prices — indicative only. No historical bid/ask depth, executable fills, costs or validated trading edge."
+                  : "Unverified or incomplete historical feed. Legacy results are not independently validated."}
+              </p>
+              {selectedRun.indicator_values?.history_source != null && (
+                <p className="mt-1 break-all">
+                  Outcome token:{" "}
+                  {String(
+                    (selectedRun.indicator_values.history_source as Record<string, unknown>)
+                      .token_id || "unknown",
+                  )}
+                  {" · "}Dataset SHA-256:{" "}
+                  {String(
+                    (selectedRun.indicator_values.history_source as Record<string, unknown>)
+                      .data_hash || "unknown",
+                  ).slice(0, 16)}
+                  {"…"}
+                </p>
+              )}
+            </div>
+          )}
+          {selectedRun.status !== "failed" && (
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 text-xs">
             <div>
               <span className="text-soft">Total PnL</span>
@@ -390,6 +438,7 @@ export default function Backtesting() {
               </p>
             </div>
           </div>
+          )}
 
           <div className="grid grid-cols-3 gap-4 text-xs">
             <div>
@@ -408,7 +457,7 @@ export default function Backtesting() {
             </div>
           </div>
 
-          {selectedRun.error_message && (
+          {selectedRun.status !== "failed" && selectedRun.error_message && (
             <p className="text-xs text-yellow-400 bg-yellow-500/10 rounded p-2">
               {selectedRun.error_message}
             </p>
