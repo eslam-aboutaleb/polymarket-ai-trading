@@ -4,13 +4,27 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           python-version: "3.11"
       - name: Install backend dependencies
@@ -19,34 +33,65 @@ jobs:
         run: uv run --project backend --frozen ruff check --config ruff.toml backend services
       - name: Ruff format
         run: uv run --project backend --frozen ruff format --check --config ruff.toml backend services
+      - name: Backend/service protocol compatibility
+        run: uv run --project backend --frozen pytest --no-cov services/tests
       - name: Duplication check (jscpd, < 3%)
         run: ./scripts/check-duplication.sh
 
+  # Shared workflows are reviewed and pinned as one immutable revision.
+  # Update all pins together after reviewing ci-workflows changes.
   backend-tests:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          python-version: "3.11"
-      - name: Install dependencies
-        run: uv sync --frozen
-      - name: "Pytest with coverage (Sonar gate: >= 80%)"
-        run: uv run pytest --cov --cov-fail-under=80
+    uses: eslam-aboutaleb/ci-workflows/.github/workflows/python.yml@f989c2d0742cdab6cdef8437685d128b28904abc
+    with:
+      project-dir: backend
+      manager: uv
+      python-versions: '["3.11"]'
+      coverage-source: app
+      coverage-min: 80
+
+  trading-safety:
+    uses: eslam-aboutaleb/ci-workflows/.github/workflows/integration.yml@f989c2d0742cdab6cdef8437685d128b28904abc
+    with:
+      project-dir: backend
+      python-version: "3.11"
+
+  emergency-browser:
+    uses: eslam-aboutaleb/ci-workflows/.github/workflows/browser.yml@f989c2d0742cdab6cdef8437685d128b28904abc
+    with:
+      project-dir: frontend
+      manager: npm
+      node-version: "20"
+      test-script: test:safety
+      browsers: chromium
+
+  workflow-lint:
+    uses: eslam-aboutaleb/ci-workflows/.github/workflows/workflow-lint.yml@f989c2d0742cdab6cdef8437685d128b28904abc
+
+  security:
+    uses: eslam-aboutaleb/ci-workflows/.github/workflows/security.yml@f989c2d0742cdab6cdef8437685d128b28904abc
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+      pull-requests: read
+    with:
+      languages: '["python", "javascript-typescript", "actions"]'
+      dependency-severity: high
 
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "20"
+          package-manager-cache: false
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Install dependencies
@@ -62,3 +107,24 @@ jobs:
         run: npm run build
       - name: Prettier check
         run: npx prettier --check "src/**/*.{ts,tsx,css,json,html}"
+
+  quality-gate:
+    name: Quality gate
+    if: always()
+    needs: [lint, backend-tests, trading-safety, frontend, emergency-browser, workflow-lint, security]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every check to succeed
+        env:
+          CHECK_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          results = json.loads(os.environ["CHECK_RESULTS"])
+          failed = {name: job["result"] for name, job in results.items() if job["result"] != "success"}
+          if failed:
+              raise SystemExit(f"Required checks did not succeed: {failed}")
+          print("All required checks passed")
+          PY

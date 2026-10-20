@@ -58,6 +58,7 @@ def _current_user() -> dict:
 
 def _body() -> ExecuteTradeRequest:
     return ExecuteTradeRequest(
+        execution_mode="live",
         token_id="0xtoken",
         market_id="0xmarket",
         side="BUY",
@@ -77,6 +78,11 @@ class ManualExecuteIdempotencyTests(unittest.IsolatedAsyncioTestCase):
     """A replayed key replays the stored result."""
 
     def setUp(self):
+        # Only legacy accounting is under test here; exchange I/O is mocked.
+        # The real production barrier is covered by tests/security/.
+        barrier = patch("app.services.trading.live_trading_policy.block_legacy_live_execution")
+        barrier.start()
+        self.addCleanup(barrier.stop)
         self.db = _make_db()
         _get_idempotency_cache().clear()
 

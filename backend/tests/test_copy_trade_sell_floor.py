@@ -76,6 +76,13 @@ def _fake_exchange(post_response=None) -> MagicMock:
 
 
 class SellFloorTests(unittest.TestCase):
+    def setUp(self):
+        # Isolate legacy math against mocked exchange I/O; production freeze
+        # is exercised without this override in tests/security/.
+        barrier = patch("app.services.trading.live_trading_policy.block_legacy_live_execution")
+        barrier.start()
+        self.addCleanup(barrier.stop)
+
     """The SELL branch signs a tick-aligned floor, never a raw price."""
 
     def test_floor_is_reference_price_less_the_guard(self):

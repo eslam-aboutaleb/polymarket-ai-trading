@@ -25,6 +25,8 @@ import { marketsService, MarketCategory } from "../services/marketsService";
 import { getApiErrorMessage } from "../utils/apiError";
 import { Banner, ConfirmModal, useToast } from "./ui";
 
+import EmergencyHaltStatus from "./EmergencyHaltStatus";
+
 const JSON_PRETTY_SPACE = 2;
 
 export default function OpsCenter() {
@@ -223,8 +225,8 @@ export default function OpsCenter() {
   const runEmergencyStop = async () => {
     try {
       setRiskBusy("emergency_stop");
-      const res = await emergencyService.emergencyStop(true);
-      setNoticeSuccess(res.message || "Emergency stop executed.");
+      const res = await emergencyService.emergencyStop(false);
+      setNoticeSuccess(res.message || "Trading halt persisted; cancellation verification pending.");
     } catch (err: unknown) {
       setNoticeError(err, "Emergency stop failed");
     } finally {
@@ -236,9 +238,9 @@ export default function OpsCenter() {
     try {
       setRiskBusy("resume");
       const res = await emergencyService.resumeTrading();
-      setNoticeSuccess(res.message || "Trading resumed.");
+      setNoticeSuccess(res.message || "Recovery requested. Trading remains halted.");
     } catch (err: unknown) {
-      setNoticeError(err, "Resume trading failed");
+      setNoticeError(err, "Recovery request failed");
     } finally {
       setRiskBusy(null);
     }
@@ -408,7 +410,7 @@ export default function OpsCenter() {
   const arbitragePreview = useMemo(() => arbitrageRows.slice(0, 8), [arbitrageRows]);
 
   const emergencyStopBody =
-    "Emergency stop halts all automated trading and closes your open positions at market price. This cannot be undone — stop-losses, take-profit orders and inverse bots stop with it, and anything you want back has to be re-opened manually.";
+    "Emergency stop persists a trading halt and requests exchange-order cancellation. Cancellation and position closure need verification. Existing positions remain exposed; automatic position exits are currently unavailable.";
 
   return (
     <div className="space-y-6">
@@ -430,8 +432,8 @@ export default function OpsCenter() {
           <div className="rounded border border-[var(--line)] bg-[var(--bg-soft)] p-3">
             <p className="text-xs font-semibold mb-1">1. Risk Controls</p>
             <p className="text-xs text-soft">
-              Use for emergency stop, resume, trader rescoring, arbitrage scanning, and trader
-              quality checks. Start here when you need immediate risk intervention.
+              Use for emergency stop, recovery requests, trader rescoring, arbitrage scanning, and
+              trader quality checks. Start here when you need immediate risk intervention.
             </p>
           </div>
           <div className="rounded border border-[var(--line)] bg-[var(--bg-soft)] p-3">
@@ -466,6 +468,7 @@ export default function OpsCenter() {
 
       <section className="surface-panel p-5 space-y-4">
         <h2 className="text-lg font-semibold">Risk Controls</h2>
+        <EmergencyHaltStatus />
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
@@ -473,7 +476,7 @@ export default function OpsCenter() {
             onClick={() => setEmergencyStopOpen(true)}
             disabled={riskBusy !== null}
           >
-            {riskBusy === "emergency_stop" ? "Running..." : "Emergency Stop + Close Positions"}
+            {riskBusy === "emergency_stop" ? "Running..." : "Emergency Stop"}
           </button>
           <button
             type="button"
@@ -481,7 +484,7 @@ export default function OpsCenter() {
             onClick={runResumeTrading}
             disabled={riskBusy !== null}
           >
-            {riskBusy === "resume" ? "Running..." : "Resume Trading"}
+            {riskBusy === "resume" ? "Running..." : "Request Recovery"}
           </button>
           <button
             type="button"
@@ -1021,7 +1024,7 @@ export default function OpsCenter() {
         open={emergencyStopOpen}
         title="Emergency stop trading?"
         body={emergencyStopBody}
-        confirmLabel="Close positions & stop"
+        confirmLabel="Persist halt & request cancellation"
         destructive
         confirmDisabled={riskBusy !== null}
         onConfirm={() => {

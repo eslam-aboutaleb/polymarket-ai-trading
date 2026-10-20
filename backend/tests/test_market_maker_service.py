@@ -601,6 +601,13 @@ class _PlacementPatches:
 
 
 class PlaceMakerOrderTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # Isolate legacy math against mocked exchange I/O; production freeze
+        # is exercised without this override in tests/security/.
+        barrier = patch("app.services.trading.live_trading_policy.block_legacy_live_execution")
+        barrier.start()
+        self.addCleanup(barrier.stop)
+
     @staticmethod
     def _clob(post_response=None, create_error: Exception | None = None) -> MagicMock:
         clob = _fake_clob()

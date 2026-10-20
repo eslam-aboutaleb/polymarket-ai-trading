@@ -449,8 +449,8 @@ class GatedRouteTest(EntitlementBaseTest):
         self.assertEqual(response.status_code, 402)
         self.assertEqual(response.json()["detail"]["capability"], CAP_EXTERNAL_API_TRADE)
 
-    def test_institutional_can_trade_through_the_external_api(self):
-        """The gate lets an institutional key through to the real path."""
+    def test_institutional_plan_cannot_bypass_live_release_barrier(self):
+        """A paid plan does not confer financial execution authority."""
         self._set_plan(self._account(), "institutional")
         record, raw_key = create_api_key(
             self.db,
@@ -470,6 +470,7 @@ class GatedRouteTest(EntitlementBaseTest):
             response = self.client.post(
                 "/api/v1/external/orders",
                 json={
+                    "execution_mode": "live",
                     "token_id": TOKEN_ID,
                     "market_id": MARKET_ID,
                     "side": "BUY",
@@ -478,8 +479,9 @@ class GatedRouteTest(EntitlementBaseTest):
                 },
                 headers={"X-API-Key": raw_key},
             )
-        self.assertEqual(response.status_code, 200, msg=response.text)
-        self.assertTrue(response.json()["success"])
+        self.assertEqual(response.status_code, 503, msg=response.text)
+        place.assert_not_called()
+        load.assert_not_called()
 
 
 class DowngradeSafetyTest(EntitlementBaseTest):

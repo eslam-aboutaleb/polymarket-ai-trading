@@ -95,6 +95,12 @@ class Settings(BaseSettings):
     prompts_path: str = "prompts/prompts.json"
 
     # Trading
+    # Emergency exposure controls. Enabling these does not authorize legacy
+    # execution: the durable gateway and signer must pass the release gates.
+    live_trading_enabled: bool = False
+    live_market_making_enabled: bool = False
+    live_copy_trading_enabled: bool = False
+    live_latency_arb_enabled: bool = False
     execution_mode: str = "approval"  # auto or approval
     max_position_size: float = 1000.0  # Max USDC per trade
     stop_loss_check_interval_seconds: int = 10

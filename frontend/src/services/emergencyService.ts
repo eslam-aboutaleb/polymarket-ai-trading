@@ -1,8 +1,8 @@
 /**
  * Trading kill-switch, arbitrage, and trader-scoring endpoints under `/api/trades`.
  *
- * `emergencyStop` optionally closes positions while cancelling every stop-loss and take-profit;
- * `resumeTrading` clears the halt. Also lists or triggers arbitrage scans and reads or recomputes
+ * `emergencyStop` persists a halt and tracks exchange cancellation verification;
+ * `resumeTrading` requests recovery while preserving the halt. Also reads or recomputes
  * quality-score breakdowns for tracked traders.
  *
  * @module services/emergencyService
@@ -13,10 +13,20 @@ import { apiClient } from "./apiClient";
 // --- Types ---
 
 export interface EmergencyStopResponse {
+  operation_id: string;
   halted: boolean;
-  positions_closed: number;
-  stop_losses_cancelled: number;
-  take_profits_cancelled: number;
+  halt_status: "HALTING" | "HALTED" | "RECOVERY_REQUIRED";
+  operation_status: "PENDING" | "VERIFIED" | "RECOVERY_REQUIRED";
+  open_orders_found: number | null;
+  cancel_requests_submitted: number;
+  orders_confirmed_cancelled: number;
+  orders_still_open: number | null;
+  positions_found: number | null;
+  close_requests_submitted: number;
+  positions_confirmed_closed: number;
+  positions_partially_closed: number;
+  unresolved_positions: number | null;
+  reconciliation_status: string;
   errors: string[];
   message: string;
 }
@@ -48,16 +58,30 @@ export interface TraderQuality {
 // --- Emergency & Arbitrage Service ---
 
 export const emergencyService = {
-  /** Trigger emergency stop: halt trading, cancel SL/TP, optionally close all positions */
-  async emergencyStop(closePositions = true): Promise<EmergencyStopResponse> {
+  /** Persist a halt. Position exits require verified gateway authorization. */
+  async emergencyStop(closePositions = false): Promise<EmergencyStopResponse> {
     return apiClient.post<EmergencyStopResponse>(
       `/api/trades/emergency-stop?close_positions=${closePositions}`,
     );
   },
 
-  /** Resume trading after emergency stop or risk halt */
+  async haltStatus(operationId: string): Promise<EmergencyStopResponse> {
+    return apiClient.get(`/api/trades/emergency-stop/${encodeURIComponent(operationId)}`);
+  },
+
+  async latestHalt(): Promise<EmergencyStopResponse | null> {
+    return apiClient.get("/api/trades/emergency-stop");
+  },
+
+  /** Request recovery. This cannot automatically resume strategies. */
   async resumeTrading(): Promise<{ resumed: boolean; message: string }> {
-    return apiClient.post("/api/trades/resume-trading");
+    await apiClient.post("/api/v1/risk/recovery-request", {
+      reason: "Account owner requested recovery review",
+    });
+    return {
+      resumed: false,
+      message: "Recovery requested. Trading remains halted pending verification.",
+    };
   },
 
   /** Get recently detected arbitrage opportunities */
