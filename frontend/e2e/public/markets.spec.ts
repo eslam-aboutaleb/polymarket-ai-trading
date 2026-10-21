@@ -81,6 +81,8 @@ test.describe("Markets — public browsing", () => {
 
 test.describe("Markets — navigation entry points", () => {
   test("the nav menu links every public page", async ({ page }) => {
+    // The hamburger intentionally hides at the lg breakpoint. Exercise mobile navigation.
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/markets");
     await page.getByRole("button", { name: "Open navigation menu" }).click();
     const menu = page.getByRole("menu", { name: "Primary navigation" });
