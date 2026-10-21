@@ -100,9 +100,21 @@ test.describe("Login page", () => {
     // match the issued challenge, so the backend must reject it.
     const wrongSignature = await new Wallet(ADMIN_PRIVATE_KEY).signMessage(challenge + " tampered");
     await provideMockSignature(page, wrongSignature);
+    const rejected = page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/auth/verify") &&
+        response.request().method() === "POST",
+    );
     await page.getByRole("button", { name: "Sign Message" }).click();
 
-    await expect(page.getByText("Your session has expired. Please sign in again.")).toBeVisible();
+    // Assert the SECURITY contract, not the backend's literal error text.
+    // The frontend deliberately normalizes every HTTP 401 into a generic
+    // session-expired message to avoid leaking authentication details.
+    const response = await rejected;
+    expect(response.status()).toBe(401);
+    await expect(
+      page.getByText("Your session has expired. Please sign in again."),
+    ).toBeVisible();
     await expect(page).toHaveURL(/\/login$/);
   });
 });
