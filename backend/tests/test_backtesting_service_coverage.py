@@ -220,9 +220,9 @@ class FetchHistoricalPricesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.provenance["quality"], "indicative_price_only")
         self.assertEqual(len(result.provenance["data_hash"]), 64)
         self.assertEqual(client.get.await_count, 2)
-        self.assertTrue(client.get.await_args_list[0].args[0].endswith(
-            "/markets/" + self.CONDITION
-        ))
+        self.assertTrue(
+            client.get.await_args_list[0].args[0].endswith("/markets/" + self.CONDITION)
+        )
         url = client.get.await_args_list[1].args[0]
         params = client.get.await_args_list[1].kwargs["params"]
         self.assertTrue(url.endswith("/prices-history"))
@@ -277,9 +277,11 @@ class FetchHistoricalPricesTests(unittest.IsolatedAsyncioTestCase):
         ]
         for payload in cases:
             with self.subTest(payload=payload), self.assertRaises(PriceHistoryError):
-                await self.load(self.client_for(
-                    _response(200, self.market()), _response(200, {"history": payload})
-                ))
+                await self.load(
+                    self.client_for(
+                        _response(200, self.market()), _response(200, {"history": payload})
+                    )
+                )
 
     async def test_list_payload_rejected_instead_of_silently_used(self):
         from app.services.market_data.historical_prices import PriceHistoryError
@@ -297,11 +299,13 @@ class FetchHistoricalPricesTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_http_transport_failure_is_reported(self):
         import httpx
+
         from app.services.market_data.historical_prices import PriceHistoryError
 
         client = self.client_for(_response(200, self.market()))
         client.get.side_effect = [
-            _response(200, self.market()), httpx.ConnectError("connection reset")
+            _response(200, self.market()),
+            httpx.ConnectError("connection reset"),
         ]
         with self.assertRaisesRegex(PriceHistoryError, "unavailable"):
             await self.load(client)
@@ -311,9 +315,9 @@ class FetchHistoricalPricesTests(unittest.IsolatedAsyncioTestCase):
 
         for payload in ({"history": []}, self.history(count=2)):
             with self.subTest(payload=payload), self.assertRaises(PriceHistoryError):
-                await self.load(self.client_for(
-                    _response(200, self.market()), _response(200, payload)
-                ))
+                await self.load(
+                    self.client_for(_response(200, self.market()), _response(200, payload))
+                )
 
     async def test_conflicting_timestamp_values_rejected(self):
         from app.services.market_data.historical_prices import PriceHistoryError
@@ -321,9 +325,11 @@ class FetchHistoricalPricesTests(unittest.IsolatedAsyncioTestCase):
         rows = self.history()["history"]
         rows.append({"t": rows[0]["t"], "p": "0.99"})
         with self.assertRaisesRegex(PriceHistoryError, "Contradictory"):
-            await self.load(self.client_for(
-                _response(200, self.market()), _response(200, {"history": rows})
-            ))
+            await self.load(
+                self.client_for(
+                    _response(200, self.market()), _response(200, {"history": rows})
+                )
+            )
 
     async def test_invalid_condition_rejected_before_network(self):
         from app.services.market_data.historical_prices import (
@@ -333,8 +339,10 @@ class FetchHistoricalPricesTests(unittest.IsolatedAsyncioTestCase):
 
         client = self.client_for()
         with (
-            patch("app.services.market_data.historical_prices.httpx.AsyncClient",
-                  return_value=client),
+            patch(
+                "app.services.market_data.historical_prices.httpx.AsyncClient",
+                return_value=client,
+            ),
             self.assertRaisesRegex(PriceHistoryError, "Invalid Polymarket condition ID"),
         ):
             await load_token_price_history("cond-1", "2024-01-01", "2024-01-02")

@@ -402,42 +402,42 @@ export default function Backtesting() {
             </div>
           )}
           {selectedRun.status !== "failed" && (
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 text-xs">
-            <div>
-              <span className="text-soft">Total PnL</span>
-              <p className={`font-bold text-lg ${pnlColor(selectedRun.total_pnl)}`}>
-                ${selectedRun.total_pnl.toFixed(2)}
-              </p>
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 text-xs">
+              <div>
+                <span className="text-soft">Total PnL</span>
+                <p className={`font-bold text-lg ${pnlColor(selectedRun.total_pnl)}`}>
+                  ${selectedRun.total_pnl.toFixed(2)}
+                </p>
+              </div>
+              <div>
+                <span className="text-soft">Win Rate</span>
+                <p className="text-white font-semibold text-lg">
+                  {selectedRun.win_rate?.toFixed(1) ?? "—"}%
+                </p>
+              </div>
+              <div>
+                <span className="text-soft">Total Trades</span>
+                <p className="text-white font-semibold">{selectedRun.total_trades}</p>
+              </div>
+              <div>
+                <span className="text-soft">Sharpe Ratio</span>
+                <p className="text-white font-semibold">
+                  {selectedRun.sharpe_ratio?.toFixed(2) ?? "—"}
+                </p>
+              </div>
+              <div>
+                <span className="text-soft">Max Drawdown</span>
+                <p className="text-red-400 font-semibold">
+                  ${selectedRun.max_drawdown?.toFixed(2) ?? "—"}
+                </p>
+              </div>
+              <div>
+                <span className="text-soft">Profit Factor</span>
+                <p className="text-white font-semibold">
+                  {selectedRun.profit_factor?.toFixed(2) ?? "—"}
+                </p>
+              </div>
             </div>
-            <div>
-              <span className="text-soft">Win Rate</span>
-              <p className="text-white font-semibold text-lg">
-                {selectedRun.win_rate?.toFixed(1) ?? "—"}%
-              </p>
-            </div>
-            <div>
-              <span className="text-soft">Total Trades</span>
-              <p className="text-white font-semibold">{selectedRun.total_trades}</p>
-            </div>
-            <div>
-              <span className="text-soft">Sharpe Ratio</span>
-              <p className="text-white font-semibold">
-                {selectedRun.sharpe_ratio?.toFixed(2) ?? "—"}
-              </p>
-            </div>
-            <div>
-              <span className="text-soft">Max Drawdown</span>
-              <p className="text-red-400 font-semibold">
-                ${selectedRun.max_drawdown?.toFixed(2) ?? "—"}
-              </p>
-            </div>
-            <div>
-              <span className="text-soft">Profit Factor</span>
-              <p className="text-white font-semibold">
-                {selectedRun.profit_factor?.toFixed(2) ?? "—"}
-              </p>
-            </div>
-          </div>
           )}
 
           <div className="grid grid-cols-3 gap-4 text-xs">
