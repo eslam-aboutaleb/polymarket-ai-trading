@@ -157,12 +157,37 @@ test.describe("WebMCP surface", () => {
       });
     });
 
-    const result = JSON.parse(await executeWebmcpTool(page, "read-market-board"));
-    const domTradeButtons = await page.getByRole("button", { name: /^Trade .+ Yes$/ }).count();
+    // A live market board may append or replace a page of results between
+    // separate Playwright evaluations. Snapshot before/after the tool call
+    // *in the same browser task* instead of comparing with a later DOM state.
+    const snapshot = await page.evaluate(async () => {
+      const countTradeButtons = () =>
+        Array.from(document.querySelectorAll("[aria-label^='Trade ']")).filter((el) =>
+          / Yes$/.test(el.getAttribute("aria-label") || ""),
+        ).length;
+      const before = countTradeButtons();
+      const tool = (
+        window as unknown as {
+          __webmcpTest: { execute: (name: string) => Promise<string> };
+        }
+      ).__webmcpTest;
+      const result = JSON.parse(await tool.execute("read-market-board")) as {
+        heading: string | null;
+        tradeButtons: number;
+      };
+      const after = countTradeButtons();
+      return { before, after, result };
+    });
 
-    expect(result.heading).toBe("Markets");
-    expect(result.tradeButtons).toBeGreaterThan(0);
-    // The tool's view of the DOM matches the test's own query.
-    expect(result.tradeButtons).toBe(domTradeButtons);
+    expect(snapshot.result.heading).toBe("Markets");
+    expect(snapshot.result.tradeButtons).toBeGreaterThan(0);
+    // An in-flight market-page update is legitimate: the model's result
+    // must lie between the observed counts bracketing its execution.
+    expect(snapshot.result.tradeButtons).toBeGreaterThanOrEqual(
+      Math.min(snapshot.before, snapshot.after),
+    );
+    expect(snapshot.result.tradeButtons).toBeLessThanOrEqual(
+      Math.max(snapshot.before, snapshot.after),
+    );
   });
 });
