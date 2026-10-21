@@ -20,6 +20,21 @@ import { Banner, ConfirmModal, Skeleton } from "./ui";
 
 type FormState = CreateBacktestRequest;
 
+/** Render a UTC timestamp as `YYYY-MM-DD HH:MMZ` (or the raw value). */
+const formatUtc = (value: unknown): string => {
+  if (value == null) return "—";
+  const text = String(value);
+  return text.includes("T") ? `${text.slice(0, 10)} ${text.slice(11, 16)}Z` : text;
+};
+
+/** Render a gap in seconds as a compact duration. */
+const formatDuration = (value: unknown): string => {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds)) return "—";
+  if (seconds < 3600) return `${Math.round(seconds)}s`;
+  return `${(seconds / 3600).toFixed(1)}h`;
+};
+
 const defaultForm: FormState = {
   strategy_type: "indicator",
   strategy_name: "",
@@ -31,6 +46,7 @@ const defaultForm: FormState = {
     rsi_oversold: 30,
     rsi_overbought: 70,
     condition_id: "",
+    outcome: "Yes",
   },
 };
 
@@ -105,6 +121,15 @@ export default function Backtesting() {
     };
     return colors[status] || "bg-gray-500/20 text-gray-400";
   };
+
+  // Provenance of the historical feed behind an indicator run: which feed,
+  // which token side, which window and how complete that window was.
+  const historySource = (selectedRun?.indicator_values?.history_source ?? null) as Record<
+    string,
+    unknown
+  > | null;
+  const historyQuality = String(selectedRun?.indicator_values?.history_quality ?? "");
+  const historyErrorReason = String(selectedRun?.indicator_values?.error_reason ?? "");
 
   if (loading) {
     return (
@@ -246,6 +271,22 @@ export default function Backtesting() {
                 />
               </div>
               <div>
+                <label className="block text-xs text-soft mb-1">Outcome token</label>
+                <select
+                  value={(form.parameters.outcome as string) || "Yes"}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      parameters: { ...form.parameters, outcome: e.target.value },
+                    })
+                  }
+                  className="input-field w-full"
+                >
+                  <option value="Yes">YES</option>
+                  <option value="No">NO</option>
+                </select>
+              </div>
+              <div>
                 <label className="block text-xs text-soft mb-1">RSI Oversold</label>
                 <input
                   type="number"
@@ -354,42 +395,137 @@ export default function Backtesting() {
             </button>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 text-xs">
-            <div>
-              <span className="text-soft">Total PnL</span>
-              <p className={`font-bold text-lg ${pnlColor(selectedRun.total_pnl)}`}>
-                ${selectedRun.total_pnl.toFixed(2)}
+          {selectedRun.status === "failed" && (
+            <div role="alert" className="rounded bg-red-500/10 p-3 text-sm text-red-300">
+              This run failed validation. Its zero-value placeholders are not trading results.
+              {selectedRun.error_message && <p className="mt-1">{selectedRun.error_message}</p>}
+            </div>
+          )}
+          {selectedRun.strategy_type === "indicator" && (
+            <div className="rounded bg-surface-secondary p-3 text-xs text-soft" role="status">
+              <p>
+                {historyQuality === "indicative_price_only"
+                  ? "Verified-source CLOB sampled token prices — indicative only. No historical bid/ask depth, executable fills, costs or validated trading edge."
+                  : "Unverified or incomplete historical feed. Legacy results are not independently validated."}
               </p>
+              {historySource && (
+                <dl className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
+                  <div className="flex gap-1">
+                    <dt className="text-soft shrink-0">Feed</dt>
+                    <dd className="text-white break-all">
+                      {String(historySource.feed_version ?? historySource.source ?? "unknown")}
+                    </dd>
+                  </div>
+                  <div className="flex gap-1">
+                    <dt className="text-soft shrink-0">Source</dt>
+                    <dd className="text-white break-all">
+                      {String(historySource.source ?? "unknown")}
+                    </dd>
+                  </div>
+                  <div className="flex gap-1">
+                    <dt className="text-soft shrink-0">Token side</dt>
+                    <dd className="text-white">
+                      {String(historySource.outcome ?? "unknown").toUpperCase()}
+                    </dd>
+                  </div>
+                  <div className="flex gap-1">
+                    <dt className="text-soft shrink-0">Outcome token</dt>
+                    <dd className="text-white break-all font-mono">
+                      {String(historySource.token_id ?? "unknown")}
+                    </dd>
+                  </div>
+                  <div className="flex gap-1">
+                    <dt className="text-soft shrink-0">Covered window (UTC)</dt>
+                    <dd className="text-white">
+                      {formatUtc(historySource.start_utc)} →{" "}
+                      {formatUtc(historySource.end_exclusive_utc)}
+                    </dd>
+                  </div>
+                  <div className="flex gap-1">
+                    <dt className="text-soft shrink-0">Samples</dt>
+                    <dd className="text-white">
+                      {String(historySource.sample_count ?? "—")}
+                      {historySource.first_observed_at != null && (
+                        <span className="text-soft">
+                          {" · "}
+                          {formatUtc(historySource.first_observed_at)} →{" "}
+                          {formatUtc(historySource.last_observed_at)}
+                        </span>
+                      )}
+                    </dd>
+                  </div>
+                  <div className="flex gap-1">
+                    <dt className="text-soft shrink-0">Max gap</dt>
+                    <dd className="text-white">
+                      {formatDuration(historySource.max_gap_seconds)}
+                      {historySource.gap_count != null && (
+                        <span className="text-soft">
+                          {" · "}
+                          {String(historySource.gap_count)} gap
+                          {Number(historySource.gap_count) === 1 ? "" : "s"} over 4h
+                        </span>
+                      )}
+                    </dd>
+                  </div>
+                  <div className="flex gap-1">
+                    <dt className="text-soft shrink-0">Dataset SHA-256</dt>
+                    <dd className="text-white break-all font-mono">
+                      {String(historySource.data_hash ?? "unknown").slice(0, 16)}…
+                    </dd>
+                  </div>
+                  {historySource.error_reason != null && (
+                    <div className="flex gap-1 sm:col-span-2">
+                      <dt className="text-soft shrink-0">Feed error</dt>
+                      <dd className="text-red-300 break-all">
+                        {String(historySource.error_reason)}
+                      </dd>
+                    </div>
+                  )}
+                </dl>
+              )}
+              {historyErrorReason && !historySource && (
+                <p className="mt-1 text-red-300 break-all">{historyErrorReason}</p>
+              )}
             </div>
-            <div>
-              <span className="text-soft">Win Rate</span>
-              <p className="text-white font-semibold text-lg">
-                {selectedRun.win_rate?.toFixed(1) ?? "—"}%
-              </p>
+          )}
+          {selectedRun.status !== "failed" && (
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 text-xs">
+              <div>
+                <span className="text-soft">Total PnL</span>
+                <p className={`font-bold text-lg ${pnlColor(selectedRun.total_pnl)}`}>
+                  ${selectedRun.total_pnl.toFixed(2)}
+                </p>
+              </div>
+              <div>
+                <span className="text-soft">Win Rate</span>
+                <p className="text-white font-semibold text-lg">
+                  {selectedRun.win_rate?.toFixed(1) ?? "—"}%
+                </p>
+              </div>
+              <div>
+                <span className="text-soft">Total Trades</span>
+                <p className="text-white font-semibold">{selectedRun.total_trades}</p>
+              </div>
+              <div>
+                <span className="text-soft">Sharpe Ratio</span>
+                <p className="text-white font-semibold">
+                  {selectedRun.sharpe_ratio?.toFixed(2) ?? "—"}
+                </p>
+              </div>
+              <div>
+                <span className="text-soft">Max Drawdown</span>
+                <p className="text-red-400 font-semibold">
+                  ${selectedRun.max_drawdown?.toFixed(2) ?? "—"}
+                </p>
+              </div>
+              <div>
+                <span className="text-soft">Profit Factor</span>
+                <p className="text-white font-semibold">
+                  {selectedRun.profit_factor?.toFixed(2) ?? "—"}
+                </p>
+              </div>
             </div>
-            <div>
-              <span className="text-soft">Total Trades</span>
-              <p className="text-white font-semibold">{selectedRun.total_trades}</p>
-            </div>
-            <div>
-              <span className="text-soft">Sharpe Ratio</span>
-              <p className="text-white font-semibold">
-                {selectedRun.sharpe_ratio?.toFixed(2) ?? "—"}
-              </p>
-            </div>
-            <div>
-              <span className="text-soft">Max Drawdown</span>
-              <p className="text-red-400 font-semibold">
-                ${selectedRun.max_drawdown?.toFixed(2) ?? "—"}
-              </p>
-            </div>
-            <div>
-              <span className="text-soft">Profit Factor</span>
-              <p className="text-white font-semibold">
-                {selectedRun.profit_factor?.toFixed(2) ?? "—"}
-              </p>
-            </div>
-          </div>
+          )}
 
           <div className="grid grid-cols-3 gap-4 text-xs">
             <div>
@@ -408,7 +544,7 @@ export default function Backtesting() {
             </div>
           </div>
 
-          {selectedRun.error_message && (
+          {selectedRun.status !== "failed" && selectedRun.error_message && (
             <p className="text-xs text-yellow-400 bg-yellow-500/10 rounded p-2">
               {selectedRun.error_message}
             </p>
