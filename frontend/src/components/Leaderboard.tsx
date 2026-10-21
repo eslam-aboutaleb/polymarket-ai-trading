@@ -33,7 +33,7 @@ import {
   MockCopyTrader,
   hasMockCopyTrader,
   loadMockCopyTraders,
-  removeMockCopyTrader,
+  removeMockCopyTraderAndPersist,
   saveMockCopyTraders,
   subscribeMockCopyTraders,
   upsertMockCopyTrader,
@@ -345,20 +345,18 @@ export default function Leaderboard() {
 
   const handleToggleMockCopy = (wallet: string) => {
     const normalized = wallet.toLowerCase();
-    setMockTraders((prev) => {
-      const exists = hasMockCopyTrader(prev, normalized);
-      const next = exists
-        ? removeMockCopyTrader(prev, normalized)
-        : upsertMockCopyTrader(prev, normalized);
-      saveMockCopyTraders(next);
-      setPopupActionError(null);
-      setPopupActionMessage(
-        exists
-          ? `Removed ${shortAddress(normalized)} from mock copy trading.`
-          : `Added ${shortAddress(normalized)} to mock copy trading ($10,000).`,
-      );
-      return next;
-    });
+    setPopupActionError(null);
+    if (hasMockCopyTrader(mockTraders, normalized)) {
+      // Removing is applied to the persisted list so entries added by another
+      // tab are not lost; adding merges with it for the same reason.
+      setMockTraders(removeMockCopyTraderAndPersist(normalized));
+      setPopupActionMessage(`Removed ${shortAddress(normalized)} from your watchlist.`);
+      return;
+    }
+    const next = upsertMockCopyTrader(mockTraders, normalized);
+    saveMockCopyTraders(next);
+    setMockTraders(next);
+    setPopupActionMessage(`Added ${shortAddress(normalized)} to your watchlist.`);
   };
 
   const openProfile = async (wallet: string) => {
@@ -1283,7 +1281,7 @@ export default function Leaderboard() {
                             : "bg-[var(--bg-soft)] text-soft border-[var(--line)] hover:border-[var(--line-strong)]"
                         }`}
                       >
-                        {isMockCopied ? "Mock Copy Enabled" : "Mock Copy Trade"}
+                        {isMockCopied ? "Watchlisted" : "Watch Trader"}
                       </button>
                     </div>
 
