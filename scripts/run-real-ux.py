@@ -171,9 +171,11 @@ def main() -> int:
                         timeout=180,
                     )
 
+                # The service lock can constrain protobuf below the API runtime.
+                # Generate with its compiler so its own server can load the schema.
                 run(
                     [
-                        sys.executable,
+                        str(service_python),
                         "-m",
                         "grpc_tools.protoc",
                         "-I",
