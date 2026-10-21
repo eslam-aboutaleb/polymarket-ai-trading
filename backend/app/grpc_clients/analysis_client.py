@@ -633,10 +633,11 @@ class AnalysisClient:
         user_id: str = "",
         llm_config: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
-        """
-        Streaming trader analysis - yields text chunks.
-        Uses the unary AnalyzeTrader RPC and simulates streaming
-        by yielding the response in sentence-sized chunks.
+        """Return one completed unary response, never fake model-token streaming.
+
+        The RPC currently lacks a server-streaming method. This compatibility
+        iterator provides a single text frame after analysis is fully complete.
+        The SSE endpoint marks the frame as buffered_replay, not model_tokens.
         """
         result = await self.analyze_trader(
             wallet_address=wallet_address,
@@ -655,14 +656,10 @@ class AnalysisClient:
             yield "No analysis available for this trader."
             return
 
-        # Stream in sentence-like chunks for a real-time feel
-        import re as _re
-
-        sentences = _re.split(r"(?<=[.!?\n])\s+", analysis_text)
-        for sentence in sentences:
-            if sentence.strip():
-                yield sentence.strip() + " "
-                await asyncio.sleep(0.05)
+        # The unary request has already finished; deliberately avoid artificial
+        # sentence pacing. Genuine provider token streaming requires a separate
+        # gRPC server-streaming contract and implementation.
+        yield analysis_text
 
     async def evaluate_copy_trade(
         self,
