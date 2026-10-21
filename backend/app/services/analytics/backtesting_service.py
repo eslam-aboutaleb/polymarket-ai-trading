@@ -65,7 +65,7 @@ def _calculate_metrics(trade_log: list[dict[str, Any]]) -> dict[str, Any]:
     pnls = [t.get("pnl", 0.0) for t in trade_log]
     winning = [p for p in pnls if p > 0]
     losing = [p for p in pnls if p < 0]
-    volumes = [abs(t.get("size", 0) * t.get("price", 0)) for t in trade_log]
+    volumes = [abs(t.get("notional_usdc", t.get("size", 0) * t.get("price", 0))) for t in trade_log]
 
     total_pnl = sum(pnls)
     win_count = len(winning)
@@ -87,14 +87,10 @@ def _calculate_metrics(trade_log: list[dict[str, Any]]) -> dict[str, Any]:
         if dd > max_dd:
             max_dd = dd
 
-    # Sharpe ratio (annualized, assuming daily trades)
+    # Irregular, USD-denominated trade PnLs are NOT a time series of
+    # periodic returns. An annualized Sharpe requires a consistently sampled
+    # cash+position NAV series. Do not manufacture the statistic from trades.
     sharpe = None
-    if len(pnls) > 1:
-        mean_pnl = sum(pnls) / len(pnls)
-        variance = sum((p - mean_pnl) ** 2 for p in pnls) / (len(pnls) - 1)
-        std_pnl = math.sqrt(variance) if variance > 0 else 0
-        if std_pnl > 0:
-            sharpe = round((mean_pnl / std_pnl) * math.sqrt(252), 4)
 
     # Profit factor
     gross_profit = sum(winning) if winning else 0
@@ -315,6 +311,12 @@ async def run_indicator_backtest(
     position_size = float(params.get("position_size", 10))
     rsi_oversold = float(params.get("rsi_oversold", 30))
     rsi_overbought = float(params.get("rsi_overbought", 70))
+    if not math.isfinite(position_size) or position_size <= 0:
+        return {
+            "trade_log": [],
+            "metrics": _calculate_metrics([]),
+            "error": "position_size must be positive and finite",
+        }
     start_date = params.get("start_date", "2024-01-01")
     end_date = params.get("end_date", "2025-12-31")
     outcome = params.get("outcome", "Yes")
@@ -396,6 +398,14 @@ async def run_indicator_backtest(
             context={"provenance": provenance} if provenance else None,
         )
 
+    if strategy not in {"rsi_mean_reversion", "macd_crossover", "bollinger_bounce"}:
+        return {
+            "trade_log": [],
+            "metrics": _calculate_metrics([]),
+            "error": "Unsupported indicator strategy",
+            "indicator_values": {"history_quality": "invalid_strategy"},
+        }
+
     # Compute indicators
     indicators = compute_all_indicators(prices)
 
@@ -410,7 +420,7 @@ async def run_indicator_backtest(
     macd_data = calc_macd(prices)
     bb_data = calc_bb(prices)
 
-    for i in range(30, len(prices)):
+    for i in range(30, len(prices) - 1):
         signal = None
 
         if strategy == "rsi_mean_reversion":
@@ -450,43 +460,52 @@ async def run_indicator_backtest(
                 elif prices[i] >= upper and position is not None:
                     signal = "SELL"
 
-        # Execute signal
+        # The indicator uses observation i. Earliest possible modeled fill
+        # is the NEXT observed price i+1, not the signal's own candle.
+        # This is still a price-only scenario, not an executable CLOB fill.
+        next_idx = i + 1
+        next_price = prices[next_idx]
         if signal == "BUY" and position is None:
-            # A position cannot be sized against a zero price.
-            if prices[i] <= 0:
+            # Next-sample zero prices cannot size an entry.
+            if next_price <= 0:
                 continue
-            position = {"entry_price": prices[i], "entry_idx": i}
+            shares = position_size / next_price
+            position = {
+                "entry_price": next_price,
+                "entry_idx": next_idx,
+                "entry_signal_idx": i,
+                "shares": shares,
+            }
         elif signal == "SELL" and position is not None:
-            pnl = (prices[i] - position["entry_price"]) * (position_size / position["entry_price"])
+            pnl = (next_price - position["entry_price"]) * position["shares"]
             trade_log.append(
                 {
-                    "timestamp": timestamps[i] if i < len(timestamps) else "",
+                    "timestamp": timestamps[next_idx] if next_idx < len(timestamps) else "",
+                    "signal_timestamp": timestamps[i] if i < len(timestamps) else "",
                     "side": "SELL",
                     "entry_price": position["entry_price"],
-                    "exit_price": prices[i],
+                    "exit_price": next_price,
                     "size": position_size,
-                    "price": prices[i],
+                    "shares": position["shares"],
+                    "notional_usdc": position_size,
+                    "price": next_price,
                     "pnl": round(pnl, 4),
                     "strategy": strategy,
+                    "fill_mode": "next_sample_indicative",
+                    "cost_quality": "unknown",
+                    "entry_signal_idx": position["entry_signal_idx"],
+                    "entry_idx": position["entry_idx"],
+                    "exit_signal_idx": i,
+                    "exit_idx": next_idx,
                 }
             )
             position = None
 
-    # Close open position at last price
+    # Unclosed inventory is marked, NOT converted to a fictitious last-bar
+    # SELL. Realized PnL covers only modeled completed round trips.
+    unrealized = None
     if position is not None:
-        pnl = (prices[-1] - position["entry_price"]) * (position_size / position["entry_price"])
-        trade_log.append(
-            {
-                "timestamp": timestamps[-1] if timestamps else "",
-                "side": "SELL",
-                "entry_price": position["entry_price"],
-                "exit_price": prices[-1],
-                "size": position_size,
-                "price": prices[-1],
-                "pnl": round(pnl, 4),
-                "strategy": strategy,
-            }
-        )
+        unrealized = round((prices[-1] - position["entry_price"]) * position["shares"], 4)
 
     return {
         "trade_log": trade_log,
@@ -500,6 +519,10 @@ async def run_indicator_backtest(
             },
             "history_source": provenance,
             "history_quality": "indicative_price_only" if provenance else "unverified_fixture",
+            "execution_assumption": "next_sample_indicative_no_verified_book",
+            "net_pnl_quality": "costs_unknown",
+            "unrealized_pnl_indicative": unrealized,
+            "unclosed_position": position,
         },
     }
 
