@@ -113,6 +113,15 @@ class SummaryTests(CalibrationRouteTestBase):
         self.db.commit()
         return row
 
+    def _resolved_verdict(self, **overrides):
+        """A verdict that carries a verified binary resolution."""
+        row = self._verdict(**overrides)
+        row.resolved_outcome = "YES"
+        row.brier_score = 0.04
+        row.resolved_at = utc_now()
+        self.db.commit()
+        return row
+
     def test_empty_window_returns_baseline_only(self):
         response = self.client.get("/api/analysis/calibration/summary")
         self.assertEqual(response.status_code, 200)
@@ -165,6 +174,54 @@ class SummaryTests(CalibrationRouteTestBase):
         self.assertIsNone(data["mean_brier"])
         self.assertEqual(sum(b["count"] for b in data["reliability"]), 0)
         self.assertEqual(data["data_quality"]["invalid_legacy_resolution"], 1)
+
+    def test_legacy_named_resolution_is_excluded_from_every_aggregate(self):
+        """The binary-only rule is shared, not summary-only."""
+        row = self._verdict(ai_probability=0.8, market_price_at_assessment=0.6)
+        row.resolved_outcome = "ALICE"
+        row.brier_score = 0.64
+        row.resolved_at = utc_now()
+        self.db.commit()
+        data = self.client.get("/api/analysis/calibration/summary").json()
+        self.assertEqual(data["effective_sample_count"], 0)
+        self.assertIsNone(data["mean_log_loss"])
+        self.assertEqual(data["by_model"][0]["mean_brier"], None)
+        versions = self.client.get(
+            "/api/analysis/calibration/summary/by-prompt-version", params={"scope": "user"}
+        ).json()
+        self.assertEqual(versions["versions"][0]["resolved"], 0)
+        self.assertIsNone(versions["versions"][0]["mean_brier"])
+
+    def test_one_market_is_one_effective_sample(self):
+        """A market scanned by two models is one market, not two samples."""
+        self._resolved_verdict(condition_id="0xmarket-1", ai_probability=0.8)
+        self._resolved_verdict(condition_id="0xmarket-1", ai_probability=0.4, model_name="claude")
+        data = self.client.get("/api/analysis/calibration/summary").json()
+        self.assertEqual(data["resolved_count"], 2)
+        self.assertEqual(data["effective_sample_count"], 1)
+        self.assertEqual(sum(b["count"] for b in data["reliability"]), 1)
+
+    def test_exclusion_reasons_are_reported(self):
+        row = self._verdict(ai_probability=0.8, market_price_at_assessment=0.6)
+        row.exclusion_reason = "disputed_or_challenged"
+        self.db.commit()
+        data = self.client.get("/api/analysis/calibration/summary").json()
+        self.assertEqual(data["data_quality"]["exclusion_reasons"], {"disputed_or_challenged": 1})
+        self.assertEqual(data["data_quality"]["excluded_count"], 1)
+
+    def test_null_probability_reason_is_reported_and_not_counted_as_legacy(self):
+        self._verdict(ai_probability=None, probability_null_reason="unusable_probability")
+        data = self.client.get("/api/analysis/calibration/summary").json()
+        self.assertEqual(
+            data["data_quality"]["null_probability_reasons"], {"unusable_probability": 1}
+        )
+        self.assertEqual(data["data_quality"]["legacy_excluded"], 0)
+
+    def test_mean_log_loss_is_reported(self):
+        self._resolved_verdict(ai_probability=0.8)
+        data = self.client.get("/api/analysis/calibration/summary").json()
+        self.assertIsNotNone(data["mean_log_loss"])
+        self.assertGreater(data["mean_log_loss"], 0.0)
 
     def test_by_model_and_by_task_stats(self):
         row = self._verdict(model_name="gpt-4", task="copy_trade_eval")
@@ -284,6 +341,22 @@ class ForecastsTests(CalibrationRouteTestBase):
         unauthenticated.include_router(router)
         response = TestClient(unauthenticated).get("/api/analysis/calibration/forecasts")
         self.assertEqual(response.status_code, 401)
+
+
+class ResolutionRunReportTests(CalibrationRouteTestBase):
+    """The last resolution pass, as the API reports it."""
+
+    def test_report_requires_an_admin(self):
+        response = self.client.get("/api/analysis/calibration/resolution-run")
+        self.assertEqual(response.status_code, 403)
+
+    def test_report_exposes_the_exclusion_reasons(self):
+        _, admin_client, _, _ = _make_app_and_db(is_admin=True, db=self.db)
+        response = admin_client.get("/api/analysis/calibration/resolution-run")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("exclusion_reasons", data)
+        self.assertIn("effective_sample_count", data)
 
 
 if __name__ == "__main__":
