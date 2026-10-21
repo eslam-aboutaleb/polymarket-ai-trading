@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # be read as an authenticated feed.
 INDEXED_EVIDENCE_HEADING = (
     "== Indexed Web Results (search-engine snippets; partial coverage; "
-    "not an authenticated X feed) ==
+    "not an authenticated X feed) =="
 )
 
 

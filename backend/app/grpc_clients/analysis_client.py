@@ -765,7 +765,7 @@ class AnalysisClient:
             result["alt_token_id"] = meta.get("alt_token_id", "")
             result["web_summary"] = meta.get("web_summary", "")
             result["x_summary"] = meta.get("x_summary", "")
-            result["x_source"] = self._parse_x_source(meta.get("x_source", ""))
+            result["x_source"] = _parse_x_source(meta.get("x_source", ""))
             key_risks_raw = meta.get("key_risks", "[]")
             if isinstance(key_risks_raw, str):
                 try:
