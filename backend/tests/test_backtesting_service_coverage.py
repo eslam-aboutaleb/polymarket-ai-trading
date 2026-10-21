@@ -231,9 +231,7 @@ class FetchHistoricalPricesTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("startDate", params)
 
     async def test_no_token_side_mixing(self):
-        client = self.client_for(
-            _response(200, self.market()), _response(200, self.history())
-        )
+        client = self.client_for(_response(200, self.market()), _response(200, self.history()))
         result = await self.load(client, outcome="No")
         self.assertEqual(result.provenance["token_id"], self.NO)
         self.assertEqual(client.get.await_args_list[1].kwargs["params"]["market"], self.NO)
