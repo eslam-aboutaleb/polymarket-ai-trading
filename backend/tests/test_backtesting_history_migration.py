@@ -18,9 +18,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from alembic.script import ScriptDirectory
+
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 PREVIOUS_REVISION = "20261020_0022_trading_controls"
-HEAD_REVISION = "20261021_0026_unverified_history_runs"
+HISTORY_REVISION = "20261021_0026_unverified_history_runs"
 UNVERIFIED_MARKER = "unverified_historical_source"
 
 INSERT_RUN = """
@@ -126,11 +128,15 @@ class UnverifiedHistoryMigrationTests(unittest.TestCase):
             # The migrated marker must not be confused with the fixture marker.
             self.assertNotEqual(fixture["history_quality"], "unverified_fixture")
 
-    def test_migration_is_a_single_head(self):
-        heads = _run_alembic("sqlite://", "heads")
-        self.assertEqual(heads.returncode, 0, msg=f"STDERR:\n{heads.stderr}")
-        self.assertIn(HEAD_REVISION, heads.stdout)
-        self.assertEqual(len([line for line in heads.stdout.splitlines() if "(head)" in line]), 1)
+    def test_history_migration_remains_reachable_from_the_single_head(self):
+        graph = ScriptDirectory(str(BACKEND_DIR / "migrations"))
+        heads = graph.get_heads()
+        self.assertEqual(len(heads), 1)
+        # Later migrations may follow this backfill, including the shared
+        # merge revision. Require reachability rather than freezing its name
+        # as the tip of the graph forever.
+        ancestors = {revision.revision for revision in graph.iterate_revisions(heads[0], "base")}
+        self.assertIn(HISTORY_REVISION, ancestors)
 
 
 if __name__ == "__main__":
