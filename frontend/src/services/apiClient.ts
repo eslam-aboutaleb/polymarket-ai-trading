@@ -112,9 +112,8 @@ class ApiClient {
         // A rejected wallet signature is NOT an expired authenticated session.
         // Never invoke refresh for login/verify: it can clear session state and
         // unmount the login error before users can read it.
-        const isPublicAuthRequest = /^\/api\/auth\/(?:login|verify|login-with-key|refresh)(?:[/?]|$)/.test(
-          requestUrl,
-        );
+        const isPublicAuthRequest =
+          /^\/api\/auth\/(?:login|verify|login-with-key|refresh)(?:[/?]|$)/.test(requestUrl);
 
         if (error.response?.status === 401 && !originalRequest._retry && !isPublicAuthRequest) {
           originalRequest._retry = true;
