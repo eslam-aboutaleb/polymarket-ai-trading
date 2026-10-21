@@ -204,7 +204,17 @@ jobs:
   quality-gate:
     name: Quality gate
     if: always()
-    needs: [lint, backend-tests, trading-safety, frontend, emergency-browser, e2e, workflow-lint, security]
+    needs:
+      [
+        lint,
+        backend-tests,
+        trading-safety,
+        frontend,
+        emergency-browser,
+        e2e,
+        workflow-lint,
+        security,
+      ]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

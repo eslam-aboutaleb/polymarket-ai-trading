@@ -9,6 +9,14 @@ LangChain-based AI analysis service for Polymarket trading.
 - **Binance Skills Hub integration** — smart money signals, social hype, trending tokens, and token market data enriched into all AI analysis chains
 - Configurable via environment variables
 
+## Market RAG persistence
+
+Market vectors are stored in a local SQLite database under `CHROMA_PERSIST_DIR`; OpenAI embeddings
+continue to provide semantic indexing and cosine search. The `CHROMA_*` environment variable names
+remain supported for existing deployments. Existing ChromaDB files are left untouched, but are not
+read by the SQLite store. Since this index is a rebuildable cache, call `IndexMarketsRAG` to
+repopulate it after upgrading.
+
 ## Binance Skills Integration
 
 The analysis chain automatically gathers Binance smart money data for crypto-related markets via the MCP research server. This enriches the following analysis methods:
