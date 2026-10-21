@@ -178,10 +178,7 @@ def _is_indexed_x_post(url: str) -> bool:
         return False
     parts = parsed.path.strip("/").split("/")
     return (
-        len(parts) >= 3
-        and bool(parts[0])
-        and parts[1].lower() == "status"
-        and parts[2].isdigit()
+        len(parts) >= 3 and bool(parts[0]) and parts[1].lower() == "status" and parts[2].isdigit()
     )
 
 
