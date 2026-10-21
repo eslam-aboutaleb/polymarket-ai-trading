@@ -370,6 +370,7 @@ async def evaluate_inverse_position_row(
     row.last_reasoning = ai_eval.get("reasoning", "")
     row.last_web_summary = ai_eval.get("web_summary", "")
     row.last_x_summary = ai_eval.get("x_summary", "")
+    _store_x_provenance(row, ai_eval.get("x_source"))
     row.last_alt_outcome = ai_eval.get("alt_outcome", best_alt["outcome"])
     row.last_alt_token_id = ai_eval.get("alt_token_id", best_alt["token_id"])
 
@@ -538,6 +539,48 @@ async def evaluate_inverse_position_row(
         # stays unchanged.
         result["simulated"] = True
     return result
+
+
+def _parse_checked_at(value: Any) -> datetime | None:
+    """Parse the ISO timestamp of the last index check.
+
+    Args:
+        value: Raw timestamp as reported by the AI service.
+
+    Returns:
+        A timezone-aware datetime, or None when the value is missing or
+        unparsable.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _store_x_provenance(row: InverseBotPosition, source: Any) -> None:
+    """Store the provenance of the social summary on the position row.
+
+    The social summary comes from a search-engine index, not an authenticated
+    X feed. Recording the source, its coverage, whether the provider answered
+    and when it was checked is what lets the API and the UI label the data
+    truthfully — and keeps an outage distinguishable from "no matches".
+
+    Args:
+        row: The position row to update.
+        source: Provenance mapping reported by the AI service.
+    """
+    if not isinstance(source, dict):
+        source = {}
+    row.last_x_source_type = str(source.get("source_type") or "") or None
+    row.last_x_coverage = str(source.get("coverage") or "") or None
+    row.last_x_status = str(source.get("status") or "") or None
+    row.last_x_checked_at = _parse_checked_at(source.get("checked_at"))
 
 
 async def _fetch_market_tokens(condition_id: str) -> dict[str, Any]:

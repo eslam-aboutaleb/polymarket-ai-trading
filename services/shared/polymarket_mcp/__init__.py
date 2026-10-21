@@ -50,15 +50,23 @@ import contextlib
 import json
 import logging
 import os
+import re
 import sys
 import time
+import unicodedata
 from collections import OrderedDict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ResearchMCPClient"]
+__all__ = [
+    "ResearchMCPClient",
+    "no_indexed_matches_text",
+    "sanitize_external_text",
+    "search_rows",
+]
 
 # Explicit shutdown frame understood by the research server: it answers with
 # one acknowledgement and then stops reading, which is what makes a batched
@@ -141,6 +149,14 @@ _NAME_TO_SYMBOL = {
 # the highest-signal smart-money flow data lives.
 _BINANCE_CHAIN = "solana"
 
+# Source type of every search tool the client calls, so a failed call still
+# says which source was unavailable instead of degrading to a bare empty list.
+_SOURCE_TYPE_BY_TOOL = {
+    "web_search": "web_index",
+    "x_indexed_web_search": "indexed_web",
+    "x_posts_search": "indexed_web",
+}
+
 # One inclusive truthy rule, shared by every env gate below so the gates
 # cannot drift apart (one of them used to accept only the bare string
 # "true"). Every gate defaults to enabled, and the explicit falsy spellings
@@ -165,13 +181,130 @@ def _env_flag(name: str, default: bool = True) -> bool:
     return raw.strip().lower() in _TRUTHY_VALUES
 
 
+# ── External text handling ──────────────────────────────────
+# Search snippets are untrusted third-party text: they are quoted data, never
+# instructions. Anything that looks like a prompt instruction is neutralised
+# before the text reaches a model.
+_INSTRUCTION_PATTERNS = (
+    re.compile(
+        r"ignore\s+(?:all\s+|any\s+)?(?:previous|prior|earlier|above)\s+\w+",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"disregard\s+(?:all\s+|any\s+)?(?:previous|prior|earlier|above)\s+\w+",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^\s*(?:system|assistant|developer|human|user)\s*:", re.IGNORECASE | re.MULTILINE),
+    re.compile(r"<\s*/?\s*(?:system|instructions?)\s*>", re.IGNORECASE),
+    re.compile(r"\[\s*(?:system|inst)\s*\]", re.IGNORECASE),
+    re.compile(r"\b(?:you\s+must|always)\s+(?:call|invoke|run|execute|send)\b", re.IGNORECASE),
+)
+
+_REDACTED = "[redacted instruction-like text]"
+
+
+def sanitize_external_text(text: str) -> str:
+    """Neutralise instruction-like content in external text.
+
+    External snippets are data, not instructions: control characters are
+    stripped and instruction-like fragments are redacted, so a hostile page
+    cannot steer the model that reads the snippet.
+
+    Args:
+        text: Raw text taken from a search provider.
+
+    Returns:
+        The text with control characters removed and instruction-like
+        fragments replaced by a neutral marker.
+    """
+    if not text:
+        return ""
+    cleaned = "".join(ch for ch in text if ch in "\n\t" or unicodedata.category(ch)[0] != "C")
+    for pattern in _INSTRUCTION_PATTERNS:
+        cleaned = pattern.sub(_REDACTED, cleaned)
+    return cleaned.strip()
+
+
+def search_rows(payload: Any) -> list[dict[str, Any]]:
+    """Read the result rows of a search payload.
+
+    Args:
+        payload: A search-tool payload (dict with ``results``) or a bare row
+            list.
+
+    Returns:
+        The rows, or an empty list when the payload carries none.
+    """
+    if isinstance(payload, dict):
+        rows = payload.get("results")
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+        return []
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    return []
+
+
+def no_indexed_matches_text(status: str = "") -> str:
+    """Return the honest "nothing to report" text for the indexed-web source.
+
+    Args:
+        status: The source status ("no_matches", "provider_unavailable", …).
+
+    Returns:
+        A sentence saying whether the index held no matches or the provider
+        never answered. The two are never merged: an outage is not evidence
+        that nothing was published.
+    """
+    if status == "provider_unavailable":
+        return (
+            "Indexed web source unavailable (provider error); nothing was "
+            "retrieved, which is not evidence that there was no activity."
+        )
+    return (
+        "No indexed web matches found in the last 24h; search engines may omit "
+        "private, deleted or very new posts."
+    )
+
+
+def _provenance_label(payload: Any) -> str:
+    """Render the one-line provenance label of a structured search payload.
+
+    Args:
+        payload: A search-tool payload (dict) or a bare row list.
+
+    Returns:
+        A label naming the source, its coverage and when it was checked, or an
+        empty string for payloads that carry no provenance.
+    """
+    if not isinstance(payload, dict):
+        return ""
+    source_type = str(payload.get("source_type") or "")
+    if not source_type:
+        return ""
+    checked_at = str(payload.get("checked_at") or "")
+    if source_type == "indexed_web":
+        head = "Social source: indexed web pages"
+        detail = "search-engine snippets; partial coverage; not an authenticated X feed"
+    else:
+        head = f"Web source: {source_type}"
+        detail = "search-engine snippets; partial coverage"
+    if str(payload.get("status") or "") == "provider_unavailable":
+        detail = "provider unavailable; no data retrieved"
+    label = f"{head} ({detail})"
+    if checked_at:
+        label = f"{label}; checked {checked_at}"
+    return label
+
+
 class ResearchMCPClient:
     """Calls the open-source research MCP server over stdio.
 
     All public methods are resilient by design: research enrichment is a
     best-effort addition to an LLM prompt, so any transport, decoding or
-    subprocess failure yields an empty result rather than propagating into the
-    analysis path.
+    subprocess failure yields a structured "provider unavailable" payload
+    rather than propagating into the analysis path. That payload is what
+    keeps an outage distinguishable from "the source had no matches".
     """
 
     # Class-level, shared by every instance. Safe for the current
@@ -287,7 +420,9 @@ class ResearchMCPClient:
             # Transport kill-switch fallback: one subprocess per tool call.
             responses = [await self._call_tool(tool, args) for tool, args in requests]
 
-        web_results, x_results = responses[0], responses[1]
+        web_payload, x_payload = responses[0], responses[1]
+        web_results = self._search_rows(web_payload)
+        x_results = self._search_rows(x_payload)
         if binance_key is not None and binance_context is None:
             binance_context = self._binance_context_from_payload(responses[2])
             self._binance_cache_put(binance_key, binance_context)
@@ -296,9 +431,12 @@ class ResearchMCPClient:
 
         result = {
             "web_results": web_results,
+            "web_status": self._search_status(web_payload),
+            "web_summary": self._summarize(web_payload),
             "x_results": x_results,
-            "web_summary": self._summarize(web_results),
-            "x_summary": self._summarize(x_results),
+            "x_status": self._search_status(x_payload),
+            "x_source": self._search_provenance(x_payload),
+            "x_summary": self._summarize(x_payload),
             "binance_context": binance_context,
             "binance_summary": binance_context.get("formatted", ""),
         }
@@ -309,8 +447,8 @@ class ResearchMCPClient:
         # or every Binance source failed, and error payloads (e.g. a timed-out
         # server) carry an "error" key — neither counts as data.
         has_data = (
-            (isinstance(web_results, list) and bool(web_results))
-            or (isinstance(x_results, list) and bool(x_results))
+            bool(web_results)
+            or bool(x_results)
             or (binance_context != {"formatted": ""} and not binance_context.get("error"))
         )
         if has_data:
@@ -538,10 +676,40 @@ class ResearchMCPClient:
             if proc.returncode != 0:
                 return [[] for _ in requests]
 
-            return self._decode_response_frames(stdout.decode("utf-8"), len(requests))
+            frames = self._decode_response_frames(stdout.decode("utf-8"), len(requests))
+            return [self._annotate_source(tool, frame) for tool, frame in zip(requests, frames)]
         except Exception:
             logger.debug("MCP batch call failed", exc_info=True)
             return [[] for _ in requests]
+
+    @staticmethod
+    def _unavailable_payload(error: str) -> dict[str, Any]:
+        """Build the payload of a call that never produced data.
+
+        A transport or provider failure is not an absence of results: the
+        payload says so explicitly so the caller can tell the two apart.
+        """
+        return {
+            "status": "provider_unavailable",
+            "error": error,
+            "results": [],
+            "checked_at": datetime.now(UTC).isoformat(),
+        }
+
+    @staticmethod
+    def _annotate_source(tool: str, frame: Any) -> Any:
+        """Give a failed call the source type of the tool that was asked for.
+
+        Args:
+            tool: Name of the tool the frame answers.
+            frame: The decoded tool result.
+
+        Returns:
+            The frame, with ``source_type`` filled in when the call failed.
+        """
+        if isinstance(frame, dict) and frame.get("status") == "provider_unavailable":
+            frame.setdefault("source_type", _SOURCE_TYPE_BY_TOOL.get(tool, "unknown"))
+        return frame
 
     @classmethod
     def _decode_response_frames(cls, raw_stdout: str, expected: int) -> list[Any]:
@@ -583,8 +751,9 @@ class ResearchMCPClient:
             parsed: A parsed ``{"ok": ..., "result": ...}`` response object.
 
         Returns:
-            The result (dict or list of dicts), or an empty container when the
-            call failed or the payload is unusable.
+            The result (dict or list of dicts). A failed call yields a
+            structured payload that says the source was unavailable, so a
+            transport error is never read as "no results".
         """
         if not parsed.get("ok"):
             return []
@@ -607,8 +776,10 @@ class ResearchMCPClient:
             args: JSON-serialisable arguments for the tool.
 
         Returns:
-            The tool result (dict or list of dicts), or an empty container when
-            the server is missing, exits non-zero, or returns an error payload.
+            The tool result (dict or list of dicts). When the server is
+            missing, exits non-zero or answers with an error payload, the
+            result is a structured "provider unavailable" payload rather than
+            an empty list, so the caller can tell an outage from "no results".
         """
         if not self.server_path:
             return []
@@ -616,28 +787,107 @@ class ResearchMCPClient:
         return responses[0] if responses else []
 
     @staticmethod
-    def _summarize(results: list[dict[str, str]]) -> str:
-        """Condense search results into one line per result.
+    def _search_rows(payload: Any) -> list[dict[str, Any]]:
+        """Read the result rows of a search payload.
 
         Args:
-            results: Raw rows returned by a search tool.
+            payload: A search-tool payload (dict with ``results``) or a bare
+                row list.
+
+        Returns:
+            The rows, or an empty list when the payload carries none.
+        """
+        return search_rows(payload)
+
+    @staticmethod
+    def _search_status(payload: Any) -> str:
+        """Read the status of a search payload.
+
+        "no_matches" (the index had nothing) and "provider_unavailable" (the
+        provider never answered) are different facts and must not be merged:
+        an outage is not an absence of results.
+
+        Args:
+            payload: A search-tool payload or a bare row list.
+
+        Returns:
+            The payload status, or a status derived from the payload shape.
+        """
+        if isinstance(payload, dict):
+            status = str(payload.get("status") or "")
+            if status:
+                return status
+            if payload.get("error"):
+                return "provider_unavailable"
+            rows = payload.get("results")
+            if isinstance(rows, list):
+                return "ok" if rows else "no_matches"
+            return "unknown"
+        if isinstance(payload, list):
+            return "ok" if payload else "no_matches"
+        return "provider_unavailable"
+
+    @staticmethod
+    def _search_provenance(payload: Any) -> dict[str, Any]:
+        """Read the provenance metadata of a search payload.
+
+        The provenance travels with the summary so that every downstream
+        surface (analysis chain, prompt, API, UI) can label the source
+        truthfully instead of calling an indexed snippet an X feed.
+
+        Args:
+            payload: A search-tool payload or a bare row list.
+
+        Returns:
+            The provenance fields present in the payload, or an empty dict.
+        """
+        if not isinstance(payload, dict):
+            return {}
+        keys = (
+            "status",
+            "source_type",
+            "provider",
+            "quality",
+            "coverage",
+            "freshness",
+            "search_query",
+            "checked_at",
+        )
+        provenance = {key: payload[key] for key in keys if payload.get(key)}
+        if payload.get("error"):
+            provenance["error"] = str(payload["error"])
+        return provenance
+
+    @staticmethod
+    def _summarize(results: Any) -> str:
+        """Condense search results into one line per result.
+
+        A structured search payload (dict) is condensed from its ``results``
+        rows and prefixed with its provenance label, so an indexed-web snippet
+        is never presented as a native feed. A bare row list is condensed as
+        before, minus any instruction-like content.
+
+        Args:
+            results: Raw rows or a structured search payload.
 
         Returns:
             Newline-separated ``title - snippet (url)`` strings, capped at four
-            rows, or an empty string when there are no usable results.
+            rows, prefixed with the provenance label when there is one. An
+            empty string is returned when there are no usable results.
         """
-        if not isinstance(results, list):
-            return ""
-        if not results:
-            return ""
+        rows = ResearchMCPClient._search_rows(results)
+        label = _provenance_label(results)
         lines: list[str] = []
-        for row in results[:4]:
-            title = str(row.get("title") or "").strip()
-            snippet = str(row.get("snippet") or "").strip()
+        for row in rows[:4]:
+            title = sanitize_external_text(str(row.get("title") or ""))
+            snippet = sanitize_external_text(str(row.get("snippet") or ""))
             url = str(row.get("url") or "").strip()
             part = " - ".join(p for p in [title, snippet] if p)
             if url:
                 part = f"{part} ({url})" if part else url
             if part:
                 lines.append(part)
-        return "\n".join(lines)
+        body = "\n".join(lines)
+        if label and body:
+            return f"{label}\n{body}"
+        return body

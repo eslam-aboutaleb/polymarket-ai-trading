@@ -10,7 +10,9 @@ gets the same outcome via EOF).
 
 Tools (the dispatch table is :data:`TOOLS`, built at import):
 - web_search(query, recency_hours=24, max_results=8)        — DuckDuckGo free search
-- x_posts_search(query, recency_hours=24, max_results=8)    — indexed X links via DDG
+- x_indexed_web_search(query, recency_hours=24, max_results=8) — indexed X links via DDG
+- x_posts_search(query, recency_hours=24, max_results=8)    — compatibility alias for
+  ``x_indexed_web_search`` (the same implementation, so existing clients keep working)
 - tavily_search(query, max_results=5, search_depth="basic")  — Tavily premium search (opt-in)
 - news_search(query, max_results=5, sort_by="relevancy")     — NewsAPI headlines (opt-in)
 - binance_smart_signals(chain, page_size)                     — Smart money buy/sell signals
@@ -137,26 +139,103 @@ def _normalize_result(item: dict[str, Any]) -> dict[str, str]:
     }
 
 
+# ── Search provenance labels ─────────────────────────────────
+# Every row that reaches a client carries these labels. The "X" source is a
+# search-engine index, never an authenticated timeline, and the labels say so
+# at each hop instead of only at the tool boundary.
+WEB_SOURCE_TYPE = "web_index"
+INDEXED_SOURCE_TYPE = "indexed_web"
+INDEXED_PROVIDER = "duckduckgo_web_index"
+INDEXED_QUALITY = "unverified_search_snippet"
+INDEXED_COVERAGE = "partial_non_comprehensive"
+# A search snippet carries no reliable publication timestamp: the index lag is
+# unknown, so the freshness is stated as unknown rather than guessed.
+INDEXED_FRESHNESS = "unknown_index_lag"
+
+# Search status values. "no_matches" and "provider_unavailable" are different
+# facts: the first means the index had nothing, the second that the provider
+# never answered. Conflating them turns an outage into "no activity".
+STATUS_OK = "ok"
+STATUS_NO_MATCHES = "no_matches"
+STATUS_PROVIDER_UNAVAILABLE = "provider_unavailable"
+
+
+def _status_for(rows: list[dict[str, str]], error: str | None) -> str:
+    """Classify a search outcome: rows, no matches, or a provider failure."""
+    if error:
+        return STATUS_PROVIDER_UNAVAILABLE
+    return STATUS_OK if rows else STATUS_NO_MATCHES
+
+
+def _rows_of(payload: Any) -> list[dict[str, str]]:
+    """Read the result rows from a search payload (dict) or a raw row list."""
+    if isinstance(payload, dict):
+        rows = payload.get("results")
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+        return []
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    return []
+
+
+def _search_rows(
+    query: str,
+    recency_hours: int,
+    max_results: int,
+) -> tuple[list[dict[str, str]], str | None]:
+    """Run the DuckDuckGo text search.
+
+    Returns:
+        ``(rows, provider_error)``. ``provider_error`` is ``None`` when the
+        provider answered, and a human-readable reason (rate limit, timeout,
+        blocked request) when it did not, so callers can tell "the index had no
+        matches" from "the index was never asked".
+    """
+    if not query.strip():
+        return [], None
+
+    timelimit = _timelimit_for_hours(max(1, recency_hours))
+    limit = max(1, min(20, int(max_results)))
+    results: list[dict[str, str]] = []
+    try:
+        with DDGS() as ddgs:
+            for row in ddgs.text(
+                keywords=query,
+                max_results=limit,
+                timelimit=timelimit,
+            ):
+                normalized = _normalize_result(row or {})
+                if normalized["url"]:
+                    results.append(normalized)
+    except Exception as exc:
+        return [], f"{type(exc).__name__}: {exc}"
+    return results[:limit], None
+
+
 def web_search(
     query: str,
     recency_hours: int = 24,
     max_results: int = 8,
-) -> list[dict[str, str]]:
-    if not query.strip():
-        return []
+) -> dict[str, Any]:
+    """Search the web index and report the provider status explicitly.
 
-    timelimit = _timelimit_for_hours(max(1, recency_hours))
-    results: list[dict[str, str]] = []
-    with DDGS() as ddgs:
-        for row in ddgs.text(
-            keywords=query,
-            max_results=max(1, min(20, int(max_results))),
-            timelimit=timelimit,
-        ):
-            normalized = _normalize_result(row or {})
-            if normalized["url"]:
-                results.append(normalized)
-    return results[: max(1, min(20, int(max_results)))]
+    The payload always carries ``status`` (``ok`` / ``no_matches`` /
+    ``provider_unavailable``) next to ``results``: an empty ``results`` list
+    alone must never be read as "nothing exists out there".
+    """
+    rows, error = _search_rows(query, recency_hours, max_results)
+    return {
+        "status": _status_for(rows, error),
+        "source_type": WEB_SOURCE_TYPE,
+        "provider": INDEXED_PROVIDER,
+        "coverage": INDEXED_COVERAGE,
+        "freshness": INDEXED_FRESHNESS,
+        "search_query": query,
+        "checked_at": datetime.now(UTC).isoformat(),
+        "error": error,
+        "results": rows,
+    }
 
 
 def _is_indexed_x_post(url: str) -> bool:
@@ -182,65 +261,144 @@ def _is_indexed_x_post(url: str) -> bool:
     )
 
 
-def _indexed_x_results(items: list[dict[str, str]], fetched_at: str) -> list[dict[str, str]]:
-    """Tag indexed snippets as unverified: no native API, author or engagement claims."""
-    results = []
-    seen: set[str] = set()
+def _indexed_x_results(
+    items: list[dict[str, str]],
+    fetched_at: str,
+    query: str = "",
+) -> list[dict[str, str]]:
+    """Tag indexed snippets as unverified: no native API, author or engagement claims.
+
+    Rows are de-duplicated by (username, status id), so the same status reached
+    through x.com and through twitter.com collapses into a single row instead
+    of two.
+    """
+    results: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
     for item in items:
         url = str(item.get("url") or "")
         if not _is_indexed_x_post(url):
             continue
         parsed = urlsplit(url)
-        # Strip query/fragment tracking for deterministic deduplication.
-        canonical = f"https://{(parsed.hostname or '').lower()}{parsed.path.rstrip('/')}"
-        if canonical in seen:
+        parts = parsed.path.strip("/").split("/")
+        username = parts[0].lower()
+        status_id = parts[2]
+        if (username, status_id) in seen:
             continue
-        seen.add(canonical)
+        seen.add((username, status_id))
+        # One canonical permalink per status: the host is normalised to x.com
+        # (twitter.com serves the same statuses) and tracking parameters are
+        # dropped. The provider's exact URL is kept in "original_url".
+        canonical = f"https://x.com{parsed.path.rstrip('/')}"
         results.append(
             {
                 "title": str(item.get("title") or ""),
                 "url": canonical,
+                "original_url": url,
                 "snippet": str(item.get("snippet") or ""),
-                "source_type": "indexed_web",
-                "provider": "duckduckgo_web_index",
-                "quality": "unverified_search_snippet",
-                "coverage": "partial_non_comprehensive",
+                "source_type": INDEXED_SOURCE_TYPE,
+                "provider": INDEXED_PROVIDER,
+                "quality": INDEXED_QUALITY,
+                "coverage": INDEXED_COVERAGE,
+                "freshness": INDEXED_FRESHNESS,
+                "search_query": query,
+                "first_seen_at": fetched_at,
                 "fetched_at": fetched_at,
             }
         )
     return results
 
 
+def _indexed_x_payload(
+    status: str,
+    query: str,
+    rows: list[dict[str, str]],
+    error: str | None,
+    checked_at: str,
+) -> dict[str, Any]:
+    """Build the indexed-X tool payload with its provenance labels."""
+    return {
+        "status": status,
+        "source_type": INDEXED_SOURCE_TYPE,
+        "provider": INDEXED_PROVIDER,
+        "quality": INDEXED_QUALITY,
+        "coverage": INDEXED_COVERAGE,
+        "freshness": INDEXED_FRESHNESS,
+        "search_query": query,
+        "checked_at": checked_at,
+        "error": error,
+        "results": rows,
+    }
+
+
+def x_indexed_web_search(
+    query: str,
+    recency_hours: int = 24,
+    max_results: int = 8,
+) -> dict[str, Any]:
+    """Search *indexed links to posts*, not an authenticated X timeline.
+
+    A zero-result response means no indexed matches, not that no posts exist:
+    ``status`` is ``no_matches`` in that case and ``provider_unavailable``
+    when the search provider failed, so an outage is never presented as
+    missing social evidence. Never infer native post times, likes, retweets
+    or authenticity from snippets.
+    """
+    checked_at = datetime.now(UTC).isoformat()
+    if not query.strip():
+        return _indexed_x_payload(STATUS_NO_MATCHES, query, [], None, checked_at)
+
+    limit = max(1, min(20, int(max_results)))
+    primary_query = f"site:x.com {query}"
+    primary = web_search(primary_query, recency_hours=recency_hours, max_results=limit)
+    primary_rows = _indexed_x_results(_rows_of(primary), checked_at, primary_query)
+    if primary_rows:
+        return _indexed_x_payload(STATUS_OK, primary_query, primary_rows[:limit], None, checked_at)
+
+    fallback_query = f"{query} x.com"
+    fallback = web_search(fallback_query, recency_hours=recency_hours, max_results=limit)
+    fallback_rows = _indexed_x_results(_rows_of(fallback), checked_at, fallback_query)
+    if fallback_rows:
+        return _indexed_x_payload(
+            STATUS_OK, fallback_query, fallback_rows[:limit], None, checked_at
+        )
+
+    # No rows: distinguish "the index had nothing" from "the provider failed".
+    errors = [
+        str(payload.get("error"))
+        for payload in (primary, fallback)
+        if isinstance(payload, dict) and payload.get("error")
+    ]
+    if errors:
+        return _indexed_x_payload(
+            STATUS_PROVIDER_UNAVAILABLE, fallback_query, [], errors[0], checked_at
+        )
+    return _indexed_x_payload(STATUS_NO_MATCHES, fallback_query, [], None, checked_at)
+
+
 def x_posts_search(
     query: str,
     recency_hours: int = 24,
     max_results: int = 8,
-) -> list[dict[str, str]]:
-    """Search *indexed links to posts*, not an authenticated X timeline.
+) -> list[dict[str, Any]]:
+    """Backward-compatible name for :func:`x_indexed_web_search`.
 
-    A zero-result response means no indexed matches, not that no posts exist.
-    Never infer native post times, likes, retweets or authenticity from snippets.
+    Existing clients and tests consume a flat list of indexed rows, so this
+    alias projects the structured payload back to its ``results`` list. New
+    callers should use ``x_indexed_web_search`` to read the ``status`` field
+    and tell "no indexed matches" apart from "provider unavailable".
     """
-    if not query.strip():
-        return []
-
-    limit = max(1, min(20, int(max_results)))
-    fetched_at = datetime.now(UTC).isoformat()
-    primary = web_search(
-        f"site:x.com {query}",
+    payload = x_indexed_web_search(
+        query=query,
         recency_hours=recency_hours,
-        max_results=limit,
+        max_results=max_results,
     )
-    indexed = _indexed_x_results(primary, fetched_at)
-    if indexed:
-        return indexed[:limit]
-
-    fallback = web_search(
-        f"{query} x.com",
-        recency_hours=recency_hours,
-        max_results=limit,
-    )
-    return _indexed_x_results(fallback, fetched_at)[:limit]
+    if isinstance(payload, dict):
+        rows = payload.get("results")
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    return []
 
 
 async def cross_venue_markets(query: str, limit: int = 50) -> list[dict[str, Any]]:
@@ -284,7 +442,7 @@ async def cross_venue_markets(query: str, limit: int = 50) -> list[dict[str, Any
 # lookup below answers with the same "module unavailable" error as before.
 
 
-def _tool_web_search(args: dict[str, Any]) -> list[dict[str, str]]:
+def _tool_web_search(args: dict[str, Any]) -> dict[str, Any]:
     return web_search(
         query=str(args.get("query") or ""),
         recency_hours=int(args.get("recency_hours", 24) or 24),
@@ -292,8 +450,8 @@ def _tool_web_search(args: dict[str, Any]) -> list[dict[str, str]]:
     )
 
 
-def _tool_x_posts_search(args: dict[str, Any]) -> list[dict[str, str]]:
-    return x_posts_search(
+def _tool_x_indexed_web_search(args: dict[str, Any]) -> dict[str, Any]:
+    return x_indexed_web_search(
         query=str(args.get("query") or ""),
         recency_hours=int(args.get("recency_hours", 24) or 24),
         max_results=int(args.get("max_results", 8) or 8),
@@ -409,7 +567,10 @@ def _tool_binance_pnl_leaderboard(args: dict[str, Any]):
 
 TOOLS: dict[str, Any] = {
     "web_search": _tool_web_search,
-    "x_posts_search": _tool_x_posts_search,
+    "x_indexed_web_search": _tool_x_indexed_web_search,
+    # Compatibility alias: the pre-rename name resolves to the same handler,
+    # so clients that still ask for "x_posts_search" keep working.
+    "x_posts_search": _tool_x_indexed_web_search,
     "tavily_search": _tool_tavily_search,
     "news_search": _tool_news_search,
     "cross_venue_markets": _tool_cross_venue_markets,
@@ -465,7 +626,7 @@ def tavily_search(
     client = _get_tavily()
     if client is None:
         # Graceful fallback to DuckDuckGo
-        return web_search(query, max_results=max_results)
+        return _rows_of(web_search(query, max_results=max_results))
 
     try:
         response = client.search(
@@ -486,7 +647,7 @@ def tavily_search(
         return results[: max(1, min(10, max_results))]
     except Exception:
         # Fallback to DuckDuckGo on failure
-        return web_search(query, max_results=max_results)
+        return _rows_of(web_search(query, max_results=max_results))
 
 
 # ── NewsAPI integration ────────────────────────────────────
@@ -508,7 +669,7 @@ def news_search(
     client = _get_newsapi()
     if client is None:
         # Fallback: use DuckDuckGo news search
-        return web_search(f"{query} news", max_results=max_results)
+        return _rows_of(web_search(f"{query} news", max_results=max_results))
 
     try:
         response = client.get_everything(
@@ -530,7 +691,7 @@ def news_search(
             )
         return results[: max(1, min(20, max_results))]
     except Exception:
-        return web_search(f"{query} news", max_results=max_results)
+        return _rows_of(web_search(f"{query} news", max_results=max_results))
 
 
 def main() -> int:
