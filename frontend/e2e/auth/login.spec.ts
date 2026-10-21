@@ -82,7 +82,7 @@ test.describe("Login page", () => {
     await page.getByRole("button", { name: "Logout" }).first().click();
     await expect(page.getByRole("heading", { name: "Confirm Logout" })).toBeVisible();
     await page.getByRole("dialog", { name: "Confirm Logout" })
-      .getByRole("button", { name: "Logout", exact: true })
+      .getByRole("button", { name: "Log out", exact: true })
       .click();
     await expect(page.getByRole("button", { name: "Connect Wallet" }).first()).toBeVisible();
   });
