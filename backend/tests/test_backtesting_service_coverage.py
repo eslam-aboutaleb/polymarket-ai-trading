@@ -559,9 +559,7 @@ class RunIndicatorBacktestTests(unittest.IsolatedAsyncioTestCase):
         rsi_series = [None] * 60
         rsi_series[34] = 20.0  # BUY signal observed at 0.4
         rsi_series[44] = 80.0  # SELL signal observed at 0.4
-        result = await self._run(
-            {"condition_id": "c1", "_rsi": rsi_series}, _price_data(prices)
-        )
+        result = await self._run({"condition_id": "c1", "_rsi": rsi_series}, _price_data(prices))
         trade = result["trade_log"][0]
         self.assertEqual(trade["entry_price"], 0.6)
         self.assertEqual(trade["exit_price"], 0.2)
@@ -582,9 +580,7 @@ class RunIndicatorBacktestTests(unittest.IsolatedAsyncioTestCase):
         prices = [0.4] * 60
         rsi_series = [None] * 60
         rsi_series[59] = 20.0
-        result = await self._run(
-            {"condition_id": "c1", "_rsi": rsi_series}, _price_data(prices)
-        )
+        result = await self._run({"condition_id": "c1", "_rsi": rsi_series}, _price_data(prices))
         self.assertEqual(result["trade_log"], [])
         self.assertIsNone(result["indicator_values"]["unclosed_position"])
 

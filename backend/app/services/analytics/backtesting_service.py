@@ -65,10 +65,7 @@ def _calculate_metrics(trade_log: list[dict[str, Any]]) -> dict[str, Any]:
     pnls = [t.get("pnl", 0.0) for t in trade_log]
     winning = [p for p in pnls if p > 0]
     losing = [p for p in pnls if p < 0]
-    volumes = [
-        abs(t.get("notional_usdc", t.get("size", 0) * t.get("price", 0)))
-        for t in trade_log
-    ]
+    volumes = [abs(t.get("notional_usdc", t.get("size", 0) * t.get("price", 0))) for t in trade_log]
 
     total_pnl = sum(pnls)
     win_count = len(winning)
@@ -405,9 +402,7 @@ async def run_indicator_backtest(
     # SELL. Realized PnL covers only modeled completed round trips.
     unrealized = None
     if position is not None:
-        unrealized = round(
-            (prices[-1] - position["entry_price"]) * position["shares"], 4
-        )
+        unrealized = round((prices[-1] - position["entry_price"]) * position["shares"], 4)
 
     return {
         "trade_log": trade_log,
