@@ -3,6 +3,7 @@
 Revision ID: 20261021_0023
 Revises: 20261020_0022
 """
+
 from alembic import op
 from sqlalchemy import text
 
