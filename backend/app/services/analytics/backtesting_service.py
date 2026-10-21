@@ -135,9 +135,7 @@ async def _fetch_historical_prices(
     """Resolve the outcome token and fetch validated CLOB history (not Data API)."""
     from app.services.market_data.historical_prices import load_token_price_history
 
-    return await load_token_price_history(
-        condition_id, start_date, end_date, outcome=outcome
-    )
+    return await load_token_price_history(condition_id, start_date, end_date, outcome=outcome)
 
 
 async def run_copy_trade_backtest(

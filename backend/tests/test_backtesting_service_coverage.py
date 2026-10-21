@@ -207,9 +207,7 @@ class FetchHistoricalPricesTests(unittest.IsolatedAsyncioTestCase):
     async def test_valid_yes_token_and_clob_parameters(self):
         from app.services.market_data.historical_prices import HistoricalPriceRows
 
-        client = self.client_for(
-            _response(200, self.market()), _response(200, self.history())
-        )
+        client = self.client_for(_response(200, self.market()), _response(200, self.history()))
         result = await self.load(client)
         self.assertIsInstance(result, HistoricalPriceRows)
         self.assertEqual(len(result), 48)
@@ -326,9 +324,7 @@ class FetchHistoricalPricesTests(unittest.IsolatedAsyncioTestCase):
         rows.append({"t": rows[0]["t"], "p": "0.99"})
         with self.assertRaisesRegex(PriceHistoryError, "Contradictory"):
             await self.load(
-                self.client_for(
-                    _response(200, self.market()), _response(200, {"history": rows})
-                )
+                self.client_for(_response(200, self.market()), _response(200, {"history": rows}))
             )
 
     async def test_invalid_condition_rejected_before_network(self):

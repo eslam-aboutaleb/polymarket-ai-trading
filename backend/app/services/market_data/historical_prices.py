@@ -76,9 +76,7 @@ def _parse_market_tokens(payload: Any, condition_id: str, outcome: str) -> str:
     if not _TOKEN_ID.fullmatch(token_id):
         raise PriceHistoryError("Market returned an invalid outcome token ID")
     all_ids = [
-        str(t.get("token_id") or t.get("tokenId") or "")
-        for t in tokens
-        if isinstance(t, dict)
+        str(t.get("token_id") or t.get("tokenId") or "") for t in tokens if isinstance(t, dict)
     ]
     if len(all_ids) != len(set(all_ids)):
         raise PriceHistoryError("Market response contains duplicate outcome token IDs")
