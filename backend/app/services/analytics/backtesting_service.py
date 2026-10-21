@@ -65,7 +65,7 @@ def _calculate_metrics(trade_log: list[dict[str, Any]]) -> dict[str, Any]:
     pnls = [t.get("pnl", 0.0) for t in trade_log]
     winning = [p for p in pnls if p > 0]
     losing = [p for p in pnls if p < 0]
-    volumes = [abs(t.get("size", 0) * t.get("price", 0)) for t in trade_log]
+    volumes = [abs(t.get("notional_usdc", t.get("size", 0) * t.get("price", 0))) for t in trade_log]
 
     total_pnl = sum(pnls)
     win_count = len(winning)
@@ -87,14 +87,10 @@ def _calculate_metrics(trade_log: list[dict[str, Any]]) -> dict[str, Any]:
         if dd > max_dd:
             max_dd = dd
 
-    # Sharpe ratio (annualized, assuming daily trades)
+    # Irregular, USD-denominated trade PnLs are NOT a time series of
+    # periodic returns. An annualized Sharpe requires a consistently sampled
+    # cash+position NAV series. Do not manufacture the statistic from trades.
     sharpe = None
-    if len(pnls) > 1:
-        mean_pnl = sum(pnls) / len(pnls)
-        variance = sum((p - mean_pnl) ** 2 for p in pnls) / (len(pnls) - 1)
-        std_pnl = math.sqrt(variance) if variance > 0 else 0
-        if std_pnl > 0:
-            sharpe = round((mean_pnl / std_pnl) * math.sqrt(252), 4)
 
     # Profit factor
     gross_profit = sum(winning) if winning else 0
@@ -130,34 +126,96 @@ async def _fetch_historical_prices(
     condition_id: str,
     start_date: str,
     end_date: str,
+    outcome: str = "Yes",
 ) -> list[dict[str, Any]]:
-    """Fetch historical price data from Polymarket data API."""
-    import httpx
+    """Resolve the outcome token and fetch validated CLOB history (not Data API)."""
+    from app.services.market_data.historical_prices import load_token_price_history
 
-    prices: list[dict[str, Any]] = []
+    return await load_token_price_history(condition_id, start_date, end_date, outcome=outcome)
+
+
+def _failure_provenance(
+    condition_id: str,
+    start_date: str,
+    end_date: str,
+    outcome: str,
+    *,
+    reason: str,
+    message: str,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Provenance for a run that never produced a validated dataset.
+
+    A failed run must stay attributable: the requested window, the token
+    mapping, the feed identity and the reason it failed are recorded even
+    when the upstream feed was never usable.
+    """
+    from app.services.market_data.historical_prices import (
+        FEED_VERSION,
+        SOURCE_SCHEMA_VERSION,
+        price_window,
+    )
+
+    context = context or {}
+    provenance = dict(context.get("provenance") or {})
     try:
-        from app.services.market_data.polymarket_service import POLYMARKET_DATA_API
+        start_dt, end_dt = price_window(start_date, end_date)
+        window = {"start_utc": start_dt.isoformat(), "end_exclusive_utc": end_dt.isoformat()}
+    except ValueError:
+        window = {"start_utc": start_date, "end_exclusive_utc": end_date}
+    provenance.update(
+        {
+            "source": SOURCE_SCHEMA_VERSION,
+            "source_schema_version": SOURCE_SCHEMA_VERSION,
+            "feed_version": FEED_VERSION,
+            "source_url": provenance.get("source_url", ""),
+            "condition_id": str(condition_id),
+            "outcome": outcome,
+            "token_id": context.get("token_id") or provenance.get("token_id", ""),
+            "fetched_at": provenance.get("fetched_at") or utc_now().isoformat(),
+            "price_only": True,
+            "error_reason": message,
+            "error_kind": reason,
+        }
+    )
+    provenance.update(window)
+    return provenance
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(
-                f"{POLYMARKET_DATA_API}/prices",
-                params={
-                    "market": condition_id,
-                    "startDate": start_date,
-                    "endDate": end_date,
-                    "interval": "1h",
-                },
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                if isinstance(data, list):
-                    prices = data
-                elif isinstance(data, dict) and "history" in data:
-                    prices = data["history"]
-    except Exception as e:
-        logger.warning("Could not fetch historical prices for %s: %s", condition_id[:20], e)
 
-    return prices
+def _failed_history_run(
+    condition_id: str,
+    start_date: str,
+    end_date: str,
+    outcome: str,
+    *,
+    reason: str,
+    message: str,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """A failed run that carries the provenance of the failure it reports."""
+    from app.services.market_data.historical_prices import FAILURE_QUALITY_BY_REASON
+
+    quality = FAILURE_QUALITY_BY_REASON.get(reason, "history_error")
+    provenance = _failure_provenance(
+        condition_id,
+        start_date,
+        end_date,
+        outcome,
+        reason=reason,
+        message=message,
+        context=context,
+    )
+    provenance["quality"] = quality
+    return {
+        "trade_log": [],
+        "metrics": _calculate_metrics([]),
+        "error": message,
+        "indicator_values": {
+            "history_source": provenance,
+            "history_quality": quality,
+            "error_reason": message,
+        },
+    }
 
 
 async def run_copy_trade_backtest(
@@ -253,29 +311,99 @@ async def run_indicator_backtest(
     position_size = float(params.get("position_size", 10))
     rsi_oversold = float(params.get("rsi_oversold", 30))
     rsi_overbought = float(params.get("rsi_overbought", 70))
+    if not math.isfinite(position_size) or position_size <= 0:
+        return {
+            "trade_log": [],
+            "metrics": _calculate_metrics([]),
+            "error": "position_size must be positive and finite",
+        }
+    start_date = params.get("start_date", "2024-01-01")
+    end_date = params.get("end_date", "2025-12-31")
+    outcome = params.get("outcome", "Yes")
 
-    # Fetch historical prices
-    price_data = await _fetch_historical_prices(
-        condition_id,
-        params.get("start_date", "2024-01-01"),
-        params.get("end_date", "2025-12-31"),
-    )
+    # A missing/malformed feed must not produce nominally successful performance.
+    # Only the dedicated CLOB adapter accepts and validates raw t/p prices.
+    from app.services.market_data.historical_prices import PriceHistoryError
+
+    try:
+        price_data = await _fetch_historical_prices(
+            condition_id,
+            start_date,
+            end_date,
+            outcome=outcome,
+        )
+    except PriceHistoryError as exc:
+        # An upstream/transport failure is not "insufficient data": keep the
+        # provenance of the attempt and name the actual cause.
+        return _failed_history_run(
+            condition_id,
+            start_date,
+            end_date,
+            outcome,
+            reason=exc.reason,
+            message=str(exc),
+            context=exc.context,
+        )
 
     if not price_data:
-        return {
-            "trade_log": [],
-            "metrics": _calculate_metrics([]),
-            "error": "No historical price data available",
-        }
+        return _failed_history_run(
+            condition_id,
+            start_date,
+            end_date,
+            outcome,
+            reason="empty_history",
+            message="No historical price data available",
+        )
 
-    prices = [float(p.get("price", p.get("mid", 0.5))) for p in price_data if p]
-    timestamps = [p.get("timestamp", p.get("t", "")) for p in price_data if p]
+    prices = []
+    timestamps = []
+    for point in price_data:
+        if not isinstance(point, dict) or "price" not in point:
+            return _failed_history_run(
+                condition_id,
+                start_date,
+                end_date,
+                outcome,
+                reason="invalid_source",
+                message="Malformed historical price row (price missing)",
+            )
+        try:
+            value = float(point["price"])
+        except (ValueError, TypeError, OverflowError):
+            value = float("nan")
+        # A settled-at-zero outcome is a legitimate price; only a negative or
+        # non-finite value is a malformed row.
+        if not math.isfinite(value) or value < 0:
+            return _failed_history_run(
+                condition_id,
+                start_date,
+                end_date,
+                outcome,
+                reason="invalid_source",
+                message="Malformed historical price row (invalid price)",
+            )
+        prices.append(value)
+        timestamps.append(point.get("timestamp", point.get("t", "")))
+
+    provenance = getattr(price_data, "provenance", None)
 
     if len(prices) < 30:
+        return _failed_history_run(
+            condition_id,
+            start_date,
+            end_date,
+            outcome,
+            reason="insufficient_coverage",
+            message="Insufficient price data (need at least 30 data points)",
+            context={"provenance": provenance} if provenance else None,
+        )
+
+    if strategy not in {"rsi_mean_reversion", "macd_crossover", "bollinger_bounce"}:
         return {
             "trade_log": [],
             "metrics": _calculate_metrics([]),
-            "error": "Insufficient price data (need at least 30 data points)",
+            "error": "Unsupported indicator strategy",
+            "indicator_values": {"history_quality": "invalid_strategy"},
         }
 
     # Compute indicators
@@ -292,7 +420,7 @@ async def run_indicator_backtest(
     macd_data = calc_macd(prices)
     bb_data = calc_bb(prices)
 
-    for i in range(30, len(prices)):
+    for i in range(30, len(prices) - 1):
         signal = None
 
         if strategy == "rsi_mean_reversion":
@@ -332,49 +460,69 @@ async def run_indicator_backtest(
                 elif prices[i] >= upper and position is not None:
                     signal = "SELL"
 
-        # Execute signal
+        # The indicator uses observation i. Earliest possible modeled fill
+        # is the NEXT observed price i+1, not the signal's own candle.
+        # This is still a price-only scenario, not an executable CLOB fill.
+        next_idx = i + 1
+        next_price = prices[next_idx]
         if signal == "BUY" and position is None:
-            position = {"entry_price": prices[i], "entry_idx": i}
+            # Next-sample zero prices cannot size an entry.
+            if next_price <= 0:
+                continue
+            shares = position_size / next_price
+            position = {
+                "entry_price": next_price,
+                "entry_idx": next_idx,
+                "entry_signal_idx": i,
+                "shares": shares,
+            }
         elif signal == "SELL" and position is not None:
-            pnl = (prices[i] - position["entry_price"]) * (position_size / position["entry_price"])
+            pnl = (next_price - position["entry_price"]) * position["shares"]
             trade_log.append(
                 {
-                    "timestamp": timestamps[i] if i < len(timestamps) else "",
+                    "timestamp": timestamps[next_idx] if next_idx < len(timestamps) else "",
+                    "signal_timestamp": timestamps[i] if i < len(timestamps) else "",
                     "side": "SELL",
                     "entry_price": position["entry_price"],
-                    "exit_price": prices[i],
+                    "exit_price": next_price,
                     "size": position_size,
-                    "price": prices[i],
+                    "shares": position["shares"],
+                    "notional_usdc": position_size,
+                    "price": next_price,
                     "pnl": round(pnl, 4),
                     "strategy": strategy,
+                    "fill_mode": "next_sample_indicative",
+                    "cost_quality": "unknown",
+                    "entry_signal_idx": position["entry_signal_idx"],
+                    "entry_idx": position["entry_idx"],
+                    "exit_signal_idx": i,
+                    "exit_idx": next_idx,
                 }
             )
             position = None
 
-    # Close open position at last price
+    # Unclosed inventory is marked, NOT converted to a fictitious last-bar
+    # SELL. Realized PnL covers only modeled completed round trips.
+    unrealized = None
     if position is not None:
-        pnl = (prices[-1] - position["entry_price"]) * (position_size / position["entry_price"])
-        trade_log.append(
-            {
-                "timestamp": timestamps[-1] if timestamps else "",
-                "side": "SELL",
-                "entry_price": position["entry_price"],
-                "exit_price": prices[-1],
-                "size": position_size,
-                "price": prices[-1],
-                "pnl": round(pnl, 4),
-                "strategy": strategy,
-            }
-        )
+        unrealized = round((prices[-1] - position["entry_price"]) * position["shares"], 4)
 
     return {
         "trade_log": trade_log,
         "metrics": _calculate_metrics(trade_log),
         "indicator_summary": generate_indicator_summary(indicators),
         "indicator_values": {
-            k: {kk: vv for kk, vv in v.items() if kk != "series"}
-            for k, v in indicators.items()
-            if isinstance(v, dict) and "series" in v
+            **{
+                k: {kk: vv for kk, vv in v.items() if kk != "series"}
+                for k, v in indicators.items()
+                if isinstance(v, dict) and "series" in v
+            },
+            "history_source": provenance,
+            "history_quality": "indicative_price_only" if provenance else "unverified_fixture",
+            "execution_assumption": "next_sample_indicative_no_verified_book",
+            "net_pnl_quality": "costs_unknown",
+            "unrealized_pnl_indicative": unrealized,
+            "unclosed_position": position,
         },
     }
 
@@ -456,7 +604,7 @@ async def create_and_run_backtest(
                 run.total_volume = metrics.get("total_volume")
                 run.trade_log = trade_log
                 run.indicator_values = result.get("indicator_values")
-                run.status = "completed"
+                run.status = "failed" if result.get("error") else "completed"
                 run.completed_at = utc_now()
                 if result.get("error"):
                     run.error_message = result["error"]
