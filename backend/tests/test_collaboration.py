@@ -34,7 +34,7 @@ from app.api.routes.platform.collaboration import (
     _collaboration_write_rate_limit,
     router,
 )
-from app.models.analytics.assessment import Assessment
+from app.models.analytics.assessment import VERIFIED_SCORING_VERSION, Assessment
 from app.models.base import Base
 from app.models.intelligence.collaboration import (
     VISIBILITY_PRIVATE,
@@ -45,6 +45,7 @@ from app.models.intelligence.collaboration import (
 )
 from app.models.market_data.market import Market
 from app.models.users.user import User
+from app.repositories.intelligence.assessments import AssessmentRepository
 from app.services.intelligence.consensus_service import (
     CONSENSUS_CACHE_TTL_SECONDS,
     MAX_VOTES_PER_HOUR,
@@ -100,6 +101,7 @@ def _assessment(condition_id: str, outcome: str, probability: float = 0.9) -> As
         confidence=50,
         ai_probability=probability,
         resolved_outcome=outcome,
+        scoring_version=VERIFIED_SCORING_VERSION,
         brier_score=(probability - 1.0) ** 2 if outcome == "YES" else probability**2,
         task="opportunity_scan",
         created_at=utc_now(),
@@ -497,6 +499,68 @@ class LeaderboardOrderingTest(ConsensusTestCase):
         row = next(row for row in global_board["forecasters"] if row["user_id"] == 3)
         self.assertEqual(row["public_votes"], 0)
         self.assertEqual(row["total_votes"], 1)
+
+
+class LegacyResolutionTest(ConsensusTestCase):
+    """A legacy non-binary label must never break a read path.
+
+    The legacy resolver stored the raw Gamma label ("ALICE") instead of
+    a binary YES/NO. Such a row cannot be scored, so the read paths
+    skip it — they must not raise, and they must not map it onto a
+    binary outcome.
+    """
+
+    def _legacy_assessment(self, condition_id: str) -> Assessment:
+        row = Assessment(
+            condition_id=condition_id,
+            ai_score=50,
+            reasoning="legacy",
+            recommendation="hold",
+            risk_level="unknown",
+            confidence=50,
+            ai_probability=0.9,
+            resolved_outcome="ALICE",
+            brier_score=0.01,
+            task="opportunity_scan",
+            created_at=utc_now(),
+        )
+        self.db.add(row)
+        self.db.commit()
+        return row
+
+    def test_resolved_condition_rows_skip_a_legacy_label(self):
+        condition = "0xlegacy-1"
+        self._legacy_assessment(condition)
+        rows = AssessmentRepository(self.db).resolved_condition_rows([condition])
+        self.assertEqual(rows, [])
+
+    def test_forecaster_skill_skips_a_legacy_label(self):
+        condition = "0xlegacy-1"
+        self._legacy_assessment(condition)
+        self._vote(1, 0.9, condition_id=condition)
+
+        skill = forecaster_skill(self.db, 1)
+        self.assertEqual(skill["resolved"], 0)
+        self.assertIsNone(skill["mean_brier"])
+        self.assertEqual(skill["skill"], 0.0)
+
+    def test_forecaster_leaderboard_skips_a_legacy_label(self):
+        condition = "0xlegacy-1"
+        self._legacy_assessment(condition)
+        self._vote(1, 0.9, condition_id=condition)
+
+        board = forecaster_leaderboard(self.db)
+        row = next(row for row in board["forecasters"] if row["user_id"] == 1)
+        self.assertEqual(row["resolved"], 0)
+        self.assertIsNone(row["mean_brier"])
+
+    def test_consensus_read_does_not_raise_on_a_legacy_label(self):
+        condition = "0xlegacy-1"
+        self._legacy_assessment(condition)
+        self._vote(1, 0.9, condition_id=condition)
+
+        result = get_consensus(self.db, condition)
+        self.assertEqual(result["n_votes"], 1)
 
 
 class ConsensusNarrativeTest(ConsensusTestCase):
