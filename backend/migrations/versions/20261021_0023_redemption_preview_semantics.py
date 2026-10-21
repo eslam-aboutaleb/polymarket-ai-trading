@@ -18,16 +18,12 @@ def upgrade() -> None:
     # prove their execution mode from the old schema. Do not call them 'preview'
     # or 'submitted' without verifiable provenance.
     op.get_bind().execute(
-        text(
-            "UPDATE redemption_attempts SET status = 'legacy_unknown' WHERE status = 'pending'"
-        )
+        text("UPDATE redemption_attempts SET status = 'legacy_unknown' WHERE status = 'pending'")
     )
 
 
 def downgrade() -> None:
     # Revert the encoding only; this cannot restore evidence that never existed.
     op.get_bind().execute(
-        text(
-            "UPDATE redemption_attempts SET status = 'pending' WHERE status = 'legacy_unknown'"
-        )
+        text("UPDATE redemption_attempts SET status = 'pending' WHERE status = 'legacy_unknown'")
     )
