@@ -95,6 +95,7 @@ jobs:
       ADMIN_WALLETS: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
       VITE_API_URL: ""
       E2E_BASE_URL: http://localhost:5174
+      CORS_ALLOWED_ORIGINS: "http://localhost:5174,http://localhost:5173,http://localhost:3000"
       PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/e2e-junit.xml
       # Do not enable live Polymarket orders or expose any real wallet key.
     steps:
