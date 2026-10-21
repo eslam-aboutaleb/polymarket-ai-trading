@@ -100,9 +100,18 @@ assertions or depending on undocumented public rate-limit windows.
 ## Credentialed user workflows
 
 The ordinary public/auth/features suite remains available on every PR without provider secrets.
-`Real user workflows / live providers` additionally runs on trusted main pushes, scheduled runs and
-manual CI dispatches. It is required by the quality gate on those triggers. It is intentionally not
-run on pull requests/merge groups, and never uses `pull_request_target` with provider credentials.
+`Real user experience (manual)` is a separate, optional workflow. It runs only when explicitly
+triggered and is independent of the CI quality gate. It does not run on pushes, schedules, pull
+requests or merge groups.
+
+In GitHub, open **Actions → Real user experience (manual) → Run workflow**, select the branch in
+**Use workflow from**, and click **Run workflow**. The selected branch is checked out and tested.
+The workflow appears in that menu once its definition is merged into the default branch.
+To trigger it from the CLI after that:
+
+```sh
+gh workflow run real-user-experience.yml --ref YOUR_BRANCH
+```
 
 Configure these **Actions secrets** for the repository:
 
