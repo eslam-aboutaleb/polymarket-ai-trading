@@ -530,9 +530,7 @@ def _attempt_response(attempt) -> RedemptionAttemptResponse:
         tx_hash=attempt.tx_hash,
         status=attempt.status,
         preview_only=attempt.status == "preview",
-        on_chain_submitted=(
-            bool(attempt.tx_hash) and attempt.status in {"submitted", "confirmed"}
-        ),
+        on_chain_submitted=(bool(attempt.tx_hash) and attempt.status in {"submitted", "confirmed"}),
         amount=attempt.amount,
         error=attempt.error,
         created_at=attempt.created_at,
