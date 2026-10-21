@@ -34,7 +34,7 @@ RUN python -m grpc_tools.protoc \
 
 ENV PYTHONPATH=/app:/app/shared
 
-# ChromaDB data dir
+# SQLite RAG data dir
 RUN mkdir -p /app/data/chroma
 
 # ── Non-root user ─────────────────────────────────────────────
