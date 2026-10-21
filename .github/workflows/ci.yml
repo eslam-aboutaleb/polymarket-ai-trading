@@ -201,21 +201,99 @@ jobs:
       - name: Prettier check
         run: npx prettier --check "src/**/*.{ts,tsx,css,json,html}"
 
+  # Credentialed user flows run only on trusted refs. Ordinary/Dependabot PRs
+  # retain the full secret-free suite; no pull_request_target checkout is used.
+  real-user-experience:
+    name: Real user workflows / live providers
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: polymarket
+          POSTGRES_PASSWORD: real_ux_test_only
+          POSTGRES_DB: polymarket_real_ux
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U polymarket -d polymarket_real_ux"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.23.3"
+          package-manager-cache: false
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install locked API and LLM service dependencies
+        run: |
+          uv sync --project backend --frozen --python 3.11
+          uv sync --project services/llm-chain --frozen --python 3.11
+      - name: Install browser dependencies
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Exercise real authenticated AI and research workflows
+        env:
+          UX_TEST_DATABASE_URL: postgresql://polymarket:real_ux_test_only@127.0.0.1:5432/polymarket_real_ux
+          OPENAI_API_KEY: ${{ secrets.REAL_UX_OPENAI_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.REAL_UX_TAVILY_API_KEY }}
+          NEWSAPI_API_KEY: ${{ secrets.REAL_UX_NEWSAPI_API_KEY }}
+        run: uv run --project backend --frozen python scripts/run-real-ux.py
+      - name: Upload redacted failure evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: real-user-workflows-${{ github.run_id }}
+          path: |
+            frontend/test-results/
+            frontend/real-ux-artifacts/
+          if-no-files-found: warn
+          retention-days: 3
+
   quality-gate:
     name: Quality gate
     if: always()
-    needs: [lint, backend-tests, trading-safety, frontend, emergency-browser, e2e, workflow-lint, security]
+    needs:
+      [
+        lint,
+        backend-tests,
+        trading-safety,
+        frontend,
+        emergency-browser,
+        e2e,
+        workflow-lint,
+        security,
+        real-user-experience,
+      ]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Require every check to succeed
         env:
           CHECK_RESULTS: ${{ toJSON(needs) }}
+          REAL_UX_REQUIRED: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}
         run: |
           python3 - <<'PY'
           import json
           import os
           results = json.loads(os.environ["CHECK_RESULTS"])
+          if os.environ["REAL_UX_REQUIRED"] != "true":
+              # Only this credentialed job is intentionally absent on PRs/merge groups.
+              real_ux = results.pop("real-user-experience")
+              if real_ux["result"] != "skipped":
+                  raise SystemExit("Unexpected credentialed job on an untrusted trigger")
           failed = {name: job["result"] for name, job in results.items() if job["result"] != "success"}
           if failed:
               raise SystemExit(f"Required checks did not succeed: {failed}")

@@ -39,11 +39,11 @@ The suite talks to a real stack, so it needs:
 
 ## What is covered
 
-| Project | Area |
-| --- | --- |
-| `public` | Markets (categories, search, sort, detail drawer, trade gate), Opportunities, Leaderboard (periods, table size, follow gate), Your Guide + tutorial overlay, AI Analysis (incl. degraded error state), Copy Trading landing, nav + unknown-route 404 page |
-| `auth` | Wallet-signature login (`personal_sign` with a mock EIP-1193 provider), missing wallet, rejected signature, keep-logged-in, logout confirmation, route guards (anonymous redirects, admin-only `/debug`, signed-in users skip `/login`) |
-| `features` | Dashboard, Trades, Whales, Execution analytics, Calibration, Risk report, Latency Arb, Cross-venue signals, AI Orchestrator, Ask the AI, Ops Center, Settings (all tabs), Copy Trading, Market Making, Backtesting, News, and the WebMCP agent surface |
+| Project    | Area                                                                                                                                                                                                                                                      |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `public`   | Markets (categories, search, sort, detail drawer, trade gate), Opportunities, Leaderboard (periods, table size, follow gate), Your Guide + tutorial overlay, AI Analysis (incl. degraded error state), Copy Trading landing, nav + unknown-route 404 page |
+| `auth`     | Wallet-signature login (`personal_sign` with a mock EIP-1193 provider), missing wallet, rejected signature, keep-logged-in, logout confirmation, route guards (anonymous redirects, admin-only `/debug`, signed-in users skip `/login`)                   |
+| `features` | Dashboard, Trades, Whales, Execution analytics, Calibration, Risk report, Latency Arb, Cross-venue signals, AI Orchestrator, Ask the AI, Ops Center, Settings (all tabs), Copy Trading, Market Making, Backtesting, News, and the WebMCP agent surface    |
 
 ## Sessions
 
@@ -96,3 +96,46 @@ a live venue-order E2E test. A passing run does not prove real-money behavior.
 If a PR changes market feeds or introduces external dependencies, prefer
 recorded deterministic fixture responses in feature tests, not suppressing
 assertions or depending on undocumented public rate-limit windows.
+
+## Credentialed user workflows
+
+The ordinary public/auth/features suite remains available on every PR without provider secrets.
+`Real user workflows / live providers` additionally runs on trusted main pushes, scheduled runs and
+manual CI dispatches. It is required by the quality gate on those triggers. It is intentionally not
+run on pull requests/merge groups, and never uses `pull_request_target` with provider credentials.
+
+Configure these **Actions secrets** for the repository:
+
+- `REAL_UX_OPENAI_API_KEY`: the OpenAI key used by the app's selected provider.
+- `REAL_UX_TAVILY_API_KEY`: the app's research search credential.
+- `REAL_UX_NEWSAPI_API_KEY`: the app's news research credential.
+
+The job fails if any key is missing or the provider returns an error; it does not silently skip tests.
+It starts the actual LLM gRPC service from its own frozen dependency lock, waits for health/capabilities,
+and runs real authenticated API and browser requests against a fresh PostgreSQL schema. Three bounded
+flows verify quick analysis, streamed browser completion and research-backed analysis containing real
+Tavily sources and NewsAPI headlines. These checks do not mock routes or replace provider responses.
+
+To run locally, first install the two locked Python environments and browser dependencies:
+
+```sh
+uv sync --project backend --frozen --python 3.11
+uv sync --project services/llm-chain --frozen --python 3.11
+cd frontend
+npm ci
+npx playwright install chromium
+cd ..
+UX_TEST_DATABASE_URL=postgresql:///postgres \
+  uv run --project backend --frozen python scripts/run-real-ux.py --env-file /absolute/path/to/.env
+```
+
+The env-file reader copies only the three required provider keys. It never copies the production
+wallet private key, GitHub token, session secret or database URL. `UX_TEST_DATABASE_URL` must be
+explicit; the runner creates and removes a random schema and generates fresh test-session secrets.
+Ports 8002, 5174 and 59151 must be free; existing servers are never reused. Provider calls use
+`gpt-4o-mini`, 1,536 output tokens, disabled tier escalation and no browser retries.
+
+RAG corpus validation, CLI/Copilot-provider success, other model providers and actual trading are
+not claimed by this suite. No wallet capable of spending user funds is provided. API/backend errors
+and provider outages remain failures. Redacted service diagnostics are kept separately from
+Playwright's output directory so its automatic cleanup cannot erase startup failures.

@@ -52,6 +52,8 @@ repos:
         exclude: ^backend/alembic\.ini$
       - id: check-added-large-files
         args: [--maxkb=1024]
+        # Generated multi-platform dependency hashes, checked by frozen service installs.
+        exclude: ^services/llm-chain/uv\.lock$
       - id: detect-private-key
 
   # ── Duplication budget ──────────────────────────────────────────────────
