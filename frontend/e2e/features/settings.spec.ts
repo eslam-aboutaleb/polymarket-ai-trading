@@ -21,7 +21,14 @@ test.describe("Settings", () => {
     await expect(displayName).toHaveValue(newName);
     const save = page.getByRole("button", { name: "Save Profile" });
     await expect(save).toBeVisible();
+    const saved = page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/settings/profile") && response.request().method() === "PUT",
+    );
     await save.click();
+    const response = await saved;
+    expect(response.ok()).toBeTruthy();
+    expect((await response.json()).display_name).toBe(newName);
 
     // The save completes: the button disappears again once the draft is clean.
     await expect(save).toBeHidden({ timeout: 20_000 });
