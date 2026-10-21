@@ -166,9 +166,11 @@ test.describe("WebMCP surface", () => {
           / Yes$/.test(el.getAttribute("aria-label") || ""),
         ).length;
       const before = countTradeButtons();
-      const tool = (window as unknown as {
-        __webmcpTest: { execute: (name: string) => Promise<string> };
-      }).__webmcpTest;
+      const tool = (
+        window as unknown as {
+          __webmcpTest: { execute: (name: string) => Promise<string> };
+        }
+      ).__webmcpTest;
       const result = JSON.parse(await tool.execute("read-market-board")) as {
         heading: string | null;
         tradeButtons: number;
