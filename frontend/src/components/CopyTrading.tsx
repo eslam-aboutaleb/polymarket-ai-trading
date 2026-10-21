@@ -1,10 +1,10 @@
 /**
- * Copy-trading dashboard with two tabs: live copied trades and locally simulated "mock" trading.
+ * Copy-trading dashboard with backend copy-trading and a separate local wallet watchlist.
  *
  * The copy tab manages followed wallets through `tradesService` (follow/unfollow, per-trader sizing
  * and copy-wallet settings with draft/save status tracking) and polls copy-evaluation rows every
- * 15 seconds. The mock tab keeps wallets in `mockCopyTraders` storage and estimates ROI from the
- * leaderboard PnL/volume ratio. Unauthenticated visitors get a connect-wallet prompt instead.
+ * 15 seconds. The watchlist tab stores wallet bookmarks only, with clearly labeled historical
+ * leader metrics from the leaderboard. It does not simulate follower execution or portfolio P&L.
  *
  * @module components/CopyTrading
  */
@@ -20,7 +20,6 @@ import {
 } from "../services/tradesService";
 import { getApiErrorMessage } from "../utils/apiError";
 import {
-  MOCK_COPY_DEFAULT_CAPITAL,
   MockCopyTrader,
   hasMockCopyTrader,
   loadMockCopyTraders,
@@ -44,7 +43,6 @@ const MOCK_PERIODS: { value: MockPeriod; label: string }[] = [
   { value: "all_time", label: "All Time" },
 ];
 
-const MOCK_CAPITAL_PER_TRADER = MOCK_COPY_DEFAULT_CAPITAL;
 const COPY_TRADING_TAB_STORAGE_KEY = "pm:copy-trading:active-tab";
 
 // Rolling windows offered by the trader-attribution selector, mirroring the
@@ -556,7 +554,7 @@ export default function CopyTrading() {
       return;
     }
     if (hasMockCopyTrader(mockTraders, wallet)) {
-      setMockError("This wallet is already in mock copy trading.");
+      setMockError("This wallet is already on the watchlist.");
       setMockIndicatorByWallet((prev) => ({
         ...prev,
         [wallet]: "already_exists",
@@ -566,7 +564,7 @@ export default function CopyTrading() {
     upsertMockTrader(wallet);
     setMockWalletInput("");
     setMockError(null);
-    toast.success(`Mock copy started for ${shortAddress(wallet)} with $10,000.`);
+    toast.success(`Watchlisted ${shortAddress(wallet)}.`);
     setMockIndicatorByWallet((prev) => ({
       ...prev,
       [wallet]: "added",
@@ -576,7 +574,7 @@ export default function CopyTrading() {
   const handleAddFollowedToMock = (wallet: string, alias?: string | null) => {
     const normalized = wallet.toLowerCase();
     if (hasMockCopyTrader(mockTraders, normalized)) {
-      setMockError("This wallet is already in mock copy trading.");
+      setMockError("This wallet is already on the watchlist.");
       setMockIndicatorByWallet((prev) => ({
         ...prev,
         [normalized]: "already_exists",
@@ -585,7 +583,7 @@ export default function CopyTrading() {
     }
     upsertMockTrader(normalized, alias);
     setMockError(null);
-    toast.success(`Added ${shortAddress(normalized)} to mock copy trading with $10,000.`);
+    toast.success(`Added ${shortAddress(normalized)} to the watchlist.`);
     setMockIndicatorByWallet((prev) => ({
       ...prev,
       [normalized]: "added",
@@ -598,7 +596,7 @@ export default function CopyTrading() {
       saveMockCopyTraders(next);
       return next;
     });
-    toast.success(`Removed ${shortAddress(wallet)} from mock copy trading.`);
+    toast.success(`Removed ${shortAddress(wallet)} from the watchlist.`);
     setMockError(null);
     setMockIndicatorByWallet((prev) => {
       const next = { ...prev };
@@ -682,18 +680,15 @@ export default function CopyTrading() {
 
     return mockTraders.map((trader) => {
       const entry = byWallet.get(trader.wallet.toLowerCase());
-      const rawRoi = entry && entry.volume > 0 ? entry.profit_loss / entry.volume : 0;
-      const roi = Math.max(-1, Math.min(3, rawRoi));
-      const estimatedPnl = trader.initial_capital * roi;
-      const virtualBalance = trader.initial_capital + estimatedPnl;
+      const leaderPnl = entry && Number.isFinite(entry.profit_loss) ? entry.profit_loss : null;
+      const leaderVolume = entry && Number.isFinite(entry.volume) ? entry.volume : null;
 
       return {
         ...trader,
         display_name: entry?.display_name,
         primary_name: trader.alias?.trim() || entry?.display_name || shortAddress(trader.wallet),
-        roi,
-        estimatedPnl,
-        virtualBalance,
+        leaderPnl,
+        leaderVolume,
         hasLeaderboardData: Boolean(entry),
       };
     });
@@ -725,15 +720,10 @@ export default function CopyTrading() {
     return null;
   };
 
-  const mockTotals = useMemo(() => {
-    const allocated = mockRows.reduce((sum, row) => sum + row.initial_capital, 0);
-    const estimatedPnl = mockRows.reduce((sum, row) => sum + row.estimatedPnl, 0);
-    return {
-      allocated,
-      estimatedPnl,
-      equity: allocated + estimatedPnl,
-    };
-  }, [mockRows]);
+  const mockTotals = useMemo(
+    () => ({ matched: mockRows.filter((row) => row.hasLeaderboardData).length }),
+    [mockRows],
+  );
 
   // Best trader first; the backend already returns this order, so the sort
   // also survives a payload from an older API version.
@@ -783,14 +773,14 @@ export default function CopyTrading() {
           <p className="text-soft">
             {activeTab === "copy"
               ? "Automatically mirror trades from top traders"
-              : "Paper-copy Polymarket wallets with virtual funds"}
+              : "Watch Polymarket traders without executing or simulating trades"}
           </p>
         </div>
         <button
           onClick={activeTab === "copy" ? fetchData : refreshMockLeaderboard}
           className="btn-muted"
         >
-          {activeTab === "copy" ? "Refresh" : mockLoading ? "Refreshing..." : "Refresh Mock Data"}
+          {activeTab === "copy" ? "Refresh" : mockLoading ? "Refreshing..." : "Refresh Leaderboard"}
         </button>
       </div>
 
@@ -813,7 +803,7 @@ export default function CopyTrading() {
               : "text-soft hover:text-white"
           }`}
         >
-          Mock Copy Trading
+          Trader Watchlist
         </button>
       </div>
 
@@ -827,14 +817,13 @@ export default function CopyTrading() {
         <div className="surface-panel p-6 rounded-lg space-y-4">
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
-              <h2 className="text-lg font-semibold">Mock Copy Trading</h2>
+              <h2 className="text-lg font-semibold">Trader Watchlist</h2>
               <p className="text-soft text-sm">
-                Paper-copy Polymarket wallets with virtual funds. Each mock trader starts with{" "}
-                {formatUSD(MOCK_CAPITAL_PER_TRADER)}.
+                Bookmark wallets locally and review historical leaderboard results. No funds are allocated, and no follower returns are calculated.
               </p>
             </div>
             <button onClick={refreshMockLeaderboard} className="btn-muted">
-              {mockLoading ? "Refreshing..." : "Refresh Mock Data"}
+              {mockLoading ? "Refreshing..." : "Refresh Leaderboard"}
             </button>
           </div>
 
@@ -865,7 +854,7 @@ export default function CopyTrading() {
               ))}
             </div>
             <span className="text-xs text-muted">
-              Performance shown as an estimate from leaderboard PnL/volume ratio.
+              These are the leader’s historical leaderboard figures for the selected window, not returns earned by following.
             </span>
           </div>
 
@@ -874,40 +863,28 @@ export default function CopyTrading() {
               type="text"
               value={mockWalletInput}
               onChange={(e) => setMockWalletInput(e.target.value)}
-              placeholder="Add wallet to mock copy (0x...)"
+              placeholder="Add wallet to watchlist (0x...)"
               className="flex-1 bg-[var(--bg-soft)] border border-[var(--line)] rounded px-3 py-2 text-sm mono"
             />
             <button onClick={handleAddMockTrader} className="btn-primary">
-              Add Mock Trader
+              Add to Watchlist
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="surface-soft p-4 rounded-lg">
-              <p className="text-muted text-xs uppercase tracking-wide">Mock Traders</p>
+              <p className="text-muted text-xs uppercase tracking-wide">Watchlisted Traders</p>
               <p className="text-2xl font-bold mt-1">{mockRows.length}</p>
             </div>
             <div className="surface-soft p-4 rounded-lg">
-              <p className="text-muted text-xs uppercase tracking-wide">Virtual Equity</p>
-              <p className="text-2xl font-bold mt-1">{formatUSD(mockTotals.equity)}</p>
-            </div>
-            <div className="surface-soft p-4 rounded-lg">
-              <p className="text-muted text-xs uppercase tracking-wide">Est. P&L ({mockPeriod})</p>
-              <p
-                className={`text-2xl font-bold mt-1 ${
-                  mockTotals.estimatedPnl >= 0 ? "status-good" : "status-bad"
-                }`}
-              >
-                {mockTotals.estimatedPnl >= 0 ? "+" : ""}
-                {formatUSD(mockTotals.estimatedPnl)}
-              </p>
+              <p className="text-muted text-xs uppercase tracking-wide">Matched Leaderboard Profiles</p>
+              <p className="text-2xl font-bold mt-1">{mockTotals.matched}</p>
             </div>
           </div>
 
           {mockRows.length === 0 ? (
             <div className="surface-soft p-6 rounded text-sm text-soft">
-              No mock traders added yet. Add any Polymarket wallet to simulate copy trading with{" "}
-              {formatUSD(MOCK_CAPITAL_PER_TRADER)} per trader.
+              No traders added yet. Save any Polymarket wallet to your local watchlist. No trades or returns are simulated.
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -915,10 +892,8 @@ export default function CopyTrading() {
                 <thead>
                   <tr>
                     <th className="text-left p-3">Trader</th>
-                    <th className="text-right p-3">Start Capital</th>
-                    <th className="text-right p-3">Est. ROI</th>
-                    <th className="text-right p-3">Est. P&L</th>
-                    <th className="text-right p-3">Virtual Balance</th>
+                    <th className="text-right p-3">Leader P&L (period)</th>
+                    <th className="text-right p-3">Leader Volume (period)</th>
                     <th className="text-right p-3">Started</th>
                     <th className="text-center p-3">Action</th>
                   </tr>
@@ -956,32 +931,11 @@ export default function CopyTrading() {
                           className="mt-2 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-1.5 text-xs"
                         />
                       </td>
-                      <td className="p-3 text-right mono">{formatUSD(row.initial_capital)}</td>
                       <td className="p-3 text-right mono">
-                        {row.hasLeaderboardData ? (
-                          <span className={row.roi >= 0 ? "status-good" : "status-bad"}>
-                            {formatPct(row.roi)}
-                          </span>
-                        ) : (
-                          <span className="text-muted">N/A</span>
-                        )}
+                        {row.leaderPnl == null ? "N/A" : formatUSD(row.leaderPnl)}
                       </td>
                       <td className="p-3 text-right mono">
-                        {row.hasLeaderboardData ? (
-                          <span className={row.estimatedPnl >= 0 ? "status-good" : "status-bad"}>
-                            {row.estimatedPnl >= 0 ? "+" : ""}
-                            {formatUSD(row.estimatedPnl)}
-                          </span>
-                        ) : (
-                          <span className="text-muted">N/A</span>
-                        )}
-                      </td>
-                      <td className="p-3 text-right mono">
-                        {row.hasLeaderboardData ? (
-                          formatUSD(row.virtualBalance)
-                        ) : (
-                          <span className="text-muted">{formatUSD(row.initial_capital)}</span>
-                        )}
+                        {row.leaderVolume == null ? "N/A" : formatUSD(row.leaderVolume)}
                       </td>
                       <td className="p-3 text-right text-muted text-xs">
                         {new Date(row.created_at).toLocaleDateString()}
