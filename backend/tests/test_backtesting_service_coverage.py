@@ -122,8 +122,8 @@ class CalculateMetricsTests(unittest.TestCase):
         self.assertAlmostEqual(metrics["profit_factor"], 3.0)
         # volume = 100*0.5 + 100*0.5 + 50*0.4 = 120
         self.assertAlmostEqual(metrics["total_volume"], 120.0)
-        # Sharpe computed for >1 trades with variance
-        self.assertIsNotNone(metrics["sharpe_ratio"])
+        # Irregular USD PnLs cannot be annualized as periodic returns.
+        self.assertIsNone(metrics["sharpe_ratio"])
 
     def test_single_trade_has_no_sharpe(self):
         metrics = _calculate_metrics([{"pnl": 5.0, "size": 10, "price": 1.0}])
@@ -721,6 +721,7 @@ class RunIndicatorBacktestTests(unittest.IsolatedAsyncioTestCase):
     async def test_rsi_mean_reversion_buy_and_sell(self):
         prices = [100.0] * 60
         prices[44] = 110.0
+        prices[45] = 110.0
         rsi_series = [None] * 60
         rsi_series[34] = 25.0  # oversold → BUY
         rsi_series[44] = 75.0  # overbought → SELL
@@ -734,12 +735,47 @@ class RunIndicatorBacktestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trade["entry_price"], 100.0)
         self.assertEqual(trade["exit_price"], 110.0)
         self.assertEqual(trade["strategy"], "rsi_mean_reversion")
+        self.assertEqual(trade["entry_idx"], 35)
+        self.assertEqual(trade["exit_idx"], 45)
+        self.assertEqual(trade["fill_mode"], "next_sample_indicative")
         # pnl = (110 - 100) * (10 / 100) = 1.0
         self.assertAlmostEqual(trade["pnl"], 1.0)
         self.assertEqual(result["metrics"]["total_trades"], 1)
         self.assertEqual(result["indicator_summary"], "summary")
         self.assertEqual(result["indicator_values"]["sma"]["latest"], 105.0)
         self.assertNotIn("series", result["indicator_values"]["sma"])
+
+    async def test_signal_cannot_fill_on_same_sample(self):
+        prices = [0.4] * 60
+        prices[35] = 0.6
+        prices[45] = 0.2
+        rsi_series = [None] * 60
+        rsi_series[34] = 20.0  # BUY signal observed at 0.4
+        rsi_series[44] = 80.0  # SELL signal observed at 0.4
+        result = await self._run({"condition_id": "c1", "_rsi": rsi_series}, _price_data(prices))
+        trade = result["trade_log"][0]
+        self.assertEqual(trade["entry_price"], 0.6)
+        self.assertEqual(trade["exit_price"], 0.2)
+        self.assertEqual(trade["entry_idx"], 35)
+        self.assertEqual(trade["exit_idx"], 45)
+        self.assertLess(trade["pnl"], 0)
+        self.assertIsNone(result["metrics"]["sharpe_ratio"])
+        self.assertEqual(result["metrics"]["total_volume"], 10.0)
+
+    async def test_invalid_position_size_is_rejected(self):
+        result = await self._run(
+            {"condition_id": "c1", "position_size": 0}, _price_data([0.4] * 60)
+        )
+        self.assertIn("position_size must be positive", result["error"])
+        self.assertEqual(result["trade_log"], [])
+
+    async def test_last_bar_signal_cannot_generate_future_fill(self):
+        prices = [0.4] * 60
+        rsi_series = [None] * 60
+        rsi_series[59] = 20.0
+        result = await self._run({"condition_id": "c1", "_rsi": rsi_series}, _price_data(prices))
+        self.assertEqual(result["trade_log"], [])
+        self.assertIsNone(result["indicator_values"]["unclosed_position"])
 
     async def test_rsi_open_position_closed_at_last_price(self):
         prices = [100.0] * 60
@@ -749,16 +785,13 @@ class RunIndicatorBacktestTests(unittest.IsolatedAsyncioTestCase):
             {"condition_id": "c1", "strategy": "rsi_mean_reversion", "_rsi": rsi_series},
             _price_data(prices),
         )
-        self.assertEqual(len(result["trade_log"]), 1)
-        trade = result["trade_log"][0]
-        self.assertEqual(trade["entry_price"], 100.0)
-        self.assertEqual(trade["exit_price"], 100.0)  # last price
-        self.assertEqual(trade["timestamp"], "t59")
+        self.assertEqual(result["trade_log"], [])
+        self.assertEqual(result["indicator_values"]["unrealized_pnl_indicative"], 0.0)
+        self.assertEqual(result["indicator_values"]["unclosed_position"]["entry_idx"], 35)
 
     async def test_rsi_buy_requires_no_position(self):
         # Two oversold readings in a row: only the first opens
-        # a position; the position is then closed at the last
-        # price (one round-trip trade in the log).
+        # a position. The remaining inventory is NOT treated as sold.
         prices = [100.0] * 60
         rsi_series = [None] * 60
         rsi_series[34] = 25.0
@@ -767,12 +800,13 @@ class RunIndicatorBacktestTests(unittest.IsolatedAsyncioTestCase):
             {"condition_id": "c1", "strategy": "rsi_mean_reversion", "_rsi": rsi_series},
             _price_data(prices),
         )
-        self.assertEqual(len(result["trade_log"]), 1)
-        self.assertEqual(result["trade_log"][0]["entry_price"], 100.0)
+        self.assertEqual(result["trade_log"], [])
+        self.assertEqual(result["indicator_values"]["unclosed_position"]["entry_price"], 100.0)
 
     async def test_macd_crossover_buy_and_sell(self):
         prices = [100.0] * 60
         prices[44] = 110.0
+        prices[45] = 110.0
         macd_line = [None] * 60
         signal_line = [None] * 60
         macd_line[33], signal_line[33] = 1.0, 2.0
@@ -803,6 +837,7 @@ class RunIndicatorBacktestTests(unittest.IsolatedAsyncioTestCase):
     async def test_bollinger_bounce_buy_and_sell(self):
         prices = [100.0] * 60
         prices[44] = 110.0
+        prices[45] = 110.0
         lower = [None] * 60
         upper = [None] * 60
         # Both bands must be present at an index for a signal.
@@ -825,13 +860,13 @@ class RunIndicatorBacktestTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result["trade_log"], [])
 
-    async def test_unknown_strategy_generates_no_trades(self):
+    async def test_unknown_strategy_fails_explicitly(self):
         result = await self._run(
             {"condition_id": "c1", "strategy": "unknown"}, _price_data([100.0] * 60)
         )
         self.assertEqual(result["trade_log"], [])
         self.assertEqual(result["metrics"]["total_trades"], 0)
-        self.assertEqual(result["indicator_summary"], "summary")
+        self.assertIn("Unsupported indicator strategy", result["error"])
 
     async def test_mid_without_price_is_rejected(self):
         prices = [100.0] * 60
@@ -862,9 +897,9 @@ class RunIndicatorBacktestTests(unittest.IsolatedAsyncioTestCase):
             },
             _price_data(prices),
         )
-        # Position opened at 34 and closed at the last price.
-        self.assertEqual(len(result["trade_log"]), 1)
-        self.assertEqual(result["trade_log"][0]["size"], 5)
+        # Position stays open; the last sampled mark is unrealized.
+        self.assertEqual(result["trade_log"], [])
+        self.assertEqual(result["indicator_values"]["unclosed_position"]["shares"], 0.05)
 
     async def test_settled_zero_price_is_not_rejected(self):
         """A market that settled at 0.0 is a valid price, not a malformed row."""
