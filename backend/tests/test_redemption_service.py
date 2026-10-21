@@ -348,7 +348,7 @@ class ExecuteRedeemTests(unittest.IsolatedAsyncioTestCase):
         w3 = _fake_w3()
         attempt = self._execute(w3, dry_run=True)
         self.assertIsNotNone(attempt)
-        self.assertEqual(attempt.status, "pending")
+        self.assertEqual(attempt.status, "preview")
         self.assertIsNone(attempt.tx_hash)
         # The transaction is built (for logging) but never signed/sent.
         w3._ctf.functions.redeemPosition.return_value.build_transaction.assert_called_once()
@@ -491,6 +491,8 @@ class OrchestrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary["users_checked"], 1)
         self.assertEqual(summary["attempts"], 1)
         self.assertTrue(summary["dry_run"])
+        self.assertEqual(summary["preview"], 1)
+        self.assertEqual(summary["submitted"], 0)
         # Dry-run: nothing was broadcast.
         w3.eth.send_raw_transaction.assert_not_called()
 

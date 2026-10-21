@@ -21,7 +21,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models.analytics.assessment import Assessment
+from app.models.analytics.assessment import NULL_PROBABILITY_REASON, Assessment
 from app.models.trading.followed_trader import FollowedTrader
 from app.models.trading.user_trade import UserTrade
 from app.models.users.user_settings import RiskMode, UserSettings
@@ -1256,10 +1256,12 @@ async def execute_copy_trade(
 
 
 def _coerce_probability(value: Any) -> float | None:
-    """Coerce a 0-100 (or 0-1) probability into a float in (0, 1).
+    """Coerce a 0-100 (or 0-1) probability into a float in [0, 1].
 
     Returns None for anything unusable so calibration aggregates can
-    exclude the row instead of treating it as a 50% forecast.
+    exclude the row instead of treating it as a 50% forecast. A stated
+    certainty (exactly 0 or 1) is kept as stated: it is clipped only
+    inside the log-loss computation, never rewritten.
     """
     if value is None:
         return None
@@ -1269,7 +1271,9 @@ def _coerce_probability(value: Any) -> float | None:
         return None
     if p > 1.0:
         p = p / 100.0
-    if 0.0 < p < 1.0:
+    if not math.isfinite(p):
+        return None
+    if 0.0 <= p <= 1.0:
         return p
     return None
 
@@ -1293,6 +1297,9 @@ def _save_assessment(
     """
     try:
         metadata = assessment.get("metadata") or {}
+        probability = _coerce_probability(
+            ai_probability if ai_probability is not None else assessment.get("ai_probability")
+        )
         record = Assessment(
             trade_history_id=trade_history_id,
             ai_score=float(assessment.get("ai_score", assessment.get("confidence", 50))),
@@ -1302,9 +1309,10 @@ def _save_assessment(
             market_sentiment=assessment.get("market_sentiment"),
             confidence=float(assessment.get("confidence", 50)),
             market_price_at_assessment=price,
-            ai_probability=_coerce_probability(
-                ai_probability if ai_probability is not None else assessment.get("ai_probability")
-            ),
+            ai_probability=probability,
+            # A row without a probability records why, so it is never
+            # mistaken for a pre-calibration (legacy) row.
+            probability_null_reason=None if probability is not None else NULL_PROBABILITY_REASON,
             # Model attribution arrives nested under "metadata" from
             # evaluate_copy_trade (the gRPC response map), not as a
             # top-level key — reading it there keeps by_model honest.

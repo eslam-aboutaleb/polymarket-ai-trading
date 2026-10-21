@@ -5,10 +5,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
+from app.models.analytics.assessment import Assessment
 from app.models.intelligence.governance import LLMExperiment
+from app.repositories.intelligence.assessments import verified_resolution_filter
 
 
 class ExperimentRepository:
@@ -38,20 +40,25 @@ class ExperimentRepository:
         return self.db.execute(stmt).scalars().first()
 
     def compare_arms(self, experiment_name: str, cutoff: datetime) -> list[Any]:
-        stmt = text(
-            """
-            SELECT variant,
-                   COUNT(*) AS samples,
-                   SUM(CASE WHEN brier_score IS NOT NULL THEN 1 ELSE 0 END) AS resolved,
-                   AVG(CASE WHEN brier_score IS NOT NULL THEN brier_score END) AS mean_brier,
-                   MIN(brier_score) AS best_brier,
-                   MAX(brier_score) AS worst_brier
-              FROM assessments
-             WHERE experiment_id = :experiment
-               AND variant IN ('control', 'variant')
-               AND ai_probability IS NOT NULL
-               AND created_at >= :cutoff
-             GROUP BY variant
-            """
+        # A row only counts as *resolved* when it carries a verified
+        # binary label: the legacy resolver wrote raw Gamma labels
+        # ("ALICE"), and those rows must not enter an arm average.
+        verified = case((verified_resolution_filter(), Assessment.brier_score))
+        stmt = (
+            select(
+                Assessment.variant,
+                func.count(Assessment.id).label("samples"),
+                func.count(verified).label("resolved"),
+                func.avg(verified).label("mean_brier"),
+                func.min(verified).label("best_brier"),
+                func.max(verified).label("worst_brier"),
+            )
+            .where(
+                Assessment.experiment_id == experiment_name,
+                Assessment.variant.in_(("control", "variant")),
+                Assessment.ai_probability.isnot(None),
+                Assessment.created_at >= cutoff,
+            )
+            .group_by(Assessment.variant)
         )
-        return list(self.db.execute(stmt, {"experiment": experiment_name, "cutoff": cutoff}))
+        return list(self.db.execute(stmt))

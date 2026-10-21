@@ -9,7 +9,9 @@ test.describe("Route protection", () => {
   test("anonymous visitors are redirected from the dashboard to Markets", async ({ page }) => {
     await page.goto("/");
     await expect(page).toHaveURL(/\/markets$/);
-    await expect(page.getByRole("heading", { name: "Markets" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Markets", level: 1, exact: true }),
+    ).toBeVisible();
   });
 
   test("anonymous visitors are redirected from Settings to Markets", async ({ page }) => {

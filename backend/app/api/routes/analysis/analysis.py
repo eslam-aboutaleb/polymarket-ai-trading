@@ -581,8 +581,12 @@ async def analyze_trader_stream(
 
     async def event_generator():
         try:
-            # Send a status update while AI processes
-            yield f"data: {json.dumps({'chunk': ''})}\n\n"
+            # The underlying gRPC AnalyzeTrader method is unary; progress is
+            # transport metadata, never a claim of streaming model tokens.
+            status_payload = json.dumps(
+                {"chunk": "", "stream_kind": "buffered_replay", "phase": "processing"}
+            )
+            yield f"data: {status_payload}\n\n"
 
             async for chunk in client.analyze_trader_stream(
                 wallet_address=enriched["wallet_address"],
@@ -595,9 +599,9 @@ async def analyze_trader_stream(
                 user_id=str(user_id),
                 llm_config=llm_config,
             ):
-                payload = json.dumps({"chunk": chunk})
+                payload = json.dumps({"chunk": chunk, "stream_kind": "buffered_replay"})
                 yield f"data: {payload}\n\n"
-            yield f"data: {json.dumps({'done': True})}\n\n"
+            yield f"data: {json.dumps({'done': True, 'stream_kind': 'buffered_replay'})}\n\n"
         except Exception as e:
             logger.error(f"Streaming trader analysis error: {e}", exc_info=True)
             yield f"data: {json.dumps({'error': 'Trader analysis failed'})}\n\n"

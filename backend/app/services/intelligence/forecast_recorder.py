@@ -9,11 +9,14 @@ calibration API can aggregate accuracy per model and per task.
 Two invariants matter:
 
 1. **No fabricated probabilities.** A verdict without a usable
-   ``ai_probability`` (missing, non-numeric, or outside ``(0, 1)``
-   after coercion) is not written at all. Aggregates filter on
+   ``ai_probability`` (missing, non-numeric, or outside ``[0, 1]``
+   after coercion) is not written at all, and the reason is logged so
+   the drop is never silent. Aggregates filter on
    ``ai_probability IS NOT NULL`` and never default to 0.5 — legacy
    rows written before this module existed stay ``NULL`` forever and
-   are excluded rather than backfilled.
+   are excluded rather than backfilled. A stated certainty (exactly 0
+   or 1) is a forecast the forecaster actually made: it is kept as
+   stated and clipped only inside the log-loss computation.
 2. **Idempotency.** The 20-minute opportunity cache
    (``analysis.OPPORTUNITY_CACHE_TTL``) replays SSE events without
    re-running the AI, so a naive writer would inflate the sample with
@@ -27,12 +30,13 @@ Two invariants matter:
 """
 
 import logging
+import math
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.analytics.assessment import Assessment
+from app.models.analytics.assessment import NULL_PROBABILITY_REASON, Assessment
 from app.repositories.intelligence.assessments import AssessmentRepository
 from app.services.intelligence.prompt_version import current_prompt_version
 
@@ -45,16 +49,21 @@ _RECORD_REASONING = "Forecast captured for calibration scoring"
 
 
 def _coerce_probability(value: Any) -> float | None:
-    """Coerce to a float strictly inside ``(0, 1)``; ``None`` otherwise.
+    """Coerce to a float inside ``[0, 1]``; ``None`` otherwise.
 
     Mirrors ``analysis_client._opt_float`` so the recorder and the
-    gRPC client agree on what counts as a usable forecast.
+    gRPC client agree on what counts as a usable forecast. A stated
+    certainty (exactly 0 or 1) is kept: it is a forecast the forecaster
+    actually stated, and it is clipped only inside the log-loss
+    computation, never rewritten here.
     """
     try:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return number if 0.0 < number < 1.0 else None
+    if not math.isfinite(number):
+        return None
+    return number if 0.0 <= number <= 1.0 else None
 
 
 def _coerce_price(value: Any) -> float | None:
@@ -128,7 +137,7 @@ def record_verdict(
         model_name: Model that produced the verdict (``None``/empty when
             the backend never echoes one; kept for ``data_quality``).
         provider: Backend/model provider (``None``/empty when unknown).
-        ai_probability: Forecast probability in ``(0, 1)``.
+        ai_probability: Forecast probability in ``[0, 1]``.
         market_price: YES price at decision time (``[0, 1]``).
         ai_score: Legacy 0-100 score (informational only).
         confidence: Legacy 0-100 confidence (informational only).
@@ -153,7 +162,18 @@ def record_verdict(
     probability = _coerce_probability(ai_probability)
     if probability is None:
         # No usable forecast: nothing to calibrate. Defaulting to 0.5
-        # would fabricate a coin-flip sample, so skip instead.
+        # would fabricate a coin-flip sample, so skip instead — and say
+        # why, so the drop is visible instead of silent.
+        logger.warning(
+            "forecast_probability_unavailable: %s",
+            NULL_PROBABILITY_REASON,
+            extra={
+                "condition_id": market_key,
+                "task": task,
+                "model_name": model_name,
+                "probability_null_reason": NULL_PROBABILITY_REASON,
+            },
+        )
         return None
 
     price = _coerce_price(market_price)
