@@ -11,6 +11,9 @@ Covers:
   (no Sharpe), max drawdown, consecutive losses, volume,
 * ``_fetch_historical_prices`` — list payload, ``{"history": ...}``
   payload, dict without history, non-200, transport error,
+* the recorded CLOB price-history fixture — ordering, price sequence,
+  dataset hash, non-monotonic detection, closed markets, 429 handling
+  and the observation cache (hit, corruption, upstream failure),
 * ``run_copy_trade_backtest`` — replay with sizing caps, daily loss
   limit, day rollover, zero size/price skips, missing timestamps,
 * ``run_indicator_backtest`` — no data, insufficient data, RSI /
@@ -21,8 +24,10 @@ Covers:
 * ``get_backtest_runs`` / ``get_backtest_run`` queries.
 """
 
+import json
 import unittest
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import app.services.analytics.backtesting_service as backtesting_service
@@ -36,6 +41,25 @@ from app.services.analytics.backtesting_service import (
     run_copy_trade_backtest,
     run_indicator_backtest,
 )
+from app.services.market_data.polymarket_service import market_data_cache
+
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
+
+
+def _load_fixture(name: str) -> dict:
+    with (FIXTURES_DIR / name).open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+# Recorded on 2026-10-21 from the live CLOB API for the YES outcome token of an
+# active market: verbatim /markets/{condition_id} and /prices-history payloads.
+RECORDED_PRICES_HISTORY = _load_fixture("polymarket_clob_prices_history_yes.json")
+# Recorded on 2026-10-21: a market that has already closed and settled.
+RECORDED_RESOLVED_MARKET = _load_fixture("polymarket_clob_market_resolved.json")
+
+# The recorded series covers 2026-10-16T11:00Z .. 2026-10-21T10:00Z.
+RECORDED_START_DATE = "2026-10-16"
+RECORDED_END_DATE = "2026-10-19"
 
 # ── Date helpers ──────────────────────────────────────────────
 
@@ -171,29 +195,62 @@ def _response(status_code=200, json_data=None):
 class FetchHistoricalPricesTests(unittest.IsolatedAsyncioTestCase):
     """Fixture-contract tests for the actual CLOB prices-history interface."""
 
-    CONDITION = "0x" + "a" * 64
-    YES = "12345678901234567890"
-    NO = "98765432109876543210"
+    CONDITION = RECORDED_PRICES_HISTORY["market"]["condition_id"]
+    YES = RECORDED_PRICES_HISTORY["market"]["tokens"][0]["token_id"]
+    NO = RECORDED_PRICES_HISTORY["market"]["tokens"][1]["token_id"]
 
     def market(self):
-        return {
-            "condition_id": self.CONDITION,
-            "tokens": [
-                {"token_id": self.YES, "outcome": "Yes"},
-                {"token_id": self.NO, "outcome": "No"},
-            ],
-        }
+        return json.loads(json.dumps(RECORDED_PRICES_HISTORY["market"]))
 
-    def history(self, count=48):
-        anchor = int(datetime.fromisoformat("2024-01-01T00:00:00+00:00").timestamp())
-        return {"history": [{"t": anchor + i * 3600, "p": "0.40"} for i in range(count)]}
+    def history(self, count=None):
+        payload = json.loads(json.dumps(RECORDED_PRICES_HISTORY["prices_history"]))
+        if count is not None:
+            payload["history"] = payload["history"][:count]
+        return payload
+
+    def recorded_rows(self):
+        """The recorded rows that fall inside the tested window."""
+        start = datetime.strptime(RECORDED_START_DATE, "%Y-%m-%d").replace(tzinfo=UTC)
+        end = datetime.strptime(RECORDED_END_DATE, "%Y-%m-%d").replace(tzinfo=UTC) + timedelta(
+            days=1
+        )
+        return [
+            row
+            for row in RECORDED_PRICES_HISTORY["prices_history"]["history"]
+            if start.timestamp() <= row["t"] < end.timestamp()
+        ]
 
     def client_for(self, *responses):
         client = _httpx_client(responses[0] if responses else _response())
         client.get = AsyncMock(side_effect=list(responses))
         return client
 
-    async def load(self, client, outcome="Yes"):
+    def cache_keys(self):
+        start = datetime.strptime(RECORDED_START_DATE, "%Y-%m-%d").replace(tzinfo=UTC)
+        end = datetime.strptime(RECORDED_END_DATE, "%Y-%m-%d").replace(tzinfo=UTC) + timedelta(
+            days=1
+        )
+        window = f"{int(start.timestamp())}:{int(end.timestamp())}:60"
+        return (
+            f"price_history_token:{self.CONDITION.lower()}:Yes",
+            f"price_history_token:{self.CONDITION.lower()}:No",
+            f"price_history:{self.YES}:{window}",
+            f"price_history:{self.NO}:{window}",
+        )
+
+    def setUp(self):
+        super().setUp()
+        self.clear_cache()
+
+    def tearDown(self):
+        self.clear_cache()
+        super().tearDown()
+
+    def clear_cache(self):
+        for key in self.cache_keys():
+            market_data_cache.delete(key)
+
+    async def load(self, client, outcome="Yes", condition_id=None):
         from app.services.market_data.historical_prices import load_token_price_history
 
         with patch(
@@ -201,7 +258,10 @@ class FetchHistoricalPricesTests(unittest.IsolatedAsyncioTestCase):
             return_value=client,
         ):
             return await load_token_price_history(
-                self.CONDITION, "2024-01-01", "2024-01-02", outcome=outcome
+                condition_id or self.CONDITION,
+                RECORDED_START_DATE,
+                RECORDED_END_DATE,
+                outcome=outcome,
             )
 
     async def test_valid_yes_token_and_clob_parameters(self):
@@ -210,11 +270,11 @@ class FetchHistoricalPricesTests(unittest.IsolatedAsyncioTestCase):
         client = self.client_for(_response(200, self.market()), _response(200, self.history()))
         result = await self.load(client)
         self.assertIsInstance(result, HistoricalPriceRows)
-        self.assertEqual(len(result), 48)
-        self.assertEqual(result[0]["price"], 0.4)
+        self.assertEqual(len(result), len(self.recorded_rows()))
+        self.assertEqual(result[0]["price"], self.recorded_rows()[0]["p"])
         self.assertEqual(result.provenance["token_id"], self.YES)
         self.assertEqual(result.provenance["outcome"], "Yes")
-        self.assertEqual(result.provenance["sample_count"], 48)
+        self.assertEqual(result.provenance["sample_count"], len(self.recorded_rows()))
         self.assertEqual(result.provenance["quality"], "indicative_price_only")
         self.assertEqual(len(result.provenance["data_hash"]), 64)
         self.assertEqual(client.get.await_count, 2)
@@ -229,6 +289,81 @@ class FetchHistoricalPricesTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(params["startTs"], int)
         self.assertIsInstance(params["endTs"], int)
         self.assertNotIn("startDate", params)
+
+    async def test_recorded_response_is_ordered_and_reproducible(self):
+        """The recorded YES payload returns ordered rows and a stable hash."""
+        client = self.client_for(_response(200, self.market()), _response(200, self.history()))
+        result = await self.load(client)
+
+        timestamps = [row["t"] for row in result]
+        self.assertEqual(timestamps, sorted(timestamps))
+        self.assertTrue(all(b > a for a, b in zip(timestamps, timestamps[1:], strict=False)))
+
+        expected = self.recorded_rows()
+        self.assertEqual([row["price"] for row in result], [row["p"] for row in expected])
+        self.assertEqual(
+            [row["timestamp"] for row in result],
+            [datetime.fromtimestamp(row["t"], tz=UTC).isoformat() for row in expected],
+        )
+
+        # The dataset hash is the identity of the series: same input, same hash.
+        self.assertEqual(
+            result.provenance["data_hash"],
+            "1e895a0fba531f3ed5c1fbc51a3b28546da65df1b2abc6ac78bdb6a07ae04ae7",
+        )
+
+        # A second, identical read of the same payload yields the same hash.
+        self.clear_cache()
+        again = await self.load(
+            self.client_for(_response(200, self.market()), _response(200, self.history()))
+        )
+        self.assertEqual(again.provenance["data_hash"], result.provenance["data_hash"])
+
+    async def test_observations_carry_full_provenance(self):
+        from app.services.market_data.historical_prices import ObservedPrice
+
+        client = self.client_for(_response(200, self.market()), _response(200, self.history()))
+        result = await self.load(client)
+
+        self.assertEqual(len(result.observations), len(result))
+        observation = result.observations[0]
+        self.assertIsInstance(observation, ObservedPrice)
+        self.assertEqual(observation.token_id, self.YES)
+        self.assertEqual(observation.condition_id, self.CONDITION.lower())
+        self.assertEqual(observation.outcome, "Yes")
+        self.assertEqual(observation.source_schema_version, "polymarket_clob_prices_history_v1")
+        self.assertEqual(observation.quality, "indicative_price_only")
+        self.assertEqual(observation.timestamp.isoformat(), result[0]["timestamp"])
+        self.assertIsNotNone(observation.available_at)
+
+        provenance = result.provenance
+        self.assertEqual(provenance["feed_version"], "prices_history_feed_v1")
+        self.assertEqual(provenance["source"], "polymarket_clob_prices_history_v1")
+        self.assertEqual(provenance["gap_count"], 0)
+        self.assertEqual(provenance["sample_count"], len(result))
+        self.assertIn("start_utc", provenance)
+        self.assertIn("end_exclusive_utc", provenance)
+
+    async def test_non_monotonic_series_is_detected_not_sorted(self):
+        from app.services.market_data.historical_prices import PriceHistoryError
+
+        rows = self.recorded_rows()
+        shuffled = [rows[0], rows[2], rows[1], *rows[3:]]
+        client = self.client_for(
+            _response(200, self.market()),
+            _response(200, {"history": shuffled}),
+        )
+        with self.assertRaisesRegex(PriceHistoryError, "monotonic"):
+            await self.load(client)
+
+    async def test_closed_market_before_window_fails_explicitly(self):
+        from app.services.market_data.historical_prices import PriceHistoryError
+
+        resolved = json.loads(json.dumps(RECORDED_RESOLVED_MARKET["market"]))
+        self.assertTrue(resolved["closed"])
+        client = self.client_for(_response(200, resolved))
+        with self.assertRaisesRegex(PriceHistoryError, "closed or resolved"):
+            await self.load(client, condition_id=resolved["condition_id"])
 
     async def test_no_token_side_mixing(self):
         client = self.client_for(_response(200, self.market()), _response(200, self.history()))
@@ -339,8 +474,66 @@ class FetchHistoricalPricesTests(unittest.IsolatedAsyncioTestCase):
             ),
             self.assertRaisesRegex(PriceHistoryError, "Invalid Polymarket condition ID"),
         ):
-            await load_token_price_history("cond-1", "2024-01-01", "2024-01-02")
+            await load_token_price_history("cond-1", RECORDED_START_DATE, RECORDED_END_DATE)
         client.get.assert_not_called()
+
+    async def test_rate_limited_upstream_fails_and_is_not_cached(self):
+        """A 429 must fail the run and never become cached empty data."""
+        from app.services.market_data.historical_prices import PriceHistoryError
+
+        client = self.client_for(
+            _response(200, self.market()),
+            _response(429, {}),
+            _response(429, {}),
+            _response(429, {}),
+        )
+        with self.assertRaisesRegex(PriceHistoryError, "HTTP 429"):
+            await self.load(client)
+
+        for key in self.cache_keys():
+            self.assertIsNone(market_data_cache.get(key), msg=f"cache key {key} must stay empty")
+
+    async def test_repeated_query_is_served_from_cache(self):
+        client = self.client_for(_response(200, self.market()), _response(200, self.history()))
+        first = await self.load(client)
+        calls_after_first = client.get.await_count
+        self.assertEqual(calls_after_first, 2)
+
+        # The second identical query must be served from the cache: the mock
+        # only has two responses left, so any extra call would fail the test.
+        second = await self.load(client)
+        self.assertEqual(client.get.await_count, calls_after_first)
+        self.assertEqual(len(second), len(first))
+        self.assertEqual(second.provenance["data_hash"], first.provenance["data_hash"])
+        self.assertEqual(second.provenance["token_id"], self.YES)
+
+    async def test_corrupted_cache_entry_is_detected_and_recomputed(self):
+        client = self.client_for(
+            _response(200, self.market()),
+            _response(200, self.history()),
+            _response(200, self.history()),
+        )
+        first = await self.load(client)
+        calls_after_first = client.get.await_count
+
+        history_key = f"price_history:{self.YES}:{self.window_key()}"
+        entry = market_data_cache.get(history_key)
+        self.assertIsNotNone(entry)
+        entry["observations"][0]["price_decimal"] = "0.99"
+        market_data_cache.set(history_key, entry, ttl_seconds=900)
+
+        recomputed = await self.load(client)
+        # The corrupted entry was discarded and the dataset was fetched again.
+        self.assertGreater(client.get.await_count, calls_after_first)
+        self.assertEqual(recomputed[0]["price"], first[0]["price"])
+        self.assertEqual(recomputed.provenance["data_hash"], first.provenance["data_hash"])
+
+    def window_key(self):
+        start = datetime.strptime(RECORDED_START_DATE, "%Y-%m-%d").replace(tzinfo=UTC)
+        end = datetime.strptime(RECORDED_END_DATE, "%Y-%m-%d").replace(tzinfo=UTC) + timedelta(
+            days=1
+        )
+        return f"{int(start.timestamp())}:{int(end.timestamp())}:60"
 
 
 # ── Copy-trade replay ─────────────────────────────────────────
@@ -673,6 +866,86 @@ class RunIndicatorBacktestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result["trade_log"]), 1)
         self.assertEqual(result["trade_log"][0]["size"], 5)
 
+    async def test_settled_zero_price_is_not_rejected(self):
+        """A market that settled at 0.0 is a valid price, not a malformed row."""
+        prices = [100.0] * 60
+        prices[40] = 0.0
+        result = await self._run({"condition_id": "c1"}, _price_data(prices))
+        self.assertNotIn("error", result)
+        self.assertEqual(result["metrics"]["total_trades"], 0)
+
+    async def test_negative_price_is_still_rejected(self):
+        result = await self._run({"condition_id": "c1"}, _price_data([-0.1] + [100.0] * 59))
+        self.assertEqual(result["trade_log"], [])
+        self.assertIn("invalid price", result["error"])
+        self.assertEqual(result["indicator_values"]["history_quality"], "invalid_source")
+
+
+# ── History failure provenance ────────────────────────────────
+
+
+class HistoryFailureProvenanceTests(unittest.IsolatedAsyncioTestCase):
+    """A failed history read stays attributable and never looks successful."""
+
+    async def _run_with_failure(self, reason: str, message: str, context=None):
+        from app.services.market_data.historical_prices import PriceHistoryError
+
+        failure = PriceHistoryError(message, reason=reason, context=context)
+        fetch = AsyncMock(side_effect=failure)
+        with patch.object(backtesting_service, "_fetch_historical_prices", fetch):
+            return await run_indicator_backtest(
+                1,
+                {
+                    "condition_id": "0x" + "a" * 64,
+                    "start_date": RECORDED_START_DATE,
+                    "end_date": RECORDED_END_DATE,
+                },
+            )
+
+    async def test_upstream_failure_keeps_provenance_and_names_the_cause(self):
+        result = await self._run_with_failure(
+            "upstream_unavailable",
+            "Polymarket historical market data unavailable",
+            context={
+                "token_id": "12345678901234567890",
+                "provenance": {"fetched_at": "2026-10-21T10:00:00+00:00"},
+            },
+        )
+        self.assertEqual(result["trade_log"], [])
+        self.assertIsNone(result["metrics"]["sharpe_ratio"])
+
+        indicator_values = result["indicator_values"]
+        self.assertEqual(indicator_values["history_quality"], "upstream_unavailable")
+        self.assertEqual(
+            indicator_values["error_reason"], "Polymarket historical market data unavailable"
+        )
+
+        provenance = indicator_values["history_source"]
+        self.assertEqual(provenance["token_id"], "12345678901234567890")
+        self.assertEqual(provenance["source"], "polymarket_clob_prices_history_v1")
+        self.assertEqual(provenance["feed_version"], "prices_history_feed_v1")
+        self.assertEqual(provenance["start_utc"], "2026-10-16T00:00:00+00:00")
+        self.assertEqual(provenance["end_exclusive_utc"], "2026-10-20T00:00:00+00:00")
+        self.assertEqual(provenance["fetched_at"], "2026-10-21T10:00:00+00:00")
+        self.assertEqual(provenance["error_kind"], "upstream_unavailable")
+        self.assertEqual(
+            provenance["error_reason"], "Polymarket historical market data unavailable"
+        )
+
+    async def test_upstream_failure_is_not_labelled_insufficient_coverage(self):
+        upstream = await self._run_with_failure(
+            "upstream_unavailable", "Polymarket historical market data unavailable"
+        )
+        sparse = await self._run_with_failure(
+            "insufficient_coverage", "Insufficient historical price coverage"
+        )
+        self.assertEqual(upstream["indicator_values"]["history_quality"], "upstream_unavailable")
+        self.assertEqual(sparse["indicator_values"]["history_quality"], "insufficient_coverage")
+        self.assertNotEqual(
+            upstream["indicator_values"]["history_quality"],
+            sparse["indicator_values"]["history_quality"],
+        )
+
 
 # ── Run creation and routing ──────────────────────────────────
 
@@ -786,6 +1059,37 @@ class CreateAndRunBacktestTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(run.status, "failed")
         self.assertIn("Unknown strategy type: inverse_bot", run.error_message)
+
+    async def test_history_failure_marks_run_failed_without_sharpe(self):
+        """A failed history read is a failed run, never a zero-return success."""
+        from app.services.market_data.historical_prices import PriceHistoryError
+
+        db = _run_db(run=MagicMock(name="run"))
+        fetch = AsyncMock(
+            side_effect=PriceHistoryError(
+                "Polymarket history HTTP 429", reason="upstream_http_error"
+            )
+        )
+        with (
+            patch.object(backtesting_service, "SessionLocal", return_value=db),
+            patch.object(backtesting_service, "BacktestRun") as run_cls,
+            patch.object(backtesting_service, "_fetch_historical_prices", fetch),
+        ):
+            run_cls.return_value.id = 42
+            run = await create_and_run_backtest(
+                1,
+                "indicator",
+                "history failure",
+                RECORDED_START_DATE,
+                RECORDED_END_DATE,
+                {"condition_id": "0x" + "a" * 64},
+            )
+        self.assertEqual(run.status, "failed")
+        self.assertIsNone(run.sharpe_ratio)
+        self.assertIsNone(run.profit_factor)
+        self.assertEqual(run.total_trades, 0)
+        self.assertIn("HTTP 429", run.error_message)
+        self.assertEqual(run.indicator_values["history_quality"], "upstream_unavailable")
 
     async def test_engine_error_marks_run_failed(self):
         db = _run_db(run=MagicMock(name="run"))

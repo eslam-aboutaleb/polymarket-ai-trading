@@ -20,6 +20,21 @@ import { Banner, ConfirmModal, Skeleton } from "./ui";
 
 type FormState = CreateBacktestRequest;
 
+/** Render a UTC timestamp as `YYYY-MM-DD HH:MMZ` (or the raw value). */
+const formatUtc = (value: unknown): string => {
+  if (value == null) return "—";
+  const text = String(value);
+  return text.includes("T") ? `${text.slice(0, 10)} ${text.slice(11, 16)}Z` : text;
+};
+
+/** Render a gap in seconds as a compact duration. */
+const formatDuration = (value: unknown): string => {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds)) return "—";
+  if (seconds < 3600) return `${Math.round(seconds)}s`;
+  return `${(seconds / 3600).toFixed(1)}h`;
+};
+
 const defaultForm: FormState = {
   strategy_type: "indicator",
   strategy_name: "",
@@ -106,6 +121,15 @@ export default function Backtesting() {
     };
     return colors[status] || "bg-gray-500/20 text-gray-400";
   };
+
+  // Provenance of the historical feed behind an indicator run: which feed,
+  // which token side, which window and how complete that window was.
+  const historySource = (selectedRun?.indicator_values?.history_source ?? null) as Record<
+    string,
+    unknown
+  > | null;
+  const historyQuality = String(selectedRun?.indicator_values?.history_quality ?? "");
+  const historyErrorReason = String(selectedRun?.indicator_values?.error_reason ?? "");
 
   if (loading) {
     return (
@@ -380,24 +404,87 @@ export default function Backtesting() {
           {selectedRun.strategy_type === "indicator" && (
             <div className="rounded bg-surface-secondary p-3 text-xs text-soft" role="status">
               <p>
-                {selectedRun.indicator_values?.history_quality === "indicative_price_only"
+                {historyQuality === "indicative_price_only"
                   ? "Verified-source CLOB sampled token prices — indicative only. No historical bid/ask depth, executable fills, costs or validated trading edge."
                   : "Unverified or incomplete historical feed. Legacy results are not independently validated."}
               </p>
-              {selectedRun.indicator_values?.history_source != null && (
-                <p className="mt-1 break-all">
-                  Outcome token:{" "}
-                  {String(
-                    (selectedRun.indicator_values.history_source as Record<string, unknown>)
-                      .token_id || "unknown",
+              {historySource && (
+                <dl className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
+                  <div className="flex gap-1">
+                    <dt className="text-soft shrink-0">Feed</dt>
+                    <dd className="text-white break-all">
+                      {String(historySource.feed_version ?? historySource.source ?? "unknown")}
+                    </dd>
+                  </div>
+                  <div className="flex gap-1">
+                    <dt className="text-soft shrink-0">Source</dt>
+                    <dd className="text-white break-all">
+                      {String(historySource.source ?? "unknown")}
+                    </dd>
+                  </div>
+                  <div className="flex gap-1">
+                    <dt className="text-soft shrink-0">Token side</dt>
+                    <dd className="text-white">
+                      {String(historySource.outcome ?? "unknown").toUpperCase()}
+                    </dd>
+                  </div>
+                  <div className="flex gap-1">
+                    <dt className="text-soft shrink-0">Outcome token</dt>
+                    <dd className="text-white break-all font-mono">
+                      {String(historySource.token_id ?? "unknown")}
+                    </dd>
+                  </div>
+                  <div className="flex gap-1">
+                    <dt className="text-soft shrink-0">Covered window (UTC)</dt>
+                    <dd className="text-white">
+                      {formatUtc(historySource.start_utc)} →{" "}
+                      {formatUtc(historySource.end_exclusive_utc)}
+                    </dd>
+                  </div>
+                  <div className="flex gap-1">
+                    <dt className="text-soft shrink-0">Samples</dt>
+                    <dd className="text-white">
+                      {String(historySource.sample_count ?? "—")}
+                      {historySource.first_observed_at != null && (
+                        <span className="text-soft">
+                          {" · "}
+                          {formatUtc(historySource.first_observed_at)} →{" "}
+                          {formatUtc(historySource.last_observed_at)}
+                        </span>
+                      )}
+                    </dd>
+                  </div>
+                  <div className="flex gap-1">
+                    <dt className="text-soft shrink-0">Max gap</dt>
+                    <dd className="text-white">
+                      {formatDuration(historySource.max_gap_seconds)}
+                      {historySource.gap_count != null && (
+                        <span className="text-soft">
+                          {" · "}
+                          {String(historySource.gap_count)} gap
+                          {Number(historySource.gap_count) === 1 ? "" : "s"} over 4h
+                        </span>
+                      )}
+                    </dd>
+                  </div>
+                  <div className="flex gap-1">
+                    <dt className="text-soft shrink-0">Dataset SHA-256</dt>
+                    <dd className="text-white break-all font-mono">
+                      {String(historySource.data_hash ?? "unknown").slice(0, 16)}…
+                    </dd>
+                  </div>
+                  {historySource.error_reason != null && (
+                    <div className="flex gap-1 sm:col-span-2">
+                      <dt className="text-soft shrink-0">Feed error</dt>
+                      <dd className="text-red-300 break-all">
+                        {String(historySource.error_reason)}
+                      </dd>
+                    </div>
                   )}
-                  {" · "}Dataset SHA-256:{" "}
-                  {String(
-                    (selectedRun.indicator_values.history_source as Record<string, unknown>)
-                      .data_hash || "unknown",
-                  ).slice(0, 16)}
-                  {"…"}
-                </p>
+                </dl>
+              )}
+              {historyErrorReason && !historySource && (
+                <p className="mt-1 text-red-300 break-all">{historyErrorReason}</p>
               )}
             </div>
           )}
