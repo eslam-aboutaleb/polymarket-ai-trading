@@ -205,7 +205,9 @@ with SessionLocal.begin() as db:
                 )
                 service = subprocess.Popen(  # noqa: S603 - fixed service entrypoint
                     [str(service_python), "-m", "src.server"],
-                    cwd=ROOT / "services/llm-chain",
+                    # Keep checked-in generated modules (and local .env files)
+                    # behind the freshly compiled, runtime-compatible bindings.
+                    cwd=runtime,
                     env=env,
                     stdout=log,
                     stderr=subprocess.STDOUT,
