@@ -459,6 +459,7 @@ export default function SettingsPage() {
         phone: phone || null,
       });
       setProfile(updated);
+      setProfileDirty(false);
       toast.success("Profile saved!");
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to save profile"));
