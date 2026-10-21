@@ -81,7 +81,10 @@ test.describe("Login page", () => {
     // 6. Logout asks for confirmation and then clears the session.
     await page.getByRole("button", { name: "Logout" }).first().click();
     await expect(page.getByRole("heading", { name: "Confirm Logout" })).toBeVisible();
-    await page.getByRole("button", { name: "Logout", exact: true }).last().click();
+    await page
+      .getByRole("dialog", { name: "Confirm Logout" })
+      .getByRole("button", { name: "Log out", exact: true })
+      .click();
     await expect(page.getByRole("button", { name: "Connect Wallet" }).first()).toBeVisible();
   });
   test("rejects a signature the backend cannot verify", async ({ page }) => {
@@ -98,8 +101,17 @@ test.describe("Login page", () => {
     // match the issued challenge, so the backend must reject it.
     const wrongSignature = await new Wallet(ADMIN_PRIVATE_KEY).signMessage(challenge + " tampered");
     await provideMockSignature(page, wrongSignature);
+    const rejected = page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/auth/verify") && response.request().method() === "POST",
+    );
     await page.getByRole("button", { name: "Sign Message" }).click();
 
+    // Assert the SECURITY contract, not the backend's literal error text.
+    // The frontend deliberately normalizes every HTTP 401 into a generic
+    // session-expired message to avoid leaking authentication details.
+    const response = await rejected;
+    expect(response.status()).toBe(401);
     await expect(page.getByText("Your session has expired. Please sign in again.")).toBeVisible();
     await expect(page).toHaveURL(/\/login$/);
   });
@@ -112,7 +124,10 @@ test.describe("Login modal on public pages", () => {
     const modal = page.getByRole("heading", { name: "Connect Wallet" });
     await expect(modal).toBeVisible();
 
-    await page.getByRole("button", { name: "Close login modal" }).click();
+    await page
+      .getByRole("dialog", { name: "Connect Wallet" })
+      .getByRole("button", { name: "Close", exact: true })
+      .click();
     await expect(modal).toBeHidden();
   });
 
