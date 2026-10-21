@@ -404,7 +404,7 @@ export default function Backtesting() {
           {selectedRun.status !== "failed" && (
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 text-xs">
               <div>
-                <span className="text-soft">Total PnL</span>
+                <span className="text-soft">{selectedRun.strategy_type === "indicator" ? "Gross Indicative P&L" : "Total PnL"}</span>
                 <p className={`font-bold text-lg ${pnlColor(selectedRun.total_pnl)}`}>
                   ${selectedRun.total_pnl.toFixed(2)}
                 </p>
