@@ -7,6 +7,7 @@ Supports per-request LLM provider selection via the gateway pattern.
 import asyncio
 import json
 import logging
+import math
 import re
 from collections.abc import AsyncIterator
 from functools import lru_cache
@@ -131,24 +132,26 @@ UNUSABLE_VERDICT = "unknown"
 
 
 def _opt_float(value: Any) -> float | None:
-    """Coerce to a float strictly inside (0, 1); ``None`` when unusable.
+    """Coerce to a float inside [0, 1]; ``None`` when unusable.
 
     Used for ``ai_probability`` so a missing or malformed forecast stays
     absent (and is excluded from calibration aggregates) instead of
     silently defaulting to a fake probability.
 
-    The strict interval is deliberate: a stated certainty of 0 or 1 is a
-    model claiming knowledge of an unresolved market, which is not a
-    forecast and cannot be scored against a resolution, so it is dropped
-    rather than clamped. ``forecast_recorder`` shares this rule verbatim
-    and filters its aggregates on ``ai_probability IS NOT NULL`` instead
-    of backfilling a neutral 0.5.
+    A stated certainty of 0 or 1 is kept: the model really did state it,
+    and it is a forecast that can be scored (the log-loss clips it for
+    the computation only — the stored probability is never rewritten).
+    ``forecast_recorder`` shares this rule verbatim and filters its
+    aggregates on ``ai_probability IS NOT NULL`` instead of backfilling
+    a neutral 0.5.
     """
     try:
         num = float(value)
     except (TypeError, ValueError):
         return None
-    if 0.0 < num < 1.0:
+    if not math.isfinite(num):
+        return None
+    if 0.0 <= num <= 1.0:
         return num
     return None
 
@@ -204,7 +207,7 @@ def _parse_trailing_probability(analysis_text: str, meta: dict[str, Any]) -> flo
 
     The prompt ends with three parseable trailer lines
     (Recommendation / Confidence / AI Probability). Returns a float in
-    (0, 1), or None when the model omitted the line — never a fake
+    [0, 1], or None when the model omitted the line — never a fake
     default, so calibration aggregates can exclude it.
     """
     raw = meta.get("ai_probability") or meta.get("probability")
@@ -220,7 +223,7 @@ def _parse_trailing_probability(analysis_text: str, meta: dict[str, Any]) -> flo
         return None
     if value > 1.0:  # prompt emits a 0-100 percentage
         value = value / 100.0
-    if 0.0 < value < 1.0:
+    if 0.0 <= value <= 1.0:
         return value
     return None
 

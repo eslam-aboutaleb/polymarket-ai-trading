@@ -4,12 +4,18 @@ Gamma lookups are mocked at the ``httpx.AsyncClient`` boundary
 (patch-constructor convention from
 test_binance_signals_routes_coverage.py); resolution and Brier writes
 run against real in-memory SQLite.
+
+The golden fixtures below cover the settlement states issue #29 asks
+for: closed-not-resolved, multi-outcome, disputed, void, changed rules,
+a reversed outcome mapping and a replayed (stream-deduplicated) verdict.
 """
 
 import asyncio
 import contextlib
 import json
+import math
 import unittest
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy import create_engine
@@ -21,9 +27,15 @@ from app.models.analytics.assessment import Assessment
 from app.models.base import Base
 from app.services.intelligence import forecast_resolution
 from app.services.intelligence.forecast_resolution import (
+    SCORING_VERSION,
+    ExclusionReason,
+    MarketResolution,
     ResolutionRun,
     brier_score,
     fetch_resolutions,
+    is_binary_outcome,
+    is_verified_resolution,
+    log_loss,
     outcome_value,
     resolve_pending,
     winning_outcome,
@@ -34,8 +46,8 @@ CID = "0x" + "ab" * 32
 CID_2 = "0x" + "cd" * 32
 
 
-def _gamma_market(cid, outcomes, prices):
-    return {
+def _gamma_market(cid, outcomes, prices, **extra):
+    market = {
         "conditionId": cid,
         "question": "Will it happen?",
         "outcomes": json.dumps(outcomes),
@@ -43,6 +55,13 @@ def _gamma_market(cid, outcomes, prices):
         "closed": True,
         "umaResolutionStatus": "resolved",
     }
+    market.update(extra)
+    return market
+
+
+def _resolved(outcome: str, closed_at: datetime | None = None) -> MarketResolution:
+    """A settled market, as ``fetch_resolutions`` reports it."""
+    return MarketResolution(outcome=outcome, closed_at=closed_at)
 
 
 def _mock_httpx_client(responses=None, status_code=200, get_exc=None):
@@ -118,9 +137,22 @@ class WinningOutcomeTests(unittest.TestCase):
         market = _gamma_market(CID, ["Yes", "No"], ["0", "1"])
         self.assertEqual(winning_outcome(market), "NO")
 
-    def test_multi_outcome_market_uses_winning_label(self):
+    def test_reversed_outcome_mapping_resolves_to_the_winning_label(self):
+        """Gamma may list the outcomes the other way round.
+
+        ``["No", "Yes"]`` with the prices ``["1", "0"]`` means NO won:
+        the label must follow the price, not the position.
+        """
+        market = _gamma_market(CID, ["No", "Yes"], ["1", "0"])
+        self.assertEqual(winning_outcome(market), "NO")
+
+    def test_reversed_outcome_mapping_resolves_to_the_other_winner(self):
+        market = _gamma_market(CID, ["No", "Yes"], ["0", "1"])
+        self.assertEqual(winning_outcome(market), "YES")
+
+    def test_multi_outcome_market_is_not_scored_as_binary_no(self):
         market = _gamma_market(CID, ["Alice", "Bob"], ["0", "1"])
-        self.assertEqual(winning_outcome(market), "BOB")
+        self.assertIsNone(winning_outcome(market))
 
     def test_no_outcome_reaching_threshold_returns_none(self):
         market = _gamma_market(CID, ["Yes", "No"], ["0", "0"])
@@ -135,8 +167,114 @@ class WinningOutcomeTests(unittest.TestCase):
         )
 
     def test_already_parsed_lists_are_accepted(self):
-        market = {"outcomes": ["Yes", "No"], "outcomePrices": [0.99, 0.01]}
+        market = _gamma_market(CID, ["Yes", "No"], [1.0, 0.0])
+        market["outcomes"] = ["Yes", "No"]
+        market["outcomePrices"] = [1.0, 0.0]
         self.assertEqual(winning_outcome(market), "YES")
+
+    def test_closed_without_verified_resolution_does_not_count(self):
+        market = _gamma_market(CID, ["Yes", "No"], ["1", "0"])
+        market["umaResolutionStatus"] = "proposed"
+        self.assertIsNone(winning_outcome(market))
+
+    def test_ambiguous_equal_outcome_values_does_not_count(self):
+        market = _gamma_market(CID, ["Yes", "No"], ["0.5", "0.5"])
+        self.assertIsNone(winning_outcome(market))
+
+    def test_99_percent_quote_is_not_final_resolution(self):
+        market = _gamma_market(CID, ["Yes", "No"], ["0.99", "0.01"])
+        self.assertIsNone(winning_outcome(market))
+
+
+class ExclusionReasonTests(unittest.TestCase):
+    """Every unusable settlement state has its own reason."""
+
+    def _reason(self, market) -> ExclusionReason:
+        return forecast_resolution.classify_market(market).reason
+
+    def test_disputed_market_is_reported_as_disputed(self):
+        """Gamma emits "disputed" for a challenged resolution."""
+        market = _gamma_market(CID, ["Yes", "No"], ["1", "0"], umaResolutionStatus="disputed")
+        self.assertEqual(self._reason(market), ExclusionReason.DISPUTED_OR_CHALLENGED)
+        self.assertIsNone(winning_outcome(market))
+
+    def test_challenged_market_is_reported_as_disputed(self):
+        market = _gamma_market(CID, ["Yes", "No"], ["1", "0"], umaResolutionStatus="challenged")
+        self.assertEqual(self._reason(market), ExclusionReason.DISPUTED_OR_CHALLENGED)
+
+    def test_voided_market_is_reported_as_void(self):
+        market = _gamma_market(CID, ["Yes", "No"], ["1", "0"], umaResolutionStatus="voided")
+        self.assertEqual(self._reason(market), ExclusionReason.VOID)
+
+    def test_closed_but_not_finalized_market_has_its_own_reason(self):
+        market = _gamma_market(CID, ["Yes", "No"], ["1", "0"], umaResolutionStatus="proposed")
+        self.assertEqual(self._reason(market), ExclusionReason.CLOSED_NOT_FINALIZED)
+
+    def test_multi_outcome_market_has_its_own_reason(self):
+        market = _gamma_market(CID, ["Alice", "Bob"], ["0", "1"])
+        self.assertEqual(self._reason(market), ExclusionReason.NON_BINARY_OUTCOME)
+
+    def test_three_outcome_market_has_its_own_reason(self):
+        market = _gamma_market(CID, ["Yes", "No", "Maybe"], ["1", "0", "0"])
+        self.assertEqual(self._reason(market), ExclusionReason.MULTI_OUTCOME)
+
+    def test_ambiguous_settlement_has_its_own_reason(self):
+        market = _gamma_market(CID, ["Yes", "No"], ["0", "0"])
+        self.assertEqual(self._reason(market), ExclusionReason.AMBIGUOUS_SETTLEMENT)
+
+    def test_changed_rules_produce_a_different_outcome(self):
+        """The same market settled the other way round scores the other way.
+
+        A market that resolves NO instead of YES must produce the
+        mirrored Brier score — the label follows the settlement, never
+        the previous answer.
+        """
+        yes_market = _gamma_market(CID, ["Yes", "No"], ["1", "0"])
+        no_market = _gamma_market(CID, ["Yes", "No"], ["0", "1"])
+        self.assertEqual(winning_outcome(yes_market), "YES")
+        self.assertEqual(winning_outcome(no_market), "NO")
+        self.assertAlmostEqual(brier_score(0.8, "YES"), 0.04)
+        self.assertAlmostEqual(brier_score(0.8, "NO"), 0.64)
+
+
+class BinaryOutcomeTests(unittest.TestCase):
+    def test_is_binary_outcome_accepts_the_binary_labels(self):
+        for label in ("YES", "yes", "NO", "no", "Yes", "No"):
+            with self.subTest(label=label):
+                self.assertTrue(is_binary_outcome(label))
+
+    def test_is_binary_outcome_rejects_legacy_and_missing_labels(self):
+        for label in ("ALICE", "BOB", "", None, "maybe"):
+            with self.subTest(label=label):
+                self.assertFalse(is_binary_outcome(label))
+
+    def test_verified_resolution_needs_a_score_and_a_binary_label(self):
+        self.assertTrue(is_verified_resolution(0.04, "YES", SCORING_VERSION))
+        self.assertFalse(is_verified_resolution(0.04, "YES"))
+        self.assertFalse(is_verified_resolution(0.04, "YES", "brier-binary-v1"))
+        for score in (float("nan"), float("inf"), -0.1, 1.1):
+            self.assertFalse(is_verified_resolution(score, "YES", SCORING_VERSION))
+        self.assertFalse(is_verified_resolution(None, "YES"))
+        self.assertFalse(is_verified_resolution(0.04, "ALICE"))
+
+
+class LogLossTests(unittest.TestCase):
+    def test_log_loss_is_finite_for_a_stated_certainty(self):
+        """p = 0 and p = 1 are clipped for the computation only."""
+        for probability in (0.0, 1.0):
+            with self.subTest(probability=probability):
+                value = log_loss(probability, "YES")
+                self.assertTrue(math.isfinite(value))
+                self.assertGreater(value, 0.0)
+
+    def test_log_loss_penalises_a_wrong_certainty(self):
+        self.assertGreater(log_loss(1.0, "NO"), log_loss(0.5, "NO"))
+
+    def test_log_loss_rejects_an_unusable_probability(self):
+        with self.assertRaises(ValueError):
+            log_loss(1.5, "YES")
+        with self.assertRaises(ValueError):
+            log_loss(0.5, "ALICE")
 
 
 class BrierScoreTests(unittest.TestCase):
@@ -154,8 +292,15 @@ class BrierScoreTests(unittest.TestCase):
         self.assertEqual(outcome_value("YES"), 1.0)
         self.assertEqual(outcome_value("yes"), 1.0)
         self.assertEqual(outcome_value("NO"), 0.0)
-        self.assertEqual(outcome_value("ALICE"), 0.0)
-        self.assertEqual(outcome_value(None), 0.0)
+        with self.assertRaises(ValueError):
+            outcome_value("ALICE")
+        with self.assertRaises(ValueError):
+            outcome_value(None)
+
+    def test_brier_rejects_out_of_range_or_unverified(self):
+        for p, label in [(float("nan"), "YES"), (1.2, "NO"), (0.8, "BOB")]:
+            with self.subTest(p=p, label=label), self.assertRaises(ValueError):
+                brier_score(p, label)
 
 
 class FetchResolutionsTests(unittest.IsolatedAsyncioTestCase):
@@ -180,7 +325,60 @@ class FetchResolutionsTests(unittest.IsolatedAsyncioTestCase):
         client = _mock_httpx_client([[yes_market], [no_market]])
         self._patch_client(client)
         result = await fetch_resolutions([CID, CID_2])
-        self.assertEqual(result, {CID: "YES", CID_2: "NO"})
+        self.assertEqual(
+            {cid: item.outcome for cid, item in result.items()}, {CID: "YES", CID_2: "NO"}
+        )
+
+    async def test_wrong_condition_id_from_upstream_is_rejected(self):
+        wrong = _gamma_market(CID_2, ["Yes", "No"], ["1", "0"])
+        client = _mock_httpx_client([[wrong]])
+        self._patch_client(client)
+        result = await fetch_resolutions([CID])
+        self.assertIsNone(result[CID].outcome)
+        self.assertEqual(result[CID].reason, ExclusionReason.CONDITION_ID_MISMATCH)
+
+    async def test_closed_but_not_finalized_is_excluded(self):
+        market = _gamma_market(CID, ["Yes", "No"], ["1", "0"])
+        market["umaResolutionStatus"] = "challenged"
+        client = _mock_httpx_client([[market]])
+        self._patch_client(client)
+        result = await fetch_resolutions([CID])
+        self.assertIsNone(result[CID].outcome)
+        self.assertEqual(result[CID].reason, ExclusionReason.DISPUTED_OR_CHALLENGED)
+
+    async def test_disputed_market_is_excluded(self):
+        """Gamma reports a challenged resolution as "disputed"."""
+        market = _gamma_market(CID, ["Yes", "No"], ["1", "0"])
+        market["umaResolutionStatus"] = "disputed"
+        client = _mock_httpx_client([[market]])
+        self._patch_client(client)
+        result = await fetch_resolutions([CID])
+        self.assertIsNone(result[CID].outcome)
+        self.assertEqual(result[CID].reason, ExclusionReason.DISPUTED_OR_CHALLENGED)
+
+    async def test_voided_market_is_excluded(self):
+        market = _gamma_market(CID, ["Yes", "No"], ["1", "0"])
+        market["umaResolutionStatus"] = "voided"
+        client = _mock_httpx_client([[market]])
+        self._patch_client(client)
+        result = await fetch_resolutions([CID])
+        self.assertIsNone(result[CID].outcome)
+        self.assertEqual(result[CID].reason, ExclusionReason.VOID)
+
+    async def test_reversed_outcome_mapping_is_resolved(self):
+        market = _gamma_market(CID, ["No", "Yes"], ["1", "0"])
+        client = _mock_httpx_client([[market]])
+        self._patch_client(client)
+        result = await fetch_resolutions([CID])
+        self.assertEqual(result[CID].outcome, "NO")
+
+    async def test_market_close_time_is_reported(self):
+        closed = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+        market = _gamma_market(CID, ["Yes", "No"], ["1", "0"], closedTime=closed.timestamp())
+        client = _mock_httpx_client([[market]])
+        self._patch_client(client)
+        result = await fetch_resolutions([CID])
+        self.assertEqual(result[CID].closed_at, closed)
 
     async def test_uses_condition_ids_param_and_closed_filter(self):
         market = _gamma_market(CID, ["Yes", "No"], ["1", "0"])
@@ -196,23 +394,26 @@ class FetchResolutionsTests(unittest.IsolatedAsyncioTestCase):
         client = _mock_httpx_client([[market]])
         self._patch_client(client)
         result = await fetch_resolutions([CID, CID, CID])
-        self.assertEqual(result, {CID: "YES"})
+        self.assertEqual({cid: item.outcome for cid, item in result.items()}, {CID: "YES"})
         self.assertEqual(client.get.await_count, 1)
 
     async def test_empty_result_is_skipped(self):
         client = _mock_httpx_client([[]])
         self._patch_client(client)
-        self.assertEqual(await fetch_resolutions([CID]), {})
+        result = await fetch_resolutions([CID])
+        self.assertEqual(result[CID].reason, ExclusionReason.MARKET_NOT_FOUND)
 
     async def test_non_200_is_skipped(self):
         client = _mock_httpx_client([[]], status_code=500)
         self._patch_client(client)
-        self.assertEqual(await fetch_resolutions([CID]), {})
+        result = await fetch_resolutions([CID])
+        self.assertEqual(result[CID].reason, ExclusionReason.LOOKUP_FAILED)
 
     async def test_network_error_is_skipped(self):
         client = _mock_httpx_client([None], get_exc=RuntimeError("network down"))
         self._patch_client(client)
-        self.assertEqual(await fetch_resolutions([CID]), {})
+        result = await fetch_resolutions([CID])
+        self.assertEqual(result[CID].reason, ExclusionReason.LOOKUP_FAILED)
 
     async def test_lookups_are_bounded_per_batch(self):
         """A slow Gamma must not stretch the pass into a serial hour.
@@ -242,7 +443,8 @@ class FetchResolutionsTests(unittest.IsolatedAsyncioTestCase):
         client.get = AsyncMock(side_effect=_get)
         self._patch_client(client)
 
-        self.assertEqual(await fetch_resolutions(ids), {})
+        result = await fetch_resolutions(ids)
+        self.assertEqual(len(result), 20)
         self.assertEqual(client.get.await_count, 20)
         self.assertEqual(peak, forecast_resolution._RESOLUTION_CONCURRENCY)
 
@@ -257,7 +459,9 @@ class ResolvePendingTests(unittest.IsolatedAsyncioTestCase):
     async def test_scores_pending_rows_with_brier(self):
         row = _verdict(self.db, probability=0.8, price=0.55)
         with patch.object(
-            forecast_resolution, "fetch_resolutions", AsyncMock(return_value={CID: "YES"})
+            forecast_resolution,
+            "fetch_resolutions",
+            AsyncMock(return_value={CID: _resolved("YES")}),
         ):
             run = await resolve_pending(self.db)
         self.assertIsInstance(run, ResolutionRun)
@@ -268,6 +472,109 @@ class ResolvePendingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row.resolved_outcome, "YES")
         self.assertAlmostEqual(row.brier_score, 0.04)
         self.assertIsNotNone(row.resolved_at)
+
+    async def test_scored_row_carries_the_scoring_version(self):
+        """A change of scoring rule must be visible on the row."""
+        row = _verdict(self.db, probability=0.8)
+        with patch.object(
+            forecast_resolution,
+            "fetch_resolutions",
+            AsyncMock(return_value={CID: _resolved("YES")}),
+        ):
+            await resolve_pending(self.db)
+        self.db.refresh(row)
+        self.assertEqual(row.scoring_version, SCORING_VERSION)
+        self.assertIsNone(row.exclusion_reason)
+
+    async def test_invalid_outcome_leaves_forecast_unscored(self):
+        row = _verdict(self.db, probability=0.8)
+        with patch.object(
+            forecast_resolution,
+            "fetch_resolutions",
+            AsyncMock(
+                return_value={CID: MarketResolution(reason=ExclusionReason.NON_BINARY_OUTCOME)}
+            ),
+        ):
+            run = await resolve_pending(self.db)
+        self.assertEqual(run.resolved, 0)
+        self.db.refresh(row)
+        self.assertIsNone(row.brier_score)
+        self.assertIsNone(row.resolved_at)
+        self.assertIsNone(row.resolved_outcome)
+        self.assertEqual(row.exclusion_reason, ExclusionReason.NON_BINARY_OUTCOME.value)
+
+    async def test_exclusion_reasons_are_counted_per_reason(self):
+        """The distinct causes must not collapse into one bucket."""
+        _verdict(self.db, probability=0.8)
+        _verdict(self.db, cid=CID_2, probability=0.6)
+        with patch.object(
+            forecast_resolution,
+            "fetch_resolutions",
+            AsyncMock(
+                return_value={
+                    CID: MarketResolution(reason=ExclusionReason.DISPUTED_OR_CHALLENGED),
+                    CID_2: MarketResolution(reason=ExclusionReason.VOID),
+                }
+            ),
+        ):
+            run = await resolve_pending(self.db)
+        self.assertEqual(run.resolved, 0)
+        self.assertEqual(
+            run.exclusions,
+            {
+                ExclusionReason.DISPUTED_OR_CHALLENGED.value: 1,
+                ExclusionReason.VOID.value: 1,
+            },
+        )
+        self.assertEqual(run.to_dict()["excluded"], 2)
+        self.assertEqual(run.to_dict()["unresolved"], 2)
+
+    async def test_forecast_recorded_after_the_close_is_not_scored(self):
+        """A forecast made after the market closed already knew the answer."""
+        closed = utc_now() - timedelta(hours=1)
+        row = _verdict(self.db, probability=0.8)
+        row.created_at = closed + timedelta(hours=1)
+        self.db.commit()
+        with patch.object(
+            forecast_resolution,
+            "fetch_resolutions",
+            AsyncMock(return_value={CID: _resolved("YES", closed_at=closed)}),
+        ):
+            run = await resolve_pending(self.db)
+        self.assertEqual(run.resolved, 0)
+        self.assertEqual(run.exclusions, {ExclusionReason.FORECAST_AFTER_CLOSE.value: 1})
+        self.db.refresh(row)
+        self.assertIsNone(row.brier_score)
+        self.assertEqual(row.exclusion_reason, ExclusionReason.FORECAST_AFTER_CLOSE.value)
+
+    async def test_forecast_recorded_before_the_close_is_scored(self):
+        closed = utc_now() - timedelta(hours=1)
+        row = _verdict(self.db, probability=0.8)
+        row.created_at = closed - timedelta(hours=2)
+        self.db.commit()
+        with patch.object(
+            forecast_resolution,
+            "fetch_resolutions",
+            AsyncMock(return_value={CID: _resolved("YES", closed_at=closed)}),
+        ):
+            run = await resolve_pending(self.db)
+        self.assertEqual(run.resolved, 1)
+        self.db.refresh(row)
+        self.assertIsNone(row.exclusion_reason)
+
+    async def test_two_rows_for_one_market_count_as_one_effective_sample(self):
+        """A replayed verdict must not inflate the effective sample count."""
+        _verdict(self.db, probability=0.8, price=0.55)
+        _verdict(self.db, probability=0.4, price=0.60, model="claude")
+        with patch.object(
+            forecast_resolution,
+            "fetch_resolutions",
+            AsyncMock(return_value={CID: _resolved("YES")}),
+        ):
+            run = await resolve_pending(self.db)
+        self.assertEqual(run.resolved, 2)
+        self.assertEqual(run.effective_resolved, 1)
+        self.assertAlmostEqual(run.effective_mean_brier, 0.04)
 
     async def test_no_resolution_leaves_row_untouched(self):
         row = _verdict(self.db)
@@ -283,7 +590,9 @@ class ResolvePendingTests(unittest.IsolatedAsyncioTestCase):
     async def test_second_run_is_a_noop(self):
         _verdict(self.db, probability=0.8)
         with patch.object(
-            forecast_resolution, "fetch_resolutions", AsyncMock(return_value={CID: "YES"})
+            forecast_resolution,
+            "fetch_resolutions",
+            AsyncMock(return_value={CID: _resolved("YES")}),
         ):
             first = await resolve_pending(self.db)
             second = await resolve_pending(self.db)

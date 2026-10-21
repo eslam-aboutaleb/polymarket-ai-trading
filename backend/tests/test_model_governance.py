@@ -23,7 +23,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (register models on Base.metadata)
-from app.models.analytics.assessment import Assessment
+from app.models.analytics.assessment import VERIFIED_SCORING_VERSION, Assessment
 from app.models.base import Base
 from app.models.intelligence.governance import LLMExperiment, VerdictFeedback
 from app.models.users.user import User
@@ -280,6 +280,7 @@ class ExperimentComparisonTest(unittest.TestCase):
                     ai_probability=0.6,
                     market_price_at_assessment=0.5,
                     resolved_outcome="YES",
+                    scoring_version=VERIFIED_SCORING_VERSION,
                     brier_score=brier,
                     resolved_at=now,
                     model_name="gpt-4o",
@@ -345,6 +346,7 @@ class DriftDetectionTest(unittest.TestCase):
                     ai_probability=0.6,
                     market_price_at_assessment=0.5,
                     resolved_outcome="YES",
+                    scoring_version=VERIFIED_SCORING_VERSION,
                     brier_score=brier,
                     resolved_at=now,
                     model_name=model,
@@ -398,6 +400,7 @@ class DriftDetectionTest(unittest.TestCase):
                     ai_probability=0.6,
                     market_price_at_assessment=0.5,
                     resolved_outcome="YES",
+                    scoring_version=VERIFIED_SCORING_VERSION,
                     brier_score=brier,
                     resolved_at=today,
                     model_name="m2",

@@ -48,7 +48,7 @@ from app.models.intelligence.collaboration import (
 )
 from app.repositories.intelligence.assessments import AssessmentRepository
 from app.repositories.intelligence.consensus import ConsensusRepository
-from app.services.intelligence.forecast_resolution import brier_score
+from app.services.intelligence.forecast_resolution import brier_score, is_binary_outcome
 from app.services.intelligence.model_drift import BASELINE_BRIER
 from app.utils.cache import get_cache
 from app.utils.time import utc_now
@@ -143,11 +143,30 @@ def _condition_resolutions(db: Session, condition_ids: list[str]) -> dict[str, s
     ``Assessment`` row, so a human forecast is scored with exactly the
     outcome the AI's own forecast on that market was scored with — the
     two legs of the ensemble are graded by the same grader.
+
+    Only verified binary YES/NO labels are returned: the legacy resolver
+    stored the raw Gamma label, and such a row must be skipped, never
+    mapped onto a binary outcome.
     """
     if not condition_ids:
         return {}
     rows = AssessmentRepository(db).resolved_condition_rows(condition_ids)
     return {row.condition_id: row.resolved_outcome for row in rows}
+
+
+def _score_vote(probability: float, outcome: str | None) -> float | None:
+    """Brier score of one vote, or ``None`` when it cannot be scored.
+
+    A non-binary resolution label (legacy rows) and an unusable
+    probability are skipped instead of raising: a read path must never
+    fail because one historical row carries a label nobody can map.
+    """
+    if not is_binary_outcome(outcome):
+        return None
+    try:
+        return brier_score(float(probability), outcome)
+    except (TypeError, ValueError):
+        return None
 
 
 def forecaster_skill(
@@ -173,10 +192,10 @@ def forecaster_skill(
 
     scores = []
     for vote in latest:
-        outcome = resolutions.get(vote.condition_id)
-        if outcome is None:
+        score = _score_vote(vote.probability, resolutions.get(vote.condition_id))
+        if score is None:
             continue
-        scores.append(brier_score(float(vote.probability), outcome))
+        scores.append(score)
 
     resolved = len(scores)
     mean_brier = (sum(scores) / resolved) if resolved else None
@@ -590,9 +609,12 @@ def forecaster_leaderboard(
     forecasters = []
     for user_id, user_votes in by_user.items():
         scores = [
-            brier_score(float(vote.probability), resolutions.get(vote.condition_id))
-            for vote in user_votes
-            if resolutions.get(vote.condition_id) is not None
+            score
+            for score in (
+                _score_vote(vote.probability, resolutions.get(vote.condition_id))
+                for vote in user_votes
+            )
+            if score is not None
         ]
         resolved = len(scores)
         mean_brier = (sum(scores) / resolved) if resolved else None
