@@ -34,7 +34,7 @@ from app.api.routes.platform.collaboration import (
     _collaboration_write_rate_limit,
     router,
 )
-from app.models.analytics.assessment import Assessment
+from app.models.analytics.assessment import VERIFIED_SCORING_VERSION, Assessment
 from app.models.base import Base
 from app.models.intelligence.collaboration import (
     VISIBILITY_PRIVATE,
@@ -101,6 +101,7 @@ def _assessment(condition_id: str, outcome: str, probability: float = 0.9) -> As
         confidence=50,
         ai_probability=probability,
         resolved_outcome=outcome,
+        scoring_version=VERIFIED_SCORING_VERSION,
         brier_score=(probability - 1.0) ** 2 if outcome == "YES" else probability**2,
         task="opportunity_scan",
         created_at=utc_now(),

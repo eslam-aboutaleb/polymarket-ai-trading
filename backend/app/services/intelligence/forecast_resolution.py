@@ -65,7 +65,11 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models.analytics.assessment import BINARY_NO_LABELS, BINARY_YES_LABELS
+from app.models.analytics.assessment import (
+    BINARY_NO_LABELS,
+    BINARY_YES_LABELS,
+    VERIFIED_SCORING_VERSION,
+)
 from app.repositories.intelligence.assessments import AssessmentRepository
 from app.utils.database import SessionLocal
 from app.utils.scheduler_lock import (
@@ -82,7 +86,7 @@ SCHEDULER_NAME = "forecast_resolution"
 
 #: Version of the scoring rule that produced a Brier score. A row written
 #: under an older rule is distinguishable from one written under this one.
-SCORING_VERSION = "brier-binary-v2"
+SCORING_VERSION = VERIFIED_SCORING_VERSION
 
 #: Clipping applied to a probability *inside* the log-loss computation.
 #: The stored ``ai_probability`` is never rewritten: a stated certainty
@@ -344,16 +348,23 @@ def is_binary_outcome(resolved_outcome: str | None) -> bool:
     return label in _YES_LABELS or label in _NO_LABELS
 
 
-def is_verified_resolution(brier_score: float | None, resolved_outcome: str | None) -> bool:
+def is_verified_resolution(
+    brier_score: float | None,
+    resolved_outcome: str | None,
+    scoring_version: str | None = None,
+) -> bool:
     """True when a row carries a scoreable, verified binary resolution.
 
-    The one rule every aggregate uses: a Brier score alone is not proof
-    of a usable label, because the legacy resolver wrote raw Gamma
-    labels ("ALICE") that cannot be mapped to a binary outcome.
+    A binary label alone does not prove finality: the legacy resolver also
+    scored merely closed markets. Only the current resolver's version stamp
+    and a finite bounded score establish eligibility. Old evidence stays
+    readable but cannot become verified calibration data.
     """
-    if brier_score is None or resolved_outcome is None:
+    if scoring_version != SCORING_VERSION or brier_score is None or resolved_outcome is None:
         return False
-    return is_binary_outcome(resolved_outcome)
+    return (
+        math.isfinite(brier_score) and 0 <= brier_score <= 1 and is_binary_outcome(resolved_outcome)
+    )
 
 
 def outcome_value(resolved_outcome: str | None) -> float:

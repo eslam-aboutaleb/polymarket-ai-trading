@@ -708,7 +708,17 @@ export default function CalibrationPanel() {
                       {signed(forecast.edge)}
                     </td>
                     <td className="py-2 pr-4">{forecast.resolved_outcome || "—"}</td>
-                    <td className="py-2 pr-4">{brier(forecast.brier_score)}</td>
+                    <td className="py-2 pr-4">
+                      {forecast.verified_resolution ? (
+                        brier(forecast.brier_score)
+                      ) : forecast.brier_score != null ? (
+                        <span title="Historical score excluded: finality has not been verified.">
+                          Unverified
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                     {canRateVerdicts && (
                       <td className="py-2 align-top">
                         {forecast.id != null && (
