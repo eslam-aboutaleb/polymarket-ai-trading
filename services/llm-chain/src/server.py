@@ -409,6 +409,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 "alt_token_id": str(result.get("alt_token_id", "")),
                 "web_summary": str(result.get("web_summary", "")),
                 "x_summary": str(result.get("x_summary", "")),
+                "x_source": json.dumps(result.get("x_source", {})),
             }
             metadata.update(provider_meta)
 

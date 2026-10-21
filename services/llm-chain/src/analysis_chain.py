@@ -16,6 +16,7 @@ from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_core.callbacks import StreamingStdOutCallbackHandler
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import Tool
+from polymarket_mcp import no_indexed_matches_text, sanitize_external_text, search_rows
 
 from src.config import get_settings
 from src.llm_factory import (
@@ -28,6 +29,44 @@ from src.llm_factory import (
 from src.mcp_client import ResearchMCPClient
 
 logger = logging.getLogger(__name__)
+
+# ── Untrusted external evidence ─────────────────────────────
+# Search snippets are quoted data, never instructions. Every snippet that
+# reaches a prompt is sanitised, marked as untrusted and carries its source
+# URL and coverage label, so an indexed page can neither steer the model nor
+# be read as an authenticated feed.
+INDEXED_EVIDENCE_HEADING = (
+    "== Indexed Web Results (search-engine snippets; partial coverage; "
+    "not an authenticated X feed) =="
+)
+
+
+def _indexed_evidence_block(rows: list[dict[str, Any]]) -> str:
+    """Render indexed web rows as prompt evidence.
+
+    Args:
+        rows: Rows returned by the indexed-web search tool.
+
+    Returns:
+        One bullet per row: the quoted, sanitised snippet plus its source
+        type, coverage and URL.
+    """
+    lines: list[str] = []
+    for row in rows[:10]:
+        title = sanitize_external_text(str(row.get("title") or ""))
+        snippet = sanitize_external_text(str(row.get("snippet") or ""))
+        url = str(row.get("url") or "")
+        source_type = str(row.get("source_type") or "indexed_web")
+        coverage = str(row.get("coverage") or "partial_non_comprehensive")
+        quoted = " — ".join(part for part in (title, snippet) if part)
+        if not quoted:
+            continue
+        lines.append(
+            f'• "{quoted}" (untrusted external snippet; source_type={source_type}; '
+            f"coverage={coverage}; url={url})"
+        )
+    return "\n".join(lines)
+
 
 # Auto-discovery fan-out caps. Each stage is bounded so a single invocation
 # cannot fan out into an unbounded number of LLM calls.
@@ -923,7 +962,8 @@ class TradingAnalysisChain:
         web_summary = ""
         x_summary = ""
         binance_summary = ""
-        x_results: list[dict[str, str]] = []
+        x_status = ""
+        x_source: dict[str, Any] = {}
         if include_research:
             research = await self.research_mcp.gather_market_research(
                 condition_id=condition_id,
@@ -935,7 +975,8 @@ class TradingAnalysisChain:
             )
             web_summary = research.get("web_summary", "")
             x_summary = research.get("x_summary", "")
-            x_results = research.get("x_results", []) or []
+            x_status = str(research.get("x_status", "") or "")
+            x_source = research.get("x_source", {}) or {}
             binance_summary = research.get("binance_summary", "")
 
         prompt_template = self.prompts.get("inverse_position_bot", "evaluation_prompt")
@@ -948,7 +989,7 @@ class TradingAnalysisChain:
                 "Delta: {delta_pct:.3f}\n"
                 "Alternatives: {alternatives_json}\n"
                 "Web: {web_summary}\n"
-                "X: {x_summary}\n"
+                "Indexed web (partial coverage, not an authenticated X feed): {x_summary}\n"
                 "Binance Smart Money: {binance_summary}\n"
                 "Return JSON with: recommendation, confidence, reasoning, key_risks, "
                 "alt_outcome, alt_token_id, web_summary, x_summary."
@@ -971,7 +1012,7 @@ class TradingAnalysisChain:
             delta_pct=delta_pct,
             alternatives_json=json.dumps(alternatives, ensure_ascii=True),
             web_summary=web_summary or "No web evidence found in last 24h.",
-            x_summary=x_summary or "No X evidence found in last 24h.",
+            x_summary=x_summary or no_indexed_matches_text(x_status),
             binance_summary=binance_summary or "No Binance smart money data available.",
         )
 
@@ -997,11 +1038,11 @@ class TradingAnalysisChain:
             confidence = float(parsed.get("confidence", 0))
         except (TypeError, ValueError):
             confidence = 0.0
-        # Cap confidence if no X evidence, but Binance data can partially compensate
-        if not x_results and not binance_summary:
-            confidence = min(confidence, 70.0)
-        elif not x_results and binance_summary:
-            confidence = min(confidence, 80.0)
+        # Cap confidence only when the source answered and held no indexed
+        # matches. An unavailable source is unknown, not evidence that there
+        # was no social activity, so it must not be priced as missing evidence.
+        if x_status == "no_matches" or not include_research:
+            confidence = min(confidence, 80.0 if binance_summary else 70.0)
 
         key_risks = parsed.get("key_risks", [])
         if not isinstance(key_risks, list):
@@ -1017,6 +1058,7 @@ class TradingAnalysisChain:
             "alt_token_id": str(parsed.get("alt_token_id", "")),
             "web_summary": str(parsed.get("web_summary", web_summary)),
             "x_summary": str(parsed.get("x_summary", x_summary)),
+            "x_source": x_source,
             "timestamp": datetime.utcnow().isoformat(),
         }
 
@@ -1062,24 +1104,24 @@ class TradingAnalysisChain:
             if news_text:
                 evidence_parts.append(f"== Recent News ==\n{news_text}")
 
-        # 4. X / Twitter signals
+        # 4. Indexed web (X-linked) signals
         if include_social:
             try:
                 # Must be awaited: without it this bound a coroutine, which is
                 # always truthy, so the subscript below raised TypeError and the
                 # social evidence block was silently dead in every request.
-                x_results = await self.research_mcp._call_tool(
-                    "x_posts_search",
+                x_payload = await self.research_mcp._call_tool(
+                    "x_indexed_web_search",
                     {"query": query, "recency_hours": 48, "max_results": 10},
                 )
-                if x_results:
-                    x_text = "\n".join(
-                        f"• {r.get('title', '')} — {r.get('snippet', '')}" for r in x_results[:10]
+                x_rows = search_rows(x_payload)
+                if x_rows:
+                    evidence_parts.append(
+                        f"{INDEXED_EVIDENCE_HEADING}\n{_indexed_evidence_block(x_rows)}"
                     )
-                    evidence_parts.append(f"== Social/X Posts ==\n{x_text}")
             except Exception:
                 logger.warning(
-                    "X posts search failed; continuing without social evidence",
+                    "Indexed web search failed; continuing without social evidence",
                     exc_info=True,
                 )
 
@@ -1446,25 +1488,26 @@ class TradingAnalysisChain:
         # 1. Multi-source research (web + news + Binance)
         news_context = await self._research_market(market_question, market_description)
 
-        # 2. Social / X-Twitter commentary
+        # 2. Indexed web (X-linked) commentary
         social_data = ""
         try:
-            x_results = await self.research_mcp._call_tool(
-                "x_posts_search",
+            x_payload = await self.research_mcp._call_tool(
+                "x_indexed_web_search",
                 {"query": market_question, "recency_hours": 48, "max_results": 10},
             )
-            if x_results and isinstance(x_results, list):
-                social_data = "\n".join(
-                    f"• {r.get('title', '')} — {r.get('snippet', r.get('body', ''))}"
-                    for r in x_results[:10]
-                )
-            elif isinstance(x_results, str):
-                social_data = x_results
+            x_rows = search_rows(x_payload)
+            if x_rows:
+                social_data = _indexed_evidence_block(x_rows)
+            elif isinstance(x_payload, str):
+                social_data = x_payload
         except Exception as exc:
-            logger.debug(f"X/Twitter search for news failed: {exc}")
+            logger.debug(f"Indexed web search for news failed: {exc}")
 
         if not social_data:
-            social_data = "No social media data available."
+            social_data = (
+                "No indexed web matches found; search engines may omit private, "
+                "deleted or very new posts."
+            )
 
         # 3. Build prompt
         try:

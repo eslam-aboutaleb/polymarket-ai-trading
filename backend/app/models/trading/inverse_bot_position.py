@@ -43,6 +43,14 @@ class InverseBotPosition(Base):
     last_reasoning = Column(Text, nullable=True)
     last_web_summary = Column(Text, nullable=True)
     last_x_summary = Column(Text, nullable=True)
+    # Provenance of the "social" summary above: the pipeline reads a
+    # search-engine index, never an authenticated X feed, and the API/UI label
+    # the source accordingly. "last_x_status" is "ok", "no_matches" or
+    # "provider_unavailable" — an outage is not "there was no activity".
+    last_x_source_type = Column(String(30), nullable=True)
+    last_x_coverage = Column(String(40), nullable=True)
+    last_x_status = Column(String(30), nullable=True)
+    last_x_checked_at = Column(DateTime(timezone=True), nullable=True)
     last_error = Column(Text, nullable=True)
     last_recommendation = Column(String(30), nullable=True)
     last_alt_outcome = Column(String(100), nullable=True)

@@ -29,6 +29,17 @@ export interface InverseBotPosition {
   last_reasoning: string | null;
   last_web_summary: string | null;
   last_x_summary: string | null;
+  /**
+   * Provenance of the social summary: the pipeline reads a search-engine
+   * index ("indexed_web"), never an authenticated X feed. `x_status` is
+   * "ok", "no_matches" or "provider_unavailable", and `x_source_label` is the
+   * ready-to-render label the API builds from them.
+   */
+  x_source_type: string | null;
+  x_coverage: string | null;
+  x_status: string | null;
+  x_checked_at: string | null;
+  x_source_label: string;
   last_error: string | null;
   last_recommendation: string | null;
   last_alt_outcome: string | null;
