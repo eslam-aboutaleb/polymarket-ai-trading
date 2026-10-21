@@ -179,6 +179,29 @@ def _response_metadata(response: Any) -> dict[str, str]:
         return {}
 
 
+def _parse_x_source(raw: Any) -> dict[str, Any]:
+    """Parse the indexed-web provenance carried in the response metadata.
+
+    The social summary of the inverse bot comes from a search-engine index, so
+    the AI service reports which source it read, how complete it is, whether
+    the provider answered and when it was checked. A missing or malformed
+    payload yields an empty dict, and the caller falls back to the
+    known-constant label.
+    """
+    if isinstance(raw, dict):
+        parsed: Any = raw
+    elif isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+    else:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(key): value for key, value in parsed.items()}
+
+
 def _parse_trailing_probability(analysis_text: str, meta: dict[str, Any]) -> float | None:
     """Extract ``AI Probability: <0-100>`` from a copy-trade evaluation.
 
@@ -745,6 +768,7 @@ class AnalysisClient:
             result["alt_token_id"] = meta.get("alt_token_id", "")
             result["web_summary"] = meta.get("web_summary", "")
             result["x_summary"] = meta.get("x_summary", "")
+            result["x_source"] = _parse_x_source(meta.get("x_source", ""))
             key_risks_raw = meta.get("key_risks", "[]")
             if isinstance(key_risks_raw, str):
                 try:

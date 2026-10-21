@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 
 # In-memory TTL cache for Gamma API market data (avoids hitting upstream on every page load)
 _market_data_cache = get_cache("market_data")
+# Public alias: other services share this cache instance instead of creating a
+# second, parallel cache for the same upstream data.
+market_data_cache = _market_data_cache
 
 # Compatibility constants for callers that historically imported these
 # values. Runtime defaults come from the central Settings object.
@@ -1675,6 +1678,63 @@ class PolymarketService:
         except Exception as e:
             logger.error("Error in search_all_markets: %s", e)
             return {"markets": [], "total": 0, "offset": offset, "has_more": False}
+
+    async def get_market_outcome_tokens(self, condition_id: str) -> dict[str, Any]:
+        """Return the raw CLOB market payload for one condition.
+
+        Research code paths need the outcome-token mapping and the market
+        lifecycle state (``closed`` / ``active`` / token ``winner``) before any
+        upstream series can be trusted. This runs through the shared venue
+        client (house timeout, shared connection handling) so a caller does
+        not introduce a second, independent venue client.
+
+        Fail-closed: a transport or HTTP error is raised instead of returning
+        an empty mapping that a caller could mistake for "no token".
+        """
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(f"{POLYMARKET_CLOB_API}/markets/{condition_id}")
+        if response.status_code != 200:
+            raise httpx.HTTPStatusError(
+                f"CLOB market lookup returned HTTP {response.status_code}",
+                request=response.request,
+                response=response,
+            )
+        return response.json()
+
+    async def get_token_price_history(
+        self,
+        token_id: str,
+        start_ts: int,
+        end_ts: int,
+        fidelity: int = 60,
+    ) -> dict[str, Any]:
+        """Return the raw CLOB /prices-history payload for one outcome token.
+
+        The shared venue client owns the transport concerns (house timeout and
+        the bounded retry on transient upstream statuses). The caller owns the
+        validation of the returned rows: a payload that does not validate must
+        never become a backtest input.
+        """
+        params = {
+            "market": token_id,
+            "startTs": start_ts,
+            "endTs": end_ts,
+            "fidelity": fidelity,
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            for attempt in range(3):
+                response = await client.get(f"{POLYMARKET_CLOB_API}/prices-history", params=params)
+                if response.status_code == 200:
+                    return response.json()
+                if response.status_code in (429, 502, 503, 504) and attempt < 2:
+                    await asyncio.sleep(0.2 * (2**attempt))
+                    continue
+                raise httpx.HTTPStatusError(
+                    f"CLOB price history returned HTTP {response.status_code}",
+                    request=response.request,
+                    response=response,
+                )
+        raise httpx.HTTPError("CLOB price history retries exhausted")
 
     async def get_market_trader_stats(self, condition_id: str) -> dict:
         """

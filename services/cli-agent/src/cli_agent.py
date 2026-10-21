@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from polymarket_mcp import no_indexed_matches_text
 from polymarket_settings import TASK_TIERS, ModelTier, resolve_tier_config
 from src.config import get_settings
 from src.mcp_client import ResearchMCPClient
@@ -711,7 +712,8 @@ Provide:
         web_summary = ""
         x_summary = ""
         binance_summary = ""
-        x_results: list[dict[str, str]] = []
+        x_status = ""
+        x_source: dict[str, Any] = {}
         if include_research:
             research = await self.research_mcp.gather_market_research(
                 condition_id=condition_id,
@@ -724,7 +726,8 @@ Provide:
             web_summary = research.get("web_summary", "")
             x_summary = research.get("x_summary", "")
             binance_summary = research.get("binance_summary", "")
-            x_results = research.get("x_results", []) or []
+            x_status = str(research.get("x_status", "") or "")
+            x_source = research.get("x_source", {}) or {}
 
         system_prompt = self.prompts.get("inverse_position_bot", "system_prompt")
         if not system_prompt:
@@ -739,7 +742,7 @@ Provide:
                 "Delta: {delta_pct:.3f}\n"
                 "Alternatives: {alternatives_json}\n"
                 "Web summary: {web_summary}\n"
-                "X summary: {x_summary}\n"
+                "Indexed web summary (partial coverage): {x_summary}\n"
                 "Binance Smart Money: {binance_summary}\n"
                 "Return strict JSON: recommendation, confidence, reasoning, key_risks, "
                 "alt_outcome, alt_token_id, web_summary, x_summary."
@@ -754,7 +757,7 @@ Provide:
             delta_pct=delta_pct,
             alternatives_json=json.dumps(alternatives, ensure_ascii=True),
             web_summary=web_summary or "No web evidence found in last 24h.",
-            x_summary=x_summary or "No X evidence found in last 24h.",
+            x_summary=x_summary or no_indexed_matches_text(x_status),
             binance_summary=binance_summary or "No Binance smart money data available.",
         )
 
@@ -777,7 +780,9 @@ Provide:
             confidence = float(parsed.get("confidence", 0))
         except (TypeError, ValueError):
             confidence = 0.0
-        if not x_results:
+        # Cap confidence only when the source answered and held no indexed
+        # matches: an unavailable source is unknown, not missing evidence.
+        if x_status == "no_matches" or not include_research:
             confidence = min(confidence, 70.0)
 
         key_risks = parsed.get("key_risks", [])
@@ -794,6 +799,7 @@ Provide:
             "alt_token_id": str(parsed.get("alt_token_id", "")),
             "web_summary": str(parsed.get("web_summary", web_summary)),
             "x_summary": str(parsed.get("x_summary", x_summary)),
+            "x_source": x_source,
             "timestamp": datetime.utcnow().isoformat(),
         }
 
