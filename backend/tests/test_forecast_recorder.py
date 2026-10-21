@@ -67,10 +67,24 @@ class RecordVerdictTests(unittest.TestCase):
         self.assertEqual(self._rows(), [])
 
     def test_out_of_range_probabilities_are_not_written(self):
-        for bad in (0, 1, -0.5, 1.5, 0.0, 1.0):
+        for bad in (-0.5, 1.5):
             with self.subTest(bad=bad):
                 self.assertIsNone(self._record(ai_probability=bad))
         self.assertEqual(self._rows(), [])
+
+    def test_a_stated_certainty_is_retained(self):
+        """p = 0 and p = 1 are forecasts, not missing data.
+
+        The value is kept exactly as stated: it is clipped only inside
+        the log-loss computation, never rewritten here.
+        """
+        zero = self._record(ai_probability=0, market_price=0.5)
+        self.assertIsNotNone(zero)
+        self.assertAlmostEqual(zero.ai_probability, 0.0)
+        one = self._record(ai_probability=1, market_price=0.5, task="other")
+        self.assertIsNotNone(one)
+        self.assertAlmostEqual(one.ai_probability, 1.0)
+        self.assertEqual(len(self._rows()), 2)
 
     def test_non_numeric_probability_is_not_written(self):
         self.assertIsNone(self._record(ai_probability="high"))
@@ -153,6 +167,18 @@ class RecordVerdictTests(unittest.TestCase):
         # 0.7004 and 0.7001 both round to 0.700 → the same sample.
         self.assertIsNotNone(self._record(ai_probability=0.7004))
         self.assertIsNone(self._record(ai_probability=0.7001))
+        self.assertEqual(len(self._rows()), 1)
+
+    def test_a_replayed_verdict_stays_one_row_and_one_sample(self):
+        """A replayed SSE verdict must not become a second sample.
+
+        The opportunity stream replays a verdict for the same request
+        (cache hit, client retry). The dedupe key keeps one row, so the
+        market contributes a single effective sample to the calibration
+        aggregate.
+        """
+        self.assertIsNotNone(self._record(ai_probability=0.7))
+        self.assertIsNone(self._record(ai_probability=0.7))
         self.assertEqual(len(self._rows()), 1)
 
     def test_same_key_from_a_second_endpoint_writes_second_row(self):
