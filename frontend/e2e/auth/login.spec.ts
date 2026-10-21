@@ -102,7 +102,7 @@ test.describe("Login page", () => {
     await provideMockSignature(page, wrongSignature);
     await page.getByRole("button", { name: "Sign Message" }).click();
 
-    await expect(page.getByText("Your session has expired. Please sign in again.")).toBeVisible();
+    await expect(page.getByText("Invalid signature")).toBeVisible();
     await expect(page).toHaveURL(/\/login$/);
   });
 });
