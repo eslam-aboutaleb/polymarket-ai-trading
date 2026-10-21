@@ -81,7 +81,9 @@ test.describe("Login page", () => {
     // 6. Logout asks for confirmation and then clears the session.
     await page.getByRole("button", { name: "Logout" }).first().click();
     await expect(page.getByRole("heading", { name: "Confirm Logout" })).toBeVisible();
-    await page.getByRole("button", { name: "Logout", exact: true }).last().click();
+    await page.getByRole("dialog", { name: "Confirm Logout" })
+      .getByRole("button", { name: "Logout", exact: true })
+      .click();
     await expect(page.getByRole("button", { name: "Connect Wallet" }).first()).toBeVisible();
   });
   test("rejects a signature the backend cannot verify", async ({ page }) => {
