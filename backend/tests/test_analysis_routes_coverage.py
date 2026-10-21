@@ -521,6 +521,7 @@ class AnalysisRouteTests(_AnalysisRouteMixin, unittest.TestCase):
         # initial empty status chunk, the analysis chunk, then done
         self.assertIn('"chunk": ""', body)
         self.assertIn('"chunk": "trader chunk"', body)
+        self.assertIn('"stream_kind": "buffered_replay"', body)
         self.assertIn('"done": true', body)
         self.mock_client.close.assert_awaited_once()
 
