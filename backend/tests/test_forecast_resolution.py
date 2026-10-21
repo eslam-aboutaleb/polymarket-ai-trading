@@ -118,9 +118,9 @@ class WinningOutcomeTests(unittest.TestCase):
         market = _gamma_market(CID, ["Yes", "No"], ["0", "1"])
         self.assertEqual(winning_outcome(market), "NO")
 
-    def test_multi_outcome_market_uses_winning_label(self):
+    def test_multi_outcome_market_is_not_scored_as_binary_no(self):
         market = _gamma_market(CID, ["Alice", "Bob"], ["0", "1"])
-        self.assertEqual(winning_outcome(market), "BOB")
+        self.assertIsNone(winning_outcome(market))
 
     def test_no_outcome_reaching_threshold_returns_none(self):
         market = _gamma_market(CID, ["Yes", "No"], ["0", "0"])
@@ -135,8 +135,23 @@ class WinningOutcomeTests(unittest.TestCase):
         )
 
     def test_already_parsed_lists_are_accepted(self):
-        market = {"outcomes": ["Yes", "No"], "outcomePrices": [0.99, 0.01]}
+        market = _gamma_market(CID, ["Yes", "No"], [1.0, 0.0])
+        market["outcomes"] = ["Yes", "No"]
+        market["outcomePrices"] = [1.0, 0.0]
         self.assertEqual(winning_outcome(market), "YES")
+
+    def test_closed_without_verified_resolution_does_not_count(self):
+        market = _gamma_market(CID, ["Yes", "No"], ["1", "0"])
+        market["umaResolutionStatus"] = "proposed"
+        self.assertIsNone(winning_outcome(market))
+
+    def test_ambiguous_equal_outcome_values_does_not_count(self):
+        market = _gamma_market(CID, ["Yes", "No"], ["0.5", "0.5"])
+        self.assertIsNone(winning_outcome(market))
+
+    def test_99_percent_quote_is_not_final_resolution(self):
+        market = _gamma_market(CID, ["Yes", "No"], ["0.99", "0.01"])
+        self.assertIsNone(winning_outcome(market))
 
 
 class BrierScoreTests(unittest.TestCase):
@@ -154,8 +169,15 @@ class BrierScoreTests(unittest.TestCase):
         self.assertEqual(outcome_value("YES"), 1.0)
         self.assertEqual(outcome_value("yes"), 1.0)
         self.assertEqual(outcome_value("NO"), 0.0)
-        self.assertEqual(outcome_value("ALICE"), 0.0)
-        self.assertEqual(outcome_value(None), 0.0)
+        with self.assertRaises(ValueError):
+            outcome_value("ALICE")
+        with self.assertRaises(ValueError):
+            outcome_value(None)
+
+    def test_brier_rejects_out_of_range_or_unverified(self):
+        for p, label in [(float("nan"), "YES"), (1.2, "NO"), (0.8, "BOB")]:
+            with self.subTest(p=p, label=label), self.assertRaises(ValueError):
+                brier_score(p, label)
 
 
 class FetchResolutionsTests(unittest.IsolatedAsyncioTestCase):
@@ -181,6 +203,19 @@ class FetchResolutionsTests(unittest.IsolatedAsyncioTestCase):
         self._patch_client(client)
         result = await fetch_resolutions([CID, CID_2])
         self.assertEqual(result, {CID: "YES", CID_2: "NO"})
+
+    async def test_wrong_condition_id_from_upstream_is_rejected(self):
+        wrong = _gamma_market(CID_2, ["Yes", "No"], ["1", "0"])
+        client = _mock_httpx_client([[wrong]])
+        self._patch_client(client)
+        self.assertEqual(await fetch_resolutions([CID]), {})
+
+    async def test_closed_but_not_finalized_is_excluded(self):
+        market = _gamma_market(CID, ["Yes", "No"], ["1", "0"])
+        market["umaResolutionStatus"] = "challenged"
+        client = _mock_httpx_client([[market]])
+        self._patch_client(client)
+        self.assertEqual(await fetch_resolutions([CID]), {})
 
     async def test_uses_condition_ids_param_and_closed_filter(self):
         market = _gamma_market(CID, ["Yes", "No"], ["1", "0"])
@@ -268,6 +303,18 @@ class ResolvePendingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row.resolved_outcome, "YES")
         self.assertAlmostEqual(row.brier_score, 0.04)
         self.assertIsNotNone(row.resolved_at)
+
+    async def test_invalid_outcome_leaves_forecast_unscored(self):
+        row = _verdict(self.db, probability=0.8)
+        with patch.object(
+            forecast_resolution, "fetch_resolutions", AsyncMock(return_value={CID: "BOB"})
+        ):
+            run = await resolve_pending(self.db)
+        self.assertEqual(run.resolved, 0)
+        self.db.refresh(row)
+        self.assertIsNone(row.brier_score)
+        self.assertIsNone(row.resolved_at)
+        self.assertIsNone(row.resolved_outcome)
 
     async def test_no_resolution_leaves_row_untouched(self):
         row = _verdict(self.db)
