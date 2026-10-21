@@ -8,6 +8,8 @@ test.describe("Copy Trading — authenticated", () => {
   test.beforeEach(async ({ adminPage: page }) => {
     await page.goto("/copy-trading");
     await expect(page.getByRole("heading", { name: "Copy Trading" })).toBeVisible();
+    // Other workspace tests can leave the persisted watchlist tab selected.
+    await page.getByRole("button", { name: "Copy Trading", exact: true }).click();
   });
 
   test("renders the copy-trading workspace", async ({ adminPage: page }) => {
