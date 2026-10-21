@@ -64,6 +64,98 @@ jobs:
       test-script: test:safety
       browsers: chromium
 
+  # Full real-stack Playwright regression suite. The emergency-browser reusable
+  # workflow only runs test:safety; it does not cover auth/features/public E2E.
+  e2e:
+    name: E2E / Playwright full stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: polymarket
+          POSTGRES_PASSWORD: polymarket_e2e_only
+          POSTGRES_DB: polymarket
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U polymarket -d polymarket"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://polymarket:polymarket_e2e_only@127.0.0.1:5432/polymarket
+      ENVIRONMENT: development
+      ROLE: web
+      REDIS_URL: ""
+      REQUIRE_REDIS_FOR_CREDENTIALS: "false"
+      REQUIRE_REDIS_FOR_CHALLENGES: "false"
+      RATE_LIMIT_PER_MINUTE: "1000"
+      ADMIN_WALLETS: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+      VITE_API_URL: ""
+      E2E_BASE_URL: http://localhost:5174
+      PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/e2e-junit.xml
+      # Do not enable live Polymarket orders or expose any real wallet key.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "20"
+          package-manager-cache: false
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Generate isolated signing secret
+        shell: bash
+        run: |
+          printf 'JWT_SECRET_KEY=%s\n' "$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - name: Install backend dependencies
+        run: uv sync --project backend --frozen
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Install Chromium and system dependencies
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Run PostgreSQL schema migrations
+        working-directory: backend
+        run: uv run --frozen alembic upgrade head
+      - name: Seed disposable admin test wallet
+        env:
+          PYTHONPATH: ${{ github.workspace }}/backend:${{ github.workspace }}/services/shared
+        run: |
+          uv run --project backend --frozen python - <<'PY'
+          from app.models.users.user import User
+          from app.utils.database import SessionLocal
+
+          wallet = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+          with SessionLocal.begin() as db:
+              user = db.query(User).filter(User.wallet_address == wallet).one_or_none()
+              if user is None:
+                  db.add(User(wallet_address=wallet, is_admin=True))
+              else:
+                  user.is_admin = True
+          print("Disposable CI admin wallet seeded")
+          PY
+      - name: Run full Playwright E2E (public, auth, features)
+        working-directory: frontend
+        run: npm run test:e2e -- --project=public --project=auth --project=features --reporter=list,junit
+      - name: Upload Playwright failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-playwright-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            frontend/test-results/
+            frontend/playwright-report/
+          if-no-files-found: warn
+          retention-days: 7
+
   workflow-lint:
     uses: eslam-aboutaleb/ci-workflows/.github/workflows/workflow-lint.yml@f989c2d0742cdab6cdef8437685d128b28904abc
 
@@ -111,7 +203,7 @@ jobs:
   quality-gate:
     name: Quality gate
     if: always()
-    needs: [lint, backend-tests, trading-safety, frontend, emergency-browser, workflow-lint, security]
+    needs: [lint, backend-tests, trading-safety, frontend, emergency-browser, e2e, workflow-lint, security]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
