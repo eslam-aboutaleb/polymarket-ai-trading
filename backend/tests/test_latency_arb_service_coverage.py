@@ -1367,6 +1367,10 @@ class FetchOpportunitiesTests(unittest.IsolatedAsyncioTestCase):
     async def _fetch(self, now, settings_ns=None, evaluate=None, **market_mocks):
         settings_ns = settings_ns or _engine_settings()
         evaluate = evaluate or MagicMock(return_value=None)
+        # Keep default fixtures 150 seconds into the modeled 5-minute market.
+        # Wall-clock aligned fixture creation randomly hit the late-entry guard
+        # during CI when tests ran in the final 10 seconds of a UTC window.
+        market_mocks.setdefault("market", _market(window_start_epoch=int(now.timestamp()) - 150))
         mocks = self._patches(**market_mocks)
         with (
             patch.object(latency_arb_service, "get_settings", lambda: settings_ns),
