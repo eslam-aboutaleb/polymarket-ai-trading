@@ -32,7 +32,7 @@ class Settings(SharedLLMSettings):
     # Prompts
     prompts_path: str = "/app/prompts/prompts.json"
 
-    # ChromaDB / RAG settings
+    # SQLite RAG store settings. CHROMA_* names remain supported for existing deployments.
     chroma_persist_dir: str = "/app/data/chroma"
     chroma_collection_name: str = "polymarket_markets"
     rag_embedding_model: str = "text-embedding-3-small"

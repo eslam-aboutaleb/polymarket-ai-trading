@@ -548,7 +548,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
 
     async def IndexMarketsRAG(self, request, context):
-        """Index markets into ChromaDB RAG vector store."""
+        """Index markets into SQLite RAG vector store."""
         try:
             from src.market_rag import MarketRAGService
 
@@ -561,7 +561,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
 
             return analysis_pb2.AnalysisResponse(
                 success=True,
-                analysis=f"Indexed {count} markets into ChromaDB RAG store",
+                analysis=f"Indexed {count} markets into SQLite RAG store",
                 timestamp=datetime.utcnow().isoformat(),
                 metadata={
                     "indexed_count": str(count),

@@ -60,7 +60,7 @@ services:
       TAVILY_ENABLED: ${TAVILY_ENABLED:-false}
       NEWSAPI_API_KEY: ${NEWSAPI_API_KEY:-}
       NEWSAPI_ENABLED: ${NEWSAPI_ENABLED:-false}
-      # ChromaDB RAG (vector search for market discovery)
+      # SQLite RAG (vector search for market discovery)
       RAG_ENABLED: ${RAG_ENABLED:-true}
       CHROMA_PERSIST_DIR: /app/data/chroma
       # Research MCP: Binance Skills enrichment is gated by this env var in

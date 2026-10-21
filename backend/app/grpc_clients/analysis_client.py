@@ -1518,7 +1518,7 @@ class AnalysisClient:
         force_reindex: bool = False,
     ) -> dict[str, Any]:
         """
-        Send markets to the LLM-Chain service for ChromaDB RAG indexing.
+        Send markets to the LLM-Chain service for SQLite RAG indexing.
         """
         from app.grpc_clients import analysis_pb2
 
