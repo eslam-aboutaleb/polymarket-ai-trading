@@ -819,7 +819,8 @@ export default function CopyTrading() {
             <div>
               <h2 className="text-lg font-semibold">Trader Watchlist</h2>
               <p className="text-soft text-sm">
-                Bookmark wallets locally and review historical leaderboard results. No funds are allocated, and no follower returns are calculated.
+                Bookmark wallets locally and review historical leaderboard results. No funds are
+                allocated, and no follower returns are calculated.
               </p>
             </div>
             <button onClick={refreshMockLeaderboard} className="btn-muted">
@@ -854,7 +855,8 @@ export default function CopyTrading() {
               ))}
             </div>
             <span className="text-xs text-muted">
-              These are the leader’s historical leaderboard figures for the selected window, not returns earned by following.
+              These are the leader’s historical leaderboard figures for the selected window, not
+              returns earned by following.
             </span>
           </div>
 
@@ -877,14 +879,17 @@ export default function CopyTrading() {
               <p className="text-2xl font-bold mt-1">{mockRows.length}</p>
             </div>
             <div className="surface-soft p-4 rounded-lg">
-              <p className="text-muted text-xs uppercase tracking-wide">Matched Leaderboard Profiles</p>
+              <p className="text-muted text-xs uppercase tracking-wide">
+                Matched Leaderboard Profiles
+              </p>
               <p className="text-2xl font-bold mt-1">{mockTotals.matched}</p>
             </div>
           </div>
 
           {mockRows.length === 0 ? (
             <div className="surface-soft p-6 rounded text-sm text-soft">
-              No traders added yet. Save any Polymarket wallet to your local watchlist. No trades or returns are simulated.
+              No traders added yet. Save any Polymarket wallet to your local watchlist. No trades or
+              returns are simulated.
             </div>
           ) : (
             <div className="overflow-x-auto">

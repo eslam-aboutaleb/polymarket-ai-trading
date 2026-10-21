@@ -105,8 +105,6 @@ jobs:
         run: npm audit --audit-level=high
       - name: Type-check and build
         run: npm run build
-      - name: Temporary Prettier exact diff
-        run: npx prettier src/components/CopyTrading.tsx | diff -u src/components/CopyTrading.tsx - || true
       - name: Prettier check
         run: npx prettier --check "src/**/*.{ts,tsx,css,json,html}"
 
