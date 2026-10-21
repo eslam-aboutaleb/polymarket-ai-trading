@@ -151,24 +151,20 @@ class SummaryTests(CalibrationRouteTestBase):
         self.assertAlmostEqual(bucket["actual"], 1.0)
         self.assertEqual(bucket["count"], 1)
 
-    def test_reliability_treats_a_named_resolution_as_a_no(self):
-        """The YES mapping is the resolver's, not a second rule.
-
-        A multi-outcome market resolves to its winning label, which is
-        neither "YES" nor "NO"; ``outcome_value`` maps it to 0.0 exactly
-        like the Brier scores already do, so the reliability curve and
-        the resolution engine can never disagree.
-        """
+    def test_reliability_excludes_unverifiable_named_resolutions(self):
+        """Historical nonbinary labels must not enter binary calibration."""
         row = self._verdict(ai_probability=0.8, market_price_at_assessment=0.6)
         row.resolved_outcome = "ALICE"
         row.brier_score = 0.64
         row.resolved_at = utc_now()
         self.db.commit()
         response = self.client.get("/api/analysis/calibration/summary")
-        bucket = next(b for b in response.json()["reliability"] if b["count"] > 0)
-        self.assertEqual(bucket["bucket"], "0.8-0.9")
-        self.assertAlmostEqual(bucket["predicted"], 0.8)
-        self.assertAlmostEqual(bucket["actual"], 0.0)
+        data = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(data["resolved_count"], 0)
+        self.assertIsNone(data["mean_brier"])
+        self.assertEqual(sum(b["count"] for b in data["reliability"]), 0)
+        self.assertEqual(data["data_quality"]["invalid_legacy_resolution"], 1)
 
     def test_by_model_and_by_task_stats(self):
         row = self._verdict(model_name="gpt-4", task="copy_trade_eval")

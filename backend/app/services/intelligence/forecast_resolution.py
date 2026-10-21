@@ -129,7 +129,7 @@ def winning_outcome(market: dict[str, Any]) -> str | None:
     """
     if not isinstance(market, dict):
         return None
-    if str(market.get("umaResolutionStatus", "")).lower() != "resolved":
+    if str(market.get("umaResolutionStatus", "")).lower() not in {"resolved", "settled"}:
         return None
     if market.get("closed") not in (True, "true"):
         return None
@@ -183,7 +183,7 @@ async def fetch_resolutions(
         timeout: Per-request HTTP timeout.
 
     Returns:
-        ``{condition_id: "YES"|"NO"|<label>}`` for every market that
+        ``{condition_id: "YES"|"NO"}`` for each finalized binary market that
         has a determinable winner. Ids that are missing, unresolved or
         unreachable are simply absent — callers must tolerate gaps.
     """

@@ -63,6 +63,17 @@ def _bucket_label(index: int) -> str:
     return f"{lower:.1f}-{upper:.1f}"
 
 
+def _verified_resolution(row: Assessment) -> bool:
+    """Only finalized binary YES/NO labels are eligible for calibration."""
+    if row.brier_score is None or row.resolved_outcome is None:
+        return False
+    try:
+        outcome_value(row.resolved_outcome)
+    except ValueError:
+        return False
+    return True
+
+
 def _reliability_buckets(rows: list[Assessment]) -> list[dict]:
     """Predicted vs actual frequency per probability decile (resolved rows).
 
@@ -82,16 +93,15 @@ def _reliability_buckets(rows: list[Assessment]) -> list[dict]:
         for i in range(_RELIABILITY_BUCKET_COUNT)
     ]
     for row in rows:
-        if row.brier_score is None or row.resolved_outcome is None:
+        if not _verified_resolution(row):
             continue
         index = int(float(row.ai_probability) * _RELIABILITY_BUCKET_COUNT)
         index = min(max(index, 0), _RELIABILITY_BUCKET_COUNT - 1)
         bucket = buckets[index]
         bucket["count"] += 1
         bucket["_sum_p"] += float(row.ai_probability)
-        # The YES/NO mapping is shared with the resolver so a market that
-        # resolves to a named label lands in the same reliability bucket
-        # the Brier scores already treat as a NO.
+        # The resolver validates outcome identity; named/legacy labels are
+        # excluded rather than silently mapped to NO.
         bucket["_sum_outcome"] += outcome_value(row.resolved_outcome)
 
     result = []
@@ -113,7 +123,7 @@ def _group_stats(rows: list[Assessment], key: str) -> list[dict]:
         value = getattr(row, key) or ""
         group = groups.setdefault(value, {"key": value, "count": 0, "_sum": 0.0, "_resolved": 0})
         group["count"] += 1
-        if row.brier_score is not None:
+        if _verified_resolution(row):
             group["_resolved"] += 1
             group["_sum"] += float(row.brier_score)
     stats = []
@@ -156,7 +166,10 @@ async def get_calibration_summary(
         scope=scope,
         user_id=current_user["user_id"],
     )
-    resolved = [row for row in rows if row.brier_score is not None]
+    resolved = [row for row in rows if _verified_resolution(row)]
+    invalid_legacy_resolutions = sum(
+        1 for row in rows if row.brier_score is not None and not _verified_resolution(row)
+    )
     attributed = [
         row for row in rows if (row.model_name or "").strip().lower() not in _UNATTRIBUTED_MODELS
     ]
@@ -180,6 +193,7 @@ async def get_calibration_summary(
         "by_task": _group_stats(rows, "task"),
         "data_quality": {
             "missing_model": missing_model,
+            "invalid_legacy_resolution": invalid_legacy_resolutions,
             "legacy_excluded": legacy_assessment_count(
                 db, window_days=window_days, scope=scope, user_id=current_user["user_id"]
             ),
