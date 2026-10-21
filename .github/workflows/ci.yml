@@ -92,7 +92,7 @@ jobs:
       REQUIRE_REDIS_FOR_CREDENTIALS: "false"
       REQUIRE_REDIS_FOR_CHALLENGES: "false"
       RATE_LIMIT_PER_MINUTE: "1000"
-      ADMIN_WALLETS: 0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266
+      ADMIN_WALLETS: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
       VITE_API_URL: ""
       E2E_BASE_URL: http://localhost:5174
       PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/e2e-junit.xml
