@@ -292,7 +292,10 @@ async def run_indicator_backtest(
             "trade_log": [],
             "metrics": _calculate_metrics([]),
             "error": "Insufficient price data (need at least 30 data points)",
-            "indicator_values": {"history_source": provenance, "history_quality": "insufficient_data"},
+            "indicator_values": {
+                "history_source": provenance,
+                "history_quality": "insufficient_data",
+            },
         }
 
     # Compute indicators

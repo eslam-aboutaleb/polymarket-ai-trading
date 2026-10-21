@@ -66,7 +66,8 @@ def _parse_market_tokens(payload: Any, condition_id: str, outcome: str) -> str:
     if not isinstance(tokens, list):
         raise PriceHistoryError("Market lookup has no outcome token mapping")
     matches = [
-        t for t in tokens
+        t
+        for t in tokens
         if isinstance(t, dict) and str(t.get("outcome", "")).casefold() == outcome.casefold()
     ]
     if len(matches) != 1:
@@ -76,7 +77,8 @@ def _parse_market_tokens(payload: Any, condition_id: str, outcome: str) -> str:
         raise PriceHistoryError("Market returned an invalid outcome token ID")
     all_ids = [
         str(t.get("token_id") or t.get("tokenId") or "")
-        for t in tokens if isinstance(t, dict)
+        for t in tokens
+        if isinstance(t, dict)
     ]
     if len(all_ids) != len(set(all_ids)):
         raise PriceHistoryError("Market response contains duplicate outcome token IDs")
@@ -173,7 +175,7 @@ async def load_token_price_history(
         raise PriceHistoryError("No historical prices for this outcome token and date range")
 
     times = sorted(all_points)
-    max_gap = max((b - a for a, b in zip(times, times[1:])), default=0)
+    max_gap = max((b - a for a, b in zip(times, times[1:], strict=False)), default=0)
     # The CLOB sample series does not expose historical depth. It is always
     # indicative, and too-sparse series should not become completed backtests.
     incomplete = (
@@ -191,9 +193,14 @@ async def load_token_price_history(
         for ts in times
     ]
     canonical = json.dumps(
-        {"condition_id": condition_id.lower(), "token_id": token_id, "outcome": outcome,
-         "prices": [(ts, all_points[ts]) for ts in times]},
-        separators=(",", ":"), sort_keys=True,
+        {
+            "condition_id": condition_id.lower(),
+            "token_id": token_id,
+            "outcome": outcome,
+            "prices": [(ts, all_points[ts]) for ts in times],
+        },
+        separators=(",", ":"),
+        sort_keys=True,
     )
     provenance = {
         "source": "polymarket_clob_prices_history_v1",
