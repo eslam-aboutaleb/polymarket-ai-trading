@@ -2,10 +2,14 @@
 
 from datetime import datetime
 
-from sqlalchemy import case, func
+from sqlalchemy import and_, case, func
 from sqlalchemy.orm import Session
 
-from app.models.analytics.assessment import BINARY_OUTCOME_LABELS, Assessment
+from app.models.analytics.assessment import (
+    BINARY_OUTCOME_LABELS,
+    VERIFIED_SCORING_VERSION,
+    Assessment,
+)
 from app.models.intelligence.governance import VerdictFeedback
 from app.models.trading.user_trade import UserTrade
 
@@ -13,13 +17,17 @@ from app.models.trading.user_trade import UserTrade
 def verified_resolution_filter():
     """SQL filter for a *verified* binary resolution.
 
-    The label vocabulary is the one the scoring service uses
-    (``forecast_resolution.is_binary_outcome``), so a legacy row whose
-    ``resolved_outcome`` still holds a raw Gamma label ("ALICE") is
-    excluded from every aggregate — not only from the calibration
-    summary.
+    Match the Python read path: require the current finality-checked scoring
+    version, no exclusion, a finite bounded score and a binary label. Old
+    binary scores are as unverified as old nonbinary labels; neither may
+    feed calibration, model drift, experiments or forecaster skill.
     """
-    return func.lower(Assessment.resolved_outcome).in_(BINARY_OUTCOME_LABELS)
+    return and_(
+        Assessment.scoring_version == VERIFIED_SCORING_VERSION,
+        Assessment.exclusion_reason.is_(None),
+        Assessment.brier_score.between(0.0, 1.0),
+        func.lower(func.trim(Assessment.resolved_outcome)).in_(BINARY_OUTCOME_LABELS),
+    )
 
 
 def verified_brier_expression():

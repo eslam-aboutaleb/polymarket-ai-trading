@@ -97,6 +97,9 @@ export interface CalibrationForecast {
   edge: number | null;
   resolved_outcome: string | null;
   brier_score: number | null;
+  scoring_version: string | null;
+  exclusion_reason: string | null;
+  verified_resolution: boolean;
   created_at: string | null;
 }
 

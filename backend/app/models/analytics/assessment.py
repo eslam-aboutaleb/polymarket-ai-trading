@@ -14,6 +14,7 @@ from app.utils.time import utc_now
 BINARY_YES_LABELS = frozenset({"yes", "y", "true", "1"})
 BINARY_NO_LABELS = frozenset({"no", "n", "false", "0"})
 BINARY_OUTCOME_LABELS = BINARY_YES_LABELS | BINARY_NO_LABELS
+VERIFIED_SCORING_VERSION = "brier-binary-v2"
 
 #: Reason recorded on a row whose ``ai_probability`` could not be read.
 #: A row with this reason is not a pre-calibration (legacy) row: it is a

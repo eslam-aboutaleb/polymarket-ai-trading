@@ -98,7 +98,9 @@ def _verified_resolution(row: Assessment) -> bool:
     excluded the same way in the summary, the group stats and the
     reliability curve.
     """
-    return is_verified_resolution(row.brier_score, row.resolved_outcome)
+    return row.exclusion_reason is None and is_verified_resolution(
+        row.brier_score, row.resolved_outcome, row.scoring_version
+    )
 
 
 def _cluster_key(row: Assessment) -> str:
@@ -363,6 +365,9 @@ async def get_calibration_forecasts(
                 else None,
                 "resolved_outcome": row.resolved_outcome,
                 "brier_score": row.brier_score,
+                "scoring_version": row.scoring_version,
+                "exclusion_reason": row.exclusion_reason,
+                "verified_resolution": _verified_resolution(row),
                 "created_at": row.created_at.isoformat() if row.created_at else None,
             }
         )

@@ -249,7 +249,11 @@ class BinaryOutcomeTests(unittest.TestCase):
                 self.assertFalse(is_binary_outcome(label))
 
     def test_verified_resolution_needs_a_score_and_a_binary_label(self):
-        self.assertTrue(is_verified_resolution(0.04, "YES"))
+        self.assertTrue(is_verified_resolution(0.04, "YES", SCORING_VERSION))
+        self.assertFalse(is_verified_resolution(0.04, "YES"))
+        self.assertFalse(is_verified_resolution(0.04, "YES", "brier-binary-v1"))
+        for score in (float("nan"), float("inf"), -0.1, 1.1):
+            self.assertFalse(is_verified_resolution(score, "YES", SCORING_VERSION))
         self.assertFalse(is_verified_resolution(None, "YES"))
         self.assertFalse(is_verified_resolution(0.04, "ALICE"))
 
