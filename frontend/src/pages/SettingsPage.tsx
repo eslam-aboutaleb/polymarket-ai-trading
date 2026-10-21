@@ -295,13 +295,13 @@ export default function SettingsPage() {
 
   // Sync local profile form when profile loads
   useEffect(() => {
-    if (profile) {
+    // Background reloads must not overwrite fields while the user is editing.
+    if (profile && !profileDirty) {
       setDisplayName(profile.display_name || "");
       setEmail(profile.email || "");
       setPhone(profile.phone || "");
-      setProfileDirty(false);
     }
-  }, [profile]);
+  }, [profile, profileDirty]);
 
   useEffect(() => {
     if (!currentLlmSettings) return;
@@ -459,6 +459,7 @@ export default function SettingsPage() {
         phone: phone || null,
       });
       setProfile(updated);
+      setProfileDirty(false);
       toast.success("Profile saved!");
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, "Failed to save profile"));
