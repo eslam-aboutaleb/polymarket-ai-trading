@@ -677,7 +677,7 @@ class ResearchMCPClient:
                 return [[] for _ in requests]
 
             frames = self._decode_response_frames(stdout.decode("utf-8"), len(requests))
-            return [self._annotate_source(tool, frame) for tool, frame in zip(requests, frames)]
+            return [self._annotate_source(tool, frame) for tool, frame in zip(requests, frames, strict=True)]
         except Exception:
             logger.debug("MCP batch call failed", exc_info=True)
             return [[] for _ in requests]
