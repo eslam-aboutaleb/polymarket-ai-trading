@@ -158,6 +158,17 @@ def _engine_patches(
     """
     if engine_settings is None:
         engine_settings = _engine_settings()
+
+    # Freeze the engine cycle halfway through the market window. The live
+    # clock used to put this test near expiry at random CI execution times,
+    # skipping the trade before the paper/no-CLOB assertions could run.
+    fixed_now = datetime.fromtimestamp(market.window_start_epoch + 150, tz=UTC)
+
+    class FixedEngineDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now if tz is None else fixed_now.astimezone(tz)
+
     if fetch_book is None:
         fetch_book = AsyncMock(name="fetch_book")
     if place_fok_order is None:
@@ -173,6 +184,7 @@ def _engine_patches(
         return None
 
     patches = [
+        patch.object(latency_arb_service, "datetime", FixedEngineDatetime),
         patch.object(latency_arb_service, "get_settings", lambda: engine_settings),
         patch.object(latency_arb_service, "SessionLocal", return_value=db),
         patch.object(
