@@ -64,7 +64,7 @@ export default defineConfig({
 
   webServer: [
     {
-      command: "backend/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8002",
+      command: "./.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8002",
       cwd: path.join(REPO_ROOT, "backend"),
       url: "http://127.0.0.1:8002/",
       reuseExistingServer: true,
