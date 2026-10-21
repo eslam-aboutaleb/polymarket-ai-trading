@@ -35,7 +35,10 @@ logger = logging.getLogger(__name__)
 # reaches a prompt is sanitised, marked as untrusted and carries its source
 # URL and coverage label, so an indexed page can neither steer the model nor
 # be read as an authenticated feed.
-INDEXED_EVIDENCE_HEADING = "== Indexed Web Results (search-engine snippets; partial coverage; not an authenticated X feed) =="
+INDEXED_EVIDENCE_HEADING = (
+    "== Indexed Web Results (search-engine snippets; partial coverage; "
+    "not an authenticated X feed) ==
+)
 
 
 def _indexed_evidence_block(rows: list[dict[str, Any]]) -> str:
