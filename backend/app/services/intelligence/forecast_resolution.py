@@ -171,6 +171,7 @@ def brier_score(ai_probability: float, resolved_outcome: str | None) -> float:
     error = probability - outcome_value(resolved_outcome)
     return error * error
 
+
 async def fetch_resolutions(
     condition_ids: list[str],
     timeout: float = _RESOLUTION_TIMEOUT,
@@ -232,8 +233,7 @@ async def _lookup(client, cid: str):
         item
         for item in markets
         if isinstance(item, dict)
-        and str(item.get("conditionId") or item.get("condition_id") or "").lower()
-        == cid.lower()
+        and str(item.get("conditionId") or item.get("condition_id") or "").lower() == cid.lower()
     ]
     if len(matches) != 1:
         return None
