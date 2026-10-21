@@ -112,7 +112,9 @@ test.describe("Login modal on public pages", () => {
     const modal = page.getByRole("heading", { name: "Connect Wallet" });
     await expect(modal).toBeVisible();
 
-    await page.getByRole("button", { name: "Close login modal" }).click();
+    await page.getByRole("dialog", { name: "Connect Wallet" })
+      .getByRole("button", { name: "Close", exact: true })
+      .click();
     await expect(modal).toBeHidden();
   });
 
