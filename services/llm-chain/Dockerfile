@@ -34,7 +34,7 @@ RUN python -m grpc_tools.protoc \
 # `polymarket_mcp` and `polymarket_settings`.
 ENV PYTHONPATH=/app:/app/shared
 
-# Create ChromaDB data directory
+# Create SQLite RAG data directory
 RUN mkdir -p /app/data/chroma
 
 # Expose gRPC port

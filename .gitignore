@@ -123,3 +123,6 @@ frontend/test-results/
 backend/test-results/
 frontend/playwright-report/
 frontend/e2e/.auth/
+
+# Redacted logs from credentialed integration runs.
+/frontend/real-ux-artifacts/

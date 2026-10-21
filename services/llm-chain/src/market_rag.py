@@ -1,8 +1,8 @@
 """
-ChromaDB-based RAG (Retrieval-Augmented Generation) for Polymarket markets.
+SQLite-backed vector RAG (Retrieval-Augmented Generation) for Polymarket markets.
 
 Inspired by Polymarket/agents chroma.py — vectorizes active markets/events
-into a local ChromaDB collection, then uses similarity search to find the
+into a local SQLite vector index, then uses similarity search to find the
 most relevant opportunities for any given query.
 
 Features:
@@ -35,7 +35,10 @@ up:
 
 from __future__ import annotations
 
+import json
 import logging
+import math
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any
@@ -46,22 +49,12 @@ from src.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# Lazy imports — these are optional heavy deps
-_chromadb = None
 _OpenAIEmbeddings = None
 
 
 def _ensure_imports():
-    """Lazy-import chromadb and embeddings to avoid startup cost if RAG is disabled."""
-    global _chromadb, _OpenAIEmbeddings
-    if _chromadb is None:
-        try:
-            import chromadb as _chromadb_mod
-
-            _chromadb = _chromadb_mod
-        except ImportError:
-            logger.warning("chromadb not installed — RAG features disabled")
-            return False
+    """Lazy-import embeddings to avoid startup cost if RAG is disabled."""
+    global _OpenAIEmbeddings
     if _OpenAIEmbeddings is None:
         try:
             from langchain_openai import OpenAIEmbeddings as _OAI
@@ -75,7 +68,7 @@ def _ensure_imports():
 
 class MarketRAGService:
     """
-    Manages a ChromaDB vector store of Polymarket markets for
+    Manages a SQLite vector store of Polymarket markets for
     semantic similarity search and opportunity discovery.
     """
 
@@ -85,9 +78,8 @@ class MarketRAGService:
 
     def __init__(self):
         self.settings = get_settings()
-        self._collection = None
         self._embedding_fn = None
-        self._chroma_client = None
+        self._db_path: Path | None = None
         self._initialized = False
 
     @classmethod
@@ -96,8 +88,14 @@ class MarketRAGService:
             cls._instance = cls()
         return cls._instance
 
-    def _init_chroma(self) -> bool:
-        """Initialize ChromaDB client and collection."""
+    @property
+    def _database_path(self) -> Path:
+        if self._db_path is None:
+            raise RuntimeError("RAG store has not been initialized")
+        return self._db_path
+
+    def _init_store(self) -> bool:
+        """Initialize a local SQLite vector store without a network service."""
         if self._initialized:
             return True
         if not _ensure_imports():
@@ -106,30 +104,34 @@ class MarketRAGService:
         try:
             persist_dir = self.settings.chroma_persist_dir
             Path(persist_dir).mkdir(parents=True, exist_ok=True)
-
-            self._chroma_client = _chromadb.PersistentClient(path=persist_dir)
-            self._collection = self._chroma_client.get_or_create_collection(
-                name=self.settings.chroma_collection_name,
-                metadata={"hnsw:space": "cosine"},
-            )
+            self._db_path = Path(persist_dir) / f"{self.settings.chroma_collection_name}.sqlite3"
+            with sqlite3.connect(self._db_path) as db:
+                db.execute(
+                    """CREATE TABLE IF NOT EXISTS market_vectors (
+                        condition_id TEXT PRIMARY KEY,
+                        document TEXT NOT NULL,
+                        metadata TEXT NOT NULL,
+                        embedding TEXT NOT NULL
+                    )"""
+                )
             self._embedding_fn = _OpenAIEmbeddings(
                 model=self.settings.rag_embedding_model,
                 openai_api_key=self.settings.openai_api_key,
             )
             self._initialized = True
             logger.info(
-                "ChromaDB initialized: collection=%s, persist=%s",
+                "SQLite RAG store initialized: collection=%s, persist=%s",
                 self.settings.chroma_collection_name,
                 persist_dir,
             )
             return True
         except Exception as e:
-            logger.error("Failed to initialize ChromaDB: %s", e)
+            logger.error("Failed to initialize SQLite RAG store: %s", e)
             return False
 
     def index_markets(self, markets: list[dict[str, Any]], force: bool = False) -> int:
         """
-        Index a list of market dicts into ChromaDB.
+        Index a list of market dicts into SQLite.
 
         Args:
             markets: List of market dicts with keys like question, description,
@@ -147,7 +149,7 @@ class MarketRAGService:
             logger.debug("RAG index still fresh (%.0fs old), skipping", now - self._last_index_time)
             return 0
 
-        if not self._init_chroma():
+        if not self._init_store():
             return 0
 
         documents: list[str] = []
@@ -194,20 +196,27 @@ class MarketRAGService:
             return 0
 
         try:
-            # Upsert to handle re-indexing gracefully
-            # ChromaDB requires embeddings or we let it auto-embed
             embeddings = self._embedding_fn.embed_documents(documents)
-            self._collection.upsert(
-                ids=ids,
-                documents=documents,
-                metadatas=metadatas,
-                embeddings=embeddings,
-            )
+            with sqlite3.connect(self._database_path) as db:
+                db.executemany(
+                    """INSERT INTO market_vectors (condition_id, document, metadata, embedding)
+                       VALUES (?, ?, ?, ?)
+                       ON CONFLICT(condition_id) DO UPDATE SET
+                           document=excluded.document,
+                           metadata=excluded.metadata,
+                           embedding=excluded.embedding""",
+                    [
+                        (cid, doc, json.dumps(meta), json.dumps(vector))
+                        for cid, doc, meta, vector in zip(
+                            ids, documents, metadatas, embeddings, strict=True
+                        )
+                    ],
+                )
             self._last_index_time = time.time()
-            logger.info("Indexed %d markets into ChromaDB", len(documents))
+            logger.info("Indexed %d markets into SQLite RAG store", len(documents))
             return len(documents)
         except Exception as e:
-            logger.error("Failed to index markets in ChromaDB: %s", e)
+            logger.error("Failed to index markets into SQLite RAG store: %s", e)
             return 0
 
     def search(
@@ -232,36 +241,37 @@ class MarketRAGService:
         if not self.settings.rag_enabled:
             return []
 
-        if not self._init_chroma():
+        if not self._init_store():
             return []
 
         try:
             query_embedding = self._embedding_fn.embed_query(query)
 
-            where_filter = {}
-            if active_only:
-                where_filter["active"] = True
+            with sqlite3.connect(self._database_path) as db:
+                rows = db.execute(
+                    "SELECT condition_id, document, metadata, embedding FROM market_vectors"
+                ).fetchall()
 
-            results = self._collection.query(
-                query_embeddings=[query_embedding],
-                n_results=min(n_results * 2, 50),  # Over-fetch for post-filtering
-                where=where_filter if where_filter else None,
-                include=["documents", "metadatas", "distances"],
-            )
-
-            if not results or not results.get("ids") or not results["ids"][0]:
-                return []
-
+            query_norm = math.sqrt(sum(float(value) ** 2 for value in query_embedding))
             output = []
-            for i, doc_id in enumerate(results["ids"][0]):
-                meta = results["metadatas"][0][i] if results["metadatas"] else {}
-                distance = results["distances"][0][i] if results["distances"] else 1.0
-                score = 1.0 - distance  # cosine distance → similarity
-
-                # Post-filter by volume
-                if min_volume > 0 and float(meta.get("volume_24h", 0)) < min_volume:
+            for doc_id, document, metadata_json, embedding_json in rows:
+                meta = json.loads(metadata_json)
+                if active_only and not meta.get("active", True):
                     continue
-
+                if float(meta.get("volume_24h", 0)) < min_volume:
+                    continue
+                embedding = json.loads(embedding_json)
+                denominator = query_norm * math.sqrt(sum(float(value) ** 2 for value in embedding))
+                score = (
+                    sum(
+                        float(left) * float(right)
+                        for left, right in zip(query_embedding, embedding, strict=True)
+                    )
+                    / denominator
+                    if denominator
+                    else 0.0
+                )
+                distance = 1.0 - score
                 output.append(
                     {
                         "condition_id": doc_id,
@@ -269,13 +279,14 @@ class MarketRAGService:
                         "score": round(score, 4),
                         "distance": round(distance, 4),
                         "metadata": meta,
-                        "document": results["documents"][0][i] if results["documents"] else "",
+                        "document": document,
                     }
                 )
 
+            output.sort(key=lambda item: item["score"], reverse=True)
             return output[:n_results]
         except Exception as e:
-            logger.error("ChromaDB search failed: %s", e)
+            logger.error("SQLite RAG search failed: %s", e)
             return []
 
     async def multi_query_search(
@@ -333,23 +344,21 @@ class MarketRAGService:
 
     def get_collection_size(self) -> int:
         """Return the number of documents in the collection."""
-        if not self._init_chroma():
+        if not self._init_store():
             return 0
         try:
-            return self._collection.count()
+            with sqlite3.connect(self._database_path) as db:
+                return db.execute("SELECT COUNT(*) FROM market_vectors").fetchone()[0]
         except Exception:
             return 0
 
     def clear(self):
         """Clear the entire collection."""
-        if self._chroma_client:
+        if self._db_path:
             try:
-                self._chroma_client.delete_collection(self.settings.chroma_collection_name)
-                self._collection = self._chroma_client.get_or_create_collection(
-                    name=self.settings.chroma_collection_name,
-                    metadata={"hnsw:space": "cosine"},
-                )
+                with sqlite3.connect(self._db_path) as db:
+                    db.execute("DELETE FROM market_vectors")
                 self._last_index_time = 0
-                logger.info("Cleared ChromaDB collection")
+                logger.info("Cleared SQLite RAG store")
             except Exception as e:
-                logger.error("Failed to clear ChromaDB: %s", e)
+                logger.error("Failed to clear SQLite RAG store: %s", e)

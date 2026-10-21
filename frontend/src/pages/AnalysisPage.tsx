@@ -9,7 +9,7 @@
  * @module pages/AnalysisPage
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import AnalysisDisplay from "../components/AnalysisDisplay";
 import { analysisService } from "../services/analysisService";
@@ -21,7 +21,6 @@ export default function AnalysisPage() {
   const [streamedText, setStreamedText] = useState("");
   const [streamDone, setStreamDone] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
 
   // Extract market params from URL
   const marketTitle = searchParams.get("market_title") || "AI Analysis";
@@ -34,6 +33,7 @@ export default function AnalysisPage() {
 
   // Start independent analysis on mount
   useEffect(() => {
+    let canceled = false;
     const controller = analysisService.streamMarketAnalysis(
       {
         market_title: marketTitle,
@@ -45,18 +45,23 @@ export default function AnalysisPage() {
         include_research: includeResearch,
       },
       {
-        onChunk: (text) => setStreamedText((prev) => prev + text),
-        onDone: () => setStreamDone(true),
+        onChunk: (text) => {
+          if (!canceled) setStreamedText((prev) => prev + text);
+        },
+        onDone: () => {
+          if (!canceled) setStreamDone(true);
+        },
         onError: (err) => {
+          if (canceled) return;
           setStreamError(sanitizeAIError(err));
           setStreamDone(true);
         },
       },
     );
 
-    abortRef.current = controller;
-
     return () => {
+      // Ignore callbacks from the request disposed by unmount or StrictMode cleanup.
+      canceled = true;
       controller.abort();
     };
     // Run once on mount only
