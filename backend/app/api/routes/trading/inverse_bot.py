@@ -28,6 +28,46 @@ from app.utils.database import get_db
 
 router = APIRouter(prefix="/api/inverse-bot", tags=["inverse-bot"])
 
+# The inverse bot reads a search-engine index, never an authenticated X feed.
+# Every surface that shows the social summary repeats this label so the data
+# cannot be mistaken for a native timeline.
+INDEXED_WEB_SOURCE_TYPE = "indexed_web"
+INDEXED_WEB_COVERAGE = "partial_non_comprehensive"
+
+
+def _x_source_label(
+    source_type: str | None,
+    coverage: str | None,
+    status: str | None,
+    checked_at: str | None,
+) -> str:
+    """Build the human-readable provenance label of the social summary.
+
+    Args:
+        source_type: Provenance of the source ("indexed_web").
+        coverage: Coverage of the source ("partial_non_comprehensive").
+        status: "ok", "no_matches" or "provider_unavailable".
+        checked_at: ISO timestamp of the last index check.
+
+    Returns:
+        A label naming the source, its coverage and when it was checked. An
+        unavailable source is stated as such: it is unknown, not empty.
+    """
+    if (source_type or "") not in (INDEXED_WEB_SOURCE_TYPE, ""):
+        head = f"Social source: {source_type}"
+    else:
+        head = "Social source: indexed web pages"
+    if status == "provider_unavailable":
+        detail = "provider unavailable; no data retrieved"
+    elif status == "no_matches":
+        detail = "search-engine snippets; partial coverage; no indexed matches"
+    else:
+        detail = "search-engine snippets; partial coverage; not an authenticated X feed"
+    label = f"{head} ({detail})"
+    if checked_at:
+        label = f"{label}; checked {checked_at}"
+    return label
+
 
 class InverseBotPositionRequest(BaseModel):
     token_id: str = Field(..., min_length=2)
@@ -57,6 +97,14 @@ class InverseBotPositionResponse(BaseModel):
     last_reasoning: str | None
     last_web_summary: str | None
     last_x_summary: str | None
+    # Provenance of the social summary: the pipeline reads a search-engine
+    # index, so the API says which source it was, how complete it is and when
+    # it was last checked.
+    x_source_type: str | None = None
+    x_coverage: str | None = None
+    x_status: str | None = None
+    x_checked_at: str | None = None
+    x_source_label: str = ""
     last_error: str | None
     last_recommendation: str | None
     last_alt_outcome: str | None
@@ -92,6 +140,16 @@ def _to_response(row: InverseBotPosition) -> InverseBotPositionResponse:
         last_reasoning=row.last_reasoning,
         last_web_summary=row.last_web_summary,
         last_x_summary=row.last_x_summary,
+        x_source_type=row.last_x_source_type or INDEXED_WEB_SOURCE_TYPE,
+        x_coverage=row.last_x_coverage or INDEXED_WEB_COVERAGE,
+        x_status=row.last_x_status,
+        x_checked_at=row.last_x_checked_at.isoformat() if row.last_x_checked_at else None,
+        x_source_label=_x_source_label(
+            row.last_x_source_type,
+            row.last_x_coverage,
+            row.last_x_status,
+            row.last_x_checked_at.isoformat() if row.last_x_checked_at else None,
+        ),
         last_error=row.last_error,
         last_recommendation=row.last_recommendation,
         last_alt_outcome=row.last_alt_outcome,
