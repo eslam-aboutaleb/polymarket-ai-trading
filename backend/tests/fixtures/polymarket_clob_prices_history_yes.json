@@ -1,0 +1,513 @@
+{
+  "_recorded_at": "2026-10-21T10:05:00Z",
+  "_source_market": "GET https://clob.polymarket.com/markets/0x6c99b60b726fcb7e4fdeecc1b4fbbd467fef8e984dfc6642abd0b675629a7eb3",
+  "_source_prices_history": "GET https://clob.polymarket.com/prices-history?market=82853722658173342238781948595880114932844211419294037056959735369523146454820&startTs=1792148428&endTs=1792576844&fidelity=60",
+  "_note": "Verbatim CLOB responses recorded from the live Polymarket CLOB API for the YES outcome token of an active market. Row shape (t/p), price precision and the one-hour sampling cadence are the upstream contract, not a synthetic series.",
+  "market": {
+    "enable_order_book": true,
+    "active": true,
+    "closed": false,
+    "archived": false,
+    "accepting_orders": true,
+    "accepting_order_timestamp": "2026-10-08T18:01:14Z",
+    "minimum_order_size": 5,
+    "minimum_tick_size": 0.01,
+    "condition_id": "0x6c99b60b726fcb7e4fdeecc1b4fbbd467fef8e984dfc6642abd0b675629a7eb3",
+    "question_id": "0x30e4bc56a8391044f5fc693c2d3d2d421c524eabf51d9e981005d07e0ca66a00",
+    "question": "Will FC Bayern M\u00fcnchen win on 2026-10-21?",
+    "description": "In the upcoming game, scheduled for October 21, 2026\nIf FC Bayern M\u00fcnchen wins, this market will resolve to \"Yes\".\nOtherwise, this market will resolve to \"No\".\nIf the game is postponed, this market will remain open until the game has been completed.\nIf the game is canceled entirely, with no make-up game, this market will resolve \"No\".\nThis market refers only to the outcome within the first 90 minutes of regular play plus stoppage time.\n\nThe primary resolution source for this market is the official statistics of the event as recognized by the governing body or event organizers. However, if the governing body or event organizers have not published final match statistics within 2 hours after the event's conclusion, data from Flashscore may be used; if Flashscore data is unavailable, data from Sofascore may be used; if neither is available, a consensus of credible reporting may be used instead. All markets will settle based on the official final result as recognized by the governing body or event organizers. Revisions to officially declared final scores made after market resolution will not be accounted for in determining the outcome. If no acceptable data is available within 24 hours of the event's conclusion, this market will resolve 50-50, or to \"Draw\" where applicable.",
+    "market_slug": "ucl-bay-ars-2026-10-21-bay",
+    "end_date_iso": "2026-10-21T00:00:00Z",
+    "game_start_time": "2026-10-21T19:00:00Z",
+    "seconds_delay": 1,
+    "fpmm": "",
+    "maker_base_fee": 1000,
+    "taker_base_fee": 1000,
+    "notifications_enabled": true,
+    "neg_risk": true,
+    "neg_risk_market_id": "0x30e4bc56a8391044f5fc693c2d3d2d421c524eabf51d9e981005d07e0ca66a00",
+    "neg_risk_request_id": "0x3847126226e35c88248eaa55212176848920320a7da6c097b5699bf9fa07c713",
+    "icon": "https://polymarket-upload.s3.us-east-2.amazonaws.com/champions-league-pic-QIUFsL8vaDdq.png",
+    "image": "https://polymarket-upload.s3.us-east-2.amazonaws.com/champions-league-pic-QIUFsL8vaDdq.png",
+    "rewards": {
+      "rates": null,
+      "min_size": 50,
+      "max_spread": 4.5
+    },
+    "is_50_50_outcome": false,
+    "tokens": [
+      {
+        "token_id": "82853722658173342238781948595880114932844211419294037056959735369523146454820",
+        "outcome": "Yes",
+        "price": 0.425,
+        "winner": false
+      },
+      {
+        "token_id": "5261741566386136630503430790123537544925969719805425529373566539868070168195",
+        "outcome": "No",
+        "price": 0.575,
+        "winner": false
+      }
+    ],
+    "tags": [
+      "Sports",
+      "Soccer",
+      "Games",
+      "UCL",
+      "UCL Matchday"
+    ],
+    "version": "v1"
+  },
+  "prices_history": {
+    "history": [
+      {
+        "t": 1792148428,
+        "p": 0.445
+      },
+      {
+        "t": 1792152033,
+        "p": 0.445
+      },
+      {
+        "t": 1792155632,
+        "p": 0.45
+      },
+      {
+        "t": 1792159237,
+        "p": 0.45
+      },
+      {
+        "t": 1792162831,
+        "p": 0.45
+      },
+      {
+        "t": 1792166428,
+        "p": 0.45
+      },
+      {
+        "t": 1792170028,
+        "p": 0.45
+      },
+      {
+        "t": 1792177223,
+        "p": 0.45
+      },
+      {
+        "t": 1792180823,
+        "p": 0.45
+      },
+      {
+        "t": 1792184441,
+        "p": 0.455
+      },
+      {
+        "t": 1792188023,
+        "p": 0.455
+      },
+      {
+        "t": 1792191624,
+        "p": 0.455
+      },
+      {
+        "t": 1792195238,
+        "p": 0.45
+      },
+      {
+        "t": 1792198836,
+        "p": 0.45
+      },
+      {
+        "t": 1792202415,
+        "p": 0.445
+      },
+      {
+        "t": 1792206026,
+        "p": 0.445
+      },
+      {
+        "t": 1792209620,
+        "p": 0.445
+      },
+      {
+        "t": 1792213225,
+        "p": 0.445
+      },
+      {
+        "t": 1792216828,
+        "p": 0.445
+      },
+      {
+        "t": 1792220423,
+        "p": 0.445
+      },
+      {
+        "t": 1792224035,
+        "p": 0.445
+      },
+      {
+        "t": 1792227633,
+        "p": 0.445
+      },
+      {
+        "t": 1792231223,
+        "p": 0.445
+      },
+      {
+        "t": 1792234831,
+        "p": 0.445
+      },
+      {
+        "t": 1792238433,
+        "p": 0.445
+      },
+      {
+        "t": 1792242023,
+        "p": 0.445
+      },
+      {
+        "t": 1792249233,
+        "p": 0.445
+      },
+      {
+        "t": 1792256408,
+        "p": 0.445
+      },
+      {
+        "t": 1792260048,
+        "p": 0.445
+      },
+      {
+        "t": 1792267228,
+        "p": 0.455
+      },
+      {
+        "t": 1792270828,
+        "p": 0.455
+      },
+      {
+        "t": 1792278027,
+        "p": 0.455
+      },
+      {
+        "t": 1792281659,
+        "p": 0.455
+      },
+      {
+        "t": 1792285237,
+        "p": 0.455
+      },
+      {
+        "t": 1792288827,
+        "p": 0.455
+      },
+      {
+        "t": 1792292426,
+        "p": 0.455
+      },
+      {
+        "t": 1792296021,
+        "p": 0.455
+      },
+      {
+        "t": 1792299621,
+        "p": 0.455
+      },
+      {
+        "t": 1792303227,
+        "p": 0.455
+      },
+      {
+        "t": 1792306821,
+        "p": 0.455
+      },
+      {
+        "t": 1792310420,
+        "p": 0.455
+      },
+      {
+        "t": 1792314025,
+        "p": 0.455
+      },
+      {
+        "t": 1792317621,
+        "p": 0.455
+      },
+      {
+        "t": 1792321222,
+        "p": 0.455
+      },
+      {
+        "t": 1792324846,
+        "p": 0.455
+      },
+      {
+        "t": 1792328422,
+        "p": 0.455
+      },
+      {
+        "t": 1792332021,
+        "p": 0.455
+      },
+      {
+        "t": 1792339236,
+        "p": 0.455
+      },
+      {
+        "t": 1792342843,
+        "p": 0.455
+      },
+      {
+        "t": 1792350036,
+        "p": 0.455
+      },
+      {
+        "t": 1792357226,
+        "p": 0.455
+      },
+      {
+        "t": 1792360821,
+        "p": 0.465
+      },
+      {
+        "t": 1792364416,
+        "p": 0.465
+      },
+      {
+        "t": 1792368031,
+        "p": 0.465
+      },
+      {
+        "t": 1792371614,
+        "p": 0.465
+      },
+      {
+        "t": 1792375219,
+        "p": 0.465
+      },
+      {
+        "t": 1792378824,
+        "p": 0.465
+      },
+      {
+        "t": 1792382415,
+        "p": 0.475
+      },
+      {
+        "t": 1792386033,
+        "p": 0.475
+      },
+      {
+        "t": 1792389625,
+        "p": 0.475
+      },
+      {
+        "t": 1792393220,
+        "p": 0.475
+      },
+      {
+        "t": 1792396819,
+        "p": 0.475
+      },
+      {
+        "t": 1792400424,
+        "p": 0.475
+      },
+      {
+        "t": 1792404015,
+        "p": 0.475
+      },
+      {
+        "t": 1792407619,
+        "p": 0.475
+      },
+      {
+        "t": 1792411230,
+        "p": 0.475
+      },
+      {
+        "t": 1792414820,
+        "p": 0.475
+      },
+      {
+        "t": 1792418420,
+        "p": 0.475
+      },
+      {
+        "t": 1792422025,
+        "p": 0.475
+      },
+      {
+        "t": 1792425620,
+        "p": 0.475
+      },
+      {
+        "t": 1792429221,
+        "p": 0.475
+      },
+      {
+        "t": 1792432827,
+        "p": 0.475
+      },
+      {
+        "t": 1792436422,
+        "p": 0.475
+      },
+      {
+        "t": 1792440021,
+        "p": 0.475
+      },
+      {
+        "t": 1792443627,
+        "p": 0.475
+      },
+      {
+        "t": 1792447220,
+        "p": 0.475
+      },
+      {
+        "t": 1792450823,
+        "p": 0.475
+      },
+      {
+        "t": 1792454431,
+        "p": 0.475
+      },
+      {
+        "t": 1792458021,
+        "p": 0.475
+      },
+      {
+        "t": 1792461620,
+        "p": 0.475
+      },
+      {
+        "t": 1792465225,
+        "p": 0.475
+      },
+      {
+        "t": 1792468821,
+        "p": 0.475
+      },
+      {
+        "t": 1792472420,
+        "p": 0.475
+      },
+      {
+        "t": 1792476027,
+        "p": 0.475
+      },
+      {
+        "t": 1792479631,
+        "p": 0.475
+      },
+      {
+        "t": 1792483221,
+        "p": 0.475
+      },
+      {
+        "t": 1792486825,
+        "p": 0.475
+      },
+      {
+        "t": 1792490426,
+        "p": 0.475
+      },
+      {
+        "t": 1792494036,
+        "p": 0.475
+      },
+      {
+        "t": 1792497633,
+        "p": 0.475
+      },
+      {
+        "t": 1792501221,
+        "p": 0.475
+      },
+      {
+        "t": 1792504822,
+        "p": 0.475
+      },
+      {
+        "t": 1792508426,
+        "p": 0.475
+      },
+      {
+        "t": 1792512022,
+        "p": 0.475
+      },
+      {
+        "t": 1792515622,
+        "p": 0.475
+      },
+      {
+        "t": 1792519232,
+        "p": 0.475
+      },
+      {
+        "t": 1792522848,
+        "p": 0.475
+      },
+      {
+        "t": 1792526427,
+        "p": 0.475
+      },
+      {
+        "t": 1792530032,
+        "p": 0.475
+      },
+      {
+        "t": 1792533622,
+        "p": 0.475
+      },
+      {
+        "t": 1792537223,
+        "p": 0.475
+      },
+      {
+        "t": 1792540833,
+        "p": 0.475
+      },
+      {
+        "t": 1792544433,
+        "p": 0.475
+      },
+      {
+        "t": 1792548032,
+        "p": 0.475
+      },
+      {
+        "t": 1792551639,
+        "p": 0.465
+      },
+      {
+        "t": 1792555233,
+        "p": 0.465
+      },
+      {
+        "t": 1792558832,
+        "p": 0.455
+      },
+      {
+        "t": 1792562428,
+        "p": 0.455
+      },
+      {
+        "t": 1792566022,
+        "p": 0.455
+      },
+      {
+        "t": 1792569622,
+        "p": 0.455
+      },
+      {
+        "t": 1792573231,
+        "p": 0.455
+      },
+      {
+        "t": 1792576843,
+        "p": 0.445
+      }
+    ]
+  }
+}
