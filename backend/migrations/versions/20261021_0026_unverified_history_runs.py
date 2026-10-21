@@ -54,9 +54,7 @@ def upgrade() -> None:
         if values.get("history_source"):
             continue
         updated = {**values, "history_quality": UNVERIFIED_MARKER}
-        bind.execute(
-            runs.update().where(runs.c.id == row.id).values(indicator_values=updated)
-        )
+        bind.execute(runs.update().where(runs.c.id == row.id).values(indicator_values=updated))
 
 
 def downgrade() -> None:
@@ -72,6 +70,4 @@ def downgrade() -> None:
         if not isinstance(values, dict) or values.get("history_quality") != UNVERIFIED_MARKER:
             continue
         updated = {key: value for key, value in values.items() if key != "history_quality"}
-        bind.execute(
-            runs.update().where(runs.c.id == row.id).values(indicator_values=updated)
-        )
+        bind.execute(runs.update().where(runs.c.id == row.id).values(indicator_values=updated))
