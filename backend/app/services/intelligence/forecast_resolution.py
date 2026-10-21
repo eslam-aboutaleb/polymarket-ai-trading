@@ -20,18 +20,15 @@ The response is a JSON array of market objects where:
 * ``outcomes`` and ``outcomePrices`` are **JSON-encoded strings**
   (``"[\\"Yes\\", \\"No\\"]"`` / ``"[\\"1\\", \\"0\\"]"``) and must be
   decoded with ``json.loads`` before use.
-* The winning outcome is the decoded pair member whose price is
-  ``>= 0.5``: ``["1","0"]`` → YES wins, ``["0","1"]`` → NO wins.
-  ``umaResolutionStatus`` (``"resolved"``) is present on settled
-  markets but the price pair is the authoritative signal; markets
-  where no outcome reaches the threshold are skipped.
+* The winning outcome must be a uniquely mapped YES/NO binary pair whose
+  final CLOB settlement value is one/zero, with explicit finalized UMA status.
+  Merely closed markets, 50/50 prices, nonbinary markets and unsettled markets
+  are excluded from accuracy metrics.
 * ``closed=true`` restricts the lookup to settled markets.
 
-Brier convention: binary YES framing. ``ai_probability`` is the AI's
-probability that YES resolves true, so the outcome is ``1.0`` when the
-winning label is YES-like (``"yes"``) and ``0.0`` otherwise. The raw
-winning label is preserved in ``resolved_outcome`` (normalised to
-upper case) for transparency, including the rare non-binary label.
+Brier convention: only an unambiguous finalized YES or NO winner can be
+scored against the YES forecast probability. All other outcome labels, null
+outcomes, nonfinite probabilities and unfinalized states are excluded.
 
 Idempotency: ``resolve_pending`` only touches rows where
 ``resolved_at IS NULL``, so a re-run (the advisory lock fails open on
@@ -43,6 +40,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -82,6 +80,7 @@ BASELINE_BRIER = 0.25
 # Yes-like labels map to outcome 1.0; anything else is "YES did not
 # happen" (0.0) under the binary framing documented above.
 _YES_LABELS = {"yes", "y", "true", "1"}
+_NO_LABELS = {"no", "n", "false", "0"}
 
 _resolution_task: asyncio.Task | None = None
 
@@ -122,39 +121,55 @@ def _decode_json_string(raw: Any) -> list:
 
 
 def winning_outcome(market: dict[str, Any]) -> str | None:
-    """Return the upper-cased winning label of a Gamma market payload.
+    """Accept only canonical finalized binary YES/NO markets.
 
-    ``outcomes``/``outcomePrices`` are JSON-encoded strings; the winner
-    is the outcome whose price reaches 0.5. Returns ``None`` when the
-    payload is unusable or no outcome has resolved (both prices 0, or a
-    malformed pair).
+    Closing a market is not settlement finality. Ambiguous payouts,
+    nonbinary outcomes, partial settlement and malformed response data
+    cannot become training/quality labels.
     """
+    if not isinstance(market, dict):
+        return None
+    if str(market.get("umaResolutionStatus", "")).lower() != "resolved":
+        return None
+    if market.get("closed") not in (True, "true"):
+        return None
     outcomes = _decode_json_string(market.get("outcomes"))
     prices = _decode_json_string(market.get("outcomePrices"))
-    if len(outcomes) != len(prices) or not outcomes:
+    if len(outcomes) != 2 or len(prices) != 2:
         return None
-    for label, raw_price in zip(outcomes, prices, strict=False):
-        try:
-            price = float(raw_price)
-        except (TypeError, ValueError):
-            continue
-        if price >= 0.5:
-            return str(label).strip().upper()[:20]
+    labels = [str(v).strip().lower() for v in outcomes]
+    if set(labels) != {"yes", "no"}:
+        return None
+    try:
+        values = [float(v) for v in prices]
+    except (TypeError, ValueError):
+        return None
+    if any(not math.isfinite(v) or v < 0 or v > 1 for v in values):
+        return None
+    if values == [1.0, 0.0]:
+        return labels[0].upper()
+    if values == [0.0, 1.0]:
+        return labels[1].upper()
     return None
 
 
 def outcome_value(resolved_outcome: str | None) -> float:
-    """Map a resolved label to its YES-framing outcome (1.0 YES, else 0.0)."""
-    if resolved_outcome and resolved_outcome.strip().lower() in _YES_LABELS:
+    """Map only known binary outcomes, raising on unverified labels."""
+    label = (resolved_outcome or "").strip().lower()
+    if label in _YES_LABELS:
         return 1.0
-    return 0.0
+    if label in _NO_LABELS:
+        return 0.0
+    raise ValueError("Forecast Brier outcome must be finalized YES or NO")
 
 
 def brier_score(ai_probability: float, resolved_outcome: str | None) -> float:
-    """Brier score ``(p_yes - outcome)^2`` for one resolved verdict."""
-    error = float(ai_probability) - outcome_value(resolved_outcome)
+    """Proper binary Brier score: reject missing/nonfinite p and labels."""
+    probability = float(ai_probability)
+    if not math.isfinite(probability) or not (0 <= probability <= 1):
+        raise ValueError("Forecast probability must be finite between 0 and 1")
+    error = probability - outcome_value(resolved_outcome)
     return error * error
-
 
 async def fetch_resolutions(
     condition_ids: list[str],
@@ -213,7 +228,16 @@ async def _lookup(client, cid: str):
 
     if not isinstance(markets, list) or not markets:
         return None
-    winner = winning_outcome(markets[0])
+    matches = [
+        item
+        for item in markets
+        if isinstance(item, dict)
+        and str(item.get("conditionId") or item.get("condition_id") or "").lower()
+        == cid.lower()
+    ]
+    if len(matches) != 1:
+        return None
+    winner = winning_outcome(matches[0])
     if winner is None:
         return None
     return cid, winner
@@ -242,8 +266,13 @@ async def resolve_pending(db: Session, limit: int = _RESOLUTION_BATCH_LIMIT) -> 
         if winner is None:
             run.unresolved_condition_ids.append(row.condition_id or "")
             continue
+        try:
+            score = brier_score(row.ai_probability, winner)
+        except (ValueError, TypeError, OverflowError):
+            # Caller can retry after corrected source or outcome mapping.
+            run.unresolved_condition_ids.append(row.condition_id or "")
+            continue
         row.resolved_outcome = winner
-        score = brier_score(row.ai_probability, winner)
         row.brier_score = score
         row.resolved_at = utc_now()
         run.resolved += 1
