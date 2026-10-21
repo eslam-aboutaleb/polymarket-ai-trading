@@ -8,7 +8,7 @@
  *
  * @module components/CopyTrading
  */
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   tradesService,
   FollowedTrader,
@@ -21,9 +21,12 @@ import {
 import { getApiErrorMessage } from "../utils/apiError";
 import {
   MockCopyTrader,
+  exportMockCopyTraders,
   hasMockCopyTrader,
+  importMockCopyTraders,
   loadMockCopyTraders,
-  removeMockCopyTrader,
+  removeMockCopyTraderAndPersist,
+  resetMockCopyTraders,
   saveMockCopyTraders,
   setMockCopyTraderAlias,
   subscribeMockCopyTraders,
@@ -139,6 +142,7 @@ export default function CopyTrading() {
   });
   const [confirmLoading, setConfirmLoading] = useState(false);
   const [mockRemoveWallet, setMockRemoveWallet] = useState<string | null>(null);
+  const [mockResetConfirmOpen, setMockResetConfirmOpen] = useState(false);
 
   const [evaluationWallet, setEvaluationWallet] = useState("");
   const [evaluationRows, setEvaluationRows] = useState<CopyEvaluationRow[]>([]);
@@ -152,6 +156,12 @@ export default function CopyTrading() {
   const [mockLeaderboard, setMockLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [mockLoading, setMockLoading] = useState(false);
   const [mockError, setMockError] = useState<string | null>(null);
+  // Provenance of the leaderboard figures shown in the watchlist: when they
+  // were produced and for which window. Without them the panel would present
+  // numbers with no indication of how old they are.
+  const [mockLeaderboardUpdatedAt, setMockLeaderboardUpdatedAt] = useState<string | null>(null);
+  const [mockLeaderboardPeriod, setMockLeaderboardPeriod] = useState<string | null>(null);
+  const mockImportInputRef = useRef<HTMLInputElement | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -591,11 +601,9 @@ export default function CopyTrading() {
   };
 
   const handleRemoveMockTrader = (wallet: string) => {
-    setMockTraders((prev) => {
-      const next = removeMockCopyTrader(prev, wallet);
-      saveMockCopyTraders(next);
-      return next;
-    });
+    // The removal is applied to the persisted list so entries added by
+    // another tab are not lost, and it is never re-merged back in.
+    setMockTraders(removeMockCopyTraderAndPersist(wallet));
     toast.success(`Removed ${shortAddress(wallet)} from the watchlist.`);
     setMockError(null);
     setMockIndicatorByWallet((prev) => {
@@ -603,6 +611,40 @@ export default function CopyTrading() {
       delete next[wallet.toLowerCase()];
       return next;
     });
+  };
+
+  const handleExportWatchlist = () => {
+    const payload = exportMockCopyTraders();
+    const blob = new Blob([payload], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "polymarket-watchlist.json";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    toast.success("Watchlist exported.");
+  };
+
+  const handleImportWatchlist = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      const raw = await file.text();
+      const next = importMockCopyTraders(raw);
+      setMockTraders(next);
+      setMockError(null);
+      toast.success(`Watchlist imported — ${next.length} wallet(s) watched.`);
+    } catch {
+      setMockError("Could not read that file. Expected a watchlist JSON export.");
+    }
+  };
+
+  const handleResetWatchlist = () => {
+    resetMockCopyTraders();
+    setMockTraders([]);
+    setMockError(null);
+    toast.success("Watchlist cleared.");
   };
 
   const updateMockTraderAlias = (wallet: string, alias: string) => {
@@ -655,6 +697,8 @@ export default function CopyTrading() {
   const refreshMockLeaderboard = useCallback(async () => {
     if (mockTraders.length === 0) {
       setMockLeaderboard([]);
+      setMockLeaderboardUpdatedAt(null);
+      setMockLeaderboardPeriod(null);
       return;
     }
     setMockLoading(true);
@@ -662,8 +706,10 @@ export default function CopyTrading() {
     try {
       const data = await tradesService.getLeaderboard(1000, mockPeriod);
       setMockLeaderboard(data.entries);
+      setMockLeaderboardUpdatedAt(data.updated_at ?? null);
+      setMockLeaderboardPeriod(data.period ?? null);
     } catch (err: unknown) {
-      setMockError(getApiErrorMessage(err, "Failed to refresh mock performance data"));
+      setMockError(getApiErrorMessage(err, "Failed to refresh leaderboard data"));
     } finally {
       setMockLoading(false);
     }
@@ -680,8 +726,12 @@ export default function CopyTrading() {
 
     return mockTraders.map((trader) => {
       const entry = byWallet.get(trader.wallet.toLowerCase());
-      const leaderPnl = entry && Number.isFinite(entry.profit_loss) ? entry.profit_loss : null;
-      const leaderVolume = entry && Number.isFinite(entry.volume) ? entry.volume : null;
+      // A leader without traded volume has no meaningful performance figure:
+      // rendering $0.00 would read like a flat result instead of "no data".
+      const hasVolume = Boolean(entry && Number.isFinite(entry.volume) && entry.volume > 0);
+      const leaderPnl =
+        entry && hasVolume && Number.isFinite(entry.profit_loss) ? entry.profit_loss : null;
+      const leaderVolume = entry && hasVolume ? entry.volume : null;
 
       return {
         ...trader,
@@ -803,7 +853,7 @@ export default function CopyTrading() {
               : "text-soft hover:text-white"
           }`}
         >
-          Trader Watchlist
+          Trader Watchlist (Illustrative)
         </button>
       </div>
 
@@ -817,7 +867,7 @@ export default function CopyTrading() {
         <div className="surface-panel p-6 rounded-lg space-y-4">
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
-              <h2 className="text-lg font-semibold">Trader Watchlist</h2>
+              <h2 className="text-lg font-semibold">Trader Watchlist (Illustrative)</h2>
               <p className="text-soft text-sm">
                 Bookmark wallets locally and review historical leaderboard results. No funds are
                 allocated, and no follower returns are calculated.
@@ -838,6 +888,24 @@ export default function CopyTrading() {
             </Banner>
           )}
 
+          <div
+            className="surface-soft p-3 rounded-lg text-xs text-soft space-y-1"
+            data-testid="watchlist-status"
+          >
+            <p className="text-white font-semibold">
+              Leaderboard figures as of{" "}
+              {mockLeaderboardUpdatedAt
+                ? new Date(mockLeaderboardUpdatedAt).toLocaleString()
+                : "not loaded yet"}
+            </p>
+            <p>
+              source: Polymarket leaderboard
+              {mockLeaderboardPeriod ? ` · window: ${mockLeaderboardPeriod}` : ""} ·{" "}
+              {mockRows.length} wallet(s) watched · no follower returns are calculated · no funds
+              are involved
+            </p>
+          </div>
+
           <div className="flex items-center gap-2 flex-wrap">
             <div className="flex bg-[var(--bg-soft)] rounded-lg p-1">
               {MOCK_PERIODS.map((p) => (
@@ -855,8 +923,9 @@ export default function CopyTrading() {
               ))}
             </div>
             <span className="text-xs text-muted">
-              These are the leader’s historical leaderboard figures for the selected window, not
-              returns earned by following.
+              These are the leader&apos;s own historical leaderboard figures for the selected
+              window, not returns earned by following. No follower returns are calculated and no
+              funds are involved.
             </span>
           </div>
 
@@ -871,6 +940,33 @@ export default function CopyTrading() {
             <button onClick={handleAddMockTrader} className="btn-primary">
               Add to Watchlist
             </button>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button onClick={handleExportWatchlist} className="btn-muted text-sm">
+              Export Watchlist
+            </button>
+            <button
+              onClick={() => mockImportInputRef.current?.click()}
+              className="btn-muted text-sm"
+            >
+              Import Watchlist
+            </button>
+            <button onClick={() => setMockResetConfirmOpen(true)} className="btn-muted text-sm">
+              Reset Watchlist
+            </button>
+            <input
+              ref={mockImportInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              data-testid="watchlist-import-input"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                void handleImportWatchlist(file);
+              }}
+            />
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -892,71 +988,93 @@ export default function CopyTrading() {
               returns are simulated.
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="table-theme text-sm">
-                <thead>
-                  <tr>
-                    <th className="text-left p-3">Trader</th>
-                    <th className="text-right p-3">Leader P&L (period)</th>
-                    <th className="text-right p-3">Leader Volume (period)</th>
-                    <th className="text-right p-3">Started</th>
-                    <th className="text-center p-3">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {mockRows.map((row) => (
-                    <tr key={row.wallet}>
-                      <td className="p-3">
-                        <p className="text-white font-medium text-xs">{row.primary_name}</p>
-                        <p className="text-muted text-xs mono">{shortAddress(row.wallet)}</p>
-                        {getPolymarketProfileUrl(row.wallet) && (
-                          <a
-                            href={getPolymarketProfileUrl(row.wallet) || "#"}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-[11px] text-[var(--accent)] hover:underline"
-                          >
-                            Polymarket Profile
-                          </a>
-                        )}
-                        <input
-                          type="text"
-                          value={row.alias ?? row.display_name ?? ""}
-                          onChange={(e) =>
-                            updateMockTraderAlias(
-                              row.wallet,
-                              row.display_name &&
-                                e.target.value.trim().toLowerCase() ===
-                                  row.display_name.trim().toLowerCase()
-                                ? ""
-                                : e.target.value,
-                            )
-                          }
-                          placeholder="Defaults to Polymarket username"
-                          className="mt-2 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-1.5 text-xs"
-                        />
-                      </td>
-                      <td className="p-3 text-right mono">
-                        {row.leaderPnl == null ? "N/A" : formatUSD(row.leaderPnl)}
-                      </td>
-                      <td className="p-3 text-right mono">
-                        {row.leaderVolume == null ? "N/A" : formatUSD(row.leaderVolume)}
-                      </td>
-                      <td className="p-3 text-right text-muted text-xs">
-                        {new Date(row.created_at).toLocaleDateString()}
-                      </td>
-                      <td className="p-3 text-center">
-                        <button
-                          onClick={() => setMockRemoveWallet(row.wallet)}
-                          className="px-3 py-1 rounded text-xs font-semibold bg-red-500/20 text-red-400 hover:bg-red-500/30 transition"
-                        >
-                          Remove
-                        </button>
-                      </td>
+            <div className="space-y-3">
+              {mockLeaderboard.length === 0 && (
+                <div
+                  className="surface-soft p-4 rounded text-sm text-soft"
+                  data-testid="watchlist-no-leaderboard"
+                >
+                  No leaderboard data available. The leader figures for the selected window could
+                  not be loaded, so every column below is unknown. No follower returns are
+                  calculated and no funds are involved.
+                </div>
+              )}
+              <div className="overflow-x-auto">
+                <table className="table-theme text-sm">
+                  <thead>
+                    <tr>
+                      <th className="text-left p-3">Trader</th>
+                      <th className="text-right p-3">Leader P&amp;L proxy (period)</th>
+                      <th className="text-right p-3">Leader Volume proxy (period)</th>
+                      <th className="text-right p-3">Started</th>
+                      <th className="text-center p-3">Action</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {mockRows.map((row) => (
+                      <tr key={row.wallet}>
+                        <td className="p-3">
+                          <p className="text-white font-medium text-xs">{row.primary_name}</p>
+                          <p className="text-muted text-xs mono">{shortAddress(row.wallet)}</p>
+                          {getPolymarketProfileUrl(row.wallet) && (
+                            <a
+                              href={getPolymarketProfileUrl(row.wallet) || "#"}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[11px] text-[var(--accent)] hover:underline"
+                            >
+                              Polymarket Profile
+                            </a>
+                          )}
+                          <input
+                            type="text"
+                            value={row.alias ?? row.display_name ?? ""}
+                            onChange={(e) =>
+                              updateMockTraderAlias(
+                                row.wallet,
+                                row.display_name &&
+                                  e.target.value.trim().toLowerCase() ===
+                                    row.display_name.trim().toLowerCase()
+                                  ? ""
+                                  : e.target.value,
+                              )
+                            }
+                            placeholder="Defaults to Polymarket username"
+                            className="mt-2 w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-2 py-1.5 text-xs"
+                          />
+                        </td>
+                        <td className="p-3 text-right mono">
+                          {row.leaderPnl == null ? (
+                            <span className="text-muted">Unknown</span>
+                          ) : (
+                            formatUSD(row.leaderPnl)
+                          )}
+                        </td>
+                        <td className="p-3 text-right mono">
+                          {row.leaderVolume == null ? (
+                            <span className="text-muted">Unknown</span>
+                          ) : (
+                            formatUSD(row.leaderVolume)
+                          )}
+                        </td>
+                        <td className="p-3 text-right text-muted text-xs">
+                          {row.created_at
+                            ? new Date(row.created_at).toLocaleDateString()
+                            : "Unknown"}
+                        </td>
+                        <td className="p-3 text-center">
+                          <button
+                            onClick={() => setMockRemoveWallet(row.wallet)}
+                            className="px-3 py-1 rounded text-xs font-semibold bg-red-500/20 text-red-400 hover:bg-red-500/30 transition"
+                          >
+                            Remove
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>
@@ -1345,12 +1463,12 @@ export default function CopyTrading() {
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="chip chip-success text-xs">Active</span>
                         {getSaveStatusChip(saveStatus)}
-                        {isMocked && <span className="chip chip-success text-xs">Mocked</span>}
+                        {isMocked && <span className="chip chip-success text-xs">Watchlisted</span>}
                         {mockIndicator === "already_exists" && (
-                          <span className="chip chip-warning text-xs">Already in Mocking</span>
+                          <span className="chip chip-warning text-xs">Already on watchlist</span>
                         )}
                         {mockIndicator === "added" && (
-                          <span className="chip chip-success text-xs">Now Mocked</span>
+                          <span className="chip chip-success text-xs">Added to watchlist</span>
                         )}
                         <button
                           onClick={() =>
@@ -1365,7 +1483,7 @@ export default function CopyTrading() {
                               : "bg-[var(--accent-soft)] text-[var(--accent)] hover:opacity-90"
                           }`}
                         >
-                          {isMocked ? "Already Mocked" : "Add Mock"}
+                          {isMocked ? "On watchlist" : "Add to Watchlist"}
                         </button>
                         <button
                           onClick={() => openConfirmModal("unfollow", f.trader_wallet)}
@@ -1665,10 +1783,8 @@ export default function CopyTrading() {
 
       <ConfirmModal
         open={mockRemoveWallet !== null}
-        title="Remove mock trader?"
-        body={`Removing this mock trader deletes its simulated balance and estimated performance. Adding ${shortAddress(
-          mockRemoveWallet ?? "",
-        )} again later starts a fresh $10,000 balance.`}
+        title="Remove from watchlist?"
+        body="Removing this wallet removes it from your local watchlist. No funds or returns are involved."
         destructive
         confirmLabel="Remove"
         onConfirm={() => {
@@ -1677,6 +1793,19 @@ export default function CopyTrading() {
           if (wallet) handleRemoveMockTrader(wallet);
         }}
         onCancel={() => setMockRemoveWallet(null)}
+      />
+
+      <ConfirmModal
+        open={mockResetConfirmOpen}
+        title="Reset watchlist?"
+        body="This removes every watched wallet from this browser. No funds or returns are involved."
+        destructive
+        confirmLabel="Reset"
+        onConfirm={() => {
+          setMockResetConfirmOpen(false);
+          handleResetWatchlist();
+        }}
+        onCancel={() => setMockResetConfirmOpen(false)}
       />
     </div>
   );
