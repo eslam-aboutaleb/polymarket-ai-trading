@@ -295,13 +295,13 @@ export default function SettingsPage() {
 
   // Sync local profile form when profile loads
   useEffect(() => {
-    if (profile) {
+    // Background reloads must not overwrite fields while the user is editing.
+    if (profile && !profileDirty) {
       setDisplayName(profile.display_name || "");
       setEmail(profile.email || "");
       setPhone(profile.phone || "");
-      setProfileDirty(false);
     }
-  }, [profile]);
+  }, [profile, profileDirty]);
 
   useEffect(() => {
     if (!currentLlmSettings) return;
