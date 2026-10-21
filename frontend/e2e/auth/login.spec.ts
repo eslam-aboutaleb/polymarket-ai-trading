@@ -81,7 +81,8 @@ test.describe("Login page", () => {
     // 6. Logout asks for confirmation and then clears the session.
     await page.getByRole("button", { name: "Logout" }).first().click();
     await expect(page.getByRole("heading", { name: "Confirm Logout" })).toBeVisible();
-    await page.getByRole("dialog", { name: "Confirm Logout" })
+    await page
+      .getByRole("dialog", { name: "Confirm Logout" })
       .getByRole("button", { name: "Log out", exact: true })
       .click();
     await expect(page.getByRole("button", { name: "Connect Wallet" }).first()).toBeVisible();
@@ -114,7 +115,8 @@ test.describe("Login modal on public pages", () => {
     const modal = page.getByRole("heading", { name: "Connect Wallet" });
     await expect(modal).toBeVisible();
 
-    await page.getByRole("dialog", { name: "Connect Wallet" })
+    await page
+      .getByRole("dialog", { name: "Connect Wallet" })
       .getByRole("button", { name: "Close", exact: true })
       .click();
     await expect(modal).toBeHidden();

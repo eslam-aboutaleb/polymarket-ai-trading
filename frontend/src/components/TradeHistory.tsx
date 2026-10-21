@@ -21,6 +21,7 @@ import {
 import { analysisService } from "../services/analysisService";
 import { useAuthStore } from "../store/authStore";
 import { getApiErrorMessage } from "../utils/apiError";
+import { indexedWebSourceLabel, indexedWebSummaryText } from "../utils/inverseBot";
 import { Banner, InfoTooltip } from "./ui";
 import {
   buildPolymarketEventUrl,
@@ -342,7 +343,10 @@ export default function TradeHistory() {
         inverse.last_confidence != null ? `${inverse.last_confidence.toFixed(0)}%` : "Unknown",
       market_signal: String(inverse.last_signal || "No signal captured"),
       web_signal: String(inverse.last_web_summary || "No web summary"),
-      x_signal: String(inverse.last_x_summary || "No X summary"),
+      x_signal: [
+        indexedWebSourceLabel(inverse),
+        String(inverse.last_x_summary || indexedWebSummaryText(inverse)),
+      ].join(" — "),
       next_checks: "Monitor next cycle and confirm confidence stays stable.",
       updated_at: inverse.last_evaluated_at
         ? new Date(inverse.last_evaluated_at).toLocaleString()
@@ -362,7 +366,9 @@ export default function TradeHistory() {
       `Status: ${String(inverse.status || "unknown")}`,
       `Reasoning: ${String(inverse.last_reasoning || "No model reasoning available.")}`,
       `Web summary: ${String(inverse.last_web_summary || "None")}`,
-      `X summary: ${String(inverse.last_x_summary || "None")}`,
+      `Indexed web summary (partial coverage, not an authenticated X feed): ${String(
+        inverse.last_x_summary || indexedWebSummaryText(inverse),
+      )}`,
       `Last evaluated at: ${inverse.last_evaluated_at || "unknown"}`,
     ].join("\n");
 

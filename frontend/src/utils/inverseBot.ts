@@ -86,6 +86,45 @@ export function inverseStatusClass(status: string | null | undefined): string {
   return "chip-success";
 }
 
+/** Provenance fields the inverse-bot API reports for the social summary. */
+export interface InverseBotSourceProvenance {
+  x_source_label?: string | null;
+  x_source_type?: string | null;
+  x_coverage?: string | null;
+  x_status?: string | null;
+  x_checked_at?: string | null;
+}
+
+/**
+ * Label of the social source behind the inverse bot's summary.
+ *
+ * The bot reads a search-engine index, never an authenticated X feed, so every
+ * surface says which source it is, how complete it is and when it was checked.
+ */
+export function indexedWebSourceLabel(
+  inverse: InverseBotSourceProvenance | null | undefined,
+): string {
+  if (!inverse) return "Social source: indexed web pages (partial coverage)";
+  if (inverse.x_source_label) return inverse.x_source_label;
+  const checked = inverse.x_checked_at
+    ? new Date(inverse.x_checked_at).toLocaleString()
+    : "unknown";
+  return (
+    "Social source: indexed web pages (search-engine snippets; partial coverage; " +
+    `not an authenticated X feed); checked ${checked}`
+  );
+}
+
+/** Text shown when the social summary is empty, per source status. */
+export function indexedWebSummaryText(
+  inverse: InverseBotSourceProvenance | null | undefined,
+): string {
+  if (inverse?.x_status === "provider_unavailable") {
+    return "Indexed web source unavailable (provider error) — no data retrieved";
+  }
+  return "No indexed web matches";
+}
+
 /** Recompute one position's P&L from a fresh price (4dp, as the UI expects). */
 export function applyPositionPrice<T extends PolymarketPosition>(pos: T, newPrice: number): T {
   const size = Number(pos.size || 0);
