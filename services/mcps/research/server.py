@@ -10,7 +10,7 @@ gets the same outcome via EOF).
 
 Tools (the dispatch table is :data:`TOOLS`, built at import):
 - web_search(query, recency_hours=24, max_results=8)        — DuckDuckGo free search
-- x_posts_search(query, recency_hours=24, max_results=8)    — indexed X links via DDG (not native X API)
+- x_posts_search(query, recency_hours=24, max_results=8)    — indexed X links via DDG
 - tavily_search(query, max_results=5, search_depth="basic")  — Tavily premium search (opt-in)
 - news_search(query, max_results=5, sort_by="relevancy")     — NewsAPI headlines (opt-in)
 - binance_smart_signals(chain, page_size)                     — Smart money buy/sell signals
@@ -168,7 +168,13 @@ def _is_indexed_x_post(url: str) -> bool:
     if parsed.scheme not in ("http", "https"):
         return False
     hostname = (parsed.hostname or "").lower()
-    if hostname not in {"x.com", "www.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"}:
+    if hostname not in {
+        "x.com",
+        "www.x.com",
+        "twitter.com",
+        "www.twitter.com",
+        "mobile.twitter.com",
+    }:
         return False
     parts = parsed.path.strip("/").split("/")
     return (
