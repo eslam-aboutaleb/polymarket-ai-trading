@@ -10,7 +10,7 @@ gets the same outcome via EOF).
 
 Tools (the dispatch table is :data:`TOOLS`, built at import):
 - web_search(query, recency_hours=24, max_results=8)        — DuckDuckGo free search
-- x_posts_search(query, recency_hours=24, max_results=8)    — X/Twitter via DDG
+- x_posts_search(query, recency_hours=24, max_results=8)    — indexed X links via DDG (not native X API)
 - tavily_search(query, max_results=5, search_depth="basic")  — Tavily premium search (opt-in)
 - news_search(query, max_results=5, sort_by="relevancy")     — NewsAPI headlines (opt-in)
 - binance_smart_signals(chain, page_size)                     — Smart money buy/sell signals
@@ -36,7 +36,9 @@ import contextlib
 import json
 import os
 import sys
+from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from ddgs import DDGS
@@ -157,35 +159,85 @@ def web_search(
     return results[: max(1, min(20, int(max_results)))]
 
 
+def _is_indexed_x_post(url: str) -> bool:
+    """Accept only genuine X/Twitter status permalinks, never host substrings."""
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    hostname = (parsed.hostname or "").lower()
+    if hostname not in {"x.com", "www.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"}:
+        return False
+    parts = parsed.path.strip("/").split("/")
+    return (
+        len(parts) >= 3
+        and bool(parts[0])
+        and parts[1].lower() == "status"
+        and parts[2].isdigit()
+    )
+
+
+def _indexed_x_results(items: list[dict[str, str]], fetched_at: str) -> list[dict[str, str]]:
+    """Tag indexed snippets as unverified: no native API, author or engagement claims."""
+    results = []
+    seen: set[str] = set()
+    for item in items:
+        url = str(item.get("url") or "")
+        if not _is_indexed_x_post(url):
+            continue
+        parsed = urlsplit(url)
+        # Strip query/fragment tracking for deterministic deduplication.
+        canonical = f"https://{(parsed.hostname or '').lower()}{parsed.path.rstrip('/')}"
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        results.append(
+            {
+                "title": str(item.get("title") or ""),
+                "url": canonical,
+                "snippet": str(item.get("snippet") or ""),
+                "source_type": "indexed_web",
+                "provider": "duckduckgo_web_index",
+                "quality": "unverified_search_snippet",
+                "coverage": "partial_non_comprehensive",
+                "fetched_at": fetched_at,
+            }
+        )
+    return results
+
+
 def x_posts_search(
     query: str,
     recency_hours: int = 24,
     max_results: int = 8,
 ) -> list[dict[str, str]]:
+    """Search *indexed links to posts*, not an authenticated X timeline.
+
+    A zero-result response means no indexed matches, not that no posts exist.
+    Never infer native post times, likes, retweets or authenticity from snippets.
+    """
     if not query.strip():
         return []
 
-    primary_query = f"site:x.com {query}"
+    limit = max(1, min(20, int(max_results)))
+    fetched_at = datetime.now(UTC).isoformat()
     primary = web_search(
-        primary_query,
+        f"site:x.com {query}",
         recency_hours=recency_hours,
-        max_results=max_results,
+        max_results=limit,
     )
-    x_only = [
-        r for r in primary if "x.com/" in r.get("url", "") or "twitter.com/" in r.get("url", "")
-    ]
-    if x_only:
-        return x_only[: max(1, min(20, int(max_results)))]
+    indexed = _indexed_x_results(primary, fetched_at)
+    if indexed:
+        return indexed[:limit]
 
-    fallback_query = f"{query} x.com"
     fallback = web_search(
-        fallback_query,
+        f"{query} x.com",
         recency_hours=recency_hours,
-        max_results=max_results,
+        max_results=limit,
     )
-    return [
-        r for r in fallback if "x.com/" in r.get("url", "") or "twitter.com/" in r.get("url", "")
-    ][: max(1, min(20, int(max_results)))]
+    return _indexed_x_results(fallback, fetched_at)[:limit]
 
 
 async def cross_venue_markets(query: str, limit: int = 50) -> list[dict[str, Any]]:
