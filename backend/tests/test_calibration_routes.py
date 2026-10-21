@@ -18,7 +18,7 @@ from sqlalchemy.pool import StaticPool
 import app.models  # noqa: F401  (register models on Base)
 from app.api.routes.analysis.calibration import BASELINE_BRIER, router
 from app.api.routes.auth.auth import get_current_user_from_token
-from app.models.analytics.assessment import Assessment
+from app.models.analytics.assessment import VERIFIED_SCORING_VERSION, Assessment
 from app.models.base import Base
 from app.models.trading.trade_history import TradeHistory
 from app.models.trading.user_trade import UserTrade
@@ -92,6 +92,53 @@ class CalibrationRouteTestBase(unittest.TestCase):
 
 
 class SummaryTests(CalibrationRouteTestBase):
+    def test_legacy_binary_scores_never_enter_verified_aggregates(self):
+        from app.repositories.intelligence.assessments import AssessmentRepository
+        from app.services.intelligence.forecast_resolution import SCORING_VERSION
+
+        legacy_rows = []
+        for index, version in enumerate((None, "brier-binary-v1")):
+            row = self._resolved_verdict(condition_id=f"0xlegacy-{index}")
+            row.scoring_version = version
+            row.brier_score = 0.0
+            legacy_rows.append(row)
+        verified = self._resolved_verdict(condition_id="0xverified")
+        verified.scoring_version = SCORING_VERSION
+        self.db.commit()
+
+        data = self.client.get("/api/analysis/calibration/summary").json()
+        self.assertEqual(data["resolved_count"], 1)
+        self.assertAlmostEqual(data["mean_brier"], 0.04)
+        self.assertEqual(sum(bucket["count"] for bucket in data["reliability"]), 1)
+        self.assertEqual(data["data_quality"]["invalid_legacy_resolution"], 2)
+        forecasts = self.client.get("/api/analysis/calibration/forecasts").json()["forecasts"]
+        self.assertEqual(sum(row["verified_resolution"] for row in forecasts), 1)
+        self.assertEqual(
+            [row["brier_score"] for row in forecasts if not row["verified_resolution"]], [0.0, 0.0]
+        )
+        versions = self.client.get(
+            "/api/analysis/calibration/summary/by-prompt-version", params={"scope": "user"}
+        ).json()
+        self.assertEqual(versions["versions"][0]["resolved"], 1)
+
+        repo = AssessmentRepository(self.db)
+        since = utc_now().replace(year=utc_now().year - 1)
+        self.assertAlmostEqual(
+            repo.mean_brier(model="gpt-4", task="copy_trade_eval", since=since), 0.04
+        )
+        self.assertEqual(
+            len(repo.brier_series(model="gpt-4", task="copy_trade_eval", since=since)), 1
+        )
+        self.assertEqual(repo.model_leaderboard_rows(since)[0].resolved, 1)
+        self.assertEqual(
+            len(repo.resolved_condition_rows([row.condition_id for row in legacy_rows])), 0
+        )
+        # Quarantine affects eligibility, never erases the historical evidence.
+        for row in legacy_rows:
+            self.db.refresh(row)
+            self.assertEqual(row.brier_score, 0.0)
+            self.assertIsNotNone(row.resolved_at)
+
     def _verdict(self, **overrides):
         defaults = {
             "trade_history_id": TRADE_HISTORY_ID,
@@ -110,6 +157,16 @@ class SummaryTests(CalibrationRouteTestBase):
         defaults.update(overrides)
         row = Assessment(**defaults)
         self.db.add(row)
+        self.db.commit()
+        return row
+
+    def _resolved_verdict(self, **overrides):
+        """A verdict that carries a verified binary resolution."""
+        row = self._verdict(**overrides)
+        row.resolved_outcome = "YES"
+        row.brier_score = 0.04
+        row.resolved_at = utc_now()
+        row.scoring_version = VERIFIED_SCORING_VERSION
         self.db.commit()
         return row
 
@@ -140,6 +197,7 @@ class SummaryTests(CalibrationRouteTestBase):
         row.resolved_outcome = "YES"
         row.brier_score = 0.04
         row.resolved_at = utc_now()
+        row.scoring_version = VERIFIED_SCORING_VERSION
         self.db.commit()
         response = self.client.get("/api/analysis/calibration/summary")
         data = response.json()
@@ -151,30 +209,93 @@ class SummaryTests(CalibrationRouteTestBase):
         self.assertAlmostEqual(bucket["actual"], 1.0)
         self.assertEqual(bucket["count"], 1)
 
-    def test_reliability_treats_a_named_resolution_as_a_no(self):
-        """The YES mapping is the resolver's, not a second rule.
-
-        A multi-outcome market resolves to its winning label, which is
-        neither "YES" nor "NO"; ``outcome_value`` maps it to 0.0 exactly
-        like the Brier scores already do, so the reliability curve and
-        the resolution engine can never disagree.
-        """
+    def test_reliability_excludes_unverifiable_named_resolutions(self):
+        """Historical nonbinary labels must not enter binary calibration."""
         row = self._verdict(ai_probability=0.8, market_price_at_assessment=0.6)
         row.resolved_outcome = "ALICE"
         row.brier_score = 0.64
         row.resolved_at = utc_now()
+        row.scoring_version = VERIFIED_SCORING_VERSION
         self.db.commit()
         response = self.client.get("/api/analysis/calibration/summary")
-        bucket = next(b for b in response.json()["reliability"] if b["count"] > 0)
-        self.assertEqual(bucket["bucket"], "0.8-0.9")
-        self.assertAlmostEqual(bucket["predicted"], 0.8)
-        self.assertAlmostEqual(bucket["actual"], 0.0)
+        data = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(data["resolved_count"], 0)
+        self.assertIsNone(data["mean_brier"])
+        self.assertEqual(sum(b["count"] for b in data["reliability"]), 0)
+        self.assertEqual(data["data_quality"]["invalid_legacy_resolution"], 1)
+
+    def test_legacy_named_resolution_is_excluded_from_every_aggregate(self):
+        """The binary-only rule is shared, not summary-only."""
+        row = self._verdict(ai_probability=0.8, market_price_at_assessment=0.6)
+        row.resolved_outcome = "ALICE"
+        row.brier_score = 0.64
+        row.resolved_at = utc_now()
+        row.scoring_version = VERIFIED_SCORING_VERSION
+        self.db.commit()
+        data = self.client.get("/api/analysis/calibration/summary").json()
+        self.assertEqual(data["effective_sample_count"], 0)
+        self.assertIsNone(data["mean_log_loss"])
+        self.assertEqual(data["by_model"][0]["mean_brier"], None)
+        versions = self.client.get(
+            "/api/analysis/calibration/summary/by-prompt-version", params={"scope": "user"}
+        ).json()
+        self.assertEqual(versions["versions"][0]["resolved"], 0)
+        self.assertIsNone(versions["versions"][0]["mean_brier"])
+
+    def test_one_market_is_one_effective_sample(self):
+        """A market scanned by two models is one market, not two samples."""
+        self._resolved_verdict(condition_id="0xmarket-1", ai_probability=0.8)
+        self._resolved_verdict(condition_id="0xmarket-1", ai_probability=0.4, model_name="claude")
+        data = self.client.get("/api/analysis/calibration/summary").json()
+        self.assertEqual(data["resolved_count"], 2)
+        self.assertEqual(data["effective_sample_count"], 1)
+        self.assertEqual(sum(b["count"] for b in data["reliability"]), 1)
+
+    def test_exclusion_reasons_are_reported(self):
+        row = self._verdict(ai_probability=0.8, market_price_at_assessment=0.6)
+        row.exclusion_reason = "disputed_or_challenged"
+        self.db.commit()
+        data = self.client.get("/api/analysis/calibration/summary").json()
+        self.assertEqual(data["data_quality"]["exclusion_reasons"], {"disputed_or_challenged": 1})
+        self.assertEqual(data["data_quality"]["excluded_count"], 1)
+
+    def test_excluded_current_score_cannot_reenter_calibration(self):
+        from app.repositories.intelligence.assessments import AssessmentRepository
+
+        row = self._resolved_verdict()
+        row.exclusion_reason = "disputed_or_challenged"
+        self.db.commit()
+        data = self.client.get("/api/analysis/calibration/summary").json()
+        self.assertEqual(data["resolved_count"], 0)
+        self.assertIsNone(data["mean_brier"])
+        since = utc_now().replace(year=utc_now().year - 1)
+        self.assertIsNone(
+            AssessmentRepository(self.db).mean_brier(
+                model="gpt-4", task="copy_trade_eval", since=since
+            )
+        )
+
+    def test_null_probability_reason_is_reported_and_not_counted_as_legacy(self):
+        self._verdict(ai_probability=None, probability_null_reason="unusable_probability")
+        data = self.client.get("/api/analysis/calibration/summary").json()
+        self.assertEqual(
+            data["data_quality"]["null_probability_reasons"], {"unusable_probability": 1}
+        )
+        self.assertEqual(data["data_quality"]["legacy_excluded"], 0)
+
+    def test_mean_log_loss_is_reported(self):
+        self._resolved_verdict(ai_probability=0.8)
+        data = self.client.get("/api/analysis/calibration/summary").json()
+        self.assertIsNotNone(data["mean_log_loss"])
+        self.assertGreater(data["mean_log_loss"], 0.0)
 
     def test_by_model_and_by_task_stats(self):
         row = self._verdict(model_name="gpt-4", task="copy_trade_eval")
         row.resolved_outcome = "NO"
         row.brier_score = 0.64
         row.resolved_at = utc_now()
+        row.scoring_version = VERIFIED_SCORING_VERSION
         self.db.commit()
         # Unattributed model (cli-agent blindness) is excluded from
         # by_model but still counted in the sample.
@@ -255,6 +376,7 @@ class ForecastsTests(CalibrationRouteTestBase):
         row.resolved_outcome = "YES"
         row.brier_score = 0.04
         row.resolved_at = utc_now()
+        row.scoring_version = VERIFIED_SCORING_VERSION
         self.db.commit()
         response = self.client.get("/api/analysis/calibration/forecasts")
         self.assertEqual(response.status_code, 200)
@@ -288,6 +410,22 @@ class ForecastsTests(CalibrationRouteTestBase):
         unauthenticated.include_router(router)
         response = TestClient(unauthenticated).get("/api/analysis/calibration/forecasts")
         self.assertEqual(response.status_code, 401)
+
+
+class ResolutionRunReportTests(CalibrationRouteTestBase):
+    """The last resolution pass, as the API reports it."""
+
+    def test_report_requires_an_admin(self):
+        response = self.client.get("/api/analysis/calibration/resolution-run")
+        self.assertEqual(response.status_code, 403)
+
+    def test_report_exposes_the_exclusion_reasons(self):
+        _, admin_client, _, _ = _make_app_and_db(is_admin=True, db=self.db)
+        response = admin_client.get("/api/analysis/calibration/resolution-run")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("exclusion_reasons", data)
+        self.assertIn("effective_sample_count", data)
 
 
 if __name__ == "__main__":

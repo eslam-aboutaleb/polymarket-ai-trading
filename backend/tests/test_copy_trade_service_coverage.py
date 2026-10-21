@@ -19,7 +19,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import app.services.trading.copy_trade_service as copy_trade_service
-from app.models.analytics.assessment import Assessment
+from app.models.analytics.assessment import NULL_PROBABILITY_REASON, Assessment
 from app.models.trading.followed_trader import FollowedTrader
 from app.models.trading.trade_history import TradeHistory
 from app.models.trading.user_trade import UserTrade
@@ -1632,6 +1632,26 @@ class SaveAssessmentTests(CopyTradeServiceTestCase):
         self.assertEqual(record.reasoning, "text")
         self.assertEqual(record.recommendation, "hold")
         self.assertEqual(record.risk_level, "medium")
+
+    def test_missing_probability_stays_null_and_records_the_reason(self):
+        """A missing probability is never fabricated.
+
+        The row is written with a NULL probability (no coin-flip
+        default) and says why, so it is never counted as a
+        pre-calibration legacy row.
+        """
+        db = FakeDB()
+        copy_trade_service._save_assessment(db, 7, {"confidence": 55.0})
+        record = db.added[0]
+        self.assertIsNone(record.ai_probability)
+        self.assertEqual(record.probability_null_reason, NULL_PROBABILITY_REASON)
+
+    def test_a_stated_certainty_is_kept(self):
+        db = FakeDB()
+        copy_trade_service._save_assessment(db, 7, {"ai_probability": 1.0})
+        record = db.added[0]
+        self.assertAlmostEqual(record.ai_probability, 1.0)
+        self.assertIsNone(record.probability_null_reason)
 
     def test_commit_failure_rolls_back(self):
         db = FakeDB()
