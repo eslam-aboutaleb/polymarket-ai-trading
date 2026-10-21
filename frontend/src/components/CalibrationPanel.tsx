@@ -309,13 +309,18 @@ export default function CalibrationPanel() {
       )}
 
       {/* Data quality strip */}
-      {dataQuality && (dataQuality.missing_model > 0 || dataQuality.legacy_excluded > 0) && (
-        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 text-yellow-400 text-sm">
-          Data quality: {dataQuality.legacy_excluded} pre-calibration verdicts excluded (no
-          probability recorded, never backfilled), {dataQuality.missing_model} verdicts without
-          model attribution (cli-agent never echoes a model).
-        </div>
-      )}
+      {dataQuality &&
+        (dataQuality.missing_model > 0 ||
+          dataQuality.legacy_excluded > 0 ||
+          dataQuality.invalid_legacy_resolution > 0) && (
+          <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 text-yellow-400 text-sm">
+            Data quality: {dataQuality.legacy_excluded} pre-calibration verdicts excluded (no
+            probability recorded, never backfilled), {dataQuality.missing_model} verdicts without
+            model attribution (cli-agent never echoes a model),{" "}
+            {dataQuality.invalid_legacy_resolution} verdicts with a non-binary resolution label
+            (excluded from every aggregate).
+          </div>
+        )}
 
       {/* Headline stat cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
