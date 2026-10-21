@@ -5,6 +5,21 @@ from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Tex
 from app.models.base import Base
 from app.utils.time import utc_now
 
+#: Vocabulary of a *verified* binary resolution. The resolver writes the
+#: canonical "YES"/"NO"; rows written by the legacy resolver carry the raw
+#: Gamma label ("Yes", "No", "Alice"), so the check is case-insensitive and
+#: only these labels may become a calibration label. The scoring service
+#: and every aggregate query share this one vocabulary, so a legacy
+#: non-binary label is excluded everywhere instead of only in the summary.
+BINARY_YES_LABELS = frozenset({"yes", "y", "true", "1"})
+BINARY_NO_LABELS = frozenset({"no", "n", "false", "0"})
+BINARY_OUTCOME_LABELS = BINARY_YES_LABELS | BINARY_NO_LABELS
+
+#: Reason recorded on a row whose ``ai_probability`` could not be read.
+#: A row with this reason is not a pre-calibration (legacy) row: it is a
+#: verdict that was written without a usable probability.
+NULL_PROBABILITY_REASON = "unusable_probability"
+
 
 class Assessment(Base):
     """AI assessment of a trade opportunity"""
@@ -33,6 +48,19 @@ class Assessment(Base):
     #: Brier score written by the nightly resolution job.
     brier_score = Column(Float, nullable=True)
     resolved_at = Column(DateTime(timezone=True), nullable=True)
+    #: Scoring rule that produced ``brier_score`` (e.g. "brier-binary-v2").
+    #: A change of scoring rule is then distinguishable from the rows
+    #: written under the previous one.
+    scoring_version = Column(String(32), nullable=True)
+    #: Why the row was excluded from scoring (one of the
+    #: ``forecast_resolution.ExclusionReason`` values). Null while the
+    #: row is unresolved or once it has been scored.
+    exclusion_reason = Column(String(40), nullable=True)
+    #: Why ``ai_probability`` is NULL on this row. Null on every row that
+    #: carries a probability, and on legacy rows written before the
+    #: calibration columns existed (those are counted as legacy, not as
+    #: a known-reason null).
+    probability_null_reason = Column(String(40), nullable=True)
     #: Model attribution so accuracy can be aggregated per model.
     model_name = Column(String(100), nullable=True)
     provider = Column(String(50), nullable=True)

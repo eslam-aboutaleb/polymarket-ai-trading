@@ -12,6 +12,27 @@ have no probability and are never backfilled (see
 verdicts, which never echo a model) are excluded from ``by_model`` and
 counted in ``data_quality`` instead of being faked into a model group.
 
+Binary-only resolutions: a row counts as *resolved* only when it
+carries a finalized binary YES/NO label (the shared rule in
+``forecast_resolution.is_verified_resolution``). The legacy resolver
+stored the raw Gamma label, so old rows can hold "ALICE"; those rows
+are excluded from every aggregate here — not only from the summary —
+and are counted in ``data_quality.invalid_legacy_resolution``.
+
+Exclusion reasons: the nightly resolution job records why a forecast
+could not be scored (``Assessment.exclusion_reason`` — closed but not
+finalized, disputed, void, multi-outcome, ambiguous settlement, wrong
+market, unusable probability, forecast recorded after the close). The
+per-reason counts are surfaced in ``data_quality.exclusion_reasons``,
+next to ``data_quality.null_probability_reasons`` for the rows whose
+probability is missing for a known reason. Every scored row also
+carries the scoring rule that produced it (``Assessment.scoring_version``).
+
+One market is one sample: the aggregates count a market once (the
+earliest forecast for it) and report the raw row count next to the
+effective sample count, so a market scanned by several models cannot
+inflate the mean Brier or the reliability curve.
+
 Scoping: copy-trade verdicts link to a user through
 ``Assessment.trade_history_id`` → ``UserTrade.source_trade_history_id``
 → ``UserTrade.user_id``. Opportunity-scan verdicts have no user link
@@ -21,6 +42,7 @@ restricted to admins.
 """
 
 import logging
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -29,6 +51,7 @@ from sqlalchemy.orm import Session
 from app.api.routes.auth.auth import get_current_user_from_token
 from app.config import get_settings
 from app.models.analytics.assessment import Assessment
+from app.repositories.intelligence.assessments import AssessmentRepository
 from app.services.intelligence.calibration_service import (
     calibration_assessments,
     legacy_assessment_count,
@@ -38,7 +61,12 @@ from app.services.intelligence.calibration_service import (
 from app.services.intelligence.calibration_service import (
     delete_verdict_feedback as delete_feedback,
 )
-from app.services.intelligence.forecast_resolution import outcome_value
+from app.services.intelligence.forecast_resolution import (
+    is_verified_resolution,
+    last_resolution_run,
+    log_loss,
+    outcome_value,
+)
 from app.utils.database import get_db
 from app.utils.time import utc_now
 
@@ -64,14 +92,36 @@ def _bucket_label(index: int) -> str:
 
 
 def _verified_resolution(row: Assessment) -> bool:
-    """Only finalized binary YES/NO labels are eligible for calibration."""
-    if row.brier_score is None or row.resolved_outcome is None:
-        return False
-    try:
-        outcome_value(row.resolved_outcome)
-    except ValueError:
-        return False
-    return True
+    """Only finalized binary YES/NO labels are eligible for calibration.
+
+    One shared rule (the resolver's), so a legacy non-binary label is
+    excluded the same way in the summary, the group stats and the
+    reliability curve.
+    """
+    return is_verified_resolution(row.brier_score, row.resolved_outcome)
+
+
+def _cluster_key(row: Assessment) -> str:
+    """The market a row belongs to.
+
+    Rows that carry no market id are their own cluster: two unscoped
+    verdicts are two samples, not one.
+    """
+    condition_id = (row.condition_id or "").strip()
+    return condition_id or f"row:{row.id}"
+
+
+def _effective_samples(rows: list[Assessment]) -> list[Assessment]:
+    """One row per market: the earliest forecast recorded for it.
+
+    A market scanned by two models (or re-analysed) is one market: it
+    contributes a single effective sample to the aggregate, while the
+    raw row count stays visible in ``resolved_count``.
+    """
+    effective: dict[str, Assessment] = {}
+    for row in sorted(rows, key=lambda r: (r.created_at or utc_now(), r.id or 0)):
+        effective.setdefault(_cluster_key(row), row)
+    return list(effective.values())
 
 
 def _reliability_buckets(rows: list[Assessment]) -> list[dict]:
@@ -117,27 +167,48 @@ def _reliability_buckets(rows: list[Assessment]) -> list[dict]:
 
 
 def _group_stats(rows: list[Assessment], key: str) -> list[dict]:
-    """Count + mean Brier per distinct attribution value (resolved subset)."""
-    groups: dict[str, dict] = {}
+    """Count + mean Brier per distinct attribution value (resolved subset).
+
+    ``count`` is the raw number of rows in the group; the mean is taken
+    over the group's effective samples (one per market), so a market
+    scanned twice cannot weigh twice.
+    """
+    groups: dict[str, list[Assessment]] = {}
     for row in rows:
-        value = getattr(row, key) or ""
-        group = groups.setdefault(value, {"key": value, "count": 0, "_sum": 0.0, "_resolved": 0})
-        group["count"] += 1
-        if _verified_resolution(row):
-            group["_resolved"] += 1
-            group["_sum"] += float(row.brier_score)
+        groups.setdefault(getattr(row, key) or "", []).append(row)
     stats = []
-    for group in sorted(groups.values(), key=lambda g: (-g["count"], g["key"])):
+    for value, group_rows in groups.items():
+        effective = _effective_samples([row for row in group_rows if _verified_resolution(row)])
+        mean_brier = (
+            round(sum(float(row.brier_score) for row in effective) / len(effective), 4)
+            if effective
+            else None
+        )
         stats.append(
             {
-                key: group["key"],
-                "count": group["count"],
-                "mean_brier": round(group["_sum"] / group["_resolved"], 4)
-                if group["_resolved"]
-                else None,
+                key: value,
+                "count": len(group_rows),
+                "mean_brier": mean_brier,
             }
         )
-    return stats
+    return sorted(stats, key=lambda entry: (-entry["count"], entry[key]))
+
+
+def _mean_log_loss(rows: list[Assessment]) -> float | None:
+    """Mean log loss over the effective samples, or ``None`` without any.
+
+    The probability is clipped inside the computation only: a stated
+    certainty stays exactly as stated in ``ai_probability``.
+    """
+    losses = []
+    for row in rows:
+        try:
+            losses.append(log_loss(float(row.ai_probability), row.resolved_outcome))
+        except (TypeError, ValueError):
+            continue
+    if not losses:
+        return None
+    return round(sum(losses) / len(losses), 4)
 
 
 @router.get("/summary")
@@ -167,6 +238,9 @@ async def get_calibration_summary(
         user_id=current_user["user_id"],
     )
     resolved = [row for row in rows if _verified_resolution(row)]
+    # One market is one effective sample: the aggregates below see the
+    # market once, while ``resolved_count`` keeps the raw row count.
+    effective = _effective_samples(resolved)
     invalid_legacy_resolutions = sum(
         1 for row in rows if row.brier_score is not None and not _verified_resolution(row)
     )
@@ -175,9 +249,21 @@ async def get_calibration_summary(
     ]
     missing_model = len(rows) - len(attributed)
     mean_brier = (
-        round(sum(float(row.brier_score) for row in resolved) / len(resolved), 4)
-        if resolved
+        round(sum(float(row.brier_score) for row in effective) / len(effective), 4)
+        if effective
         else None
+    )
+    mean_log_loss = _mean_log_loss(effective)
+    repository = AssessmentRepository(db)
+    exclusion_reasons = repository.exclusion_reason_counts(
+        cutoff=utc_now() - timedelta(days=max(1, int(window_days))),
+        scope=scope,
+        user_id=current_user["user_id"],
+    )
+    null_probability_reasons = repository.null_probability_reason_counts(
+        cutoff=utc_now() - timedelta(days=max(1, int(window_days))),
+        scope=scope,
+        user_id=current_user["user_id"],
     )
 
     return {
@@ -186,9 +272,11 @@ async def get_calibration_summary(
         "generated_at": utc_now().isoformat(),
         "sample_count": len(rows),
         "resolved_count": len(resolved),
+        "effective_sample_count": len(effective),
         "mean_brier": mean_brier,
+        "mean_log_loss": mean_log_loss,
         "brier_vs_baseline": BASELINE_BRIER,
-        "reliability": _reliability_buckets(rows),
+        "reliability": _reliability_buckets(effective),
         "by_model": _group_stats(attributed, "model_name"),
         "by_task": _group_stats(rows, "task"),
         "data_quality": {
@@ -197,8 +285,30 @@ async def get_calibration_summary(
             "legacy_excluded": legacy_assessment_count(
                 db, window_days=window_days, scope=scope, user_id=current_user["user_id"]
             ),
+            "exclusion_reasons": exclusion_reasons,
+            "excluded_count": sum(exclusion_reasons.values()),
+            "null_probability_reasons": null_probability_reasons,
         },
     }
+
+
+@router.get("/resolution-run")
+async def get_calibration_resolution_run(
+    current_user: dict = Depends(get_current_user_from_token),
+):
+    """The last resolution pass executed by this worker.
+
+    Admin-only: the pass summary is an operational view of the nightly
+    job (how many rows were checked, scored and excluded per reason).
+    The durable view of the exclusions lives on the rows themselves and
+    is aggregated in the ``/summary`` data-quality counters.
+    """
+    if not current_user.get("is_admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="the resolution run report requires an admin account",
+        )
+    return last_resolution_run().to_dict()
 
 
 @router.get("/forecasts")
@@ -288,26 +398,30 @@ async def get_calibration_by_prompt_version(
         scope=scope,
         user_id=current_user["user_id"],
     )
-    groups: dict[str, dict] = {}
+    groups: dict[str, list[Assessment]] = {}
     for row in rows:
         version = (row.prompt_version or "").strip() or "(unversioned)"
-        group = groups.setdefault(
-            version, {"prompt_version": version, "count": 0, "_sum": 0.0, "_resolved": 0}
-        )
-        group["count"] += 1
-        if row.brier_score is not None:
-            group["_resolved"] += 1
-            group["_sum"] += float(row.brier_score)
+        groups.setdefault(version, []).append(row)
 
-    versions = [
-        {
-            "prompt_version": g["prompt_version"],
-            "count": g["count"],
-            "resolved": g["_resolved"],
-            "mean_brier": round(g["_sum"] / g["_resolved"], 4) if g["_resolved"] else None,
-        }
-        for g in sorted(groups.values(), key=lambda g: (-g["count"], g["prompt_version"]))
-    ]
+    versions = []
+    for version, group_rows in groups.items():
+        # One effective sample per market, and only verified binary
+        # resolutions enter the average.
+        effective = _effective_samples([row for row in group_rows if _verified_resolution(row)])
+        mean_brier = (
+            round(sum(float(row.brier_score) for row in effective) / len(effective), 4)
+            if effective
+            else None
+        )
+        versions.append(
+            {
+                "prompt_version": version,
+                "count": len(group_rows),
+                "resolved": len(effective),
+                "mean_brier": mean_brier,
+            }
+        )
+    versions.sort(key=lambda g: (-g["count"], g["prompt_version"]))
     # Best (lowest Brier) version first, unversioned always last.
     versions.sort(key=lambda v: (v["mean_brier"] is None, v["mean_brier"] or 0.0))
     return {

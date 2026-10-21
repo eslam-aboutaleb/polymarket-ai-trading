@@ -76,6 +76,10 @@ def model_skill_trend(
             "slope_per_day": None,
         }
 
+    # ``brier_series`` only returns verified binary resolutions (the
+    # repository shares the calibration rule), so a legacy non-binary
+    # label can never enter a drift slope. The guard below only skips a
+    # row that carries the label but no score.
     scores = [float(r.brier_score) for r in rows if r.brier_score is not None]
     times = [r.created_at for r in rows if r.brier_score is not None]
     if not scores:

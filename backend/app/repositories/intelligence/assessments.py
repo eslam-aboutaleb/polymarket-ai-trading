@@ -2,12 +2,29 @@
 
 from datetime import datetime
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from app.models.analytics.assessment import Assessment
+from app.models.analytics.assessment import BINARY_OUTCOME_LABELS, Assessment
 from app.models.intelligence.governance import VerdictFeedback
 from app.models.trading.user_trade import UserTrade
+
+
+def verified_resolution_filter():
+    """SQL filter for a *verified* binary resolution.
+
+    The label vocabulary is the one the scoring service uses
+    (``forecast_resolution.is_binary_outcome``), so a legacy row whose
+    ``resolved_outcome`` still holds a raw Gamma label ("ALICE") is
+    excluded from every aggregate — not only from the calibration
+    summary.
+    """
+    return func.lower(Assessment.resolved_outcome).in_(BINARY_OUTCOME_LABELS)
+
+
+def verified_brier_expression():
+    """The Brier score of a verified resolution, ``NULL`` for every other row."""
+    return case((verified_resolution_filter(), Assessment.brier_score))
 
 
 class AssessmentRepository:
@@ -81,7 +98,11 @@ class AssessmentRepository:
 
     def count_legacy_calibration_rows(self, *, cutoff: datetime, scope: str, user_id: int) -> int:
         query = self.db.query(func.count(Assessment.id)).filter(
-            Assessment.ai_probability.is_(None), Assessment.created_at >= cutoff
+            Assessment.ai_probability.is_(None),
+            # A row that records *why* its probability is missing is not a
+            # pre-calibration row: it is reported under its own reason.
+            Assessment.probability_null_reason.is_(None),
+            Assessment.created_at >= cutoff,
         )
         if scope != "global":
             query = query.join(
@@ -89,15 +110,49 @@ class AssessmentRepository:
             ).filter(UserTrade.user_id == user_id)
         return int(query.scalar() or 0)
 
+    def _reason_counts(
+        self,
+        *,
+        cutoff: datetime,
+        scope: str,
+        user_id: int,
+        column,
+    ) -> dict[str, int]:
+        """Count rows per recorded reason inside the window and scope."""
+        query = self.db.query(column, func.count(Assessment.id)).filter(
+            column.isnot(None), Assessment.created_at >= cutoff
+        )
+        if scope != "global":
+            query = query.join(
+                UserTrade, UserTrade.source_trade_history_id == Assessment.trade_history_id
+            ).filter(UserTrade.user_id == user_id)
+        rows = query.group_by(column).all()
+        return {str(reason): int(count) for reason, count in rows if reason}
+
+    def exclusion_reason_counts(
+        self, *, cutoff: datetime, scope: str, user_id: int
+    ) -> dict[str, int]:
+        """Rows excluded from scoring, per exclusion reason."""
+        return self._reason_counts(
+            cutoff=cutoff, scope=scope, user_id=user_id, column=Assessment.exclusion_reason
+        )
+
+    def null_probability_reason_counts(
+        self, *, cutoff: datetime, scope: str, user_id: int
+    ) -> dict[str, int]:
+        """Rows without a probability, per recorded null reason."""
+        return self._reason_counts(
+            cutoff=cutoff, scope=scope, user_id=user_id, column=Assessment.probability_null_reason
+        )
+
     def exists(self, assessment_id: int) -> bool:
         return (
             self.db.query(Assessment.id).filter(Assessment.id == assessment_id).first() is not None
         )
 
     def mean_brier(self, *, model: str | None, task: str | None, since: datetime) -> float | None:
-        query = self.db.query(func.avg(Assessment.brier_score)).filter(
+        query = self.db.query(func.avg(verified_brier_expression())).filter(
             Assessment.ai_probability.isnot(None),
-            Assessment.brier_score.isnot(None),
             Assessment.created_at >= since,
         )
         query = query.filter(
@@ -110,9 +165,11 @@ class AssessmentRepository:
     def brier_series(
         self, *, model: str | None, task: str | None, since: datetime
     ) -> list[tuple[float, datetime]]:
-        query = self.db.query(Assessment.brier_score, Assessment.created_at).filter(
+        query = self.db.query(
+            verified_brier_expression().label("brier_score"), Assessment.created_at
+        ).filter(
             Assessment.ai_probability.isnot(None),
-            Assessment.brier_score.isnot(None),
+            verified_resolution_filter(),
             Assessment.created_at >= since,
         )
         query = query.filter(
@@ -136,8 +193,8 @@ class AssessmentRepository:
                 Assessment.model_name,
                 Assessment.task,
                 func.count(Assessment.id).label("samples"),
-                func.avg(Assessment.brier_score).label("mean_brier"),
-                func.count(Assessment.brier_score).label("resolved"),
+                func.avg(verified_brier_expression()).label("mean_brier"),
+                func.count(verified_brier_expression()).label("resolved"),
             )
             .filter(Assessment.ai_probability.isnot(None), Assessment.created_at >= since)
             .group_by(Assessment.model_name, Assessment.task)
@@ -150,7 +207,10 @@ class AssessmentRepository:
                 Assessment.condition_id, Assessment.resolved_outcome, Assessment.created_at
             )
             .filter(
-                Assessment.condition_id.in_(condition_ids), Assessment.resolved_outcome.isnot(None)
+                Assessment.condition_id.in_(condition_ids),
+                Assessment.resolved_outcome.isnot(None),
+                # Only a verified binary label may be handed to a scorer.
+                verified_resolution_filter(),
             )
             .order_by(Assessment.created_at.asc())
             .all()

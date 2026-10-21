@@ -30,6 +30,21 @@ Brier convention: only an unambiguous finalized YES or NO winner can be
 scored against the YES forecast probability. All other outcome labels, null
 outcomes, nonfinite probabilities and unfinalized states are excluded.
 
+Scoring version: every scored row is stamped with ``SCORING_VERSION``
+(``"brier-binary-v2"``) so a change of the scoring rule is distinguishable
+from the rows written under the previous one.
+
+Exclusion reasons: a row that cannot be scored is never silently dropped.
+The reason is one of the :class:`ExclusionReason` values, it is recorded on
+the row (``Assessment.exclusion_reason``) and it is counted per reason on
+the resolution run, so "unresolved" can be told apart from "disputed",
+"void", "multi outcome", "ambiguous settlement", "wrong market",
+"unusable probability" and "forecast recorded after the market closed".
+
+Leakage guard: a forecast recorded *after* the market closed already knows
+the outcome, so it is excluded (``forecast_after_close``) instead of being
+scored against the resolution it could have anticipated.
+
 Idempotency: ``resolve_pending`` only touches rows where
 ``resolved_at IS NULL``, so a re-run (the advisory lock fails open on
 database errors, so exclusivity is never assumed) scores each market
@@ -42,12 +57,15 @@ import json
 import logging
 import math
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 import httpx
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.models.analytics.assessment import BINARY_NO_LABELS, BINARY_YES_LABELS
 from app.repositories.intelligence.assessments import AssessmentRepository
 from app.utils.database import SessionLocal
 from app.utils.scheduler_lock import (
@@ -61,6 +79,15 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 SCHEDULER_NAME = "forecast_resolution"
+
+#: Version of the scoring rule that produced a Brier score. A row written
+#: under an older rule is distinguishable from one written under this one.
+SCORING_VERSION = "brier-binary-v2"
+
+#: Clipping applied to a probability *inside* the log-loss computation.
+#: The stored ``ai_probability`` is never rewritten: a stated certainty
+#: (p = 0 or p = 1) stays exactly as the forecaster stated it.
+LOG_LOSS_EPSILON = 1e-6
 
 # Verified live shape — see the module docstring.
 GAMMA_API_BASE = "https://gamma-api.polymarket.com"
@@ -77,12 +104,44 @@ _RESOLUTION_CONCURRENCY = 8
 # Coin-flip reference score: a perpetually 50/50 forecast.
 BASELINE_BRIER = 0.25
 
-# Yes-like labels map to outcome 1.0; anything else is "YES did not
-# happen" (0.0) under the binary framing documented above.
-_YES_LABELS = {"yes", "y", "true", "1"}
-_NO_LABELS = {"no", "n", "false", "0"}
+# Yes-like labels map to outcome 1.0; no-like labels map to outcome 0.0.
+# Anything else is a legacy/nonbinary label and can never become a label.
+_YES_LABELS = BINARY_YES_LABELS
+_NO_LABELS = BINARY_NO_LABELS
+
+# UMA settlement states. Only a finalized one can be scored.
+_FINAL_STATUSES = {"resolved", "settled"}
+_DISPUTED_STATUSES = {"disputed", "challenged"}
+_VOID_STATUSES = {"voided", "void"}
 
 _resolution_task: asyncio.Task | None = None
+
+
+class ExclusionReason(StrEnum):
+    """Why a forecast row could not be scored against a resolution."""
+
+    #: The market was closed but never reached a final UMA state.
+    CLOSED_NOT_FINALIZED = "closed_not_finalized"
+    #: The resolution is disputed or was challenged — the outcome is not final.
+    DISPUTED_OR_CHALLENGED = "disputed_or_challenged"
+    #: The market was voided; there is no outcome to score.
+    VOID = "void"
+    #: Not a two-outcome market (or more than two outcomes).
+    MULTI_OUTCOME = "multi_outcome"
+    #: Two outcomes that are not a YES/NO pair.
+    NON_BINARY_OUTCOME = "non_binary_outcome"
+    #: Settlement values are ambiguous (no winner, 50/50, out of range).
+    AMBIGUOUS_SETTLEMENT = "ambiguous_settlement"
+    #: Gamma answered with a different (or several) markets than asked.
+    CONDITION_ID_MISMATCH = "condition_id_mismatch"
+    #: The market was not found at all.
+    MARKET_NOT_FOUND = "market_not_found"
+    #: The lookup itself failed (transport error, non-200 response).
+    LOOKUP_FAILED = "lookup_failed"
+    #: The stored probability is missing or outside ``[0, 1]``.
+    INVALID_PROBABILITY = "invalid_probability"
+    #: The forecast was recorded after the market had already closed.
+    FORECAST_AFTER_CLOSE = "forecast_after_close"
 
 
 @dataclass
@@ -93,10 +152,44 @@ class ResolutionRun:
     resolved: int = 0
     brier_sum: float = 0.0
     unresolved_condition_ids: list[str] = field(default_factory=list)
+    #: Exclusion reason -> number of rows excluded for that reason.
+    exclusions: dict[str, int] = field(default_factory=dict)
+    #: Number of *markets* scored (one effective sample per market).
+    effective_resolved: int = 0
+    #: Brier sum over the effective (one-per-market) samples.
+    effective_brier_sum: float = 0.0
+    _scored_conditions: set[str] = field(default_factory=set, repr=False)
 
     @property
     def mean_brier(self) -> float | None:
         return self.brier_sum / self.resolved if self.resolved else None
+
+    @property
+    def effective_mean_brier(self) -> float | None:
+        if not self.effective_resolved:
+            return None
+        return self.effective_brier_sum / self.effective_resolved
+
+    def record_sample(self, condition_id: str | None, score: float) -> None:
+        """Count one scored row, but a market only once.
+
+        Two rows for the same market (a re-analysis, a second model) are
+        two forecasts but one market: the aggregate must see the market
+        once, while the raw row count stays visible.
+        """
+        key = (condition_id or "").strip()
+        if key:
+            if key in self._scored_conditions:
+                return
+            self._scored_conditions.add(key)
+        self.effective_resolved += 1
+        self.effective_brier_sum += score
+
+    def exclude(self, condition_id: str | None, reason: ExclusionReason) -> None:
+        """Record one excluded row and the reason it was excluded."""
+        self.unresolved_condition_ids.append(condition_id or "")
+        key = reason.value
+        self.exclusions[key] = self.exclusions.get(key, 0) + 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -104,7 +197,36 @@ class ResolutionRun:
             "resolved": self.resolved,
             "mean_brier": None if self.mean_brier is None else round(self.mean_brier, 4),
             "unresolved": len(self.unresolved_condition_ids),
+            "excluded": sum(self.exclusions.values()),
+            "exclusion_reasons": dict(self.exclusions),
+            "effective_sample_count": self.effective_resolved,
+            "effective_mean_brier": (
+                None if self.effective_mean_brier is None else round(self.effective_mean_brier, 4)
+            ),
         }
+
+
+#: The last pass executed by this process (see ``last_resolution_run``).
+_last_run: "ResolutionRun | None" = None
+
+
+@dataclass(frozen=True)
+class MarketResolution:
+    """What Gamma reports about one market.
+
+    Exactly one of ``outcome`` and ``reason`` is set: a market is either
+    scoreable (``outcome``) or excluded with a reason (``reason``).
+    ``closed_at`` is the market's close time when Gamma reported one; it
+    is the reference the leakage guard compares a forecast against.
+    """
+
+    outcome: str | None = None
+    reason: ExclusionReason | None = None
+    closed_at: datetime | None = None
+
+    @property
+    def is_resolved(self) -> bool:
+        return self.outcome is not None
 
 
 def _decode_json_string(raw: Any) -> list:
@@ -120,37 +242,118 @@ def _decode_json_string(raw: Any) -> list:
     return decoded if isinstance(decoded, list) else []
 
 
-def winning_outcome(market: dict[str, Any]) -> str | None:
-    """Accept only canonical finalized binary YES/NO markets.
+def _parse_timestamp(value: Any) -> datetime | None:
+    """Parse a unix timestamp or an ISO-8601 string into an aware datetime."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=UTC)
+        except (OSError, OverflowError, ValueError):
+            return None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
 
-    Closing a market is not settlement finality. Ambiguous payouts,
-    nonbinary outcomes, partial settlement and malformed response data
-    cannot become training/quality labels.
+
+def market_close_time(market: dict[str, Any]) -> datetime | None:
+    """The moment the market closed, as Gamma reports it.
+
+    ``closedTime`` is the actual close (unix seconds) and is preferred;
+    ``endDate`` is the scheduled end and is the fallback. A forecast
+    recorded after this moment already knew the outcome, so it must not
+    be scored against the resolution.
     """
     if not isinstance(market, dict):
         return None
-    if str(market.get("umaResolutionStatus", "")).lower() not in {"resolved", "settled"}:
-        return None
+    closed = market.get("closedTime")
+    if closed not in (None, ""):
+        parsed = _parse_timestamp(closed)
+        if parsed is not None:
+            return parsed
+    for key in ("endDate", "end_date", "endDateIso"):
+        parsed = _parse_timestamp(market.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def classify_market(market: dict[str, Any]) -> MarketResolution:
+    """Classify one Gamma market into a scoreable outcome or a reason.
+
+    Closing a market is not settlement finality. Ambiguous payouts,
+    nonbinary outcomes, partial settlement and malformed response data
+    cannot become training/quality labels, and each of them has its own
+    reason so the failure modes stay distinguishable.
+    """
+    if not isinstance(market, dict):
+        return MarketResolution(reason=ExclusionReason.CONDITION_ID_MISMATCH)
+    status = str(market.get("umaResolutionStatus", "")).strip().lower()
+    closed_at = market_close_time(market)
+    if status in _VOID_STATUSES:
+        return MarketResolution(reason=ExclusionReason.VOID, closed_at=closed_at)
+    if status in _DISPUTED_STATUSES:
+        return MarketResolution(reason=ExclusionReason.DISPUTED_OR_CHALLENGED, closed_at=closed_at)
+    if status not in _FINAL_STATUSES:
+        return MarketResolution(reason=ExclusionReason.CLOSED_NOT_FINALIZED, closed_at=closed_at)
     if market.get("closed") not in (True, "true"):
-        return None
+        return MarketResolution(reason=ExclusionReason.CLOSED_NOT_FINALIZED, closed_at=closed_at)
     outcomes = _decode_json_string(market.get("outcomes"))
     prices = _decode_json_string(market.get("outcomePrices"))
     if len(outcomes) != 2 or len(prices) != 2:
-        return None
+        return MarketResolution(reason=ExclusionReason.MULTI_OUTCOME, closed_at=closed_at)
     labels = [str(v).strip().lower() for v in outcomes]
     if set(labels) != {"yes", "no"}:
-        return None
+        return MarketResolution(reason=ExclusionReason.NON_BINARY_OUTCOME, closed_at=closed_at)
     try:
         values = [float(v) for v in prices]
     except (TypeError, ValueError):
-        return None
+        return MarketResolution(reason=ExclusionReason.AMBIGUOUS_SETTLEMENT, closed_at=closed_at)
     if any(not math.isfinite(v) or v < 0 or v > 1 for v in values):
-        return None
+        return MarketResolution(reason=ExclusionReason.AMBIGUOUS_SETTLEMENT, closed_at=closed_at)
     if values == [1.0, 0.0]:
-        return labels[0].upper()
+        return MarketResolution(outcome=labels[0].upper(), closed_at=closed_at)
     if values == [0.0, 1.0]:
-        return labels[1].upper()
-    return None
+        return MarketResolution(outcome=labels[1].upper(), closed_at=closed_at)
+    return MarketResolution(reason=ExclusionReason.AMBIGUOUS_SETTLEMENT, closed_at=closed_at)
+
+
+def winning_outcome(market: dict[str, Any]) -> str | None:
+    """The finalized YES/NO winner of a canonical binary market, else ``None``."""
+    return classify_market(market).outcome
+
+
+def is_binary_outcome(resolved_outcome: str | None) -> bool:
+    """True when the label is a finalized binary YES/NO label.
+
+    The non-raising sibling of :func:`outcome_value`: read paths use it
+    to *skip* a row whose label is not a verified binary outcome (a legacy
+    resolver stored the raw Gamma label, e.g. "ALICE") instead of
+    raising on it.
+    """
+    label = (resolved_outcome or "").strip().lower()
+    return label in _YES_LABELS or label in _NO_LABELS
+
+
+def is_verified_resolution(brier_score: float | None, resolved_outcome: str | None) -> bool:
+    """True when a row carries a scoreable, verified binary resolution.
+
+    The one rule every aggregate uses: a Brier score alone is not proof
+    of a usable label, because the legacy resolver wrote raw Gamma
+    labels ("ALICE") that cannot be mapped to a binary outcome.
+    """
+    if brier_score is None or resolved_outcome is None:
+        return False
+    return is_binary_outcome(resolved_outcome)
 
 
 def outcome_value(resolved_outcome: str | None) -> float:
@@ -172,20 +375,37 @@ def brier_score(ai_probability: float, resolved_outcome: str | None) -> float:
     return error * error
 
 
+def log_loss(ai_probability: float, resolved_outcome: str | None) -> float:
+    """Binary log loss with the probability clipped for the computation only.
+
+    A stated certainty (p = 0 or p = 1) is a legitimate forecast and is
+    kept as stated; the logarithm is the only thing that needs a finite
+    argument, so the probability is clipped to ``[eps, 1 - eps]`` here.
+    The stored ``ai_probability`` is never rewritten.
+    """
+    probability = float(ai_probability)
+    if not math.isfinite(probability) or not (0 <= probability <= 1):
+        raise ValueError("Forecast probability must be finite between 0 and 1")
+    outcome = outcome_value(resolved_outcome)
+    clipped = min(max(probability, LOG_LOSS_EPSILON), 1.0 - LOG_LOSS_EPSILON)
+    return -(outcome * math.log(clipped) + (1.0 - outcome) * math.log(1.0 - clipped))
+
+
 async def fetch_resolutions(
     condition_ids: list[str],
     timeout: float = _RESOLUTION_TIMEOUT,
-) -> dict[str, str]:
-    """Look up the winning outcome per condition id on Gamma.
+) -> dict[str, MarketResolution]:
+    """Look up the settlement state per condition id on Gamma.
 
     Args:
         condition_ids: Market condition ids to resolve.
         timeout: Per-request HTTP timeout.
 
     Returns:
-        ``{condition_id: "YES"|"NO"}`` for each finalized binary market that
-        has a determinable winner. Ids that are missing, unresolved or
-        unreachable are simply absent — callers must tolerate gaps.
+        ``{condition_id: MarketResolution}`` for every requested id. A
+        resolved market carries its finalized winner and its close time;
+        every other state carries the reason it was excluded. Callers must
+        tolerate both.
     """
     unique_ids = []
     seen: set[str] = set()
@@ -197,7 +417,7 @@ async def fetch_resolutions(
     if not unique_ids:
         return {}
 
-    resolutions: dict[str, str] = {}
+    resolutions: dict[str, MarketResolution] = {}
     async with httpx.AsyncClient(timeout=timeout) as client:
         for start in range(0, len(unique_ids), _RESOLUTION_CONCURRENCY):
             chunk = unique_ids[start : start + _RESOLUTION_CONCURRENCY]
@@ -209,7 +429,7 @@ async def fetch_resolutions(
 
 
 async def _lookup(client, cid: str):
-    """One Gamma lookup; ``(cid, "YES"|"NO")`` or ``None`` on any failure."""
+    """One Gamma lookup; ``(cid, MarketResolution)`` or ``None`` on failure."""
     try:
         response = await client.get(
             GAMMA_MARKETS_URL,
@@ -221,14 +441,14 @@ async def _lookup(client, cid: str):
                 cid[:16],
                 response.status_code,
             )
-            return None
+            return cid, MarketResolution(reason=ExclusionReason.LOOKUP_FAILED)
         markets = response.json()
     except Exception as exc:
         logger.warning("Gamma resolution lookup failed for %s: %s", cid[:16], exc)
-        return None
+        return cid, MarketResolution(reason=ExclusionReason.LOOKUP_FAILED)
 
     if not isinstance(markets, list) or not markets:
-        return None
+        return cid, MarketResolution(reason=ExclusionReason.MARKET_NOT_FOUND)
     matches = [
         item
         for item in markets
@@ -236,11 +456,22 @@ async def _lookup(client, cid: str):
         and str(item.get("conditionId") or item.get("condition_id") or "").lower() == cid.lower()
     ]
     if len(matches) != 1:
-        return None
-    winner = winning_outcome(matches[0])
-    if winner is None:
-        return None
-    return cid, winner
+        # The answer names a different market (or several): the row can
+        # never be matched to a resolution, and guessing would score it
+        # against somebody else's outcome.
+        return cid, MarketResolution(reason=ExclusionReason.CONDITION_ID_MISMATCH)
+    return cid, classify_market(matches[0])
+
+
+def _forecast_after_close(created_at: datetime | None, closed_at: datetime | None) -> bool:
+    """True when the forecast was recorded after the market had closed."""
+    if created_at is None or closed_at is None:
+        return False
+    created = created_at
+    if created.tzinfo is None:
+        # SQLite drops the offset on read; the stored value is UTC.
+        created = created.replace(tzinfo=UTC)
+    return created > closed_at
 
 
 async def resolve_pending(db: Session, limit: int = _RESOLUTION_BATCH_LIMIT) -> ResolutionRun:
@@ -262,21 +493,35 @@ async def resolve_pending(db: Session, limit: int = _RESOLUTION_BATCH_LIMIT) -> 
     resolutions = await fetch_resolutions([row.condition_id for row in rows])
     for row in rows:
         run.checked += 1
-        winner = resolutions.get(row.condition_id or "")
-        if winner is None:
-            run.unresolved_condition_ids.append(row.condition_id or "")
+        market = resolutions.get(row.condition_id or "")
+        if market is None:
+            market = MarketResolution(reason=ExclusionReason.MARKET_NOT_FOUND)
+        if not market.is_resolved:
+            reason = market.reason or ExclusionReason.CLOSED_NOT_FINALIZED
+            run.exclude(row.condition_id, reason)
+            row.exclusion_reason = reason.value
+            continue
+        if _forecast_after_close(row.created_at, market.closed_at):
+            # The forecast was made after the market closed, so it could
+            # already know the outcome: it is not a forecast any more.
+            run.exclude(row.condition_id, ExclusionReason.FORECAST_AFTER_CLOSE)
+            row.exclusion_reason = ExclusionReason.FORECAST_AFTER_CLOSE.value
             continue
         try:
-            score = brier_score(row.ai_probability, winner)
+            score = brier_score(row.ai_probability, market.outcome)
         except (ValueError, TypeError, OverflowError):
             # Caller can retry after corrected source or outcome mapping.
-            run.unresolved_condition_ids.append(row.condition_id or "")
+            run.exclude(row.condition_id, ExclusionReason.INVALID_PROBABILITY)
+            row.exclusion_reason = ExclusionReason.INVALID_PROBABILITY.value
             continue
-        row.resolved_outcome = winner
+        row.resolved_outcome = market.outcome
         row.brier_score = score
         row.resolved_at = utc_now()
+        row.scoring_version = SCORING_VERSION
+        row.exclusion_reason = None
         run.resolved += 1
         run.brier_sum += score
+        run.record_sample(row.condition_id, score)
 
     try:
         db.commit()
@@ -284,7 +529,21 @@ async def resolve_pending(db: Session, limit: int = _RESOLUTION_BATCH_LIMIT) -> 
         db.rollback()
         logger.exception("Failed to persist forecast resolutions")
         raise
+    global _last_run
+    _last_run = run
     return run
+
+
+def last_resolution_run() -> ResolutionRun:
+    """The last resolution pass executed by this worker process.
+
+    The pass summary is in-memory state: a deployment that runs the
+    scheduler in a separate worker process sees the run of that worker
+    only. The durable view of what was excluded lives on the rows
+    themselves (``Assessment.exclusion_reason``) and is aggregated by the
+    calibration summary.
+    """
+    return _last_run or ResolutionRun()
 
 
 async def _resolution_loop():
@@ -305,13 +564,8 @@ async def _resolution_loop():
                 db = SessionLocal()
                 try:
                     run = await resolve_pending(db)
-                    if run.resolved:
-                        logger.info(
-                            "Forecast resolution pass: %d/%d scored (mean Brier %s)",
-                            run.resolved,
-                            run.checked,
-                            run.mean_brier,
-                        )
+                    if run.resolved or run.exclusions:
+                        logger.info("Forecast resolution pass: %s", run.to_dict())
                 finally:
                     db.close()
 
