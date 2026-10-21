@@ -132,7 +132,7 @@ export async function gotoMarketsBoard(
   options?: { waitForContent?: boolean },
 ): Promise<void> {
   await page.goto("/markets");
-  await expect(page.getByRole("heading", { name: "Markets" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Markets", level: 1, exact: true })).toBeVisible();
 
   const summary = page.getByText(/Showing \d+ events \/ \d+ options/);
   // The public API budget is 30 requests/minute; repeated suite runs can

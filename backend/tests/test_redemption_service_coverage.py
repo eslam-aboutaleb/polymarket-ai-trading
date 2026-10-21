@@ -53,7 +53,7 @@ from app.services.trading.redemption_service import (
     REDEEM_STATUS_CLAIM_VIA_UI,
     REDEEM_STATUS_CONFIRMED,
     REDEEM_STATUS_FAILED,
-    REDEEM_STATUS_PENDING,
+    REDEEM_STATUS_PREVIEW,
     REDEEM_STATUS_SUBMITTED,
     build_polymarket_event_url,
     compute_collection_id,
@@ -579,7 +579,7 @@ class ExecuteRedeemEdgeCases(unittest.IsolatedAsyncioTestCase):
                 _fake_db(), 1, TEST_EOA, _position(), w3=w3
             )
 
-        self.assertEqual(attempt.status, REDEEM_STATUS_PENDING)
+        self.assertEqual(attempt.status, REDEEM_STATUS_PREVIEW)
         w3.eth.send_raw_transaction.assert_not_called()
 
     def test_daily_count_query_failure_does_not_block_redemption(self):
@@ -596,7 +596,7 @@ class ExecuteRedeemEdgeCases(unittest.IsolatedAsyncioTestCase):
                 db, 1, TEST_EOA, _position(), w3=w3, dry_run=True
             )
 
-        self.assertEqual(attempt.status, REDEEM_STATUS_PENDING)
+        self.assertEqual(attempt.status, REDEEM_STATUS_PREVIEW)
 
 
 class RunRedeemInThreadTests(unittest.TestCase):
@@ -676,7 +676,7 @@ class RedeemUserPositionsTests(unittest.IsolatedAsyncioTestCase):
 
         # Only the well-formed position produced an attempt (dry-run).
         self.assertEqual(len(result), 1)
-        self.assertEqual(result[0].status, REDEEM_STATUS_PENDING)
+        self.assertEqual(result[0].status, REDEEM_STATUS_PREVIEW)
 
     async def test_worker_thread_failure_is_logged_and_skipped(self):
         service = self._service([_raw_position()])
@@ -763,7 +763,7 @@ class RunRedeemCycleTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(status=REDEEM_STATUS_CONFIRMED),
             SimpleNamespace(status=REDEEM_STATUS_FAILED),
             SimpleNamespace(status=REDEEM_STATUS_CLAIM_VIA_UI),
-            SimpleNamespace(status=REDEEM_STATUS_PENDING),
+            SimpleNamespace(status=REDEEM_STATUS_PREVIEW),
         ]
 
         with (

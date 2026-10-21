@@ -493,12 +493,12 @@ class AnalysisClientCoverageTests(_FakeAnalysisClientMixin, unittest.IsolatedAsy
 
     # ── analyze_trader_stream ─────────────────────────────────
 
-    async def test_analyze_trader_stream_splits_sentences(self):
+    async def test_analyze_trader_stream_returns_completed_analysis_once(self):
         self.stub.AnalyzeTrader = AsyncMock(
             return_value=_ok_response(analysis="First sentence. Second sentence!")
         )
         chunks = [c async for c in self.client.analyze_trader_stream("0xw")]
-        self.assertEqual(chunks, ["First sentence. ", "Second sentence! "])
+        self.assertEqual(chunks, ["First sentence. Second sentence!"])
 
     async def test_analyze_trader_stream_empty_analysis(self):
         self.stub.AnalyzeTrader = AsyncMock(return_value=_ok_response(analysis=""))

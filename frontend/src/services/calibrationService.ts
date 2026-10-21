@@ -42,6 +42,18 @@ export interface CalibrationGroupStats {
 export interface CalibrationDataQuality {
   missing_model: number;
   legacy_excluded: number;
+  /**
+   * Rows that carry a Brier score but a resolution label that is not a
+   * finalized binary YES/NO (the legacy resolver stored the raw Gamma
+   * label). They are excluded from every aggregate.
+   */
+  invalid_legacy_resolution: number;
+  /** Rows excluded from scoring, per exclusion reason. */
+  exclusion_reasons?: Record<string, number>;
+  /** Total number of excluded rows. */
+  excluded_count?: number;
+  /** Rows without a probability, per recorded reason. */
+  null_probability_reasons?: Record<string, number>;
 }
 
 export interface CalibrationSummaryResponse {
@@ -50,7 +62,15 @@ export interface CalibrationSummaryResponse {
   generated_at: string;
   sample_count: number;
   resolved_count: number;
+  /**
+   * Number of distinct markets behind the resolved rows: one market
+   * contributes one sample, while `resolved_count` stays the raw row
+   * count.
+   */
+  effective_sample_count?: number;
   mean_brier: number | null;
+  /** Mean log loss over the effective samples (finite even for p = 0/1). */
+  mean_log_loss?: number | null;
   brier_vs_baseline: number;
   reliability: ReliabilityBucket[];
   by_model: CalibrationGroupStats[];
@@ -77,6 +97,9 @@ export interface CalibrationForecast {
   edge: number | null;
   resolved_outcome: string | null;
   brier_score: number | null;
+  scoring_version: string | null;
+  exclusion_reason: string | null;
+  verified_resolution: boolean;
   created_at: string | null;
 }
 
