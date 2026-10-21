@@ -73,3 +73,26 @@ cross-checked against an independent Playwright query.
 
 The app registers no WebMCP tools yet; the suite pins the surface an agent
 would rely on, and `the app ships no built-in tools` documents that baseline.
+
+## Required GitHub Actions E2E gate
+
+The root `.github/workflows/ci.yml` has a **required full-stack `e2e` job** for
+pushes to `main`, pull requests and merge groups. It installs the pinned
+backend/frontend dependencies and Chromium, starts an isolated PostgreSQL 16
+service, runs Alembic to head, seeds the well-known **public development-only**
+Hardhat admin wallet and launches both services using the existing Playwright
+webServer config. All three projects (`public`, `auth`, `features`) run;
+failures fail the top-level `Quality gate`. No E2E test is skipped or made
+non-blocking just because a public provider is unavailable. The existing
+`emergency-browser` job still independently tests the emergency-halt contract.
+
+A fresh random JWT secret is generated for each CI job. The Postgres password
+only authenticates the ephemeral service inside its disposable runner; no
+production credentials or funded wallets are loaded. Failed runs upload
+Playwright traces/screenshots and a JUnit report as short-lived artifacts.
+This is a real-stack browser test using disposable local persistence, **not**
+a live venue-order E2E test. A passing run does not prove real-money behavior.
+
+If a PR changes market feeds or introduces external dependencies, prefer
+recorded deterministic fixture responses in feature tests, not suppressing
+assertions or depending on undocumented public rate-limit windows.

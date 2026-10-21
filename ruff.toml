@@ -86,6 +86,7 @@ ignore = [
 # S603: subprocess.run is called with a fixed argv list, shell=False, and only
 # module-owned constants (sys.executable + alembic subcommand).
 "backend/tests/test_migrations_security.py" = ["S603"]
+"backend/tests/test_backtesting_history_migration.py" = ["S603"]
 
 [lint.isort]
 known-first-party = ["app"]
