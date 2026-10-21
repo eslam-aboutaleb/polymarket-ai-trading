@@ -513,6 +513,8 @@ class RedemptionAttemptResponse(BaseModel):
     collection_id: str
     tx_hash: str | None = None
     status: str
+    preview_only: bool = False
+    on_chain_submitted: bool = False
     amount: float
     error: str | None = None
     created_at: datetime
@@ -527,6 +529,10 @@ def _attempt_response(attempt) -> RedemptionAttemptResponse:
         collection_id=attempt.collection_id,
         tx_hash=attempt.tx_hash,
         status=attempt.status,
+        preview_only=attempt.status == "preview",
+        on_chain_submitted=(
+            bool(attempt.tx_hash) and attempt.status in {"submitted", "confirmed"}
+        ),
         amount=attempt.amount,
         error=attempt.error,
         created_at=attempt.created_at,
@@ -543,7 +549,7 @@ async def redeem_market(
 
     The winning outcome is validated against the market's
     resolved outcomePrices before any transaction is built.
-    Dry-run mode (REDEEM_DRY_RUN) records the attempt without
+    Dry-run mode (REDEEM_DRY_RUN) records a preview, without
     broadcasting a transaction.
     """
     from app.services.trading.redemption_service import redeem_market_for_user

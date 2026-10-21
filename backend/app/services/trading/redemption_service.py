@@ -62,7 +62,7 @@ from app.models.trading.redemption_attempt import (
     REDEEM_STATUS_CLAIM_VIA_UI,
     REDEEM_STATUS_CONFIRMED,
     REDEEM_STATUS_FAILED,
-    REDEEM_STATUS_PENDING,
+    REDEEM_STATUS_PREVIEW,
     REDEEM_STATUS_SUBMITTED,
     RedemptionAttempt,
 )
@@ -738,7 +738,7 @@ def _execute_redeem(
             user_id,
             market_id,
             collection_id,
-            REDEEM_STATUS_PENDING,
+            REDEEM_STATUS_PREVIEW,
             amount,
         )
 
@@ -894,6 +894,7 @@ async def run_redeem_cycle() -> dict[str, Any]:
         "users_checked": 0,
         "attempts": 0,
         "submitted": 0,
+        "preview": 0,
         "confirmed": 0,
         "failed": 0,
         "claim_via_ui": 0,
@@ -915,7 +916,9 @@ async def run_redeem_cycle() -> dict[str, Any]:
             continue
         for attempt in attempts:
             summary["attempts"] += 1
-            if attempt.status == REDEEM_STATUS_SUBMITTED:
+            if attempt.status == REDEEM_STATUS_PREVIEW:
+                summary["preview"] += 1
+            elif attempt.status == REDEEM_STATUS_SUBMITTED:
                 summary["submitted"] += 1
             elif attempt.status == REDEEM_STATUS_CONFIRMED:
                 summary["confirmed"] += 1
