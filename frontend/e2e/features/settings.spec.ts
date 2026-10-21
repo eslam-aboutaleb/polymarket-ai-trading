@@ -18,6 +18,7 @@ test.describe("Settings", () => {
     // field actually changes.
     const newName = `e2e-tester-${Date.now()}`;
     await displayName.fill(newName);
+    await expect(displayName).toHaveValue(newName);
     const save = page.getByRole("button", { name: "Save Profile" });
     await expect(save).toBeVisible();
     await save.click();
