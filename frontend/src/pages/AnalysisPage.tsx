@@ -14,8 +14,16 @@ import { useSearchParams } from "react-router-dom";
 import AnalysisDisplay from "../components/AnalysisDisplay";
 import { analysisService } from "../services/analysisService";
 import { sanitizeAIError } from "../utils/apiError";
+import MarketResearch from "../components/market-analysis/MarketResearch";
 
 export default function AnalysisPage() {
+  const [searchParams] = useSearchParams();
+  const conditionId = searchParams.get("condition_id");
+  if (conditionId !== null) return <MarketResearch key={conditionId} conditionId={conditionId} />;
+  return <LegacyAnalysisPage />;
+}
+
+function LegacyAnalysisPage() {
   const [searchParams] = useSearchParams();
 
   const [streamedText, setStreamedText] = useState("");
@@ -78,6 +86,10 @@ export default function AnalysisPage() {
         <h1 className="text-xl font-bold mb-3" style={{ color: "var(--text-primary)" }}>
           {marketTitle}
         </h1>
+        <p className="text-sm mb-3">
+          Legacy analysis · Link-supplied prices and dates are unverified. Open a market from
+          Opportunities for source-backed research.
+        </p>
         <div className="flex flex-wrap gap-3 items-center text-sm">
           <span className="chip chip-success">YES {yesCents}¢</span>
           <span className="chip chip-danger">NO {noCents}¢</span>
