@@ -30,6 +30,7 @@ from app.models.trading.inverse_bot_action import InverseBotAction
 from app.models.trading.inverse_bot_position import InverseBotPosition
 from app.models.trading.latency_arb_config import LatencyArbConfig
 from app.models.trading.market_maker_config import MarketMakerConfig
+from app.models.trading.paper_maker_intent import PaperMakerIntent
 from app.models.trading.redemption_attempt import RedemptionAttempt
 from app.models.trading.stop_loss import StopLossOrder
 from app.models.trading.take_profit import TakeProfitOrder
@@ -69,6 +70,7 @@ __all__ = [
     "InverseBotAction",
     "AdminAuditLog",
     "MarketMakerConfig",
+    "PaperMakerIntent",
     "BacktestRun",
     "FollowerExperimentRun",
     "TakeProfitOrder",
