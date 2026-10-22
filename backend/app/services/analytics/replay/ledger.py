@@ -4,17 +4,50 @@ All sizes are token shares; all cash, fees and cost basis are USDC. Reserved
 cash remains part of total cash and must never be counted twice in NAV.
 """
 
-from dataclasses import dataclass, field
-from decimal import Decimal
+from copy import copy
+from dataclasses import dataclass, field, replace
+from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
+from functools import wraps
 
 ZERO = Decimal(0)
 MODEL_VERSION = "paper-ledger-v1"
+# Bounded inputs (28 significant digits, exponents -28..28) and a fixed
+# context isolate economic results from host precision, rounding and traps.
+ACCOUNTING_CONTEXT = Context(prec=256, rounding=ROUND_HALF_EVEN)
+
+
+def accounting(method):
+    @wraps(method)
+    def calculate(*args, **kwargs):
+        with localcontext(ACCOUNTING_CONTEXT):
+            return method(*args, **kwargs)
+
+    return calculate
+
+
+def atomic(method):
+    @wraps(method)
+    @accounting
+    def commit(self, *args, **kwargs):
+        candidate = copy(self)
+        candidate.positions = {key: replace(value) for key, value in self.positions.items()}
+        candidate.orders = self.orders.copy()
+        candidate.journal = self.journal.copy()
+        candidate._events = self._events.copy()
+        candidate.settled_tokens = self.settled_tokens.copy()
+        result = method(candidate, *args, **kwargs)
+        self.__dict__.update(candidate.__dict__)
+        return result
+
+    return commit
 
 
 def positive(value: Decimal, name: str, *, zero: bool = False) -> None:
     if (
         not isinstance(value, Decimal)
         or not value.is_finite()
+        or len(value.as_tuple().digits) > 28
+        or not -28 <= value.as_tuple().exponent <= 28
         or value < 0
         or (not zero and value == 0)
     ):
@@ -53,6 +86,7 @@ class PaperLedger:
         self.cash = self.funding
 
     @property
+    @accounting
     def reserved_cash(self) -> Decimal:
         return sum(
             (
@@ -64,9 +98,11 @@ class PaperLedger:
         )
 
     @property
+    @accounting
     def available_cash(self) -> Decimal:
         return self.cash - self.reserved_cash
 
+    @accounting
     def available_shares(self, token: str) -> Decimal:
         reserved = sum(
             (r.shares for r in self.orders.values() if r.side == "SELL" and r.token_id == token),
@@ -106,6 +142,7 @@ class PaperLedger:
         ):
             raise AssertionError("paper accounting invariant violated")
 
+    @atomic
     def reserve(
         self,
         event_id: str,
@@ -133,6 +170,7 @@ class PaperLedger:
         self.orders[event_id] = Reservation(token, side, shares, limit_price, fee_bps)
         self._record(event_id, payload)
 
+    @atomic
     def fill(self, event_id: str, order_id: str, shares: Decimal, price: Decimal) -> None:
         payload = ("FILL", order_id, shares, price)
         if self._seen(event_id, payload):
@@ -175,6 +213,7 @@ class PaperLedger:
             del self.orders[order_id]
         self._record(event_id, payload)
 
+    @atomic
     def cancel(self, event_id: str, order_id: str) -> None:
         payload = ("CANCELED", order_id)
         if self._seen(event_id, payload):
@@ -184,6 +223,7 @@ class PaperLedger:
         del self.orders[order_id]
         self._record(event_id, payload)
 
+    @atomic
     def settle(self, event_id: str, token: str, payout_per_share: Decimal) -> None:
         payload = ("SETTLED", token, payout_per_share)
         if self._seen(event_id, payload):
@@ -203,6 +243,7 @@ class PaperLedger:
         self.settled_tokens.add(token)
         self._record(event_id, payload)
 
+    @accounting
     def value(self, marks: dict[str, Decimal]) -> dict:
         missing = sorted(k for k, p in self.positions.items() if p.shares and k not in marks)
         for mark in marks.values():
