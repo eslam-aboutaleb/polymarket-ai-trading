@@ -10,6 +10,7 @@
  * @module components/Opportunities
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   portfolioService,
   PolymarketMarket,
@@ -926,6 +927,7 @@ export default function Opportunities() {
       end_date: selectedMarket.endDate || new Date().toISOString(),
       include_research: "true",
     });
+    if (selectedMarket.condition_id) params.set("condition_id", selectedMarket.condition_id);
     window.open(`/analysis?${params.toString()}`, "_blank");
   };
 
@@ -1803,6 +1805,14 @@ export default function Opportunities() {
                     {endDate && <span>Ends: {new Date(endDate).toLocaleDateString()}</span>}
                   </div>
                   <div className="flex gap-2">
+                    {(market.condition_id || market.conditionId) && (
+                      <Link
+                        className="btn-accent text-xs px-2 py-1"
+                        to={`/analysis?condition_id=${encodeURIComponent(market.condition_id || market.conditionId || "")}`}
+                      >
+                        Research market
+                      </Link>
+                    )}
                     <button
                       onClick={() => handleDetailAnalysis(market)}
                       className="btn-accent text-xs px-2 py-1"
