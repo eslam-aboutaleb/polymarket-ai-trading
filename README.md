@@ -276,6 +276,9 @@ Third-party dependencies and separately identified third-party code retain their
 explicit share inventory and cost basis, cash/share reservations, idempotent
 partial fills, cancellation and modeled settlement. NAV counts reserved cash
 once and stays unknown when an open position has no supplied mark. The journal
-retains event identities, economic inputs and balances after each event.
+retains event identities, economic inputs and balances after each event. Inputs
+are bounded to 28 significant digits and exponents from -28 through 28; arithmetic
+uses a private 256-digit, half-even Decimal context. Each event is staged and
+committed only after all accounting invariants pass.
 This is a replay primitive; legacy paper strategy results remain unverified
 and are not automatically imported or relabeled as journal-backed returns.
