@@ -92,3 +92,86 @@ def test_invalid_intent_cannot_overwrite_current_quotes(db, bad):
         sync(db, [bad])
     db.rollback()
     assert db.query(PaperMakerIntent).count() == 2
+
+
+def test_intent_api_active_account_and_auth_boundary(monkeypatch):
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from sqlalchemy.pool import StaticPool
+
+    from app.api import deps
+    from app.api.routes.auth.auth import get_current_user_from_token
+    from app.api.routes.trading import market_maker
+    from app.models import Account
+    from app.utils.database import get_db
+
+    engine = create_engine(
+        "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    with factory() as session:
+        session.add_all(
+            [User(id=1, wallet_address="0x" + "a" * 40), User(id=2, wallet_address="0x" + "b" * 40)]
+        )
+        session.flush()
+        session.add_all(
+            [
+                Account(id=1, owner_user_id=1, name="Personal", kind="personal", is_default=True),
+                Account(id=2, owner_user_id=1, name="Sub", kind="sub"),
+                Account(id=3, owner_user_id=2, name="Other", kind="personal", is_default=True),
+            ]
+        )
+        session.add(
+            MarketMakerConfig(
+                id=1, user_id=1, condition_id="cond", token_id_yes="YES", token_id_no="NO"
+            )
+        )
+        session.commit()
+        sync(session, QUOTES)
+
+    def sessions():
+        with factory() as session:
+            yield session
+
+    app = FastAPI()
+    app.include_router(market_maker.router)
+    app.dependency_overrides[get_db] = sessions
+    app.dependency_overrides[get_current_user_from_token] = lambda: {"user_id": 1}
+    monkeypatch.setattr(deps, "get_settings", lambda: SimpleNamespace(accounts_enabled=True))
+    with TestClient(app) as http:
+        own = http.get("/api/market-maker/configs/1/paper-intents")
+        assert own.status_code == 200 and len(own.json()["intents"]) == 2
+        assert (
+            http.get(
+                "/api/market-maker/configs/1/paper-intents", headers={"X-Account-Id": "2"}
+            ).status_code
+            == 404
+        )
+        assert (
+            http.get(
+                "/api/market-maker/configs/1/paper-intents", headers={"X-Account-Id": "3"}
+            ).status_code
+            == 403
+        )
+        app.dependency_overrides[get_current_user_from_token] = lambda: {"user_id": 2}
+        assert http.get("/api/market-maker/configs/1/paper-intents").status_code == 404
+        app.dependency_overrides.pop(get_current_user_from_token)
+        assert http.get("/api/market-maker/configs/1/paper-intents").status_code == 401
+    engine.dispose()
+
+
+def test_definition_identity_ignores_ambient_decimal_precision(db):
+    from decimal import localcontext
+
+    quote = [dict(QUOTES[0], price=0.4567)]
+    sync(db, quote)
+    identity = db.query(PaperMakerIntent).one().id
+    with localcontext() as context:
+        context.prec = 2
+        result = sync(db, quote)
+    assert result["intents_created"] == 0
+    assert db.query(PaperMakerIntent).one().id == identity
+    assert "0.4567" in db.query(PaperMakerIntent).one().payload_json
