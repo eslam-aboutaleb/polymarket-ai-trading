@@ -16,6 +16,7 @@ import analysis_pb2
 import analysis_pb2_grpc
 import grpc
 from grpc_reflection.v1alpha import reflection
+from polymarket_mcp.research_contract import RESEARCH_CONTRACT
 
 from src.analysis_chain import get_chain_for_request, get_trading_chain
 from src.config import get_settings
@@ -111,10 +112,17 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 volume_24h=request.volume_24h,
                 end_date=request.end_date,
                 include_research=request.include_research,
+                **(
+                    {"research_instructions": request.research_instructions}
+                    if request.research_instructions
+                    else {}
+                ),
             )
 
             metadata = {"backend": "llm-chain", "model": self.settings.llm_model}
             metadata.update(provider_meta)
+            if request.research_instructions:
+                metadata["research_contract"] = RESEARCH_CONTRACT
 
             return analysis_pb2.AnalysisResponse(
                 success=True,
