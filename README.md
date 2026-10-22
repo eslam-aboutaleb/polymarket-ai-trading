@@ -120,6 +120,30 @@ diagnostics, user and AI-provider settings, model approval and drift monitoring,
 and operational logs. Forecast quality tools compare results across models and
 prompt versions.
 
+### Source-backed market research
+
+Open an Opportunities market's details and choose **Research market** to review
+server-fetched rules, outcome tokens, indicative prices and source timestamps.
+**Run Deep Dive** adds typed supporting/contradicting claims and missing
+information through the existing user-selected AI provider. The legacy analysis
+action remains available.
+
+Matched quotations establish attribution within captured venue text or
+source-delimited Tavily excerpts, not factual truth or verified interpretation.
+Other research formats stay unverified. Unsupported pivotal claims, missing
+market inputs or invalid model output produce **Insufficient evidence**.
+**Investigate further** never approves an order. Quote freshness, semantic rule
+verification, calibrated probabilities and executable economics remain explicit
+limits. This release does not persist historical observations or private briefs.
+
+Run `npm run test:research` from `frontend` after installing the frozen backend
+environment, frontend dependencies and Playwright Chromium. It runs the real API
+and browser against disposable venue/agent fixtures, without provider keys or a
+production database; ports 8002 and 5187 must be free. CI runs this suite alongside
+the existing full-stack E2E suite. Backend regressions are in
+`test_market_context.py`, `test_market_research.py` and
+`test_analysis_routes_coverage.py`.
+
 ## System design
 
 The web app is the main workspace. It sends requests to the application backend,
