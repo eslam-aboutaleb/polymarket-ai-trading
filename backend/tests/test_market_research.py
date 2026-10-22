@@ -152,6 +152,7 @@ def test_stream_uses_canonical_context_user_provider_and_one_terminal_success(ap
     client.analyze_market.return_value = {
         "analysis": json.dumps(DRAFT),
         "research_context": RESEARCH,
+        "metadata": {"research_contract": "market-research-v1"},
     }
     with (
         patch.object(analysis, "get_polymarket_service", return_value=service),
@@ -176,6 +177,8 @@ def test_stream_uses_canonical_context_user_provider_and_one_terminal_success(ap
     assert frames[1]["transport"] == "unary"
     assert factory.call_args.args[0] == 7
     assert client.analyze_market.call_args.kwargs["yes_price"] == 0.7
+    assert client.analyze_market.call_args.kwargs["market_description"] == RAW["description"]
+    assert "JSON" in client.analyze_market.call_args.kwargs["research_instructions"]
     assert client.analyze_market.call_args.kwargs["llm_config"] == {"model": "chosen"}
     client.close.assert_awaited_once()
 
@@ -267,3 +270,25 @@ def test_cancelled_stream_cancels_provider_and_closes_client(market_observation_
             client.close.assert_awaited_once()
 
     asyncio.run(run())
+
+
+def test_old_provider_cannot_silently_fall_back_to_legacy_contract(api):
+    source = AsyncMock()
+    source.get_market_outcome_tokens.return_value = RAW
+    client = AsyncMock()
+    client.analyze_market.return_value = {
+        "analysis": json.dumps(DRAFT),
+        "research_context": RESEARCH,
+        "metadata": {},
+    }
+    with (
+        patch.object(analysis, "get_polymarket_service", return_value=source),
+        patch.object(
+            analysis, "get_analysis_client_for_user", AsyncMock(return_value=(client, None))
+        ),
+    ):
+        response = api.post("/api/analysis/market/research/stream", json={"condition_id": CID})
+    assert '"error"' in response.text
+    assert '"analysis_completed"' not in response.text
+    assert '"done"' not in response.text
+    client.close.assert_awaited_once()
