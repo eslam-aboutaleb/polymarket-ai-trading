@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { marketContextService, type MarketContext } from "../../services/marketContextService";
 import { getApiErrorMessage } from "../../utils/apiError";
+import ResearchBrief from "./ResearchBrief";
 
 export default function MarketResearch({ conditionId }: { conditionId: string }) {
   const [context, setContext] = useState<MarketContext | null>(null);
@@ -125,6 +126,7 @@ export default function MarketResearch({ conditionId }: { conditionId: string })
           </dl>
         </details>
       </section>
+      <ResearchBrief key={conditionId} conditionId={conditionId} onContext={setContext} />
     </div>
   );
 }
