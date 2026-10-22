@@ -129,3 +129,54 @@ def test_independent_ledgers_and_replay_are_identical():
     assert ledgers[0].journal == ledgers[1].journal
     ledgers[0].settle("s", "YES", D(1))
     assert ledgers[1].positions["YES"].shares == 25
+
+
+def test_ambient_precision_and_rounding_do_not_change_economic_booking():
+    from decimal import ROUND_UP, localcontext
+
+    reference = PaperLedger(D(".9999999"))
+    reference.reserve("o", "YES", "BUY", D(3), D(".3333333"), D(0))
+    reference.fill("f", "o", D(3), D(".3333333"))
+    with localcontext() as context:
+        context.prec = 6
+        context.rounding = ROUND_UP
+        actual = PaperLedger(D(".9999999"))
+        actual.reserve("o", "YES", "BUY", D(3), D(".3333333"), D(0))
+        actual.fill("f", "o", D(3), D(".3333333"))
+        assert actual.value({"YES": D(".5")}) == reference.value({"YES": D(".5")})
+    assert actual.journal == reference.journal
+    assert actual.cash == 0
+
+
+def test_fractional_full_fill_does_not_overdraw():
+    ledger = PaperLedger(D("455058225.4469318636965307083"))
+    with pytest.raises(ValueError, match="insufficient cash"):
+        ledger.reserve("o", "YES", "BUY", D("444564525.4895505"), D(".96235238"), D("636.4827341"))
+    assert not ledger.journal and not ledger.orders
+    ledger = PaperLedger(D("455058226"))
+    ledger.reserve("o", "YES", "BUY", D("444564525.4895505"), D(".96235238"), D("636.4827341"))
+    ledger.fill("f", "o", D("444564525.4895505"), D(".96235238"))
+    assert ledger.cash >= 0 and not ledger.orders
+
+
+def test_failed_invariant_cannot_commit_state_or_consume_event_id(monkeypatch):
+    from copy import deepcopy
+
+    from app.services.analytics.replay.ledger import PaperLedger as Ledger
+
+    ledger = PaperLedger(D(100))
+    ledger.reserve("o", "YES", "BUY", D(10), D(".5"), D(0))
+    before = deepcopy(ledger.__dict__)
+    original = Ledger._record
+
+    def broken_record(self, event_id, payload):
+        original(self, event_id, payload)
+        raise AssertionError("injected invariant failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Ledger, "_record", broken_record)
+        with pytest.raises(AssertionError):
+            ledger.fill("f", "o", D(10), D(".5"))
+    assert ledger.__dict__ == before
+    ledger.fill("f", "o", D(10), D(".5"))
+    assert ledger.cash == 95
