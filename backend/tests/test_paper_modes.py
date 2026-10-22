@@ -146,6 +146,14 @@ class MarketMakerPaperModeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(market_maker_service, "_cancel_order", cancel_order),
             patch.object(market_maker_service, "load_wallet_credentials", load_creds),
             patch("py_clob_client.client.ClobClient", clob_cls),
+            patch(
+                "app.services.trading.paper_maker_intents.sync_intents",
+                side_effect=lambda db, config, expected: {
+                    "intent_count": len(expected),
+                    "intents_created": len(expected),
+                    "intents_withdrawn": 0,
+                },
+            ) as capture,
         ):
             result = await market_maker_service._sync_market_maker(1)
 
@@ -161,24 +169,17 @@ class MarketMakerPaperModeTests(unittest.IsolatedAsyncioTestCase):
         fetch_midpoint.assert_not_awaited()
         fetch_book.assert_awaited_once_with("token-yes")
 
-        # Bands were still computed and every expected order was
-        # recorded as a simulated fill.
+        # Bands remain desired definitions. The independently tested real-DB
+        # intent writer cannot fabricate fills from these book observations.
         self.assertTrue(result["simulated"])
         self.assertEqual(result["cancelled"], 0)
-        self.assertEqual(result["placed"], result["expected_orders"])
+        self.assertEqual(result["placed"], 0)
         self.assertGreater(result["expected_orders"], 0)
-
-        trades = _added_objects(db, UserTrade)
-        self.assertEqual(len(trades), result["expected_orders"])
-        for trade in trades:
-            self.assertEqual(trade.status, "simulated")
-            self.assertEqual(trade.user_id, 7)
-            self.assertEqual(trade.market_id, "cond-1")
-            self.assertIn(trade.action, ("buy", "sell"))
-
-        # Config counters advanced as in live mode.
-        self.assertEqual(config.total_orders_placed, result["expected_orders"])
-        self.assertEqual(config.current_open_orders, result["expected_orders"])
+        capture.assert_called_once()
+        self.assertEqual(len(capture.call_args.args[2]), result["expected_orders"])
+        self.assertEqual(_added_objects(db, UserTrade), [])
+        self.assertEqual(config.total_orders_placed, 0)
+        self.assertEqual(config.current_open_orders, 0)
         self.assertEqual(config.status, "running")
         self.assertIsNone(config.last_error)
         db.commit.assert_called_once()

@@ -569,6 +569,7 @@ class MigrationBackfillTest(unittest.TestCase):
             # This archive did not exist at the pre-account revision. Remove
             # it before rewinding its required account FK into a legacy schema.
             conn.execute(text("DROP TABLE IF EXISTS follower_experiment_runs"))
+            conn.execute(text("DROP TABLE IF EXISTS paper_maker_intents"))
             conn.execute(text("DROP TABLE IF EXISTS account_settings"))
             conn.execute(text("DROP TABLE IF EXISTS accounts"))
             for table in self._tables_with_user_id(conn):
