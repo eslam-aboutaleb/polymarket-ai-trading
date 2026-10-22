@@ -282,3 +282,30 @@ uses a private 256-digit, half-even Decimal context. Each event is staged and
 committed only after all accounting invariants pass.
 This is a replay primitive; legacy paper strategy results remain unverified
 and are not automatically imported or relabeled as journal-backed returns.
+
+### Follower replay experiments (research only)
+
+Set `FOLLOWER_REPLAY_ENABLED=true` after `alembic upgrade head` to enable
+`/api/copy-trading/experiments`. The Copy Trading page imports a frozen JSON
+experiment, compares configured delays, saves it to the authenticated account,
+and lets you inspect each outcome and download its cash/share journal. The
+included downloadable example is explicitly synthetic. Disabling the flag
+stops new runs and reads without deleting archives.
+
+Inputs contain wallet, follow/end times, funding, per-signal USDC notional,
+explicit fee assumptions, delays, tick/lot rules and a dataset of first-seen
+signals, receipt/source-timestamped bid/ask share depth and optional settlement
+payouts. Maximums are 50 signals, 250 books, 10 levels per side and four delays.
+Only eligible post-observation books inside the wait window can fill; stale,
+missing, invalid or exhausted evidence never becomes an assumed execution.
+Each signal buys or sells up to its USDC notional with cash and inventory caps.
+Best-bid marks are indicative and require freshness at the experiment end;
+unpriced positions make NAV and net P&L unknown. Sharpe remains unavailable.
+
+All imported evidence and fee/settlement policies are **user supplied and
+unverified**, including numeric results. These runs do not demonstrate trader
+skill or future profit, collect historical venue books, update the local
+watchlist, change legacy paper accounts, or enable live orders. Inputs, hashes,
+policy versions and outputs are archived separately from legacy backtests and
+live trades. The next integration work is captured book datasets and migration
+of legacy strategy runners to the journal; #6/#27/#35/#55/#58 remain open.

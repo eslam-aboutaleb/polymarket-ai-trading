@@ -56,13 +56,11 @@ test("later follow start and missing fees do not inherit leader results", async 
 test("open positions without fresh marks remain unknown", async ({ page }) => {
   const data = JSON.parse(fs.readFileSync(example, "utf8"));
   data.dataset.signals = data.dataset.signals.slice(0, 1);
-  await page
-    .getByLabel("Import frozen experiment JSON")
-    .setInputFiles({
-      name: "open.json",
-      mimeType: "application/json",
-      buffer: Buffer.from(JSON.stringify(data)),
-    });
+  await page.getByLabel("Import frozen experiment JSON").setInputFiles({
+    name: "open.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(data)),
+  });
   await page.getByRole("button", { name: "Run and save simulation" }).click();
   await expect(page.getByTestId("follower-result")).toContainText("Unknown");
   await page.getByText("0s: signal outcomes and accounting journal", { exact: true }).click();
@@ -70,13 +68,11 @@ test("open positions without fresh marks remain unknown", async ({ page }) => {
 });
 
 test("malformed imports and failed save cannot render completed metrics", async ({ page }) => {
-  await page
-    .getByLabel("Import frozen experiment JSON")
-    .setInputFiles({
-      name: "bad.json",
-      mimeType: "application/json",
-      buffer: Buffer.from('{"wallet":null}'),
-    });
+  await page.getByLabel("Import frozen experiment JSON").setInputFiles({
+    name: "bad.json",
+    mimeType: "application/json",
+    buffer: Buffer.from('{"wallet":null}'),
+  });
   await expect(page.getByRole("alert")).toContainText("Expected a frozen experiment");
   await expect(page.getByTestId("follower-result")).toHaveCount(0);
   await page.getByLabel("Import frozen experiment JSON").setInputFiles(example);
@@ -84,4 +80,29 @@ test("malformed imports and failed save cannot render completed metrics", async 
   await page.getByRole("button", { name: "Run and save simulation" }).click();
   await expect(page.getByRole("alert")).toBeVisible();
   await expect(page.getByTestId("follower-result")).toHaveCount(0);
+});
+
+test("account switch discards a pending file import", async ({ page }) => {
+  await page.evaluate(() => {
+    const original = File.prototype.text;
+    File.prototype.text = async function () {
+      const contents = await original.call(this);
+      await new Promise<void>((resolve) => {
+        (window as unknown as { releaseImport: () => void }).releaseImport = resolve;
+      });
+      return contents;
+    };
+  });
+  await page.getByLabel("Import frozen experiment JSON").setInputFiles(example);
+  await page.waitForFunction(
+    () => typeof (window as unknown as { releaseImport?: unknown }).releaseImport === "function",
+  );
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new CustomEvent("polymarket:active-account-changed", { detail: { id: 2 } }),
+    );
+    (window as unknown as { releaseImport: () => void }).releaseImport();
+  });
+  await expect(page.getByLabel("Trader wallet")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Run and save simulation" })).toHaveCount(0);
 });
