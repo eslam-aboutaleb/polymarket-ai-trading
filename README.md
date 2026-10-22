@@ -309,3 +309,21 @@ watchlist, change legacy paper accounts, or enable live orders. Inputs, hashes,
 policy versions and outputs are archived separately from legacy backtests and
 live trades. The next integration work is captured book datasets and migration
 of legacy strategy runners to the journal; #6/#27/#35/#55/#58 remain open.
+
+### Maker paper quote correction
+
+Maker paper syncs now persist desired quote definitions with stable UUIDs and
+`maker-no-evidence-no-fill-v1`. Without observed qualifying flow and queue
+assumptions, they remain `UNFILLED_DATA_MISSING`; removed definitions become
+`WITHDRAWN`. Definitions are not resting orders, inventory reservations or
+executions. Repeated static syncs never create trades or increase executed
+volume. Inspect definitions on each Market Making card. The account-scoped
+read endpoint is `/api/market-maker/configs/{id}/paper-intents` (latest 100).
+
+Run migration0031 before deployment. Historical counters/trades are preserved
+as unverified estimates; this correction does not repair historical performance
+or complete #34's queue/flow lifecycle. Paper fill eligibility stays disabled
+until those inputs exist. A definition may be reselected under the same ID;
+this is not a canceled execution order being reopened. No signing or CLOB
+mutation is added, and this correction intentionally has no switch back to
+phantom-fill behavior.

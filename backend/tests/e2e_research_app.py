@@ -16,10 +16,12 @@ from sqlalchemy.pool import StaticPool
 
 from app.api.routes.analysis import analysis
 from app.api.routes.auth.auth import get_current_user_from_token, get_optional_user_from_token
-from app.api.routes.trading import follower_replay
+from app.api.routes.trading import follower_replay, market_maker
 from app.config import get_settings
 from app.models.analytics.follower_experiment import FollowerExperimentRun
 from app.models.market_data.market_observation import MarketObservation
+from app.models.trading.market_maker_config import MarketMakerConfig
+from app.models.trading.paper_maker_intent import PaperMakerIntent
 from app.models.users.account import Account
 from app.models.users.user import User
 from app.security.rate_limit import limiter
@@ -70,6 +72,8 @@ for table in (
     Account.__table__,
     MarketObservation.__table__,
     FollowerExperimentRun.__table__,
+    MarketMakerConfig.__table__,
+    PaperMakerIntent.__table__,
 ):
     table.create(fixture_engine)
 FixtureSession = sessionmaker(bind=fixture_engine)
@@ -77,8 +81,21 @@ with FixtureSession() as seed:
     seed.add(User(id=1, wallet_address="0x" + "11" * 20))
     seed.flush()
     seed.add(Account(id=1, owner_user_id=1, name="Personal", kind="personal", is_default=True))
+    seed.add(
+        MarketMakerConfig(
+            id=1,
+            user_id=1,
+            account_id=1,
+            condition_id="cond",
+            token_id_yes="YES",
+            token_id_no="NO",
+            market_title="Synthetic maker fixture",
+            enabled=True,
+        )
+    )
     seed.commit()
 app.include_router(follower_replay.router)
+app.include_router(market_maker.router)
 app.dependency_overrides[get_current_user_from_token] = lambda: {"user_id": 1}
 get_settings().follower_replay_enabled = True
 
@@ -166,3 +183,18 @@ def revise_source(condition_id: str = "0x" + "16" * 32):
 @app.get("/")
 def health():
     return {"status": "test fixture"}
+
+
+@app.post("/__fixtures/maker-cycle")
+async def fixture_maker_cycle():
+    from app.services.trading.market_maker_service import _sync_market_maker_paper
+
+    with FixtureSession() as db:
+        config = db.get(MarketMakerConfig, 1)
+        return await _sync_market_maker_paper(
+            db,
+            config,
+            0.5,
+            [{"token_id": "YES", "side": "BUY", "price": 0.45, "size": 10}],
+            {"best_bid": 0.49, "best_ask": 0.51, "depth": 1000},
+        )

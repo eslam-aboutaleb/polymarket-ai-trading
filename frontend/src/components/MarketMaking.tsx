@@ -1,3 +1,4 @@
+import PaperMakerIntents from "./PaperMakerIntents";
 /**
  * Admin panel for automated market-making configs served by `marketMakerService`.
  *
@@ -359,6 +360,8 @@ export default function MarketMaking() {
                   </span>
                 </div>
               </div>
+
+              <PaperMakerIntents configId={cfg.id} />
 
               {/* Stats row */}
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">

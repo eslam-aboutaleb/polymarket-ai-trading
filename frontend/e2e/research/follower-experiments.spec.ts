@@ -12,7 +12,8 @@ test.beforeEach(async ({ page }) => {
         json: { id: 1, wallet_address: "0x" + "11".repeat(20), is_admin: false },
       });
     if (pathname === "/api/accounts") return route.fulfill({ json: [] });
-    if (pathname === "/api/trades/copy-trades/pnl") return route.fulfill({json:{daily_pnl:0}});
+    if (pathname === "/api/trades/copy-trades/pnl")
+      return route.fulfill({ json: { daily_pnl: 0 } });
     if (/following|copy-trades|evaluations/.test(pathname)) return route.fulfill({ json: [] });
     return route.fulfill({ json: {} });
   });
