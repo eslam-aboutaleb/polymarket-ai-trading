@@ -118,7 +118,12 @@ export async function consumeSSEStream(res: Response, handlers: SSEHandlers): Pr
   }
 
   try {
-    await streamLines(res, (lines) => handleSSELines(lines, handlers));
+    let terminated = false;
+    await streamLines(res, (lines) => {
+      terminated = handleSSELines(lines, handlers);
+      return terminated;
+    });
+    if (terminated) return;
   } catch (err) {
     if ((err as Error)?.name === "AbortError") return;
     handlers.onError?.(getApiErrorMessage(err, "Stream failed"));
