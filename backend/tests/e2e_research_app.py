@@ -15,8 +15,13 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.routes.analysis import analysis
-from app.api.routes.auth.auth import get_optional_user_from_token
+from app.api.routes.auth.auth import get_current_user_from_token, get_optional_user_from_token
+from app.api.routes.trading import follower_replay
+from app.config import get_settings
+from app.models.analytics.follower_experiment import FollowerExperimentRun
 from app.models.market_data.market_observation import MarketObservation
+from app.models.users.account import Account
+from app.models.users.user import User
 from app.security.rate_limit import limiter
 from app.utils.database import get_db
 
@@ -60,8 +65,22 @@ app.dependency_overrides[get_optional_user_from_token] = lambda: None
 fixture_engine = create_engine(
     "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
 )
-MarketObservation.__table__.create(fixture_engine)
+for table in (
+    User.__table__,
+    Account.__table__,
+    MarketObservation.__table__,
+    FollowerExperimentRun.__table__,
+):
+    table.create(fixture_engine)
 FixtureSession = sessionmaker(bind=fixture_engine)
+with FixtureSession() as seed:
+    seed.add(User(id=1, wallet_address="0x" + "11" * 20))
+    seed.flush()
+    seed.add(Account(id=1, owner_user_id=1, name="Personal", kind="personal", is_default=True))
+    seed.commit()
+app.include_router(follower_replay.router)
+app.dependency_overrides[get_current_user_from_token] = lambda: {"user_id": 1}
+get_settings().follower_replay_enabled = True
 
 
 def fixture_db():
