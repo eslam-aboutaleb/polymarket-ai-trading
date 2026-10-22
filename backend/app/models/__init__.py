@@ -6,6 +6,7 @@ Model definitions live under their bounded-context packages.
 
 from app.models.analytics.assessment import Assessment
 from app.models.analytics.backtest_run import BacktestRun
+from app.models.analytics.follower_experiment import FollowerExperimentRun
 from app.models.analytics.portfolio_snapshot import PortfolioSnapshot
 from app.models.base import Base
 from app.models.billing.subscription import BillingWebhookEvent, Subscription
@@ -69,6 +70,7 @@ __all__ = [
     "AdminAuditLog",
     "MarketMakerConfig",
     "BacktestRun",
+    "FollowerExperimentRun",
     "TakeProfitOrder",
     "RedemptionAttempt",
     "WhaleEvent",
