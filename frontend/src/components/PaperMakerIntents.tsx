@@ -18,15 +18,18 @@ export default function PaperMakerIntents({ configId }: { configId: number }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
-    const clear = () => {
+    const invalidate = () => {
       generation.current++;
+    };
+    const clear = () => {
+      invalidate();
       setIntents(null);
       setError(null);
       setBusy(false);
     };
     const unsubscribe = onActiveAccountChange(clear);
     return () => {
-      generation.current++;
+      invalidate();
       unsubscribe();
     };
   }, [configId]);
