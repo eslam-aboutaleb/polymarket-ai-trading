@@ -13,6 +13,11 @@ from app.models.trading.paper_maker_intent import PaperMakerIntent
 POLICY = "maker-no-evidence-no-fill-v1"
 
 
+def canonical_decimal(value: Decimal) -> str:
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
 def sync_intents(db: Session, config: MarketMakerConfig, expected: list[dict]) -> dict:
     # Serialize definition prices/notional explicitly. These are not executable
     # shares or cash reservations, and no market midpoint proves a fill.
@@ -31,8 +36,8 @@ def sync_intents(db: Session, config: MarketMakerConfig, expected: list[dict]) -
             {
                 "token_id": quote["token_id"],
                 "side": quote["side"],
-                "limit_price": str(price.normalize()),
-                "notional_usdc": str(notional.normalize()),
+                "limit_price": canonical_decimal(price),
+                "notional_usdc": canonical_decimal(notional),
                 "policy": POLICY,
             },
             sort_keys=True,
