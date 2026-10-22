@@ -79,12 +79,14 @@ export default function FollowerExperiments() {
   }, [accountKey]);
   const importFile = async (file?: File) => {
     if (!file) return;
+    const generation = accountGeneration.current;
     setError(null);
     setRun(null);
     setInput(null);
     try {
       if (file.size > 256_000) throw new Error("Choose an experiment smaller than 256 KB");
       const value = JSON.parse(await file.text());
+      if (generation !== accountGeneration.current) return;
       if (
         !value ||
         typeof value.wallet !== "string" ||
@@ -111,7 +113,8 @@ export default function FollowerExperiments() {
         delays_seconds: value.delays_seconds ?? [0, 60, 300, 1800],
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not import experiment");
+      if (generation === accountGeneration.current)
+        setError(e instanceof Error ? e.message : "Could not import experiment");
     }
   };
   const submit = async () => {
