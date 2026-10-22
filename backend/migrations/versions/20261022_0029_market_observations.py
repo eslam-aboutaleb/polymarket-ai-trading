@@ -10,6 +10,10 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Historical bootstrap migrations create the current model metadata, so a
+    # fresh database already has this table and its index before reaching us.
+    if sa.inspect(op.get_bind()).has_table("market_observations"):
+        return
     op.create_table(
         "market_observations",
         sa.Column("snapshot_id", sa.String(64), primary_key=True),
