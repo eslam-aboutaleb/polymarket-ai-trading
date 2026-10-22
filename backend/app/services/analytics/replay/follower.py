@@ -115,7 +115,7 @@ class FollowerExperiment(FrozenInput):
 
 def replay(experiment: FollowerExperiment) -> dict:
     """All scenario arithmetic uses a fixed context, independent of host settings."""
-    with localcontext(ACCOUNTING_CONTEXT)
+    with localcontext(ACCOUNTING_CONTEXT):
         return {
             "model_version": "follower-replay-v1",
             "dataset_hash": hashlib.sha256(
@@ -228,11 +228,12 @@ def _scenario(exp: FollowerExperiment, delay: int) -> dict:
         ]
         if books:
             latest = max(books, key=lambda b: (b.observed_at, b.snapshot_id))
+            positive_bids = [level for level in latest.bids if level.shares > 0]
             if (
-                latest.bids
+                positive_bids
                 and (exp.end_at - latest.source_at).total_seconds() <= exp.max_book_age_seconds
             ):
-                marks[token] = latest.bids[0].price
+                marks[token] = positive_bids[0].price
     return {
         "delay_seconds": delay,
         "valuation": ledger.value(marks),

@@ -139,3 +139,19 @@ def test_invalid_tick_cannot_produce_partial_booking():
     payload["dataset"]["books"][0]["asks"].append({"price": ".405", "shares": "100"})
     with pytest.raises(ValidationError, match="tick size"):
         run(payload)
+
+
+def test_zero_share_final_bid_cannot_supply_nav_mark():
+    payload = experiment_payload()
+    payload["dataset"]["signals"] = payload["dataset"]["signals"][:1]
+    payload["dataset"]["books"].append(
+        {
+            "snapshot_id": "end",
+            "token_id": "YES",
+            "observed_at": payload["end_at"],
+            "source_at": payload["end_at"],
+            "bids": [{"price": ".5", "shares": "0"}],
+            "asks": [],
+        }
+    )
+    assert run(payload)["scenarios"][0]["valuation"]["nav"] is None
