@@ -128,6 +128,12 @@ server-fetched rules, outcome tokens, indicative prices and source timestamps.
 information through the existing user-selected AI provider. The legacy analysis
 action remains available.
 
+The backend sends structured research instructions in a separate, additive gRPC
+field; both AI services select a research-only prompt instead of their legacy
+forecast/trade template. Deploy the backend and AI services together. An older
+service without the research-contract acknowledgement fails explicitly rather
+than silently falling back to a different analysis format.
+
 Matched quotations establish attribution within captured venue text or
 source-delimited Tavily excerpts, not factual truth or verified interpretation.
 Other research formats stay unverified. Unsupported pivotal claims, missing
