@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from app.api.routes.analysis.analysis import router
 from app.security.rate_limit import limiter
 from app.services.intelligence.market_context import MarketIdentityError, build_market_context
+from app.utils.database import get_db
 
 CID = "0x" + "ab" * 32
 NOW = datetime(2026, 10, 22, tzinfo=UTC)
@@ -100,10 +101,11 @@ def test_malformed_source_identity_is_a_controlled_failure(source_id):
 
 
 @pytest.fixture
-def api():
+def api(market_observation_db):
     app = FastAPI()
     app.state.limiter = limiter
     app.include_router(router)
+    app.dependency_overrides[get_db] = lambda: market_observation_db
     limiter.reset()
     yield TestClient(app)
     limiter.reset()
