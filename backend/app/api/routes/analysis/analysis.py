@@ -7,7 +7,8 @@ import logging
 from collections import OrderedDict
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -26,6 +27,11 @@ from app.services.analytics.research_quality import (
 )
 from app.services.intelligence.forecast_recorder import record_verdict
 from app.services.intelligence.llm_gateway import get_llm_gateway
+from app.services.intelligence.market_context import (
+    MarketContext,
+    MarketIdentityError,
+    fetch_market_context,
+)
 from app.services.intelligence.user_preferences import get_user_settings
 from app.services.market_data.polymarket_service import get_polymarket_service
 from app.services.users.entitlement_service import CAP_OPPORTUNITY_SCAN
@@ -217,6 +223,26 @@ async def get_analysis_client_for_user(
     client = AnalysisClient(backend=backend)
     config = llm_config.to_proto_dict() if llm_config else None
     return client, config
+
+
+@router.get(
+    "/markets/{condition_id}/context",
+    response_model=MarketContext,
+    dependencies=[Depends(_analysis_rate_limit)],
+)
+async def market_context(
+    condition_id: str = Path(pattern=r"^0x[0-9a-fA-F]{64}$"),
+):
+    """Public, read-only venue context. Never reads credentials or places orders."""
+    try:
+        return await fetch_market_context(get_polymarket_service(), condition_id)
+    except MarketIdentityError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except httpx.HTTPStatusError as exc:
+        code = 404 if exc.response.status_code == 404 else 503
+        raise HTTPException(status_code=code, detail="Market source unavailable") from exc
+    except (httpx.RequestError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail="Market source unavailable") from exc
 
 
 @router.post("/market", response_model=AnalysisResponse)
