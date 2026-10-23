@@ -8,6 +8,7 @@
  *
  * @module components/CopyTrading
  */
+import FollowerExperiments from "./FollowerExperiments";
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   tradesService,
@@ -833,6 +834,8 @@ export default function CopyTrading() {
           {activeTab === "copy" ? "Refresh" : mockLoading ? "Refreshing..." : "Refresh Leaderboard"}
         </button>
       </div>
+
+      <FollowerExperiments />
 
       <div className="surface-panel p-2 rounded-lg inline-flex gap-2">
         <button

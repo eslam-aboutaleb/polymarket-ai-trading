@@ -72,6 +72,11 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 end_date=request.end_date,
                 include_research=request.include_research,
                 model=_get_request_model(request),
+                **(
+                    {"research_instructions": request.research_instructions}
+                    if request.research_instructions
+                    else {}
+                ),
             )
 
             return analysis_pb2.AnalysisResponse(
@@ -79,7 +84,15 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 analysis=result["analysis"],
                 research_context=result.get("research_context", ""),
                 timestamp=result["timestamp"],
-                metadata={"backend": "cli-agent", "engine": "gh-copilot"},
+                metadata={
+                    "backend": "cli-agent",
+                    "engine": "gh-copilot",
+                    **(
+                        {"research_contract": "market-research-v1"}
+                        if request.research_instructions
+                        else {}
+                    ),
+                },
             )
         except Exception as e:
             logger.error(f"AnalyzeMarket error: {e}")

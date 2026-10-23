@@ -52,9 +52,11 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
     from app.api.routes.portfolio import portfolio, risk_report
     from app.api.routes.trading import (
         backtesting,
+        follower_replay,
         inverse_bot,
         latency_arb,
         market_maker,
+        replay_evidence,
         risk,
         trades,
     )
@@ -84,7 +86,9 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
     for module in (
         inverse_bot,
         market_maker,
+        replay_evidence,
         backtesting,
+        follower_replay,
         binance_signals,
         news,
         health,

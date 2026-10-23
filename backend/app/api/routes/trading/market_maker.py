@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_plan
+from app.api.deps import get_active_account, require_plan
 from app.api.routes.auth.auth import get_current_user_from_token
 from app.models.trading.market_maker_config import MarketMakerConfig
 from app.services.trading.market_maker_service import (
@@ -247,3 +247,41 @@ async def get_market_maker_metrics(
         running_configs=running,
         total_running=len(running),
     )
+
+
+@router.get("/configs/{config_id}/paper-intents")
+def get_paper_intents(
+    config_id: int, db: Session = Depends(get_db), account=Depends(get_active_account)
+):
+    """Read quote definitions in the active account; definitions never prove fills."""
+    import json
+
+    from app.models.trading.paper_maker_intent import PaperMakerIntent
+
+    config = get_market_maker_config_for_user(db, config_id, account.owner_user_id)
+    if config is None or not (
+        config.account_id == account.id or (config.account_id is None and account.is_default)
+    ):
+        raise HTTPException(404, "Maker config not found")
+    rows = (
+        db.query(PaperMakerIntent)
+        .filter_by(config_id=config_id, user_id=account.owner_user_id)
+        .order_by(PaperMakerIntent.updated_at.desc(), PaperMakerIntent.id)
+        .limit(100)
+        .all()
+    )
+    return {
+        "policy": "maker-no-evidence-no-fill-v1",
+        "fill_status": "unfilled_missing_flow_and_queue_evidence",
+        "config_enabled": bool(config.enabled),
+        "intents": [
+            {
+                "id": row.id,
+                "state": row.state,
+                "created_at": row.created_at.isoformat(),
+                "updated_at": row.updated_at.isoformat(),
+                **json.loads(row.payload_json),
+            }
+            for row in rows
+        ],
+    }

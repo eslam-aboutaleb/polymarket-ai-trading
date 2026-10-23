@@ -36,6 +36,39 @@ def _run_alembic(
 
 
 class MigrationSecurityTests(unittest.TestCase):
+    def test_market_observations_upgrade_and_rollback_preserve_schema(self):
+        """Cover metadata bootstrap and the older deployment without this table."""
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "observations.db"
+            db_url = f"sqlite:///{db_path}"
+            for args in (
+                ("upgrade", "head"),
+                ("downgrade", "20261021_0028_quarantine_legacy_scores"),
+                ("upgrade", "head"),
+            ):
+                result = _run_alembic(db_url, *args)
+                self.assertEqual(result.returncode, 0, msg=result.stderr)
+                with sqlite3.connect(db_path) as conn:
+                    present = conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' "
+                        "AND name='market_observations'"
+                    ).fetchone()
+                    if args[0] == "downgrade":
+                        self.assertIsNone(present)
+                        continue
+                    self.assertIsNotNone(present)
+                    columns = {
+                        row[1] for row in conn.execute("PRAGMA table_info(market_observations)")
+                    }
+                    self.assertEqual(
+                        columns,
+                        {"snapshot_id", "condition_id", "observed_at", "rule_hash", "payload_json"},
+                    )
+                    indexes = {
+                        row[1] for row in conn.execute("PRAGMA index_list(market_observations)")
+                    }
+                    self.assertIn("ix_market_observations_condition_observed", indexes)
+
     def test_upgrade_head_on_fresh_sqlite(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "fresh.db"

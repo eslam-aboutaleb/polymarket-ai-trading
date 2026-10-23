@@ -17,6 +17,7 @@ from langchain_core.callbacks import StreamingStdOutCallbackHandler
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import Tool
 from polymarket_mcp import no_indexed_matches_text, sanitize_external_text, search_rows
+from polymarket_mcp.research_contract import RESEARCH_SYSTEM_PROMPT, structured_research_prompt
 
 from src.config import get_settings
 from src.llm_factory import (
@@ -304,6 +305,7 @@ class TradingAnalysisChain:
         end_date: str,
         include_research: bool = True,
         llm_override=None,
+        research_instructions: str = "",
     ) -> dict[str, Any]:
         """Perform comprehensive market analysis with optional web research."""
         llm = self._get_task_llm("market_assessment", llm_override)
@@ -324,6 +326,10 @@ class TradingAnalysisChain:
         )
 
         system_prompt = self.prompts.get("market_analysis", "system_prompt")
+
+        if research_instructions:
+            analysis_prompt = structured_research_prompt(research_instructions, news_context)
+            system_prompt = RESEARCH_SYSTEM_PROMPT
 
         messages = [SystemMessage(content=system_prompt), HumanMessage(content=analysis_prompt)]
 

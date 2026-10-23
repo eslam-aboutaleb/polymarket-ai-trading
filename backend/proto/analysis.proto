@@ -123,6 +123,7 @@ message MarketAnalysisRequest {
   bool include_research = 7;
   string user_id = 8;
   LLMConfig llm_config = 9;  // Optional: per-request LLM configuration
+  string research_instructions = 10; // Optional typed research contract; not source text
 }
 
 // Quick Analysis
