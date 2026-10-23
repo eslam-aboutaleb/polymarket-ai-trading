@@ -482,14 +482,9 @@ class PaperModeTests(DailyReportServiceTestBase):
 
         result = await daily_report_service.generate_digest_for_user(self.db, user, now=now)
 
-        self.assertEqual(result["status"], "sent")
-        call = FakeAnalysisClient.instances[0].calls[0]
-        self.assertEqual(call["current_value"], "1234.50")
-        # Paper start value: 1234.50 - (-3.25) = 1237.75.
-        self.assertEqual(call["start_value"], "1237.75")
-        _to_email, subject, body = self._email_call()
-        self.assertIn("Paper", subject)
-        self.assertIn("(Paper)", body)
+        self.assertEqual(result, {"status": "skipped", "reason": "paper_nav_unavailable"})
+        self.assertEqual(FakeAnalysisClient.instances, [])
+        self.email_mock.assert_not_called()
 
 
 class DeliveryFailureTests(DailyReportServiceTestBase):

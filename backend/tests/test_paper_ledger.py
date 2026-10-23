@@ -74,7 +74,7 @@ def test_missing_mark_unknown_even_though_cash_and_realized_are_known():
     assert D(ledger.value({"YES": D(0)})["nav"]) == 990
 
 
-@pytest.mark.parametrize("bad", [D("NaN"), D("Infinity"), D(-1), D(0), 1.0])
+@pytest.mark.parametrize("bad", [D("NaN"), D("Infinity"), D(-1), 1.0])
 def test_invalid_funding_rejected(bad):
     with pytest.raises(ValueError):
         PaperLedger(bad)
@@ -180,3 +180,10 @@ def test_failed_invariant_cannot_commit_state_or_consume_event_id(monkeypatch):
     assert ledger.__dict__ == before
     ledger.fill("f", "o", D(10), D(".5"))
     assert ledger.cash == 95
+
+
+def test_zero_funding_is_valid_but_cannot_reserve_unfunded_cash():
+    ledger = PaperLedger(D(0))
+    assert D(ledger.value({})["nav"]) == 0
+    with pytest.raises(ValueError, match="cash"):
+        ledger.reserve("unfunded", "YES", "BUY", D(1), D(".5"), D(0))

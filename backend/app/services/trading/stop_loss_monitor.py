@@ -276,17 +276,38 @@ async def _check_stop_losses():
         db.close()
 
 
-async def _check_user_price_orders(
+async def _check_user_price_orders(db, user_id, wallet_address, sl_orders, tp_orders):
+    from app.services.analytics.paper_accounting import settings_for_account
+
+    count = 0
+    for account_id in {getattr(order, "account_id", None) for order in [*sl_orders, *tp_orders]}:
+        settings = (
+            TradingBotRepository(db).get_user_settings(user_id)
+            if account_id is None
+            else settings_for_account(db, user_id, account_id)
+        )
+        count += await _check_account_price_orders(
+            db,
+            user_id,
+            wallet_address,
+            [order for order in sl_orders if getattr(order, "account_id", None) == account_id],
+            [order for order in tp_orders if getattr(order, "account_id", None) == account_id],
+            settings,
+        )
+    return count
+
+
+async def _check_account_price_orders(
     db: Session,
-    user_id: int,
+    user_id: int,  # noqa: ARG001 - retained monitoring context
     wallet_address: str,
     sl_orders: list[StopLossOrder],
     tp_orders: list[TakeProfitOrder],
+    user_settings,
 ) -> int:
     """Check and potentially trigger stop-losses and take-profits for a single user."""
     # Per-user simulation flag: paper mode is decided by the
     # OWNING user's settings, never by a global switch.
-    user_settings = TradingBotRepository(db).get_user_settings(user_id)
     simulation_mode = bool(user_settings and getattr(user_settings, "simulation_mode", False))
 
     pk = None
@@ -567,55 +588,53 @@ async def _execute_stop_loss(
 async def _execute_stop_loss_simulated(
     db: Session,
     order: StopLossOrder,
-    live_price: float,
+    live_price: float,  # noqa: ARG001 - trigger reference is not fill evidence
 ):
-    """Paper mode: record a simulated stop-loss close.
+    """Trigger a shared-journal IOC exit; a partial fill keeps the remainder active."""
+    from app.services.analytics.paper_evidence import refresh_evidence
 
-    The trigger was evaluated against a real price; the close is
-    filled at a depth-aware simulated price and recorded with
-    ``status="simulated"``. Realized paper PnL is computed against
-    the user's average entry price and tracked separately from real
-    equity. No sell is submitted.
-    """
-    from app.services.analytics.simulation import average_entry_price, simulate_fill
+    await refresh_evidence(db, order.market_id)
+    _paper_exit(db, order, "stop_loss")
 
-    market = {"best_bid": live_price, "best_ask": live_price}
-    fill = simulate_fill(market, "SELL", order.size)
 
-    now = datetime.now(UTC)
-    order.status = "triggered"
-    order.order_hash = None
-    order.executed_price = fill["fill_price"]
-    order.triggered_at = now
-    order.updated_at = now
+def _paper_exit(db, order, strategy):
+    from decimal import Decimal
 
-    entry = average_entry_price(db, order.user_id, order.token_id)
-    pnl = None
-    if entry is not None and entry > 0:
-        pnl = round(order.size * (fill["fill_price"] - entry), 4)
-    record_user_trade(
+    from app.services.analytics.paper_accounting import submit_paper_order
+    from app.services.analytics.paper_evidence import latest
+    from app.utils.time import utc_now
+
+    receipt = (
+        latest(db, "book", utc_now(), token_id=order.token_id)
+        if get_settings().paper_journal_v2_enabled
+        else None
+    )
+    # New public receipts may permit another attempt, but the shared depth budget
+    # never infers replenishment merely from a repeated snapshot.
+    result = submit_paper_order(
         db,
         user_id=order.user_id,
-        market_id=order.market_id,
+        account_id=getattr(order, "account_id", None),
         token_id=order.token_id,
-        action="sell",
-        amount=order.size,
-        price=fill["fill_price"],
-        status="simulated",
-        strategy_source="stop_loss",
-        expected_price=live_price,
-        expected_size=order.size,
-        pnl=pnl,
+        side="SELL",
+        amount=Decimal(str(order.size)),
+        units="SHARES",
+        strategy=strategy,
+        intent_key=f"{strategy}:{order.id}:{order.size}:{receipt.id if receipt else 'missing'}",
     )
+    filled = Decimal(result["shares"])
+    if filled:
+        remaining = max(Decimal(0), Decimal(str(order.size)) - filled)
+        order.executed_price = float(result["fill_price"])
+        order.updated_at = utc_now()
+        if remaining == 0:
+            order.status = "triggered"
+            order.triggered_at = utc_now()
+        else:
+            order.size = float(remaining)
+        order.order_hash = None
     db.commit()
-
-    logger.info(
-        "SIMULATION: stop-loss order=%d simulated close @ %.4f (slippage=%.2fbps, pnl=%s)",
-        order.id,
-        fill["fill_price"],
-        fill["slippage_bps"],
-        pnl,
-    )
+    return result
 
 
 async def _execute_take_profit(
@@ -690,45 +709,10 @@ async def _execute_take_profit(
 async def _execute_take_profit_simulated(
     db: Session,
     order: TakeProfitOrder,
-    live_price: float,
+    live_price: float,  # noqa: ARG001 - trigger reference is not fill evidence
 ):
-    """Paper mode: record a simulated take-profit close (no sell submitted)."""
-    from app.services.analytics.simulation import average_entry_price, simulate_fill
+    """Use the same account, inventory and fee policy as stop-loss and copy."""
+    from app.services.analytics.paper_evidence import refresh_evidence
 
-    market = {"best_bid": live_price, "best_ask": live_price}
-    fill = simulate_fill(market, "SELL", order.size)
-
-    now = datetime.now(UTC)
-    order.status = "triggered"
-    order.order_hash = None
-    order.executed_price = fill["fill_price"]
-    order.triggered_at = now
-    order.updated_at = now
-
-    entry = average_entry_price(db, order.user_id, order.token_id)
-    pnl = None
-    if entry is not None and entry > 0:
-        pnl = round(order.size * (fill["fill_price"] - entry), 4)
-    record_user_trade(
-        db,
-        user_id=order.user_id,
-        market_id=order.market_id,
-        token_id=order.token_id,
-        action="sell",
-        amount=order.size,
-        price=fill["fill_price"],
-        status="simulated",
-        strategy_source="take_profit",
-        expected_price=live_price,
-        expected_size=order.size,
-        pnl=pnl,
-    )
-    db.commit()
-
-    logger.info(
-        "SIMULATION: take-profit order=%d simulated close @ %.4f (slippage=%.2fbps, pnl=%s)",
-        order.id,
-        fill["fill_price"],
-        fill["slippage_bps"],
-        pnl,
-    )
+    await refresh_evidence(db, order.market_id)
+    _paper_exit(db, order, "take_profit")

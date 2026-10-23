@@ -11,8 +11,10 @@ import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -83,30 +85,50 @@ class PaperExecutionEngine:
 
     mode = ExecutionMode.PAPER
 
-    def __init__(self, slippage_bps: int = 10) -> None:
-        self.slippage_bps = slippage_bps
+    def __init__(self, slippage_bps: int = 10, db=None) -> None:  # noqa: ARG002
+        self.db = db
 
     async def place_order(self, request: OrderPlacementRequest) -> OrderPlacementResult:
-        # Apply simulated slippage
-        slippage_factor = 1.0 + (
-            (self.slippage_bps / 10000.0)
-            if request.side.upper() == "BUY"
-            else (-self.slippage_bps / 10000.0)
-        )
-        simulated_price = round(request.price * slippage_factor, 4)
-        order_id = f"sim-{request.token_id[:8]}-{request.user_id}"
+        from app.services.analytics.paper_accounting import submit_paper_order
 
+        # The caller owns the transaction and account context. Missing context
+        # cannot authorize a fabricated fill or a fallback to live execution.
+        if self.db is None:
+            return OrderPlacementResult(
+                order_id=str(uuid4()),
+                status="unfilled",
+                executed_price=0,
+                executed_size=0,
+                is_simulated=True,
+                error_message="PAPER_SESSION_REQUIRED",
+            )
+        result = submit_paper_order(
+            self.db,
+            user_id=request.user_id,
+            account_id=request.account_id,
+            token_id=request.token_id,
+            side=request.side,
+            amount=Decimal(str(request.size)),
+            units=request.metadata.get("units", "SHARES"),
+            strategy=request.strategy,
+            order_type=request.order_type,
+            limit_price=Decimal(str(request.price)),
+            intent_key=request.metadata.get("intent_key"),
+        )
         return OrderPlacementResult(
-            order_id=order_id,
-            status="simulated",
-            executed_price=simulated_price,
-            executed_size=request.size,
+            order_id=result["order_id"],
+            status=result["status"],
+            executed_price=float(result["fill_price"] or 0),
+            executed_size=float(result["shares"]),
             is_simulated=True,
-            raw_response={"mode": "paper", "simulated_slippage_bps": self.slippage_bps},
+            fee=float(result["fee_usdc"]),
+            raw_response=result,
+            error_message=result["reason"] if result["status"] == "unfilled" else None,
         )
 
     async def cancel_order(self, order_id: str, **kwargs: Any) -> bool:  # noqa: ARG002
-        return True
+        # Marketable orders finish atomically; this adapter has no resting orders.
+        return False
 
     async def get_midpoint(self, token_id: str) -> float | None:  # noqa: ARG002
         return None

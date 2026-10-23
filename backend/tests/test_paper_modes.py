@@ -299,26 +299,18 @@ class InverseBotPaperModeTests(unittest.IsolatedAsyncioTestCase):
         clob_cls.assert_not_called()
         place_order.assert_not_called()
 
-        # The reversal was recorded as simulated and the row
-        # transitioned exactly as a live success would.
-        self.assertEqual(result["status"], "simulated")
+        # A signal without an enabled journal is not an executed reversal.
+        self.assertEqual(result["status"], "unfilled")
         self.assertTrue(result["simulated"])
         actions = _added_objects(db, InverseBotAction)
         self.assertEqual(len(actions), 1)
-        self.assertEqual(actions[0].status, "simulated")
+        self.assertEqual(actions[0].status, "unfilled")
         self.assertIsNone(actions[0].sell_order_hash)
         self.assertIsNone(actions[0].buy_order_hash)
-        self.assertEqual(actions[0].from_token_id, "tok-held")
-        self.assertEqual(actions[0].to_token_id, "tok-alt")
-        self.assertAlmostEqual(actions[0].buy_notional, 100.0 * 0.40 * 0.985, places=4)
-
-        self.assertEqual(row.token_id, "tok-alt")
-        self.assertEqual(row.outcome, "No")
-        self.assertEqual(row.status, "active")
-        self.assertEqual(row.reversals_today, 1)
-        self.assertEqual(row.persistence_count, 0)
-        self.assertIsNotNone(row.last_reversed_at)
-        db.commit.assert_called_once()
+        self.assertEqual(actions[0].buy_notional, 0)
+        self.assertEqual(row.token_id, "tok-held")
+        self.assertEqual(row.reversals_today, 0)
+        self.assertEqual(_added_objects(db, UserTrade), [])
 
     async def test_live_reversal_requires_confirmed_sell_before_buy(self):
         row = _inverse_row()
@@ -422,22 +414,10 @@ class StopLossPaperModeTests(unittest.IsolatedAsyncioTestCase):
         fetch_live.assert_not_awaited()
         place_order.assert_not_called()
 
-        # The trigger was still evaluated against a real price and
-        # the close was recorded as simulated.
         self.assertEqual(triggered, 1)
-        self.assertEqual(sl.status, "triggered")
-        self.assertIsNone(sl.order_hash)
-        self.assertIsNotNone(sl.executed_price)
-        self.assertLessEqual(sl.executed_price, 0.30)
-        self.assertIsNotNone(sl.triggered_at)
-
-        trades = _added_objects(db, UserTrade)
-        self.assertEqual(len(trades), 1)
-        self.assertEqual(trades[0].status, "simulated")
-        self.assertEqual(trades[0].action, "sell")
-        self.assertEqual(trades[0].token_id, "tok-sl")
-        self.assertEqual(trades[0].user_id, 5)
-        db.commit.assert_called_once()
+        self.assertEqual(sl.status, "active")
+        self.assertIsNone(sl.executed_price)
+        self.assertEqual(_added_objects(db, UserTrade), [])
 
     async def test_paper_take_profit_makes_zero_clob_calls(self):
         settings = _settings(simulation_mode=True, user_id=5)
@@ -461,15 +441,9 @@ class StopLossPaperModeTests(unittest.IsolatedAsyncioTestCase):
 
         place_order.assert_not_called()
         self.assertEqual(triggered, 1)
-        self.assertEqual(tp.status, "triggered")
+        self.assertEqual(tp.status, "active")
         self.assertIsNone(tp.order_hash)
-        # A simulated SELL fills at or below the trigger price
-        # (depth-aware slippage), never above it.
-        self.assertLessEqual(tp.executed_price, 0.55)
-        self.assertGreater(tp.executed_price, 0.55 * (1 - 0.03))
-        trades = _added_objects(db, UserTrade)
-        self.assertEqual(len(trades), 1)
-        self.assertEqual(trades[0].status, "simulated")
+        self.assertEqual(_added_objects(db, UserTrade), [])
 
     async def test_paper_mode_computes_pnl_against_average_entry(self):
         settings = _settings(simulation_mode=True, user_id=5)
@@ -514,16 +488,9 @@ class StopLossPaperModeTests(unittest.IsolatedAsyncioTestCase):
                 tp_orders=[],
             )
 
-        trades = _added_objects(db, UserTrade)
-        self.assertEqual(len(trades), 1)
-        # The simulated SELL fills below the 0.30 trigger.
-        self.assertLess(trades[0].price, 0.30)
-        # size is a share count, so realized PnL is
-        # size * (fill - average entry).
-        entry = 200.0 / 450.0
-        expected_pnl = round(100.0 * (trades[0].price - entry), 4)
-        self.assertIsNotNone(trades[0].pnl)
-        self.assertAlmostEqual(trades[0].pnl, expected_pnl, places=4)
+        # Executed/live legacy amounts cannot establish paper inventory or PnL.
+        self.assertEqual(_added_objects(db, UserTrade), [])
+        self.assertEqual(sl.status, "active")
 
     async def test_live_mode_submits_the_sell(self):
         """Control: with simulation_mode off the sell is submitted."""

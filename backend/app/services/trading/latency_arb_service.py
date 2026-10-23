@@ -62,6 +62,7 @@ import math
 from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -83,7 +84,6 @@ from app.utils.scheduler_lock import (
     release_scheduler_lock,
     scheduler_heartbeat,
 )
-from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -786,57 +786,31 @@ async def _execute_paper(
     settings: UserSettings,
     opportunity: Opportunity,
     token_id: str,
-    reference_price: float,
+    reference_price: float,  # noqa: ARG001 - retained strategy adapter signature
     size: float,
-    feed_to_order_ms: float,
+    feed_to_order_ms: float,  # noqa: ARG001 - retained strategy adapter signature
 ) -> dict[str, Any]:
-    """Record a simulated fill for a paper-mode user (zero CLOB calls)."""
-    if not _SIMULATION_AVAILABLE or simulate_fill is None:
-        return {"status": "rejected", "reason": "simulation engine unavailable"}
-    market_payload = {
-        "best_bid": reference_price,
-        "best_ask": reference_price,
-    }
-    fill = simulate_fill(market_payload, "buy", size)
-    trade = UserTrade(
+    """Book only captured native depth against the persistent paper account."""
+    from app.services.analytics.paper_evidence import refresh_evidence
+
+    await refresh_evidence(db, opportunity.market.condition_id)
+    from app.services.analytics.paper_accounting import submit_paper_order
+
+    result = submit_paper_order(
+        db,
         user_id=settings.user_id,
-        market_id=opportunity.market.condition_id,
         token_id=token_id,
-        action="buy",
-        amount=size,
-        price=fill["fill_price"],
-        status="simulated",
-        expected_price=reference_price,
-        expected_size=size,
-        filled_price=fill["fill_price"],
-        filled_size=size,
-        slippage_bps=fill["slippage_bps"],
-        latency_ms=round(feed_to_order_ms, 1),
-        strategy_source=STRATEGY_SOURCE,
-        executed_at=utc_now(),
-        calculation_details=_calculation_details(
-            opportunity,
-            {"mode": "paper", "simulated_slippage_bps": fill["slippage_bps"]},
-        ),
+        side="BUY",
+        amount=Decimal(str(size)),
+        strategy=STRATEGY_SOURCE,
+        intent_key=f"latency:{opportunity.market.condition_id}:{opportunity.window_start_epoch}",
     )
-    db.add(trade)
     db.commit()
-    db.refresh(trade)
-    logger.info(
-        "Latency-arb paper fill user=%s %s %sm %s @ %.4f (edge %.1f%%)",
-        settings.user_id,
-        opportunity.symbol,
-        opportunity.window_minutes,
-        opportunity.side,
-        fill["fill_price"],
-        opportunity.edge * 100.0,
-    )
     return {
-        "status": "simulated",
-        "trade_id": trade.id,
-        "fill_price": fill["fill_price"],
-        "slippage_bps": fill["slippage_bps"],
-        "size": size,
+        **result,
+        "fill_status": result["status"],
+        "status": "simulated" if result["status"] in {"filled", "partial"} else "unfilled",
+        "size": float(result["notional_usdc"]),
     }
 
 
@@ -1151,64 +1125,31 @@ def _parse_calculation_details(trade: UserTrade) -> dict[str, Any]:
 
 
 async def _settle_expired_trades(now: datetime) -> int:
-    """Settle simulated latency_arb trades whose window has ended.
+    """Only native, finalized, rule-version-matched evidence can settle paper shares.
 
-    Paper PnL is realized at window resolution: a winning binary
-    token pays $1 per share, so profit on a buy of ``amount`` USDC
-    at price ``p`` is ``amount·(1−p)/p`` and a loss is ``−amount``.
-    Live (pending) trades settle through redemption (plan 05) and
-    are never touched here.
+    Binance window prices are signal inputs and cannot establish Polymarket payouts.
+    Legacy rows remain unverified instead of receiving invented realized returns.
     """
+    from app.models.trading.paper_account import PaperAccount
+    from app.services.analytics.paper_accounting import settle_captured
+
+    if not get_settings().paper_journal_v2_enabled:
+        return 0
     db = SessionLocal()
-    settled = 0
     try:
-        rows = TradingOrderRepository(db).list_strategy_trades(
-            STRATEGY_SOURCE,
-            "simulated",
-            pnl_is_null=True,
-        )
-        for trade in rows:
-            details = _parse_calculation_details(trade)
-            window_start = details.get("window_start_epoch")
-            window_minutes = details.get("window_minutes")
-            symbol = details.get("symbol")
-            bought_side = details.get("side")
-            if (
-                window_start is None
-                or window_minutes is None
-                or not symbol
-                or bought_side not in ("up", "down")
-            ):
-                continue
-            window_end = int(window_start) + int(window_minutes) * 60
-            if now.timestamp() < window_end:
-                continue
-            feed_symbol = f"{symbol}USDT"
-            window_open = binance_ws_service.get_window_open_price(feed_symbol, int(window_start))
-            window_close = binance_ws_service.get_window_close_price(feed_symbol, window_end)
-            if window_open is None or window_close is None:
-                # Feed has no data for the window yet — retry next cycle.
-                continue
-            up_won = window_close > window_open
-            won = (bought_side == "up") == up_won
-            price = float(trade.price or 0.0)
-            amount = float(trade.amount or 0.0)
-            if price <= 0.0 or amount <= 0.0:
-                continue
-            if won:
-                trade.pnl = round(amount * (1.0 - price) / price, 4)
-            else:
-                trade.pnl = -round(amount, 4)
-            settled += 1
-        if settled:
+        count = 0
+        accounts = db.query(PaperAccount).all()
+        for account in accounts:
+            count += settle_captured(db, account.user_id, account.account_id, now)
+        if count:
             db.commit()
-            logger.info("Settled %d expired latency-arb paper trades", settled)
+        return count
     except Exception:
-        logger.warning("Latency-arb settlement failed", exc_info=True)
+        logger.warning("Native paper settlement failed", exc_info=True)
         db.rollback()
+        return 0
     finally:
         db.close()
-    return settled
 
 
 async def _engine_cycle() -> None:

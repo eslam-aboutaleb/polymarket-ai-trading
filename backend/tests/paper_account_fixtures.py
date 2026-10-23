@@ -4,6 +4,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.config import get_settings
 from app.models import Account, AccountSettings, Base, User, UserSettings
@@ -79,7 +80,9 @@ def db(monkeypatch):
     monkeypatch.setattr(get_settings(), "paper_journal_v2_enabled", True)
     clock = [datetime(2026, 10, 23, 12, tzinfo=UTC)]
     monkeypatch.setattr(paper, "utc_now", lambda: clock[0])
-    engine = create_engine("sqlite://")
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
 
     # Python sqlite3's legacy transaction mode otherwise commits a top-level
     # SAVEPOINT on release; explicit BEGIN matches PostgreSQL transaction semantics.
