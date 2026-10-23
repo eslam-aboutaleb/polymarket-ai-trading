@@ -3,7 +3,7 @@
 import asyncio
 import json
 from copy import deepcopy
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -134,12 +134,12 @@ def test_unstructured_web_context_does_not_prove_attribution():
 
 
 @pytest.fixture
-def api():
+def api(market_observation_db):
     app = FastAPI()
     app.state.limiter = limiter
     app.include_router(analysis.router)
     app.dependency_overrides[get_optional_user_from_token] = lambda: {"user_id": 7}
-    app.dependency_overrides[get_db] = lambda: MagicMock()
+    app.dependency_overrides[get_db] = lambda: market_observation_db
     limiter.reset()
     yield TestClient(app)
     limiter.reset()
@@ -228,7 +228,7 @@ def test_missing_inputs_skip_provider_without_blame_on_generation(api):
     factory.assert_not_awaited()
 
 
-def test_cancelled_stream_cancels_provider_and_closes_client():
+def test_cancelled_stream_cancels_provider_and_closes_client(market_observation_db):
     async def run():
         service = AsyncMock()
         service.get_market_outcome_tokens.return_value = RAW
@@ -251,7 +251,9 @@ def test_cancelled_stream_cancels_provider_and_closes_client():
             ),
         ):
             response = await analysis.market_research_stream(
-                analysis.MarketResearchRequest(condition_id=CID), current_user=None, db=MagicMock()
+                analysis.MarketResearchRequest(condition_id=CID),
+                current_user=None,
+                db=market_observation_db,
             )
             iterator = response.body_iterator
             await anext(iterator)  # context_ready

@@ -78,7 +78,7 @@ export default function ResearchBrief({
         {result || error ? "Run research again" : "Run Deep Dive"}
       </button>
       {running && (
-        <button className="btn-secondary ml-3" onClick={cancel}>
+        <button className="btn-muted ml-3" onClick={cancel}>
           Cancel research
         </button>
       )}

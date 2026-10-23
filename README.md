@@ -134,7 +134,10 @@ Other research formats stay unverified. Unsupported pivotal claims, missing
 market inputs or invalid model output produce **Insufficient evidence**.
 **Investigate further** never approves an order. Quote freshness, semantic rule
 verification, calibrated probabilities and executable economics remain explicit
-limits. This release does not persist historical observations or private briefs.
+limits. Public source observations are persisted with their receipt time and
+rule/token identity. **Source observation history** can filter these by a UTC
+as-of cutoff; later observations never appear in an earlier view. No historical
+book depth is inferred from token prices, and private briefs are not persisted.
 
 Run `npm run test:research` from `frontend` after installing the frozen backend
 environment, frontend dependencies and Playwright Chromium. It runs the real API
