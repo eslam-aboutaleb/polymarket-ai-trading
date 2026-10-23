@@ -84,12 +84,12 @@ export default function ForecastPanel({
   const [noteSaved, setNoteSaved] = useState(false);
   const mounted = useRef(true);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
       mounted.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
 
   const load = useCallback(async () => {
     if (!conditionId) return;

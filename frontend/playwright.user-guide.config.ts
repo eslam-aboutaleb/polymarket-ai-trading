@@ -5,7 +5,7 @@ import research from "./playwright.research.config";
 export default defineConfig({
   ...research,
   testDir: "./scripts",
-  testMatch: "capture-user-guide.spec.ts",
+  testMatch: ["capture-user-guide.spec.ts", "capture-app-guide.spec.ts"],
   timeout: 120_000,
   use: { ...research.use, viewport: { width: 1440, height: 1080 } },
 });
