@@ -56,6 +56,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         inverse_bot,
         latency_arb,
         market_maker,
+        replay_evidence,
         risk,
         trades,
     )
@@ -85,6 +86,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
     for module in (
         inverse_bot,
         market_maker,
+        replay_evidence,
         backtesting,
         follower_replay,
         binance_signals,

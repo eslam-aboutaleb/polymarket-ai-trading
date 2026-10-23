@@ -99,6 +99,24 @@ A simulation does not enable live following or establish trader skill.
 
 ![Saved synthetic follower experiment comparing delays, with one scenario's outcomes and journal download expanded](.github/images/user-guide/05-follower-simulation.png)
 
+#### Use captured venue evidence instead of an imported file
+
+When your administrator enables `NATIVE_CAPTURE_ENABLED=true` (and follower
+replay), choose **Use native captured data**. Enter a trader wallet, set the
+follow window and fee assumption, then choose **Capture trader and native books
+now**. Run and save the simulation after capture completes. The saved native run
+includes **Captured source manifest**, its SHA256 and **Download source manifest**
+for inspecting the exact public observations behind the result.
+
+Each capture reads up to 50 recent trade records across at most five markets,
+then joins native Gamma/CLOB identities and captures available bid/ask depth.
+Repeat captures later to collect books for delayed scenarios; this is an on-demand
+capture, not continuous tracking or a historical backfill. A trade dated before
+your follow start is excluded even when first captured later. Repeated snapshots
+do not prove replenished liquidity. Closed, paused or conflicting markets cannot
+produce a native replay here. Fills, latency and fees are still modeled assumptions,
+and results never enable live orders.
+
 ### 6. Inspect paper maker quote intents
 
 Open **Market Making** and find an existing paper configuration. Choose
@@ -470,3 +488,22 @@ until those inputs exist. A definition may be reselected under the same ID;
 this is not a canceled execution order being reopened. No signing or CLOB
 mutation is added, and this correction intentionally has no switch back to
 phantom-fill behavior.
+
+
+### Native follower capture deployment
+
+Run `alembic upgrade head` through revision `20261023_0032_native_replay_capture`
+before deployment. Set `NATIVE_CAPTURE_ENABLED=true` to allow new bounded public
+captures and `FOLLOWER_REPLAY_ENABLED=true` to run/reopen follower experiments.
+Both default to false. Turning capture off stops collection while retained public
+evidence and existing experiment archives remain readable under their normal
+access controls. Saved experiments stay private to their owning account; source
+captures contain public venue responses and are readable by authenticated users.
+
+Native evidence is append-only at the application boundary, not a database
+anti-tampering guarantee. The raw payload hash, rule/mapping fingerprint, receipt
+and source clocks are retained in a separately hashed native manifest. Replay
+inputs and results are frozen in the existing account archive. The simulator now
+reports `follower-replay-v2`; older saved results are retained unchanged. This
+slice does not add historical venue datasets, automatic settlement, trader-skill
+scoring, continuous collection, or legacy paper-runner/NAV migration.

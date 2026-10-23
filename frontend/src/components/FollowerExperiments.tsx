@@ -34,6 +34,9 @@ type Run = {
   result: {
     dataset_hash: string;
     model_version: string;
+    quality?: string;
+    capture_manifest_hash?: string;
+    capture_manifest?: unknown[];
     scenarios: Scenario[];
     baseline: { nav: string };
   };
@@ -55,6 +58,8 @@ export default function FollowerExperiments() {
         setRuns([]);
         setError(null);
         setBusy(false);
+        setCaptured(false);
+        setCaptureMessage(null);
       }),
     [],
   );
@@ -63,6 +68,8 @@ export default function FollowerExperiments() {
   const [runs, setRuns] = useState<Pick<Run, "id" | "created_at">[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [captured, setCaptured] = useState(false);
+  const [captureMessage, setCaptureMessage] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
     apiClient
@@ -83,6 +90,8 @@ export default function FollowerExperiments() {
     setError(null);
     setRun(null);
     setInput(null);
+    setCaptured(false);
+    setCaptureMessage(null);
     try {
       if (file.size > 256_000) throw new Error("Choose an experiment smaller than 256 KB");
       const value = JSON.parse(await file.text());
@@ -124,9 +133,13 @@ export default function FollowerExperiments() {
     setError(null);
     setRun(null);
     try {
-      const saved = await apiClient.post<Run>(endpoint, input);
+      const saved = await apiClient.post<Run>(
+        captured ? `${endpoint}/from-capture` : endpoint,
+        input,
+      );
       if (generation !== accountGeneration.current) return;
       setRun(saved);
+      setInput(saved.input);
       setRuns((previous) => [saved, ...previous].slice(0, 20));
     } catch (e) {
       if (generation === accountGeneration.current)
@@ -145,6 +158,7 @@ export default function FollowerExperiments() {
       if (generation !== accountGeneration.current) return;
       setRun(saved);
       setInput(saved.input);
+      setCaptured(saved.result.quality === "native_captured_modeled");
     } catch (e) {
       if (generation === accountGeneration.current)
         setError(getApiErrorMessage(e, "Could not load experiment"));
@@ -156,16 +170,43 @@ export default function FollowerExperiments() {
     <section className="surface-panel rounded-xl p-5 space-y-4" aria-label="Follower experiments">
       <h2 className="text-xl font-semibold">Simulate following a trader</h2>
       <p className="text-soft text-sm">
-        Compare delays using a frozen dataset you supply. Results are unverified research scenarios.
-        Leader returns and your watchlist are never used as follower profits. Live following is
-        disabled.
+        Compare delays using a frozen dataset you supply or capture from public venue endpoints.
+        Fills and fee policies remain modeled research assumptions. Leader returns and your
+        watchlist are never used as follower profits. Live following is disabled.
       </p>
       <p className="text-soft text-sm">
         Each signal buys or sells up to the chosen USDC notional, capped by cash, owned shares and
         supplied depth. Missing fees or eligible books leave signals unfilled. Open positions
         without a fresh final bid have unknown NAV.
       </p>
+      <p className="text-soft text-sm">
+        Native capture starts at receipt time and does not backfill earlier books. Each request
+        checks up to 50 recent trade records across at most five markets. Closed or inactive markets
+        need verified settlement evidence and cannot be replayed here. Capture again later to
+        collect books for delayed scenarios.
+      </p>
       <div className="flex flex-wrap gap-4 items-center">
+        <button
+          className="btn-muted"
+          disabled={busy}
+          onClick={() => {
+            setRun(null);
+            setCaptured(true);
+            setCaptureMessage(null);
+            setInput({
+              wallet: "",
+              start_at: new Date(Date.now() - 86400000).toISOString(),
+              end_at: new Date().toISOString(),
+              funding: "1000",
+              order_notional: "10",
+              fee_bps: null,
+              delays_seconds: [0, 60, 300, 1800],
+              dataset: { source: "native receipt-time capture", signals: [], books: [] },
+            });
+          }}
+        >
+          Use native captured data
+        </button>
         <label className="text-sm">
           Import frozen experiment JSON
           <input
@@ -185,6 +226,11 @@ export default function FollowerExperiments() {
           Download synthetic example
         </a>
       </div>
+      {captureMessage && (
+        <p role="status" className="text-sm text-soft">
+          {captureMessage}
+        </p>
+      )}
       {error && (
         <p role="alert" className="text-red-400">
           {error}
@@ -193,8 +239,8 @@ export default function FollowerExperiments() {
       {input && (
         <div className="space-y-3">
           <p className="text-xs text-soft">
-            Source (user supplied): {input.dataset.source} · {input.dataset.signals.length} signals
-            · {input.dataset.books.length} books
+            Source ({captured ? "server captured" : "user supplied"}): {input.dataset.source} ·{" "}
+            {input.dataset.signals.length} signals · {input.dataset.books.length} books
           </p>
           <div className="grid sm:grid-cols-2 gap-3">
             {(
@@ -232,6 +278,42 @@ export default function FollowerExperiments() {
               />
             </label>
           </div>
+          {captured && (
+            <button
+              className="btn-muted"
+              disabled={busy || !/^0x[0-9a-fA-F]{40}$/.test(input.wallet)}
+              onClick={async () => {
+                const generation = accountGeneration.current;
+                setBusy(true);
+                setRun(null);
+                setCaptureMessage(null);
+                setError(null);
+                try {
+                  const data = await apiClient.post<{
+                    books_captured: number;
+                    failures: string[];
+                    captured_at: string;
+                  }>("/api/replay/capture", { wallet: input.wallet });
+                  if (generation !== accountGeneration.current) return;
+                  setInput({ ...input, end_at: data.captured_at });
+                  setCaptureMessage(
+                    `Captured ${data.books_captured} books. Earlier history cannot be reconstructed.`,
+                  );
+                  if (!data.books_captured || data.failures.length)
+                    setError(
+                      `Captured ${data.books_captured} books; ${data.failures.length} evidence gaps. Earlier history cannot be reconstructed.`,
+                    );
+                } catch (e) {
+                  if (generation === accountGeneration.current)
+                    setError(getApiErrorMessage(e, "Native capture unavailable"));
+                } finally {
+                  if (generation === accountGeneration.current) setBusy(false);
+                }
+              }}
+            >
+              Capture trader and native books now
+            </button>
+          )}
           <p className="text-xs text-soft">
             Delay scenarios: {input.delays_seconds.join(", ")} seconds. Fees, latency, tick/lot
             rules, timestamps and depth are assumptions from this input, not independently verified
@@ -244,7 +326,12 @@ export default function FollowerExperiments() {
       )}
       {run && (
         <div className="space-y-3" data-testid="follower-result">
-          <h3 className="font-semibold">Saved research comparison · unverified inputs</h3>
+          <h3 className="font-semibold">
+            Saved research comparison ·{" "}
+            {run.result.quality === "native_captured_modeled"
+              ? "native captures, modeled fills"
+              : "unverified inputs"}
+          </h3>
           <p className="text-xs text-soft break-all">
             No-copy baseline: {money(run.result.baseline.nav)} cash · {run.result.model_version}
             <br />
@@ -252,6 +339,21 @@ export default function FollowerExperiments() {
             <br />
             Dataset: {run.result.dataset_hash}
           </p>
+          {run.result.capture_manifest_hash && (
+            <details className="surface-soft rounded p-3">
+              <summary>Captured source manifest</summary>
+              <p className="text-xs text-soft break-all">
+                SHA256: {run.result.capture_manifest_hash}
+              </p>
+              <a
+                className="text-[var(--accent)] underline text-sm"
+                href={`data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(run.result.capture_manifest, null, 2))}`}
+                download="captured-source-manifest.json"
+              >
+                Download source manifest
+              </a>
+            </details>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
