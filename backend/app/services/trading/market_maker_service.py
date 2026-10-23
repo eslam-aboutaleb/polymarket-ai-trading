@@ -548,73 +548,25 @@ async def _sync_market_maker_paper(
     config: MarketMakerConfig,
     midpoint: float,
     expected: list[dict[str, Any]],
-    book: dict[str, Any],
+    book: dict[str, Any],  # noqa: ARG001 - midpoint/depth are not fill evidence
 ) -> dict[str, Any]:
-    """Paper market-maker sync: simulate fills, record trades, zero CLOB calls.
+    """Capture desired paper quotes. Missing flow/queue data never proves a fill."""
+    from app.services.trading.paper_maker_intents import sync_intents
 
-    Bands/orders are computed exactly as in live mode; each expected
-    order is then filled against the current book depth using the
-    depth-aware simulation model and recorded with ``status="simulated"``
-    (the same pattern the copy-trade path uses). No order is ever
-    submitted, cancelled or queried on the CLOB.
-    """
-    from app.services.analytics.simulation import simulate_market_maker_fill
-    from app.services.trading.trade_recorder import record_user_trade
-
-    market = {
-        "best_bid": book["best_bid"],
-        "best_ask": book["best_ask"],
-        "book_depth": book["depth"],
-    }
-    placed = 0
-    for order_spec in expected:
-        fill = simulate_market_maker_fill(
-            market,
-            order_spec["side"],
-            order_spec["size"],
-            order_price=order_spec["price"],
-            midpoint=midpoint,
-        )
-        # Attributable row: the strategy source drives per-strategy
-        # P&L and the execution-analytics endpoints (plan 03 Phase A).
-        # Before this, market-maker fills had no strategy attribution
-        # at all, so they were invisible to every loss limit derived
-        # from UserTrade.pnl.
-        record_user_trade(
-            db,
-            user_id=config.user_id,
-            market_id=config.condition_id,
-            token_id=order_spec["token_id"],
-            action=order_spec["side"].lower(),
-            amount=order_spec["size"],
-            price=fill["fill_price"],
-            status="simulated",
-            strategy_source="market_maker",
-            expected_price=order_spec["price"],
-            expected_size=order_spec["size"],
-        )
-        placed += 1
-        config.total_volume_usdc += order_spec["size"]
-
-    config.total_orders_placed += placed
-    config.current_open_orders = placed
+    result = sync_intents(db, config, expected)
+    config.current_open_orders = 0  # Intents are neither venue nor simulated resting orders.
     config.last_sync_at = utc_now()
     config.last_error = None
     config.status = "running"
     db.commit()
-
-    logger.info(
-        "SIMULATION: market maker config=%d simulated %d fills (midpoint=%.4f)",
-        config.id,
-        placed,
-        midpoint,
-    )
+    logger.info("Paper maker intents config=%s count=%s fills=0", config.id, result["intent_count"])
     return {
         "midpoint": midpoint,
         "expected_orders": len(expected),
         "cancelled": 0,
-        "placed": placed,
+        "placed": 0,
         "simulated": True,
+        **result,
     }
 
 
