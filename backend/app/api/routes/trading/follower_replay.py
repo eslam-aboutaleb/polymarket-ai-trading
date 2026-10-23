@@ -32,17 +32,28 @@ def response(row: FollowerExperimentRun, *, detail: bool = True):
     return data
 
 
-@router.post("", dependencies=[Depends(enabled)])
-def create_experiment(
+def _save_experiment(
     body: FollowerExperiment,
     account: Account = Depends(get_active_account),
     db: Session = Depends(get_db),
+    capture_ids: list[str] | None = None,
 ):
     payload = body.model_dump_json()
     try:
         result = replay(body)
     except ValueError as exc:
         raise HTTPException(422, "Inconsistent replay events") from exc
+    if capture_ids is not None:
+        from app.services.market_data.replay_capture import capture_manifest, digest
+
+        manifest = capture_manifest(db, capture_ids)
+        result.update(
+            capture_manifest=manifest,
+            capture_manifest_hash=digest(manifest),
+            quality="native_captured_modeled",
+            capture_ids=capture_ids,
+            historical_backfill=False,
+        )
     row = FollowerExperimentRun(
         id=str(uuid4()),
         user_id=account.owner_user_id,
@@ -63,6 +74,40 @@ def create_experiment(
         "Follower experiment saved account=%s run=%s hash=%s", account.id, row.id, row.input_hash
     )
     return response(row)
+
+
+@router.post("", dependencies=[Depends(enabled)])
+def create_experiment(
+    body: FollowerExperiment,
+    account: Account = Depends(get_active_account),
+    db: Session = Depends(get_db),
+):
+    return _save_experiment(body, account, db)
+
+
+@router.post("/from-capture", dependencies=[Depends(enabled)])
+def create_captured_experiment(
+    body: FollowerExperiment,
+    account: Account = Depends(get_active_account),
+    db: Session = Depends(get_db),
+):
+    from app.services.market_data.replay_capture import frozen_dataset
+    from app.utils.time import utc_now
+
+    if body.end_at > utc_now():
+        raise HTTPException(422, "Captured replay end must not be in the future")
+    try:
+        dataset, refs = frozen_dataset(db, body.wallet.lower(), body.start_at, body.end_at)
+        validated = FollowerExperiment.model_validate({**body.model_dump(), "dataset": dataset})
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if not dataset.signals:
+        raise HTTPException(
+            409,
+            "No signals captured in this receipt-time window; "
+            "earlier history cannot be reconstructed",
+        )
+    return _save_experiment(validated, account, db, capture_ids=refs)
 
 
 def scoped(db: Session, account: Account):
