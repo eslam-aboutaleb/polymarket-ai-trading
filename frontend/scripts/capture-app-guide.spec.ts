@@ -37,7 +37,9 @@ for (const [name, url, heading] of screens) {
       await expect(page.getByRole("button", { name: "WalletConnect", exact: true })).toBeEnabled();
       await expect(page.getByText(/WalletConnect disabled: set/)).toHaveCount(0);
       await page.getByRole("button", { name: "WalletConnect", exact: true }).click();
-      await expect(page.getByRole("button", { name: "WalletConnect", exact: true })).toHaveClass(/tab-toggle-active/);
+      await expect(page.getByRole("button", { name: "WalletConnect", exact: true })).toHaveClass(
+        /tab-toggle-active/,
+      );
     }
     if (name === "ask-ai")
       await page.getByRole("button", { name: "Open palette", exact: true }).click();

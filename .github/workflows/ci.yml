@@ -6,6 +6,11 @@ on:
   pull_request:
   merge_group:
   workflow_dispatch:
+    inputs:
+      walletconnect_live_canary:
+        description: Test real WalletConnect pairing QR (requires project ID secret)
+        type: boolean
+        default: false
   schedule:
     - cron: "17 4 * * 1"
 
@@ -125,6 +130,16 @@ jobs:
       - name: Install Chromium and system dependencies
         working-directory: frontend
         run: npx playwright install --with-deps chromium
+      - name: WalletConnect browser regression tests
+        working-directory: frontend
+        run: npm run test:walletconnect
+      - name: Real WalletConnect pairing canary
+        if: github.event_name == 'workflow_dispatch' && inputs.walletconnect_live_canary
+        working-directory: frontend
+        env:
+          VITE_WALLETCONNECT_PROJECT_ID: ${{ secrets.VITE_WALLETCONNECT_PROJECT_ID }}
+          WALLETCONNECT_LIVE_CANARY: "1"
+        run: npm run test:walletconnect
       - name: Run PostgreSQL schema migrations
         working-directory: backend
         run: uv run --frozen alembic upgrade head
