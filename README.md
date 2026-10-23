@@ -7,145 +7,469 @@ question into a clear, reviewable analysis.
 
 ## User guide
 
-Start the workspace using [How to use the project](#how-to-use-the-project).
-Connect your wallet and sign the login request when prompted. Signing in creates
-an application session; trading credentials are configured separately. Choose the
-account you want to work in before running or reopening saved experiments.
+This guide covers the application’s public pages, signed-in workspace, strategy
+screens, analytics, settings and administrator tools. Start the self-hosted
+workspace using [How to use the project](#how-to-use-the-project), then follow the
+workflow you need below. Navigation groups are under **More** on desktop and the
+navigation menu on smaller screens; administrator entries require an admin account.
 
-The screenshots below are captured from the running React application and real
-API using disposable, synthetic market/provider fixtures. They show the reviewed
-research and simulation workflows, not live market prices, actual customer
-accounts or demonstrated investment returns. Click any image to inspect it at
-full size.
+All screenshots are captured from the running application with synthetic demo
+accounts, markets and API responses. Research/simulation examples use the disposable
+real-API fixture app; the wider screen examples use controlled browser API fixtures.
+Displayed balances, prices and example results are illustrations, not live account
+statements or demonstrated returns. Empty charts show where a fresh workspace has
+no observations; they are not populated with invented trading history.
 
-[Research a market](#1-open-a-market-for-research) ·
-[Run a Deep Dive](#3-review-a-deep-dive) ·
-[Inspect history](#4-compare-captured-source-history) ·
-[Simulate following](#5-run-a-follower-simulation) ·
-[Inspect maker intents](#6-inspect-paper-maker-quote-intents)
+The current application explicitly disables live orders and automated position
+exits pending safety verification. Trading screens and strategy controls are
+shown so you can understand their configuration; a sign-in, stored key or paper
+mode badge does not remove those server restrictions. Research and simulation
+results do not approve an order. Legacy paper/backtest metrics remain unverified.
 
-### 1. Open a market for research
+| Goal | Start here | Access or prerequisite |
+| --- | --- | --- |
+| Browse and save markets | [Markets and manual orders](#markets-watchlists-and-manual-orders) | Browsing is public; trading requires a session |
+| Research a market | [Opportunities and research](#opportunities-and-market-research) | AI generation needs a configured provider |
+| Ask questions or run a plan | [AI and orchestration](#ask-the-ai-and-orchestration) | Sign in and configure an AI provider |
+| Find traders and forecasters | [Leaderboard and collaboration](#leaderboard-trader-research-and-collaboration) | Public board; sign in to follow or contribute |
+| Follow or simulate a trader | [Copy trading](#copy-trading-and-follower-simulation) | Sign in; simulation/capture flags as described below |
+| Review holdings and exits | [Positions and trade history](#positions-trade-history-and-protection) | Signed-in account |
+| Configure a strategy | [Market making](#market-making), [backtesting](#backtesting), [latency arbitrage](#latency-arbitrage) | Signed-in account; capabilities depend on deployment/plan |
+| Monitor information | [News and whales](#news-and-whale-monitoring), [venues](#cross-venue-signals) | Sign in; optional feeds need server configuration |
+| Review performance | [Risk, execution and calibration](#risk-execution-and-forecast-analytics) | Sign in; metrics require eligible recorded data |
+| Configure your workspace | [Accounts and settings](#accounts-settings-and-integrations) | Sign in; billing/provider features depend on configuration |
+| Inspect operations | [Operations and administration](#operations-and-administration) | Ops requires sign-in; diagnostics/admin settings require admin |
 
-Open **Opportunities**, find a market, and expand its details using the market's
-**Open market details** button. Choose **Research market** to open its
-source-backed research view. The separate **AI Analysis** action is the legacy
-analysis flow.
+### Sign in and find your way
 
-![Opportunities market details expanded with the Research market action](.github/images/user-guide/01-open-research.png)
+1. Open **Login** or choose a sign-in action on a public page.
+2. Choose your browser wallet or, when configured, WalletConnect, then approve
+   the login signature.
+   The signature creates an application session; it is separate from depositing
+   funds, submitting an order or connecting a trading key.
+3. After login, use the account selector when multiple accounts are available.
+   Check the account and execution-mode badge before working with account data.
+4. Use the top navigation, **More**, or the mobile navigation menu to open a page.
+   Use **Logout** when finished. The app’s **Your Guide** page also offers a tour.
 
-### 2. Check the source before interpreting the price
+![Wallet sign-in screen in the application](.github/images/user-guide/app-login.png)
 
-Review the market question, YES/NO prices and **What determines the outcome?**
-section. Use **Review original market source** to inspect the venue's source.
-Expand **Source identity** to check the condition ID, rule/token mapping hash and captured
-source identity. Check the retrieval time and any missing-data warnings.
+### Dashboard and notifications
 
-Prices here are indicative. A displayed price does not establish available order
-book depth or an executable trade. Missing rules or prices remain unavailable;
-the title alone does not verify settlement rules, the oracle or cutoff time.
+Open **Dashboard** for balances, position counts, invested/current value, P&L,
+positions, market discovery and the followed-trader feed. Review the execution-mode
+badge; where allowed, **Switch to Paper** changes the account setting. Paper
+balances/counters and live portfolio values represent different records.
 
-![Source-backed market context showing indicative prices, venue rules and verification limits](.github/images/user-guide/02-source-context.png)
+Filter the following feed by trader or event type, and use **Refresh** to fetch
+new observations. The bell opens the notification center; read an item, follow its
+link, or mark notifications read. Notifications can include followed-trader
+activity, redemption reminders and operational warnings. Configure delivery
+channels separately in **Settings → Notifications**.
 
-### 3. Review a Deep Dive
+Risk-operation actions include rescoring, arbitrage scanning and opening the full
+Ops Center. Treat these as monitoring/research operations; check their reported
+result rather than assuming a completed trade or a flat portfolio.
 
-Choose **Run Deep Dive**. Your deployment needs a configured AI provider and
-compatible backend/AI services. Review the status, supporting and contradicting
-evidence, claim-source links, missing information and research limits.
+![Dashboard with synthetic balance and position data](.github/images/user-guide/app-dashboard.png)
 
-**Investigate further** means there is material to review, not approval to trade.
-**Insufficient evidence** means the inputs or structured result do not support a
-usable brief. A matched quotation proves attribution to captured text, not that
-the claim is true. You can cancel a running request; after an error, use the
-retry action shown on screen.
+![Notification inbox](.github/images/user-guide/app-notification-inbox.png)
 
-![Completed Deep Dive with supporting and contradicting evidence and missing information](.github/images/user-guide/03-deep-dive.png)
+### Markets, watchlists and manual orders
 
-### 4. Compare captured source history
+Open **Markets** to browse events and outcomes. Use category buttons, search,
+**Sort markets**, pagination/loading controls and the watchlist view to narrow the
+board. Expand **Open market details** to inspect a grouped event. A market
+watchlist is local browser research state; it does not buy an outcome or subscribe
+a trading strategy.
 
-In **Source observation history**, choose **Load observation history**. Expand a
-captured observation to inspect its rules and source identity. To see only what
-had been received by a particular time, set **Received by (UTC, optional)** and
-load the history again.
+To inspect order entry, choose a market’s YES/NO trade action. In the trade ticket,
+check the market and outcome, BUY/SELL side, amount units, indicated price, quote
+age and any size suggestion. A buy budget in USDC differs from a sell amount in
+shares. Review the confirmation and any rejection; an indicative quote is not
+proof of executable depth. Keyboard presets and suggestions do not submit an order
+by themselves. Current live-order restrictions still apply.
 
-History starts when this workspace captures observations; it does not backfill
-past order books. A later rule revision leaves earlier captured observations
-intact. This history stores public source context, not your private AI briefs.
+![Markets board with category, search and outcome actions](.github/images/user-guide/app-markets.png)
 
-![Observation history showing earlier and revised source captures without overwriting older rules](.github/images/user-guide/04-observation-history.png)
+![Trade ticket in the application](.github/images/user-guide/app-trade-ticket.png)
 
-### 5. Run a follower simulation
+### Opportunities and market research
 
-Your administrator must run the migrations and enable
-`FOLLOWER_REPLAY_ENABLED=true` first. Open **Copy Trading** and locate
-**Simulate following a trader**.
+Open **Opportunities** for a market scan and its filters. Expand a market and
+choose **Research market**. **AI Analysis** is the separate legacy analysis flow;
+its link-supplied inputs are not a substitute for source-backed context.
 
-1. Choose **Download synthetic example**, then select that file with
-   **Import frozen experiment JSON**. Use the example to learn the format before
-   supplying your own frozen signals and bid/ask depth.
-2. Review the trader wallet, follow/end timestamps, initial funding, per-signal
-   USDC notional and assumed fee. Timestamps need a timezone. A blank fee means
-   unknown, not zero. Delay scenarios come from the imported JSON.
-3. Choose **Run and save simulation**. Compare each delay's NAV, net P&L, fees
-   and cash with the no-copy baseline.
-4. Expand a delay's **signal outcomes and accounting journal** to inspect partial
-   fills and nonfills; use **Download journal** to export the accounting events.
-5. After reloading, expand **Saved experiments in this account** and choose a run
-   to reopen its saved inputs and results.
+![Expanded Opportunities market and its research action](.github/images/user-guide/01-open-research.png)
 
-The example shows how a delay can turn a modeled gain into a loss. All imported
-inputs and resulting metrics are unverified research. Missing fees or eligible
-depth prevent fills; missing fresh final marks make NAV and net P&L **Unknown**.
-A simulation does not enable live following or establish trader skill.
+In the research view, check the question, outcome identities, source retrieval
+clock and **What determines the outcome?**. Follow **Review original market
+source** to inspect the venue. Expand **Source identity** to see the condition ID,
+rule/token-mapping hash and captured snapshot identity. Missing prices and rules
+remain unavailable. End-date metadata does not independently verify a settlement
+cutoff or oracle, and token prices do not establish order-book depth.
 
-![Saved synthetic follower experiment comparing delays, with one scenario's outcomes and journal download expanded](.github/images/user-guide/05-follower-simulation.png)
+![Market source context, rules and captured identity](.github/images/user-guide/02-source-context.png)
 
-#### Use captured venue evidence instead of an imported file
+Choose **Run Deep Dive** to request a structured evidence brief. Review supporting
+and contradicting claims, source links, missing information and limits. A matched
+quotation establishes attribution to captured text, not truth or entailment.
+**Investigate further** is a research status; **Insufficient evidence** means the
+inputs or output do not support a usable brief. Cancel an in-progress request or
+use the retry action after a failure. AI provider access must be configured.
 
-When your administrator enables `NATIVE_CAPTURE_ENABLED=true` (and follower
-replay), choose **Use native captured data**. Enter a trader wallet, set the
-follow window and fee assumption, then choose **Capture trader and native books
-now**. Run and save the simulation after capture completes. The saved native run
-includes **Captured source manifest**, its SHA256 and **Download source manifest**
-for inspecting the exact public observations behind the result.
+![Deep Dive showing evidence on both sides and research limits](.github/images/user-guide/03-deep-dive.png)
 
-Each capture reads up to 50 recent trade records across at most five markets,
-then joins native Gamma/CLOB identities and captures available bid/ask depth.
-Repeat captures later to collect books for delayed scenarios; this is an on-demand
-capture, not continuous tracking or a historical backfill. A trade dated before
-your follow start is excluded even when first captured later. Repeated snapshots
-do not prove replenished liquidity. Closed, paused or conflicting markets cannot
-produce a native replay here. Fills, latency and fees are still modeled assumptions,
-and results never enable live orders.
+Under **Source observation history**, choose **Load observation history**. Set
+**Received by (UTC, optional)** to inspect only observations captured by that time,
+and expand an observation to compare original rules and hashes. Later revisions
+do not overwrite earlier captures. History starts with this deployment’s captures;
+it does not backfill order books or store private AI briefs.
 
-### 6. Inspect paper maker quote intents
+![Earlier and revised source observations retained together](.github/images/user-guide/04-observation-history.png)
 
-Open **Market Making** and find an existing paper configuration. Choose
-**Inspect paper quote intents** on its card to inspect the desired quotes. This
-panel is for reviewing definitions; do not switch a live strategy on to reproduce
-the example.
+### Ask the AI and orchestration
 
-`UNFILLED_DATA_MISSING` means there is no qualifying execution evidence. The
-quote is not an executed trade or an inventory reservation. Removed definitions
-become `WITHDRAWN`. Repeated unchanged paper syncs retain their identities and do
-not add executed volume. Historical paper counters remain unverified.
+Open **Ask the AI**, choose **Open palette**, or use **Ctrl/Cmd+K**. Enter a question,
+use an example or a recent question, then choose **Ask**. Voice input depends on
+browser support and microphone permission. Watch the plan steps and synthesis;
+partial/error states must not be mistaken for a completed answer. **Escape** closes
+the palette. Suggested action links lead to review pages; they do not approve or
+place orders.
 
-![Market Making card with a persisted unfilled paper quote definition and zero executed volume](.github/images/user-guide/06-maker-intents.png)
+![Ask the AI command palette](.github/images/user-guide/app-ask-ai.png)
 
-If a workflow is unavailable, first check your login and selected account, then
-ask your administrator to check migrations, feature flags and AI-provider
-configuration. Source/provider failures should show an error or missing data;
-do not interpret them as a zero price, successful fill or completed analysis.
+For an explicit plan, open **Orchestrator**:
+
+1. Choose **Market Deep Dive**, **Opportunity Sweep**, or **Trader Diligence**.
+2. Fill the displayed payload: market details, a JSON market list, or trader and
+   proposed-position inputs, depending on the plan. Verify numbers and identities.
+3. Start the plan, inspect each completed step and read the synthesis. Cancel or
+   retry as needed; keep provider failures and incomplete steps visible.
+
+The Orchestrator’s legacy research/risk/trade-plan workflow is distinct from the
+source-attributed structured Deep Dive above. Generated plans remain review material.
+
+![AI Orchestrator intent selection and payload form](.github/images/user-guide/app-orchestrator.png)
+
+### Leaderboard, trader research and collaboration
+
+Open **Leaderboard** and choose the trading or **Forecasting accuracy** view.
+Filter the board’s period/scope and open a trader to inspect available history,
+positions and research actions. A displayed P&L or rank is not verified follower
+profit or proof of trader skill. Check sample sizes, provenance and missing data.
+
+Trading-follow controls and notification-follow controls serve different purposes:
+one selects a trader for copying configuration, while the other subscribes to
+activity. Following a public forecaster is also separate from copying trades.
+
+In **Forecasting accuracy**, inspect Brier skill and resolved-sample counts. Use
+the market condition-ID input to open its forecast panel where available. Submit
+an explicit probability and visibility, and read market notes/consensus and
+contributor context. Consensus is advisory, and private contributions are not a
+substitute for publicly attributable evidence.
+
+![Leaderboard with a synthetic trader entry](.github/images/user-guide/app-leaderboard.png)
+
+![Forecasting accuracy and collaboration controls](.github/images/user-guide/app-forecasting.png)
+
+### Copy trading and follower simulation
+
+Open **Copy Trading** to follow a wallet and review per-trader controls, sizing
+choices, copy-trade history and evaluation reasons. Configure maximum size and
+choose inherited settings, fixed amount, wallet-ratio or Kelly sizing where
+available. Configure global limits in **Settings → Trading** and account-specific
+limits in **Settings → Accounts**. A Kelly suggestion depends on its probability
+and bankroll inputs; it is not a guarantee of profit or permission to trade.
+
+The **Trader Watchlist (Illustrative)** view is a local research aid, separate from
+server-side following, real executions and saved follower experiments. Simulation
+results do not automatically enable live copying or update that watchlist.
+
+For a reproducible research comparison, use **Simulate following a trader**:
+
+1. Choose **Download synthetic example**, then load it with
+   **Import frozen experiment JSON**. Replace it with your own frozen signals and
+   bid/ask depth only after understanding the format.
+2. Check trader wallet, follow/end timestamps with timezones, funding, per-signal
+   USDC notional and fees. A blank fee means unknown; zero is an explicit assumption.
+   Delay scenarios come from the imported JSON.
+3. Choose **Run and save simulation** and compare each delay’s NAV, net P&L, fees
+   and cash against the no-copy baseline.
+4. Expand a delay’s **signal outcomes and accounting journal**. Check partial fills,
+   nonfills and missing marks, and use **Download journal** for the event list.
+5. Reload and open **Saved experiments in this account** to reopen an archived run.
+
+Missing eligible depth or fees prevent fills. Missing fresh final marks make open
+position NAV/P&L **Unknown**. Imported inputs and outputs are unverified research.
+Follower replay requires `FOLLOWER_REPLAY_ENABLED=true` after migrations.
+
+![Saved synthetic follower comparison with delay outcomes and a journal export](.github/images/user-guide/05-follower-simulation.png)
+
+For native evidence, an administrator must also enable `NATIVE_CAPTURE_ENABLED`.
+Choose **Use native captured data**, enter a wallet/window/fee assumption, then
+**Capture trader and native books now** and **Run and save simulation**. Inspect
+**Captured source manifest**, its SHA256 and **Download source manifest**.
+
+A capture reads up to 50 recent trade records across five markets and joins native
+Gamma/CLOB identities and depth. It starts at receipt time and does not reconstruct
+earlier books. Capture later snapshots for delayed scenarios. Trades before follow
+start are excluded; repeated snapshots do not prove replenishment. Closed, paused
+or conflicting markets cannot produce a native replay here. Fees and fills remain
+modeled, and continuous tracking and native settlement are not provided by this flow.
+
+### Positions, trade history and protection
+
+Open **Trades** to inspect recorded history. Use side/status filters and refresh;
+review outcome shares, price, dollar cost, fees, timestamps and transaction state.
+A submitted order and a confirmed fill are different states.
+
+Switch to **Your Positions** for holdings. Inspect entry/current prices and
+unrealized P&L, then open **Cash Out**, **Stop Loss**, or **Take Profit** for the
+relevant position. In protection dialogs, review the token, share amount and
+trigger price before saving or cancelling. Protection orders are monitored
+instructions, not a guarantee of a fill at the trigger price. Current automated
+exit restrictions still apply; an emergency stop does not prove positions closed.
+
+The **Inverse Position Bot** panel controls monitoring, evaluation and sizing
+for a position. Check its enable state, current recommendation, confidence,
+explanation, last evaluation and any error. Use global inverse defaults in
+**Settings → Trading** and review any per-position override before enabling it.
+
+![Trade history with filters and the positions entry point](.github/images/user-guide/app-trades.png)
+
+![Positions in the application](.github/images/user-guide/app-positions.png)
+
+![Stop loss in the application](.github/images/user-guide/app-stop-loss.png)
+
+![Take profit in the application](.github/images/user-guide/app-take-profit.png)
+
+![Cash out in the application](.github/images/user-guide/app-cash-out.png)
+
+### Market making
+
+Open **Market Making** and choose **+ New Config**. Enter the condition and YES/NO
+token IDs, choose BANDS or AMM, and review spread, size/liquidity, price bounds,
+collateral and sync interval. Save the configuration before considering Start,
+Stop, Sync or enable/disable actions. Check the selected account, paper/live state
+and current server restrictions; saving a definition does not establish a fill.
+
+For paper configurations, **Inspect paper quote intents** shows desired quote
+definitions. `UNFILLED_DATA_MISSING` means qualifying flow/queue evidence is absent;
+`WITHDRAWN` means the definition was removed. These are not resting orders,
+reserved inventory or executions. Unchanged paper syncs retain their identities
+and add no executed volume. Historical paper counters remain unverified.
+
+![Maker configuration card with an unfilled quote intent and zero execution volume](.github/images/user-guide/06-maker-intents.png)
+
+![New market maker configuration form](.github/images/user-guide/app-maker-form.png)
+
+### Backtesting
+
+Open **Backtesting**, choose **+ New Backtest**, select a strategy and date range,
+and fill its parameters. Copy-trade replay and indicator strategies have different
+input needs; inspect the available strategy description rather than reusing
+parameters blindly. Submit the research job and wait for its pending/running state
+to become completed or failed.
+
+Open a previous run to inspect its assumptions, trade log and reported metrics;
+delete only runs you no longer need. Compare like-for-like windows and costs.
+Legacy backtests are not equivalent to the captured follower-journal experiments,
+and a reported Sharpe, win rate or P&L is not automatically independently verified.
+
+![Backtesting workspace and new-run entry point](.github/images/user-guide/app-backtesting.png)
+
+![Backtest form in the application](.github/images/user-guide/app-backtest-form.png)
+
+### Latency arbitrage
+
+Open **Latency Arb** for the live edge board, engine status and trade log. Review
+symbols and window lengths, model-vs-market probabilities, edge thresholds,
+remaining time and latency. Configuration includes maximum notional, daily loss
+limit, late-entry policy and opportunity alerts.
+
+Configure conservatively in paper mode where supported and inspect engine errors
+and modeled-fill assumptions. An apparent edge is a model comparison; it does not
+prove an executable quote, final settlement or realized profit. Current live-order
+restrictions remain in force.
+
+![Latency-arbitrage board, stopped engine and paper configuration](.github/images/user-guide/app-latency-arb.png)
+
+### News and whale monitoring
+
+Open **News** to browse generated market articles. Use **Refresh Feed** to refresh
+available coverage, or **Generate Article** with the required market inputs. Read
+the summary, underlying context, tags, generation time and provider/model where
+shown. Generation needs the configured AI/research services; generated narrative
+is research and should be checked against original reporting.
+
+![News feed and article-generation form](.github/images/user-guide/app-news.png)
+
+Open **Whales** to review large-wallet activity. Filter by event type or side; use the separate wallet watchlist to choose
+addresses to monitor. Set **Min notional (USD)** and the **Leaderboard whale set**,
+then choose **Save Settings**. **Auto-copy whale trades** is a separate strategy
+control, not a requirement for monitoring. Transfers, splits/merges and redemptions
+have different meanings from a directional buy/sell; do not equate every event
+with conviction or profit.
+
+![Whale monitoring filters and configuration](.github/images/user-guide/app-whales.png)
+
+### Risk, execution and forecast analytics
+
+**Risk Report** shows portfolio concentration, value, loss bounds, correlated
+clusters and upcoming catalysts, plus a narrative where available. Refresh after
+holdings change and distinguish calculated metrics from AI interpretation. Missing
+inputs limit the report; it does not guarantee a maximum loss or a timely exit.
+
+![Portfolio Risk Report for a synthetic holding](.github/images/user-guide/app-risk.png)
+
+**Execution Analytics** compares submissions/fills, slippage, fees, win rate,
+strategy attribution, edge-score inputs and per-trade details. Choose a time window
+and strategy, inspect data-quality exclusions and compare expected with actual
+execution. Missing fee/expected-price data affects interpretation; empty graphs
+mean no eligible recorded executions, not perfect execution.
+
+![Execution Analytics showing its metrics, filters and data-quality sections](.github/images/user-guide/app-execution.png)
+
+**AI Calibration** measures recorded probability forecasts against eligible final
+outcomes. Choose the time window and scope, inspect sample/resolved
+counts, Mean Brier, Brier skill, Avg edge, reliability buckets and model/task/prompt breakdowns.
+Review exclusions and unresolved rows before comparing models. The 0.25 Brier
+baseline is a reference for binary forecasts, not a promised return.
+
+Forecast rows can expose verdict feedback where supported. Administrators also
+review drift and create/manage A/B experiments: define control/variant settings,
+compare eligible resolved samples and pause/retire an experiment when appropriate.
+An experiment result with insufficient samples should not be treated as a winner.
+
+![Forecast calibration, reliability and model-governance workspace](.github/images/user-guide/app-calibration.png)
+
+### Cross-venue signals
+
+Open **Venues** to inspect adapter health, cached market rows and cross-venue or
+intra-Polymarket comparisons. Search/filter and review both questions, token/rule
+semantics, horizons, liquidity and fetch times before treating rows as comparable.
+Play-money sources must remain distinct from real-money venues.
+
+Adapters may be disabled or have no captured data. These rows are read-only
+signals: matching titles or price differences do not establish equivalent payouts,
+executable prices or a risk-free arbitrage. This page does not submit multi-venue
+orders.
+
+![Cross-venue comparison screen and adapter status](.github/images/user-guide/app-venues.png)
+
+### Accounts, settings and integrations
+
+**Settings → Profile:** edit display name/contact details or avatar and save your
+profile. Select a personal AI provider/model and choose **Save AI Preferences**.
+The deployment must have usable provider access; selecting a name does not install
+or authenticate that provider.
+
+![Profile and personal AI-provider settings](.github/images/user-guide/app-settings-profile.png)
+
+**Settings → Trading:** manage the separate encrypted trading key, copy-trading
+mode/sizing/limits and inverse-bot defaults. Login signatures do not supply an
+execution key. Review daily loss and maximum-position limits, sizing mode and
+AI-approval requirements. Account drawdown, Kelly fraction, paper balance and
+simulation controls are under **Accounts**. Disconnecting a key does not prove all existing positions are closed.
+
+![Trading credentials, strategy sizing and protection settings](.github/images/user-guide/app-settings-trading.png)
+
+**Settings → Notifications:** add a supported channel, enter its channel-specific
+details, save it and optionally send a test alert. Configure event routing and
+**Save Preferences**; configure daily-digest preferences separately. Test alerts
+send a real message in a configured deployment. This guide’s capture does not send
+an alert or contain a webhook credential.
+
+![Notification channel setup, routing and digest preferences](.github/images/user-guide/app-settings-notifications.png)
+
+**Settings → Accounts:** inspect/create/rename accounts where the deployment and
+plan allow them. Select an account before editing its AI, sizing and risk settings.
+The active account scopes account-aware histories and experiments; separate local
+watchlists and legacy records are not automatically migrated between accounts.
+
+Choose the account’s **Settings** button to review its paper balance, daily loss,
+maximum position, drawdown, Kelly fraction, simulation mode and AI approval.
+The personal account shares its settings row with the Trading tab.
+
+![Account risk and simulation settings](.github/images/user-guide/app-account-risk-settings.png)
+
+The same tab contains **API Keys** and **Subscription**:
+
+- Give an API key a name, choose read/trade scope, optional account scope and expiry,
+  and store its one-time secret securely when creating it. Review last-use/expiry
+  and revoke keys you no longer need. Read scope does not grant trading, and trade
+  scope does not bypass current server barriers. These keys authenticate the
+  external REST API; supported WebSocket position/fill streams are a separate
+  integration surface.
+- Inspect the current plan, capability/quota usage and available upgrades. Checkout
+  and subscription management require billing configuration and may require an
+  email address. A pending checkout is not a completed plan upgrade. Account and
+  strategy features remain subject to their plan and deployment gates.
+
+![Accounts, scoped API-key controls and subscription settings](.github/images/user-guide/app-settings-accounts.png)
+
+### Operations and administration
+
+Open **Ops Center** for risk controls, emergency status, arbitrage scans, category
+research and optional Binance smart-money/social/trending/inflow panels. Check
+whether a feed is configured and its update time. A disabled feed or empty ranking
+is missing information, not a neutral market signal.
+
+Use **Emergency Stop** when you intend to pause automation, then inspect the
+operation’s durable status, cancellation confirmations, still-open orders and
+unresolved positions. Requested cancellations/exits are different from confirmed
+ones. Recovery requests and operator approval, where available, do not bypass a
+locked execution barrier. **Rescore Traders** and scan actions produce research
+outputs, not live execution approval.
+
+![Ops Center risk controls and research panels](.github/images/user-guide/app-ops.png)
+
+Administrators use **Settings → Admin Settings** to inspect provider health,
+set system defaults and review per-user model overrides. Distinguish a provider
+being configured from it being healthy. Per-user and account preferences can affect
+which backend/model is actually used.
+
+![Administrator provider, default-model and user-override settings](.github/images/user-guide/app-settings-admin-settings.png)
+
+Administrators can also open **Debug** to inspect service health/uptime, endpoint
+statistics and filterable request logs. Use level, method, path and limit controls
+to narrow a diagnostic investigation; clearing logs removes diagnostic records.
+Diagnostic access is separate from ordinary workspace access.
+
+![Administrator diagnostics, service health and request-log controls](.github/images/user-guide/app-debug.png)
+
+### In-app help
+
+Open **Your Guide** (`/guide`) for searchable help sections and the interactive
+tour. Expand the relevant feature section and use the tour to locate controls.
+The README’s current implementation limits above take precedence over older
+in-app explanatory examples that imply verified performance or unrestricted live
+execution.
+
+![Built-in guide with search, feature sections and tutorial entry](.github/images/user-guide/app-in-app-guide.png)
+
+### Troubleshooting a workflow
+
+| What you see | What to check |
+| --- | --- |
+| Sign-in prompt or missing private pages | Wallet session and selected account; reconnect if the session expired |
+| Provider error, incomplete answer or insufficient evidence | Server provider configuration, research sources, and the displayed missing-input/error details |
+| Unavailable native capture or follower replay | Migrations and the deployment’s capture/replay flags; a retained archive is separate from new collection |
+| Unknown NAV, unfilled quotes or empty analytics | Eligible books, explicit fees, fresh marks and recorded/verified samples; do not replace missing data with zero |
+| Disabled strategy, key, account or upgrade action | Execution restrictions, permissions, feature flags, plan capabilities and quotas |
+| Halt reported but exposure remains | Confirmed cancellation/exit counts, still-open orders and unresolved positions, then operator recovery requirements |
 
 <details>
-<summary>Refresh guide screenshots (contributors)</summary>
+<summary>Refresh all guide screenshots (contributors)</summary>
 
-The guide targets the reviewed feature stack through PR #73. Captures use
-`backend/tests/e2e_research_app.py` with a disposable database and controlled
-venue/provider responses. Session, navigation, price polling and the separate
-opportunity-scanner APIs are stubbed; the documented research, history,
-follower and maker API paths are real. Screenshots are unmodified full-page
-Chromium captures at a 1440 × 1080 viewport, stored in
-`.github/images/user-guide/`. Capture times and run IDs vary between runs.
+The opt-in capture config renders the real React application at a 1440 × 1080
+viewport. `capture-user-guide.spec.ts` exercises source research/history and
+follower/maker workflows against the disposable real API. `capture-app-guide.spec.ts`
+uses the explicit demo responses in `user-guide-fixtures.ts` for the wider app,
+so captures need no production wallet, trading key, paid provider or billing
+account. The fixtures illustrate UI states; they are not evidence that optional
+external integrations or live execution are operational.
 
 From the repository root:
 
@@ -157,12 +481,11 @@ npx playwright install chromium
 npx playwright test --config playwright.user-guide.config.ts
 ```
 
-Ports 8002 and 5187 must be free. The opt-in config starts and stops its own
-backend and Vite servers. On Linux, install browser system libraries if needed
-with `npx playwright install --with-deps chromium`. Three capture scenarios
-assert the expected workflow states before writing the six screenshots. Review
-the images and guide labels together before committing a refresh. The regular
-CI regression suite does not rewrite these assets.
+Ports 8002 and 5187 must be free. The config starts/stops its own backend and Vite
+servers. On supported Linux hosts, use `npx playwright install --with-deps chromium`
+if browser libraries are missing. The capture scripts write PNGs under
+`.github/images/user-guide/`; inspect them with the instructions before committing
+a refresh. Normal regression CI does not rewrite these documentation assets.
 
 </details>
 
@@ -227,7 +550,8 @@ research integrations depend on how the workspace is configured.
 
 ### Trade and automate
 
-- Place manual limit orders, cash out positions, and review trade history and P&L.
+- Review manual-order and cash-out forms, trade history and P&L; live submissions
+  remain subject to the execution restrictions described in the guide.
 - Copy selected traders with configurable sizing, loss limits, and safety caps.
 - Configure market-making strategies, including band and AMM modes.
 - Review and manage contrarian positions with the inverse bot.
@@ -258,8 +582,8 @@ research integrations depend on how the workspace is configured.
   and controls to limit notification bursts.
 - Apply pre-trade checks, account cooldowns, daily and monthly loss limits, maximum
   drawdown and position limits, and strategy loss circuit breakers.
-- Pause automated trading with the emergency stop; where configured, it can also
-  close open positions.
+- Pause automation with the emergency stop and inspect confirmed cancellations
+  and unresolved exposure; current automated-exit restrictions still apply.
 
 ### Work across accounts and with a team
 
@@ -488,7 +812,6 @@ until those inputs exist. A definition may be reselected under the same ID;
 this is not a canceled execution order being reopened. No signing or CLOB
 mutation is added, and this correction intentionally has no switch back to
 phantom-fill behavior.
-
 
 ### Native follower capture deployment
 

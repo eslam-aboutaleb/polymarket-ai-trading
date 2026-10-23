@@ -12,6 +12,7 @@
  * @module components/NotificationCenter
  */
 import React, { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   NotificationEvent,
   listNotifications,
@@ -177,121 +178,125 @@ export default function NotificationCenter() {
         )}
       </button>
 
-      {open && (
-        <>
-          <div
-            className={`fixed inset-0 bg-black/50 ${resolveZ("drawer")}`}
-            onClick={onOverlayMouseDown}
-            aria-hidden="true"
-          />
-          <aside
-            ref={panelRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby={titleId}
-            tabIndex={-1}
-            className={`fixed right-0 top-0 h-full w-full sm:w-96 bg-[var(--bg)] border-l border-[var(--line)] ${resolveZ("drawer")} flex flex-col`}
-          >
-            <div className="flex items-center justify-between p-4 border-b border-[var(--line)]">
-              <h2 id={titleId} className="text-lg font-bold">
-                Notifications
-              </h2>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleMarkAllRead}
-                  disabled={loading || unreadCount === 0}
-                  className="text-xs text-[var(--accent)] hover:underline disabled:opacity-40 disabled:no-underline"
-                >
-                  Mark all read
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setOpen(false)}
-                  className="p-1 text-muted hover:text-white"
-                  aria-label="Close notifications"
-                >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M6 18L18 6M6 6l12 12"
-                    />
-                  </svg>
-                </button>
-              </div>
-            </div>
-
-            {error && (
-              <div className="mx-4 mt-3">
-                <Banner variant="error" onDismiss={() => setError(null)} onRetry={refresh}>
-                  {error}
-                </Banner>
-              </div>
-            )}
-
-            {markAllNotice && (
-              <div className="mx-4 mt-3">
-                <Banner
-                  variant="notice"
-                  onDismiss={() => setMarkAllNotice(null)}
-                  onRetry={handleMarkAllRead}
-                >
-                  {markAllNotice}
-                </Banner>
-              </div>
-            )}
-
-            <div className="flex-1 overflow-y-auto">
-              {events.length === 0 && !loading ? (
-                <div className="p-6 text-center">
-                  <p className="text-muted text-sm">No notifications yet</p>
-                  <p className="text-muted text-xs mt-2">
-                    Order fills, stop-loss and take-profit hits, whale alerts, followed-trader
-                    activity, redemption reminders and system warnings all show up here.
-                  </p>
+      {open &&
+        createPortal(
+          <>
+            <div
+              className={`fixed inset-0 bg-black/50 ${resolveZ("drawer")}`}
+              onClick={onOverlayMouseDown}
+              aria-hidden="true"
+            />
+            <aside
+              ref={panelRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={titleId}
+              tabIndex={-1}
+              className={`fixed right-0 top-0 h-full w-full sm:w-96 bg-[var(--bg-panel)] border-l border-[var(--line)] ${resolveZ("drawer")} flex flex-col`}
+            >
+              <div className="flex items-center justify-between p-4 border-b border-[var(--line)]">
+                <h2 id={titleId} className="text-lg font-bold">
+                  Notifications
+                </h2>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleMarkAllRead}
+                    disabled={loading || unreadCount === 0}
+                    className="text-xs text-[var(--accent)] hover:underline disabled:opacity-40 disabled:no-underline"
+                  >
+                    Mark all read
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOpen(false)}
+                    className="p-1 text-muted hover:text-white"
+                    aria-label="Close notifications"
+                  >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M6 18L18 6M6 6l12 12"
+                      />
+                    </svg>
+                  </button>
                 </div>
-              ) : (
-                <ul className="divide-y divide-[var(--line)]">
-                  {events.map((event) => (
-                    <li key={event.id}>
-                      <button
-                        type="button"
-                        onClick={() => handleMarkRead(event)}
-                        disabled={markingIds.has(event.id)}
-                        className={`w-full text-left px-4 py-3 hover:bg-[var(--bg-soft)] transition-colors ${
-                          event.unread ? "bg-[var(--accent-soft)]/40" : ""
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <span className="text-sm font-medium text-white">
-                            {eventLabel(event.event_type)}
-                          </span>
-                          <span className="text-[11px] text-muted flex-shrink-0">
-                            {new Date(event.created_at).toLocaleString()}
-                          </span>
-                        </div>
-                        {event.message && (
-                          <p className="text-xs text-soft mt-0.5 whitespace-pre-line">
-                            {event.message}
-                          </p>
-                        )}
-                        {eventSummary(event) && (
-                          <p className="text-xs text-soft mt-0.5 truncate">{eventSummary(event)}</p>
-                        )}
-                        {event.unread && (
-                          <span className="inline-block mt-1 w-2 h-2 rounded-full bg-[var(--accent)]" />
-                        )}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+              </div>
+
+              {error && (
+                <div className="mx-4 mt-3">
+                  <Banner variant="error" onDismiss={() => setError(null)} onRetry={refresh}>
+                    {error}
+                  </Banner>
+                </div>
               )}
-            </div>
-          </aside>
-        </>
-      )}
+
+              {markAllNotice && (
+                <div className="mx-4 mt-3">
+                  <Banner
+                    variant="notice"
+                    onDismiss={() => setMarkAllNotice(null)}
+                    onRetry={handleMarkAllRead}
+                  >
+                    {markAllNotice}
+                  </Banner>
+                </div>
+              )}
+
+              <div className="flex-1 overflow-y-auto">
+                {events.length === 0 && !loading ? (
+                  <div className="p-6 text-center">
+                    <p className="text-muted text-sm">No notifications yet</p>
+                    <p className="text-muted text-xs mt-2">
+                      Order fills, stop-loss and take-profit hits, whale alerts, followed-trader
+                      activity, redemption reminders and system warnings all show up here.
+                    </p>
+                  </div>
+                ) : (
+                  <ul className="divide-y divide-[var(--line)]">
+                    {events.map((event) => (
+                      <li key={event.id}>
+                        <button
+                          type="button"
+                          onClick={() => handleMarkRead(event)}
+                          disabled={markingIds.has(event.id)}
+                          className={`w-full text-left px-4 py-3 hover:bg-[var(--bg-soft)] transition-colors ${
+                            event.unread ? "bg-[var(--accent-soft)]/40" : ""
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="text-sm font-medium text-white">
+                              {eventLabel(event.event_type)}
+                            </span>
+                            <span className="text-[11px] text-muted flex-shrink-0">
+                              {new Date(event.created_at).toLocaleString()}
+                            </span>
+                          </div>
+                          {event.message && (
+                            <p className="text-xs text-soft mt-0.5 whitespace-pre-line">
+                              {event.message}
+                            </p>
+                          )}
+                          {eventSummary(event) && (
+                            <p className="text-xs text-soft mt-0.5 truncate">
+                              {eventSummary(event)}
+                            </p>
+                          )}
+                          {event.unread && (
+                            <span className="inline-block mt-1 w-2 h-2 rounded-full bg-[var(--accent)]" />
+                          )}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </aside>
+          </>,
+          document.body,
+        )}
     </div>
   );
 }
