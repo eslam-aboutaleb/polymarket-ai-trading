@@ -45,7 +45,7 @@ results do not approve an order. Legacy paper/backtest metrics remain unverified
 1. Open **Login** or choose a sign-in action on a public page.
 2. Choose your browser wallet or WalletConnect, then approve
    the login signature. WalletConnect is enabled when the frontend is built
-   with `VITE_WALLETCONNECT_PROJECT_ID` (inject it from GitHub Actions Secrets during the build).
+   with `VITE_WALLETCONNECT_PROJECT_ID` (the frontend CI build reads it from the GitHub Actions repository secret of the same name). For Docker Compose production deployments, also supply it through the deployment environment or `.env.prod` before rebuilding.
    Existing deployments must rebuild the frontend after changing this variable.
    The signature creates an application session; it is separate from depositing
    funds, submitting an order or connecting a trading key.
