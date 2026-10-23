@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { marketContextService, type MarketContext } from "../../services/marketContextService";
 import { getApiErrorMessage } from "../../utils/apiError";
+import ResearchBrief from "./ResearchBrief";
+import ObservationHistory from "./ObservationHistory";
 
 export default function MarketResearch({ conditionId }: { conditionId: string }) {
   const [context, setContext] = useState<MarketContext | null>(null);
@@ -36,7 +38,7 @@ export default function MarketResearch({ conditionId }: { conditionId: string })
           Prices and rules cannot be verified from this link. Open a market from Opportunities or
           retry.
         </p>
-        <button className="btn-secondary mt-4" onClick={() => setAttempt((value) => value + 1)}>
+        <button className="btn-muted mt-4" onClick={() => setAttempt((value) => value + 1)}>
           Retry market lookup
         </button>
       </section>
@@ -125,6 +127,8 @@ export default function MarketResearch({ conditionId }: { conditionId: string })
           </dl>
         </details>
       </section>
+      <ResearchBrief key={conditionId} conditionId={conditionId} onContext={setContext} />
+      <ObservationHistory key={`history-${conditionId}`} conditionId={conditionId} />
     </div>
   );
 }

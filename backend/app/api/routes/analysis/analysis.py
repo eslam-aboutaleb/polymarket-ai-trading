@@ -5,12 +5,14 @@ import contextlib
 import json
 import logging
 from collections import OrderedDict
+from datetime import datetime
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.deps import optional_plan_quota
@@ -32,7 +34,13 @@ from app.services.intelligence.market_context import (
     MarketIdentityError,
     fetch_market_context,
 )
+from app.services.intelligence.market_research import (
+    finalize_research,
+    missing_input_research,
+    research_prompt,
+)
 from app.services.intelligence.user_preferences import get_user_settings
+from app.services.market_data.market_observations import append_observation, observation_history
 from app.services.market_data.polymarket_service import get_polymarket_service
 from app.services.users.entitlement_service import CAP_OPPORTUNITY_SCAN
 from app.utils.cache import opportunity_cache
@@ -81,6 +89,14 @@ class MarketAnalysisRequest(BaseModel):
     volume_24h: float = Field(default=0, description="24-hour trading volume in USD")
     end_date: str = Field(..., description="Market resolution date (ISO format)")
     include_research: bool = Field(default=True, description="Include web research in analysis")
+
+
+class MarketResearchRequest(BaseModel):
+    """Canonical identity only: callers cannot supply replacement prices/rules."""
+
+    model_config = {"extra": "forbid"}
+    condition_id: str = Field(pattern=r"^0x[0-9a-fA-F]{64}$")
+    include_research: bool = True
 
 
 class QuickAnalysisRequest(BaseModel):
@@ -232,10 +248,13 @@ async def get_analysis_client_for_user(
 )
 async def market_context(
     condition_id: str = Path(pattern=r"^0x[0-9a-fA-F]{64}$"),
+    db: Session = Depends(get_db),
 ):
     """Public, read-only venue context. Never reads credentials or places orders."""
     try:
-        return await fetch_market_context(get_polymarket_service(), condition_id)
+        context = await fetch_market_context(get_polymarket_service(), condition_id)
+        append_observation(db, context)
+        return context
     except MarketIdentityError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except httpx.HTTPStatusError as exc:
@@ -243,6 +262,102 @@ async def market_context(
         raise HTTPException(status_code=code, detail="Market source unavailable") from exc
     except (httpx.RequestError, ValueError) as exc:
         raise HTTPException(status_code=503, detail="Market source unavailable") from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=503, detail="Market observation storage unavailable"
+        ) from exc
+
+
+class MarketContextHistory(BaseModel):
+    observations: list[MarketContext]
+
+
+@router.get(
+    "/markets/{condition_id}/observations",
+    response_model=MarketContextHistory,
+    dependencies=[Depends(_analysis_rate_limit)],
+)
+async def market_observations(
+    condition_id: str = Path(pattern=r"^0x[0-9a-fA-F]{64}$"),
+    as_of: datetime | None = Query(default=None),
+    limit: int = Query(default=25, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """Public observations received by as_of, newest first; no private analyses."""
+    boundary = as_of or utc_now()
+    if boundary.tzinfo is None:
+        raise HTTPException(status_code=422, detail="as_of must include a timezone")
+    try:
+        return MarketContextHistory(
+            observations=observation_history(db, condition_id, boundary, limit)
+        )
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503, detail="Market observation storage unavailable"
+        ) from exc
+
+
+@router.post("/market/research/stream", dependencies=[Depends(_analysis_rate_limit)])
+async def market_research_stream(
+    request: MarketResearchRequest,
+    current_user: dict | None = Depends(get_optional_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """Typed research over the existing user-selected agent; no trading actions."""
+    context = await market_context(request.condition_id, db=db)
+
+    async def events():
+        client = None
+        try:
+            ready = {"type": "context_ready", "context": context.model_dump(mode="json")}
+            yield f"data: {json.dumps(ready)}\n\n"
+            prices = {o.outcome: o.indicative_price for o in context.outcomes}
+            if context.quote_quality == "unavailable" or not context.rules.text.strip():
+                result = missing_input_research(context)
+            else:
+                user_id = current_user.get("user_id") if current_user else None
+                client, llm_config = await get_analysis_client_for_user(user_id, db)
+                # Unary generation is labelled as such. No buffered replay is
+                # represented as live model tokens, and no artificial pacing.
+                yield f"data: {json.dumps({'type': 'research_started', 'transport': 'unary'})}\n\n"
+                async with asyncio.timeout(settings.grpc_timeout * 2):
+                    response = await client.analyze_market(
+                        market_title=context.question,
+                        market_description=context.rules.text,
+                        research_instructions=research_prompt(context),
+                        yes_price=prices["YES"],
+                        no_price=prices["NO"],
+                        volume_24h=0,
+                        end_date=context.rules.market_end_date or "",
+                        include_research=request.include_research,
+                        llm_config=llm_config,
+                    )
+                if response.get("metadata", {}).get("research_contract") != "market-research-v1":
+                    raise RuntimeError("Provider does not support the typed research contract")
+                result = finalize_research(
+                    context,
+                    response.get("analysis", ""),
+                    response.get("research_context", ""),
+                    response.get("metadata"),
+                )
+            payload = {"type": "analysis_completed", "result": result.model_dump(mode="json")}
+            yield f"data: {json.dumps(payload)}\n\n"
+            yield 'data: {"done":true}\n\n'
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Structured market research failed")
+            yield 'data: {"error":"Market research failed. Retry or use legacy analysis."}\n\n'
+        finally:
+            if client is not None:
+                await client.close()
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/market", response_model=AnalysisResponse)

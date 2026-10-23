@@ -17,6 +17,7 @@ from typing import Any
 
 import httpx
 from polymarket_mcp import no_indexed_matches_text
+from polymarket_mcp.research_contract import RESEARCH_SYSTEM_PROMPT, structured_research_prompt
 from polymarket_settings import TASK_TIERS, ModelTier, resolve_tier_config
 from src.config import get_settings
 from src.mcp_client import ResearchMCPClient
@@ -238,6 +239,7 @@ Provide a structured analysis with:
         end_date: str,
         include_research: bool = True,
         model: str | None = None,
+        research_instructions: str = "",
     ) -> dict[str, Any]:
         """Perform market analysis using Copilot CLI with MCP tools."""
 
@@ -285,6 +287,9 @@ End Date: {end_date}
         )
 
         system_prompt = self.prompts.get("market_analysis", "system_prompt")
+        if research_instructions:
+            prompt = structured_research_prompt(research_instructions, news_context)
+            system_prompt = RESEARCH_SYSTEM_PROMPT
         result = await self._run_analysis(
             prompt,
             system_prompt=system_prompt,
@@ -293,7 +298,9 @@ End Date: {end_date}
 
         return {
             "analysis": result,
-            "research_context": "Analysis performed via GitHub Models API"
+            "research_context": news_context
+            if research_instructions
+            else "Analysis performed via GitHub Models API"
             if include_research
             else "",
             "timestamp": datetime.utcnow().isoformat(),

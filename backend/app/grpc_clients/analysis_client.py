@@ -313,6 +313,7 @@ class AnalysisClient:
         end_date: str,
         include_research: bool = True,
         llm_config: dict[str, Any] | None = None,
+        research_instructions: str = "",
     ) -> dict[str, Any]:
         """
         Full market analysis with research.
@@ -350,6 +351,9 @@ class AnalysisClient:
             request_kwargs["llm_config"] = proto_llm_config
 
         request = analysis_pb2.MarketAnalysisRequest(**request_kwargs)
+
+        if research_instructions:
+            request.research_instructions = research_instructions
 
         try:
             response = await stub.AnalyzeMarket(request, timeout=settings.grpc_timeout)

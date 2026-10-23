@@ -197,3 +197,21 @@ def _reset_module_singletons():
     yield
 
     _sweep_module_singletons()
+
+
+@pytest.fixture
+def market_observation_db():
+    """Disposable real storage for source-history API and cancellation regressions."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from sqlalchemy.pool import StaticPool
+
+    from app.models.market_data.market_observation import MarketObservation
+
+    engine = create_engine(
+        "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+    )
+    MarketObservation.__table__.create(engine)
+    with Session(engine) as session:
+        yield session
+    engine.dispose()

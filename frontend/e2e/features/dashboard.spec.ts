@@ -74,6 +74,10 @@ test.describe("Dashboard", () => {
   test("notification center opens", async ({ adminPage: page }) => {
     await page.getByRole("button", { name: /Notifications \(\d+ unread\)/ }).click();
     await expect(page.getByRole("button", { name: "Close notifications" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Notifications", exact: true })).not.toHaveCSS(
+      "background-color",
+      "rgba(0, 0, 0, 0)",
+    );
     await page.getByRole("button", { name: "Close notifications" }).click();
   });
 });
