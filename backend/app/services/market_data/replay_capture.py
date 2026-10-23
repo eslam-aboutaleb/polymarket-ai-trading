@@ -205,6 +205,38 @@ async def get_capture_venue():
         yield PublicVenueCapture(client)
 
 
+def market_fingerprint(clob, gamma, context):
+    condition = context.condition_id
+    return digest(
+        {
+            "condition_id": condition,
+            "clob_rules": clob.get("description"),
+            "clob_question": clob.get("question"),
+            "clob_end": clob.get("end_date_iso"),
+            "gamma_rules": gamma.get("description"),
+            "gamma_question": gamma.get("question"),
+            "gamma_end": gamma.get("endDate"),
+            "gamma_source": gamma.get("resolutionSource"),
+            "gamma_events": [
+                {
+                    key: event.get(key)
+                    for key in (
+                        "title",
+                        "description",
+                        "resolutionSource",
+                        "endDate",
+                        "clarification",
+                    )
+                }
+                for event in (gamma.get("events") or [])
+                if isinstance(event, dict)
+            ],
+            "gamma_clarifications": gamma.get("clarification"),
+            "outcomes": [(o.outcome, o.token_id) for o in context.outcomes],
+        }
+    )
+
+
 async def capture_wallet(db: Session, wallet: str, venue: PublicVenueCapture) -> dict:
     if not isinstance(wallet, str) or not re.fullmatch(r"0x[0-9a-f]{40}", wallet):
         raise ValueError("invalid wallet identity")
@@ -244,34 +276,7 @@ async def capture_wallet(db: Session, wallet: str, venue: PublicVenueCapture) ->
                     raise ValueError("native market metadata unavailable")
                 attempted_conditions.add(condition)
                 clob, gamma, context = await venue.market(condition)
-                fingerprint = digest(
-                    {
-                        "condition_id": condition,
-                        "clob_rules": clob.get("description"),
-                        "clob_question": clob.get("question"),
-                        "clob_end": clob.get("end_date_iso"),
-                        "gamma_rules": gamma.get("description"),
-                        "gamma_question": gamma.get("question"),
-                        "gamma_end": gamma.get("endDate"),
-                        "gamma_source": gamma.get("resolutionSource"),
-                        "gamma_events": [
-                            {
-                                key: event.get(key)
-                                for key in (
-                                    "title",
-                                    "description",
-                                    "resolutionSource",
-                                    "endDate",
-                                    "clarification",
-                                )
-                            }
-                            for event in (gamma.get("events") or [])
-                            if isinstance(event, dict)
-                        ],
-                        "gamma_clarifications": gamma.get("clarification"),
-                        "outcomes": [(o.outcome, o.token_id) for o in context.outcomes],
-                    }
-                )
+                fingerprint = market_fingerprint(clob, gamma, context)
                 markets[condition] = (context, fingerprint, native_active(clob, gamma))
                 append_capture(
                     db,
@@ -559,3 +564,39 @@ def capture_manifest(db: Session, capture_ids: list[str]) -> list[dict]:
         }
         for row in sorted(rows, key=lambda row: row.id)
     ]
+
+
+async def capture_market(db: Session, condition_id: str, venue: PublicVenueCapture) -> dict:
+    """Bounded public metadata/book receipt for a paper account's existing market."""
+    clob, gamma, context = await venue.market(condition_id)
+    fingerprint = market_fingerprint(clob, gamma, context)
+    rows = []
+    for kind, raw in (("gamma", gamma), ("clob_market", clob)):
+        rows.append(
+            append_capture(
+                db,
+                kind=kind,
+                source_key=condition_id,
+                raw=raw,
+                observed_at=context.observed_at,
+                condition_id=condition_id,
+                rule_hash=fingerprint,
+            ).id
+        )
+    if native_active(clob, gamma):
+        for outcome in context.outcomes:
+            raw, book = await venue.book(outcome.token_id, condition_id)
+            rows.append(
+                append_capture(
+                    db,
+                    kind="book",
+                    source_key=book.snapshot_id,
+                    raw={"book": book.model_dump(mode="json"), "venue": raw},
+                    observed_at=book.observed_at,
+                    source_at=book.source_at,
+                    token_id=outcome.token_id,
+                    condition_id=condition_id,
+                    rule_hash=fingerprint,
+                ).id
+            )
+    return {"capture_ids": rows, "condition_id": condition_id, "active": native_active(clob, gamma)}
