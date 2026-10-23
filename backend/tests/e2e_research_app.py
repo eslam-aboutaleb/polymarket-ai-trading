@@ -74,7 +74,7 @@ app.dependency_overrides[get_db] = fixture_db
 
 class FixtureAgent:
     async def analyze_market(self, **kwargs):
-        prompt = kwargs["market_description"]
+        prompt = kwargs.get("research_instructions") or kwargs["market_description"]
         if "0x" + "13" * 32 in prompt:
             raise RuntimeError("Fixture provider unavailable")
         if "0x" + "14" * 32 in prompt:
@@ -88,7 +88,11 @@ class FixtureAgent:
             CID,
         )
         if "0x" + "11" * 32 in prompt:
-            return {"analysis": "malformed output", "research_context": ""}
+            return {
+                "analysis": "malformed output",
+                "research_context": "",
+                "metadata": {"research_contract": "market-research-v1"},
+            }
         quote = "Final certification may be delayed by a legal challenge."
         source = "https://evidence.example/report"
         draft = {
@@ -116,7 +120,11 @@ class FixtureAgent:
         return {
             "analysis": json.dumps(draft),
             "research_context": f"• Certification report\n  {quote}\n  Source: {source}",
-            "metadata": {"provider": "fixture", "model": "deterministic"},
+            "metadata": {
+                "provider": "fixture",
+                "model": "deterministic",
+                "research_contract": "market-research-v1",
+            },
         }
 
     async def close(self):
