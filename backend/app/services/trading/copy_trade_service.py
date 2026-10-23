@@ -15,6 +15,7 @@ import math
 from collections import OrderedDict
 from contextlib import suppress
 from datetime import UTC, datetime
+from decimal import Decimal
 from time import time
 from typing import Any
 
@@ -696,6 +697,8 @@ async def _plan_copy_trade_size(
     market_id: str = "",
     side: str = "BUY",
     price: float = 0.0,
+    account_id: int | None = None,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     """
     Build a decision-complete sizing plan for one copy trade.
@@ -758,7 +761,7 @@ async def _plan_copy_trade_size(
         # for audit on every Kelly-sized order.
         p_market, edge_source = kelly_service.resolve_edge_probability(
             db,
-            settings.user_id,
+            user_id or getattr(settings, "user_id", None),
             market_id,
             trader_wallet=trader_wallet,
         )
@@ -766,12 +769,24 @@ async def _plan_copy_trade_size(
             settings.kelly_fraction,
             kelly_service.DEFAULT_KELLY_MULTIPLIER,
         )
-        bankroll = await kelly_service.compute_bankroll(
-            get_polymarket_service(),
-            user_wallet_address,
-            private_key=private_key,
-            clob_creds=clob_creds,
-        )
+        if settings.simulation_mode:
+            from app.services.analytics.paper_accounting import account_state, value_account
+
+            paper_value = value_account(
+                db,
+                account_state(db, user_id or getattr(settings, "user_id", None), account_id),
+            )
+            if paper_value["nav"] is None:
+                plan["rejection"] = "Paper NAV is unavailable or unverified; Kelly sizing abstains"
+                return plan
+            bankroll = float(paper_value["nav"])
+        else:
+            bankroll = await kelly_service.compute_bankroll(
+                get_polymarket_service(),
+                user_wallet_address,
+                private_key=private_key,
+                clob_creds=clob_creds,
+            )
         max_pos = _to_float(followed_trader.max_position_size) if followed_trader else 0.0
         if max_pos <= 0:
             max_pos = _to_float(settings.max_position_size)
@@ -807,7 +822,7 @@ async def _plan_copy_trade_size(
             "Kelly copy-trade sizing: user=%d market=%s edge_source=%s "
             "p=%.4f price=%.4f f*=%.4f multiplier=%.2f bankroll=%.2f "
             "size=%.2f",
-            settings.user_id,
+            user_id or getattr(settings, "user_id", None),
             market_id,
             edge_source,
             p,
@@ -864,12 +879,25 @@ async def _plan_copy_trade_size(
             pct = max(0.0, min(100.0, configured_copy_wallet_pct))
             plan["details"]["copy_wallet_percentage"] = pct
             try:
-                main_balance = await service.get_wallet_balance(
-                    user_wallet_address,
-                    private_key=private_key,
-                    clob_creds=clob_creds,
-                )
-                main_wallet_usdc = _to_float(main_balance.get("usdc_balance"))
+                if settings.simulation_mode:
+                    from app.services.analytics.paper_accounting import account_state, restore
+
+                    state = account_state(
+                        db, user_id or getattr(settings, "user_id", None), account_id
+                    )
+                    from app.services.analytics.paper_accounting import legacy_blocked
+
+                    if legacy_blocked(state):
+                        plan["rejection"] = "Paper account history is unverified"
+                        return plan
+                    main_wallet_usdc = float(restore(db, state).available_cash)
+                else:
+                    main_balance = await service.get_wallet_balance(
+                        user_wallet_address,
+                        private_key=private_key,
+                        clob_creds=clob_creds,
+                    )
+                    main_wallet_usdc = _to_float(main_balance.get("usdc_balance"))
             except Exception as e:
                 logger.warning(
                     "Main wallet balance fetch failed for user %s: %s", user_wallet_address[:10], e
@@ -980,6 +1008,17 @@ def _update_streak(settings: UserSettings, won: bool) -> None:
 # ────────────── Main execution flow ──────────────
 
 
+def _paper_copy_response(result: dict) -> dict:
+    return {
+        **result,
+        "executed": result["status"] in {"filled", "partial"},
+        "simulated": True,
+        "fill_status": result["status"],
+        "trade_size": float(result["notional_usdc"]),
+        "status": "simulated" if result["status"] in {"filled", "partial"} else "unfilled",
+    }
+
+
 async def execute_copy_trade(
     db: Session,
     user_id: int,
@@ -992,6 +1031,7 @@ async def execute_copy_trade(
     trade_history_id: int | None = None,
     assessment: dict[str, Any] | None = None,
     idempotency_key: str | None = None,
+    account_id: int | None = None,
 ) -> dict[str, Any]:
     """
     Execute (or reject) a copy trade for a user.
@@ -1012,7 +1052,14 @@ async def execute_copy_trade(
     # 1 – Load settings
     bot_repository = TradingBotRepository(db)
     order_repository = TradingOrderRepository(db)
-    user_settings = bot_repository.get_user_settings(user_id)
+    if account_id is not None:
+        from app.services.analytics.paper_accounting import settings_for_account
+
+        user_settings = settings_for_account(db, user_id, account_id)
+        if user_settings and not user_settings.simulation_mode:
+            return {"executed": False, "reason": "Account-specific adapter supports paper only"}
+    else:
+        user_settings = bot_repository.get_user_settings(user_id)
     if not user_settings or not user_settings.copy_trading_enabled:
         return {"executed": False, "reason": "Copy-trading disabled"}
 
@@ -1033,6 +1080,29 @@ async def execute_copy_trade(
         }
     ):
         return {"executed": False, "status": "rejected", "reason": "AI approval required"}
+    paper_key = idempotency_key or (
+        f"copy-trade:{trade_history_id}" if trade_history_id is not None else None
+    )
+    source_identity = {
+        "wallet": trader_wallet.lower(),
+        "trade_history_id": trade_history_id,
+        "market_id": market_id,
+        "source_amount": str(Decimal(str(trader_amount)).normalize()),
+        "source_price": str(Decimal(str(price)).normalize()),
+    }
+    if user_settings.simulation_mode and paper_key:
+        from app.services.analytics.paper_accounting import find_paper_intent
+
+        previous = find_paper_intent(db, user_id, paper_key, account_id)
+        if previous:
+            if (
+                previous.get("source_identity") != source_identity
+                or previous["token_id"] != token_id
+                or previous["side"] != side.upper()
+            ):
+                raise ValueError("copy source intent identity conflict")
+            db.commit()
+            return _paper_copy_response(previous)
 
     # 2 – Load user + credentials (also needed for balance-aware sizing)
 
@@ -1051,6 +1121,11 @@ async def execute_copy_trade(
     # Per-trader overrides
     followed = order_repository.find_user_follow(user_id, trader_wallet.lower())
 
+    if user_settings.simulation_mode:
+        from app.services.analytics.paper_evidence import refresh_evidence
+
+        await refresh_evidence(db, market_id)
+
     # 3 – Build sizing plan and apply global safety caps
     plan = await _plan_copy_trade_size(
         db=db,
@@ -1064,6 +1139,8 @@ async def execute_copy_trade(
         market_id=market_id,
         side=side,
         price=price,
+        account_id=account_id,
+        user_id=user_id,
     )
 
     if plan.get("rejection"):
@@ -1074,6 +1151,7 @@ async def execute_copy_trade(
         user_settings,
         size_before_safety,
         db,
+        **({"account_id": account_id} if account_id is not None else {}),
     )
     if rejection:
         rejected = _record_copy_trade_attempt(
@@ -1171,43 +1249,45 @@ async def execute_copy_trade(
             "status": "rejected",
         }
 
-    # 6 – Simulation mode: record trade without placing a real order
+    # Paper orders share capital, inventory and native-depth consumption with every strategy.
     if user_settings.simulation_mode:
-        logger.info(
-            "SIMULATION: user %d would trade %s %s @ %.4f size=%.2f on %s",
-            user_id,
-            side,
-            token_id,
-            price,
-            trade_size,
-            market_id,
-        )
-        sim_trade = _record_copy_trade_attempt(
-            db=db,
+        from app.services.analytics.paper_accounting import submit_paper_order
+
+        result = submit_paper_order(
+            db,
             user_id=user_id,
-            market_id=market_id,
+            token_id=token_id,
             side=side,
-            trade_size=trade_size,
-            price=price,
-            status="simulated",
-            trader_wallet=trader_wallet,
-            order_hash=None,
-            trade_history_id=trade_history_id,
-            plan=plan,
-            reason=None,
+            amount=Decimal(str(trade_size)),
+            strategy="copy",
+            account_id=account_id,
+            intent_key=paper_key,
+            source_identity=source_identity,
         )
+        if result.get("trade_id"):
+            trade = db.get(UserTrade, result["trade_id"])
+            details = _json_loads(trade.calculation_details)
+            if "configured_sizing_mode" not in details:
+                details.update(plan.get("details") or {})
+                details.update(
+                    configured_sizing_mode=plan.get("configured_sizing_mode"),
+                    configured_copy_wallet_mode=plan.get("configured_copy_wallet_mode"),
+                    trade_size_pre_safety=plan.get("trade_size_pre_safety"),
+                    trade_size_final=float(result["notional_usdc"]),
+                )
+                trade.calculation_details = _json_dumps(details)
+                trade.sizing_mode_applied = plan.get("sizing_mode_applied")
+                trade.copy_wallet_mode_applied = plan.get("copy_wallet_mode_applied")
+                trade.copied_from_wallet = trader_wallet
+                trade.source_trade_history_id = trade_history_id
+                trade.expected_price = price
+                trade.expected_size = trade_size
+        # An entry is not a resolved win. Streaks only change on verified outcomes.
         db.commit()
-        return {
-            "executed": True,
-            "simulated": True,
-            "trade_id": sim_trade.id,
-            "order_hash": None,
-            "trade_size": trade_size,
-            "status": "simulated",
-        }
+        return _paper_copy_response(result)
 
     # Real copy trading uses the durable gateway, never the frozen legacy signer.
-    from decimal import ROUND_DOWN, Decimal
+    from decimal import ROUND_DOWN
 
     from app.services.trading.execution.live import place_live_order
     from app.services.trading.live_trading_policy import LiveTradingBlocked

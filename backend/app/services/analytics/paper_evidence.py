@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models.market_data.replay_capture import ReplayCapture
 from app.services.analytics.replay.follower import Book
+from app.services.analytics.replay.ledger import positive
 from app.services.market_data.replay_capture import aware, digest, native_active
 
 
@@ -70,6 +71,9 @@ def _current_book(
         raise EvidenceUnavailable("MISSING_BOOK")
     raw = payload(row)
     book = Book.model_validate(raw["book"])
+    for level in [*book.bids, *book.asks]:
+        positive(level.price, "book price")
+        positive(level.shares, "book shares", zero=True)
     if (
         book.token_id != token_id
         or book.observed_at != aware(row.observed_at)
@@ -96,8 +100,10 @@ def _current_book(
     try:
         tick = Decimal(str(venue["tick_size"]))
         minimum = Decimal(str(venue["min_order_size"]))
-        if not tick.is_finite() or not minimum.is_finite() or not 0 < tick <= 1 or minimum <= 0:
-            raise ValueError("invalid venue size rules")
+        positive(tick, "venue tick")
+        positive(minimum, "venue minimum")
+        if tick not in {Decimal("0.1"), Decimal("0.01"), Decimal("0.001"), Decimal("0.0001")}:
+            raise ValueError("unsupported native venue tick")
     except (KeyError, ValueError, ArithmeticError):
         if require_size_rules:
             raise EvidenceUnavailable("VENUE_SIZE_RULES_UNKNOWN") from None
@@ -164,3 +170,30 @@ def final_payout(*args, **kwargs):
         raise
     except (ValueError, TypeError, KeyError, ArithmeticError, AttributeError) as exc:
         raise EvidenceUnavailable("INVALID_SETTLEMENT_EVIDENCE") from exc
+
+
+async def refresh_evidence(db, condition_id):
+    """Bounded, public-only receipt capture before acquiring an economic account lock."""
+    import asyncio
+    import logging
+    import re
+
+    import httpx
+
+    from app.config import get_settings
+    from app.services.market_data.replay_capture import PublicVenueCapture, capture_market
+
+    settings = get_settings()
+    if not (settings.paper_journal_v2_enabled and settings.native_capture_enabled):
+        return False
+    if not isinstance(condition_id, str) or not re.fullmatch(r"0x[a-fA-F0-9]{64}", condition_id):
+        return False
+    try:
+        async with asyncio.timeout(10), httpx.AsyncClient(timeout=5) as client:
+            await capture_market(db, condition_id.lower(), PublicVenueCapture(client))
+        return True
+    except (ValueError, httpx.HTTPError, TimeoutError):
+        logging.getLogger(__name__).warning(
+            "Paper native evidence unavailable condition=%s", condition_id
+        )
+        return False

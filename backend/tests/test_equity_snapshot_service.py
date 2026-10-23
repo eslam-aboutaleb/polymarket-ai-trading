@@ -23,6 +23,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (register models on Base.metadata)
+from app.models import Account
 from app.models.analytics.assessment import Assessment
 from app.models.analytics.portfolio_snapshot import PortfolioSnapshot
 from app.models.base import Base
@@ -89,6 +90,12 @@ class ServiceTestCase(unittest.IsolatedAsyncioTestCase):
     def _user(self, user_id=1, wallet=WALLET):
         user = User(id=user_id, wallet_address=wallet)
         self.db.add(user)
+        self.db.flush()
+        self.db.add(
+            Account(
+                id=user_id, owner_user_id=user_id, name="Personal", kind="personal", is_default=True
+            )
+        )
         self.db.commit()
         return user
 
@@ -199,21 +206,14 @@ class CaptureUserSnapshotTests(ServiceTestCase):
         # The idempotency check short-circuits before any upstream call.
         self.assertEqual(service.balance_calls, 1)
 
-    async def test_paper_user_tracks_paper_balance_not_the_wallet(self):
+    async def test_disabled_journal_never_writes_a_paper_balance_as_nav(self):
         user = self._user()
         self._settings(user.id, simulation_mode=True, paper_balance=1375.5)
         service = FakePolymarketService(usdc_balance=9999.0)
         with self._patch_service(service), self._patch_credentials(None):
             snapshot = await svc.capture_user_snapshot(self.db, user)
-
-        self.assertIsNotNone(snapshot)
-        self.assertTrue(snapshot.is_paper)
-        self.assertEqual(snapshot.bankroll, 1375.5)
-        # Wallet columns describe the real wallet, so they stay zero.
-        self.assertEqual(snapshot.usdc_balance, 0.0)
-        self.assertEqual(snapshot.unrealized_pnl, 0.0)
-        self.assertEqual(snapshot.positions_count, 0)
-        # A paper account needs no wallet calls at all.
+        self.assertIsNone(snapshot)
+        self.assertEqual(self._all_rows(), [])
         self.assertEqual(service.balance_calls, 0)
         self.assertEqual(service.position_calls, 0)
 
@@ -228,8 +228,8 @@ class CaptureUserSnapshotTests(ServiceTestCase):
             paper = await svc.capture_user_snapshot(self.db, paper_user)
 
         self.assertFalse(live.is_paper)
-        self.assertTrue(paper.is_paper)
-        self.assertEqual(len(self._all_rows()), 2)
+        self.assertIsNone(paper)
+        self.assertEqual(len(self._all_rows()), 1)
 
     async def test_balance_failure_skips_the_user_with_no_row(self):
         user = self._user()
@@ -306,8 +306,8 @@ class RunSnapshotCycleTests(ServiceTestCase):
         with self._patch_service(service), self._patch_credentials(None):
             result = await svc.run_snapshot_cycle(self.db)
 
-        self.assertEqual(result, {"users": 2, "written": 2, "skipped": 0})
-        self.assertEqual(len(self._all_rows()), 2)
+        self.assertEqual(result, {"users": 2, "written": 1, "skipped": 1})
+        self.assertEqual(len(self._all_rows()), 1)
 
     async def test_a_failing_user_does_not_abort_the_cycle(self):
         self._user(user_id=1, wallet=WALLET)
@@ -438,6 +438,8 @@ class RunSnapshotCycleTests(ServiceTestCase):
 
 class ReadPathTests(ServiceTestCase):
     def _seed(self, user_id=1, bankrolls=(), paper=False, hours_ago=()):
+        if self.db.get(User, user_id) is None:
+            self._user(user_id=user_id, wallet=f"0x{user_id:040x}")
         now = utc_now()
         for bankroll, age in zip(bankrolls, hours_ago, strict=False):
             captured = now - timedelta(hours=age)
@@ -515,10 +517,10 @@ class ReadPathTests(ServiceTestCase):
         both = svc.summarize_snapshots(self.db, 1, "all")
 
         self.assertEqual((live["points"], live["start"], live["end"]), (2, 1000.0, 100.0))
-        self.assertEqual((paper["points"], paper["start"], paper["end"]), (2, 500.0, 600.0))
-        # Unfiltered still blends them: 1000 → 600, a delta of neither account.
-        self.assertEqual(both["points"], 4)
-        self.assertEqual(both["delta"], -400.0)
+        self.assertEqual((paper["points"], paper["start"], paper["end"]), (2, None, None))
+        # Default mode keeps the live series separate.
+        self.assertEqual(both["points"], 2)
+        self.assertEqual(both["delta"], -900.0)
 
     def test_summary_account_filter_keeps_the_drawdown_inside_one_account(self):
         self._seed(bankrolls=[100.0, 50.0], hours_ago=[5, 4])
@@ -564,8 +566,9 @@ class ReadPathTests(ServiceTestCase):
         both = svc.get_snapshots(self.db, 1)
 
         self.assertEqual([row.bankroll for row in live], [100.0, 110.0])
-        self.assertEqual([row.bankroll for row in paper], [900.0])
-        self.assertEqual(len(both), 3)
+        self.assertEqual([row["bankroll"] for row in paper], [None])
+        self.assertEqual(paper[0]["quality"], "legacy_unverified")
+        self.assertEqual(len(both), 2)
 
     def test_get_snapshots_account_filter_composes_with_the_window(self):
         self._seed(bankrolls=[900.0], hours_ago=[3], paper=True)
@@ -581,22 +584,10 @@ class ReadPathTests(ServiceTestCase):
         self._seed(bankrolls=[100.0], hours_ago=[1], paper=True)
         row = self._all_rows()[0]
         payload = svc.serialize_snapshot(row)
-        self.assertEqual(
-            sorted(payload),
-            [
-                "bankroll",
-                "bucket_hour",
-                "captured_at",
-                "is_paper",
-                "positions_count",
-                "total_current_value",
-                "total_invested",
-                "unrealized_pnl",
-                "usdc_balance",
-            ],
-        )
         self.assertTrue(payload["is_paper"])
-        self.assertEqual(payload["bankroll"], 100.0)
+        self.assertIsNone(payload["bankroll"])
+        self.assertEqual(payload["quality"], "legacy_unverified")
+        self.assertEqual(payload["legacy_reported_balance"], 100.0)
 
 
 class AlembicChainTests(unittest.TestCase):

@@ -3,11 +3,14 @@ from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
-from paper_account_fixtures import db, evidence, order  # noqa: F401
+from paper_account_fixtures import db as _paper_db
+from paper_account_fixtures import evidence, order
 
 from app.models import PaperAccount, PaperJournalEvent, PaperNavPoint, PaperOrderRecord, UserTrade
 from app.services.analytics import paper_accounting as paper
 from app.services.users.account_service import AccountAccessDenied
+
+db = _paper_db
 
 
 def test_mark_change_without_trade_and_partial_exit_reconcile(db):
@@ -156,3 +159,136 @@ def test_order_semantics_are_explicit(db, kwargs, reason):
     session, _ = db
     assert order(session, **kwargs)["reason"] == reason
     assert session.query(UserTrade).count() == 0
+
+
+def test_legacy_reprocessor_preserves_numbers_and_requires_exclusion_epoch(db):
+    import json
+
+    from app.services.analytics.paper_history import classify
+
+    session, _ = db
+    session.delete(session.get(PaperAccount, 1))
+    old = UserTrade(
+        user_id=1,
+        account_id=1,
+        market_id="legacy",
+        token_id="11",
+        action="buy",
+        amount=100,
+        price=0.5,
+        status="simulated",
+        pnl=20,
+    )
+    session.add(old)
+    session.flush()
+    assert classify(session)["legacy_unverified"] == 1
+    assert old.calculation_details is None
+    classify(session, apply=True)
+    assert json.loads(old.calculation_details)["model_version"] == "legacy_unverified"
+    assert old.amount == 100 and old.pnl == 20
+    state = paper.account_state(session, 1, 1)
+    assert paper.value_account(session, state)["nav"] is None
+    assert order(session)["status"] == "unfilled"
+    paper.configure_account(session, 1, 1, fee_bps=0, acknowledge_legacy=True)
+    assert Decimal(paper.value_account(session, state)["nav"]) == 1000
+    assert session.query(PaperJournalEvent).count() == 0
+
+
+def test_cashflow_and_limit_formatting_do_not_change_idempotent_economics(db):
+    session, _ = db
+    paper.cash_flow(session, 1, 1, "canonical", "100")
+    paper.cash_flow(session, 1, 1, "canonical", "100.0")
+    first = order(session, limit_price=Decimal("0.40"))
+    assert order(session, limit_price=Decimal("0.4")) == first
+
+
+@pytest.mark.parametrize("winner,expected", [("11", 1015), ("22", 990)])
+def test_binary_final_payouts_reconcile_without_redemption(db, winner, expected):
+    session, clock = db
+    order(session)
+    clock[0] += timedelta(seconds=1)
+    evidence(session, clock, final=winner)
+    paper.settle_captured(session, 1, 1)
+    value = paper.value_account(session, session.get(PaperAccount, 1))
+    assert Decimal(value["nav"]) == expected
+    assert Decimal(value["realized_pnl"]) == expected - 1000
+
+
+def test_void_or_disputed_payouts_stay_unresolved(db):
+    session, clock = db
+    order(session)
+    clock[0] += timedelta(seconds=1)
+    evidence(session, clock, final="void")
+    assert paper.settle_captured(session, 1, 1) == 0
+    assert paper.value_account(session, session.get(PaperAccount, 1))["nav"] is None
+    assert paper.restore(session, session.get(PaperAccount, 1)).positions["11"].shares == 25
+
+
+def test_zero_funding_insufficient_collateral_and_latency_abstention(db):
+    session, _ = db
+    paper.configure_account(session, 1, 1, funding=0)
+    assert order(session)["status"] == "unfilled"
+    assert paper.restore(session, session.get(PaperAccount, 1)).cash == 0
+    paper.configure_account(session, 1, 1, funding=1, fee_bps=100)
+    partial = order(session, key="poor")
+    assert partial["status"] == "partial"
+    assert paper.restore(session, session.get(PaperAccount, 1)).available_cash >= 0
+    paper.configure_account(session, 1, 1, policy={"latency_ms": 200})
+    assert order(session, key="latency")["reason"] == "NO_POST_LATENCY_EXECUTION_EVIDENCE"
+
+
+def test_feature_disabled_never_writes_economic_events(db, monkeypatch):
+    from app.config import get_settings
+
+    session, _ = db
+    monkeypatch.setattr(get_settings(), "paper_journal_v2_enabled", False)
+    assert order(session)["reason"] == "PAPER_JOURNAL_DISABLED"
+    assert session.query(PaperJournalEvent).count() == session.query(UserTrade).count() == 0
+
+
+def test_cash_withdrawal_cannot_spend_reservations_and_cancel_releases_once():
+    from app.services.analytics.replay.ledger import PaperLedger
+
+    ledger = PaperLedger(Decimal(1000))
+    ledger.reserve("reserve", "11", "BUY", Decimal(100), Decimal("0.4"), Decimal(100))
+    with pytest.raises(ValueError, match="withdrawal"):
+        ledger.cash_flow("withdraw", Decimal(-960))
+    assert ledger.cash == 1000 and ledger.reserved_cash == Decimal("40.4")
+    ledger.cancel("cancel", "reserve")
+    ledger.cancel("cancel", "reserve")
+    ledger.cash_flow("withdraw", Decimal(-960))
+    assert ledger.cash == ledger.funding == 40 and ledger.reserved_cash == 0
+
+
+def test_revised_final_payout_quarantines_nav_and_future_spending(db):
+    session, clock = db
+    order(session)
+    clock[0] += timedelta(seconds=1)
+    evidence(session, clock, final="11")
+    paper.settle_captured(session, 1, 1)
+    clock[0] += timedelta(seconds=1)
+    evidence(session, clock, final="22")
+    state = session.get(PaperAccount, 1)
+    value = paper.value_account(session, state)
+    assert value["nav"] is None and value["quality"] == "incomplete"
+    assert value["settlement_issues"] == {"11": "SETTLED_PAYOUT_REVISED"}
+    assert order(session, key="post-dispute")["reason"] == "SETTLEMENT_RECONCILIATION_REQUIRED"
+    with pytest.raises(ValueError, match="reconciliation"):
+        paper.cash_flow(session, 1, 1, "withdraw-disputed", "-1")
+    assert paper.restore(session, state).cash == 1015
+
+
+def test_unsupported_native_tick_is_unknown_and_cannot_partially_book(db):
+    import json
+
+    from app.models import ReplayCapture
+    from app.services.market_data.replay_capture import digest
+
+    session, _ = db
+    row = session.query(ReplayCapture).filter_by(kind="book", token_id="11").one()
+    raw = json.loads(row.payload_json)
+    raw["venue"]["tick_size"] = "0.03"
+    row.payload_json = json.dumps(raw)
+    row.content_hash = digest(raw)
+    assert order(session)["reason"] == "VENUE_SIZE_RULES_UNKNOWN"
+    assert session.query(PaperJournalEvent).count() == 0

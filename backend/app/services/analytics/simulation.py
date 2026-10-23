@@ -231,26 +231,48 @@ def simulate_market_maker_fill(
     }
 
 
-def get_paper_summary(db: Session, user_id: int) -> dict[str, Any]:
-    """Paper-trading summary for a user, tracked separately from real equity.
+def get_paper_summary(db: Session, user_id: int, account_id=None) -> dict[str, Any]:
+    """Current journal NAV/PnL; historical simulated rows are not cash evidence."""
+    from sqlalchemy import or_
 
-    Paper PnL is the sum of ``pnl`` over the user's simulated trades;
-    ``paper_balance`` is the configurable paper starting balance. Real
-    equity is never touched by paper mode.
-    """
-    settings = UserPreferencesRepository(db).get_settings(user_id)
-    paper_balance = (
-        float(settings.paper_balance)
-        if settings is not None and settings.paper_balance is not None
-        else DEFAULT_PAPER_BALANCE
+    from app.models import AccountSettings, PaperAccount, UserTrade
+    from app.services.analytics.paper_accounting import value_account
+    from app.services.analytics.paper_equity import owner
+
+    account = owner(db, user_id, account_id)
+    settings = (
+        UserPreferencesRepository(db).get_settings(user_id)
+        if account.is_default
+        else db.query(AccountSettings).filter_by(account_id=account.id).first()
     )
-    simulated = AnalyticsTradeRepository(db).simulated_trades(user_id)
-    paper_pnl = sum(float(t.pnl or 0.0) for t in simulated)
+    state = db.get(PaperAccount, account.id) if get_settings().paper_journal_v2_enabled else None
+    trades = (
+        db.query(UserTrade)
+        .filter(
+            UserTrade.user_id == user_id,
+            UserTrade.status == "simulated",
+            or_(UserTrade.account_id == account.id, UserTrade.account_id.is_(None))
+            if account.is_default
+            else UserTrade.account_id == account.id,
+        )
+        .all()
+    )
+    value = value_account(db, state) if state else None
     return {
-        "simulation_mode": bool(settings is not None and settings.simulation_mode),
-        "paper_balance": round(paper_balance, 2),
-        "paper_pnl": round(paper_pnl, 2),
-        "simulated_trades": len(simulated),
+        "simulation_mode": bool(settings and settings.simulation_mode),
+        "paper_balance": float(state.funding)
+        if state
+        else float(settings.paper_balance if settings else DEFAULT_PAPER_BALANCE),
+        "paper_pnl": float(value["net_pnl"]) if value and value["net_pnl"] is not None else None,
+        "paper_nav": float(value["nav"]) if value and value["nav"] is not None else None,
+        "quality": value["quality"] if value else "legacy_unverified",
+        "model_version": value["model_version"] if value else "legacy_unverified",
+        "simulated_trades": sum(
+            '"paper_journal_order_id"' in (t.calculation_details or "") for t in trades
+        ),
+        "legacy_simulated_trades": sum(
+            '"paper_journal_order_id"' not in (t.calculation_details or "") for t in trades
+        ),
     }
 
 

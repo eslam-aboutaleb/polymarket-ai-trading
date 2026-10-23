@@ -6,7 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_strict_account
 from app.api.routes.auth.auth import get_current_user_from_token
+from app.models import Account
 from app.models.users.user import validate_profile_picture_url
 from app.models.users.user_settings import (
     AIBackendType,
@@ -337,7 +339,11 @@ class PaperSummaryResponse(BaseModel):
 
     simulation_mode: bool = False
     paper_balance: float = 1000.0
-    paper_pnl: float = 0.0
+    paper_pnl: float | None = None
+    paper_nav: float | None = None
+    quality: str = "legacy_unverified"
+    model_version: str = "legacy_unverified"
+    legacy_simulated_trades: int = 0
     simulated_trades: int = 0
 
 
@@ -345,6 +351,7 @@ class PaperSummaryResponse(BaseModel):
 async def get_paper_summary(
     current_user: dict = Depends(get_current_user_from_token),
     db: Session = Depends(get_db),
+    account: Account = Depends(get_strict_account),
 ):
     """Paper-trading summary: balance and realized paper PnL.
 
@@ -354,7 +361,7 @@ async def get_paper_summary(
     from app.services.analytics.simulation import get_paper_summary as _paper_summary
 
     user_id = current_user.get("user_id")
-    return PaperSummaryResponse(**_paper_summary(db, user_id))
+    return PaperSummaryResponse(**_paper_summary(db, user_id, account.id))
 
 
 @router.get("/backends/status", response_model=AIBackendStatusResponse)

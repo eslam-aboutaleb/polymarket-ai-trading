@@ -8,6 +8,7 @@ import json
 import logging
 import re
 from collections import Counter
+from contextlib import contextmanager
 from decimal import ROUND_DOWN, Decimal, localcontext
 from uuid import uuid4
 
@@ -62,6 +63,20 @@ def identity(value):
     return value
 
 
+@contextmanager
+def transaction(db):
+    # sqlite3 legacy transaction mode must not turn RELEASE SAVEPOINT into a
+    # hidden commit. PostgreSQL already begins a real transaction here.
+    connection = db.connection()
+    if (
+        connection.dialect.name == "sqlite"
+        and not connection.connection.driver_connection.in_transaction
+    ):
+        connection.exec_driver_sql("BEGIN")
+    with db.begin_nested():
+        yield
+
+
 def account_state(db: Session, user_id: int, account_id: int | None = None) -> PaperAccount:
     owner = (
         get_personal_account_read_only(db, user_id)
@@ -71,7 +86,7 @@ def account_state(db: Session, user_id: int, account_id: int | None = None) -> P
     if owner is None:
         raise AccountAccessDenied("paper account is unavailable")
     db.query(Account).filter_by(id=owner.id, owner_user_id=user_id).with_for_update().one()
-    state = db.get(PaperAccount, owner.id)
+    state = db.query(PaperAccount).filter_by(account_id=owner.id).populate_existing().first()
     if state is None:
         settings = (
             db.query(AccountSettings).filter_by(account_id=owner.id).first()
@@ -131,7 +146,16 @@ def restore(db: Session, state: PaperAccount, as_of=None) -> PaperLedger:
 
 
 def book_event(db, state, ledger, event_id, method, *args, observed_at=None):
-    body = json.dumps({"method": method, "args": [str(a) for a in args]}, sort_keys=True)
+    body = json.dumps(
+        {
+            "method": method,
+            "args": [
+                str(a.normalize(ACCOUNTING_CONTEXT)) if isinstance(a, Decimal) else str(a)
+                for a in args
+            ],
+        },
+        sort_keys=True,
+    )
     previous = (
         db.query(PaperJournalEvent)
         .filter_by(account_id=state.account_id, event_id=event_id)
@@ -190,7 +214,7 @@ def configure_account(
     acknowledge_legacy=False,
     funding=None,
 ):
-    with db.begin_nested():
+    with transaction(db):
         state = account_state(db, user_id, account_id)
         if funding is not None:
             if db.query(PaperJournalEvent.id).filter_by(account_id=state.account_id).first():
@@ -215,10 +239,12 @@ def configure_account(
 
 
 def find_paper_intent(db, user_id, intent_key, account_id=None):
-    state = account_state(db, user_id, account_id)
+    from app.services.analytics.paper_equity import owner
+
+    account = owner(db, user_id, account_id)
     row = (
         db.query(PaperOrderRecord)
-        .filter_by(account_id=state.account_id, user_id=user_id, intent_key=intent_key)
+        .filter_by(account_id=account.id, user_id=user_id, intent_key=intent_key)
         .first()
     )
     return json.loads(row.result_json) if row else None
@@ -246,26 +272,26 @@ def submit_paper_order(
     identity(token_id)
     identity(strategy)
     if limit_price is not None:
-        limit_price = decimal(limit_price, "limit price")
+        limit_price = decimal(limit_price, "limit price").normalize(ACCOUNTING_CONTEXT)
         if limit_price > 1:
             raise ValueError("limit price exceeds binary payout")
     key = identity(intent_key or str(uuid4()))
-    with localcontext(ACCOUNTING_CONTEXT), db.begin_nested():
-        if not get_settings().paper_journal_v2_enabled:
-            return {
-                "order_id": str(uuid4()),
-                "status": "unfilled",
-                "shares": "0",
-                "notional_usdc": "0",
-                "fee_usdc": "0",
-                "fill_price": None,
-                "realized_pnl": "0",
-                "reason": "PAPER_JOURNAL_DISABLED",
-                "model_version": MODEL,
-                "is_simulated": True,
-                "strategy": strategy,
-                "account_id": account_id,
-            }
+    if not get_settings().paper_journal_v2_enabled:
+        return {
+            "order_id": str(uuid4()),
+            "status": "unfilled",
+            "shares": "0",
+            "notional_usdc": "0",
+            "fee_usdc": "0",
+            "fill_price": None,
+            "realized_pnl": "0",
+            "reason": "PAPER_JOURNAL_DISABLED",
+            "model_version": MODEL,
+            "is_simulated": True,
+            "strategy": strategy,
+            "account_id": account_id,
+        }
+    with localcontext(ACCOUNTING_CONTEXT), transaction(db):
         state = account_state(db, user_id, account_id)
         request_hash = digest(
             [
@@ -338,6 +364,8 @@ def submit_paper_order(
         try:
             if legacy_blocked(state):
                 raise EvidenceUnavailable("LEGACY_HISTORY_REQUIRES_EXPLICIT_FUNDING_EPOCH")
+            if settlement_issues(db, state, ledger, moment):
+                raise EvidenceUnavailable("SETTLEMENT_RECONCILIATION_REQUIRED")
             if state.fee_bps is None:
                 raise EvidenceUnavailable("FEES_UNKNOWN")
             if strategy in {"market_maker", "maker"}:
@@ -357,6 +385,14 @@ def submit_paper_order(
                 book_content_id=evidence.book.liquidity_id or evidence.book.snapshot_id,
                 source_at=evidence.book.source_at.isoformat(),
                 received_at=evidence.book.observed_at.isoformat(),
+                dataset_snapshot_id=evidence.capture_id,
+            )
+            result["policy"].update(
+                tick_size=str(evidence.tick_size),
+                minimum_shares=str(evidence.minimum_shares),
+                book_data_quality="native_receipt_depth",
+                market_as_of=moment.isoformat(),
+                simulation_policy_version=MODEL,
             )
             levels = evidence.book.asks if side.upper() == "BUY" else evidence.book.bids
             if not levels:
@@ -468,6 +504,10 @@ def submit_paper_order(
                         {
                             "paper_journal_order_id": result["order_id"],
                             "model_version": MODEL,
+                            "quality": "modeled_not_exchange_confirmed",
+                            "amount_units": "USDC",
+                            "filled_size_units": "SHARES",
+                            "requested_units": units,
                             "fee_source": "explicit_account_assumption",
                             "capture_id": evidence.capture_id,
                         }
@@ -508,8 +548,44 @@ def submit_paper_order(
         return result
 
 
+def settlement_issues(db, state, ledger, moment):
+    """A revised/disputed final receipt cannot silently leave proven current NAV."""
+    if not ledger.settled_tokens:
+        return {}
+    versions, conditions = position_rule_versions(db, state, moment)
+    issues = {}
+    for event in ledger.journal:
+        if event["kind"] != "SETTLED":
+            continue
+        token, payout = event["details"]
+        try:
+            if len(versions.get(token, set())) != 1:
+                raise EvidenceUnavailable("SETTLED_RULE_IDENTITY_UNAVAILABLE")
+            current = final_payout(
+                db, token, conditions[token], next(iter(versions[token])), moment
+            )
+            if current != Decimal(payout):
+                raise EvidenceUnavailable("SETTLED_PAYOUT_REVISED")
+        except EvidenceUnavailable as error:
+            issues[token] = str(error)
+    return issues
+
+
 def value_account(db, state, as_of=None):
+    # Hold a shared account lock across journal, rule-version and mark reads so
+    # another writer cannot interleave two different economic states.
+    db.query(Account).filter_by(id=state.account_id, owner_user_id=state.user_id).with_for_update(
+        read=True
+    ).one()
+    state = (
+        db.query(PaperAccount)
+        .filter_by(account_id=state.account_id, user_id=state.user_id)
+        .populate_existing()
+        .one()
+    )
     moment = aware(as_of) if as_of else utc_now()
+    if moment > utc_now():
+        raise ValueError("paper valuations cannot be future-dated")
     if moment < aware(state.started_at):
         raise ValueError("paper account did not exist at requested time")
     ledger = restore(db, state, moment)
@@ -531,6 +607,7 @@ def value_account(db, state, as_of=None):
             marks[token] = bids[0].price
             provenance[token] = {
                 "capture_id": evidence.capture_id,
+                "price": str(bids[0].price),
                 "source_at": evidence.book.source_at.isoformat(),
                 "received_at": evidence.book.observed_at.isoformat(),
                 "rule_hash": evidence.rule_hash,
@@ -539,13 +616,25 @@ def value_account(db, state, as_of=None):
         except EvidenceUnavailable as error:
             reasons[token] = str(error)
     value = ledger.value(marks)
+    issues = settlement_issues(db, state, ledger, moment)
+    if issues:
+        value.update(nav=None, net_pnl=None, unrealized_pnl=None, position_value=None)
+        metrics["settlement_reconciliation_required"] += 1
     value.update(
+        settlement_issues=issues,
         account_id=state.account_id,
         user_id=state.user_id,
         as_of=moment.isoformat(),
         funding=str(ledger.funding),
+        cash_flow_count=sum(event["kind"] == "CASH_FLOW" for event in ledger.journal),
         mark_provenance=provenance,
         mark_reasons=reasons,
+        policy={
+            **policy.model_dump(mode="json"),
+            "fee_bps": str(state.fee_bps) if state.fee_bps is not None else None,
+            "fee_source": "explicit_account_assumption",
+            "mark_convention": "indicative_exit_bid",
+        },
         fee_bps=str(state.fee_bps) if state.fee_bps is not None else None,
         model_version=MODEL,
         is_paper=True,
@@ -592,17 +681,19 @@ def capture_nav(db, state, as_of=None):
 def cash_flow(db, user_id, account_id, event_id, amount):
     change = Decimal(str(amount))
     decimal(abs(change), "cash flow")
-    with localcontext(ACCOUNTING_CONTEXT), db.begin_nested():
+    with localcontext(ACCOUNTING_CONTEXT), transaction(db):
         state = account_state(db, user_id, account_id)
         if legacy_blocked(state):
             raise ValueError("acknowledge exclusion of legacy history before funding a new epoch")
         ledger = restore(db, state)
+        if change < 0 and settlement_issues(db, state, ledger, utc_now()):
+            raise ValueError("settlement reconciliation required before withdrawing paper cash")
         book_event(db, state, ledger, "cash:" + identity(event_id), "cash_flow", change)
         return value_account(db, state)
 
 
 def settle_captured(db, user_id, account_id=None, as_of=None):
-    with localcontext(ACCOUNTING_CONTEXT), db.begin_nested():
+    with localcontext(ACCOUNTING_CONTEXT), transaction(db):
         state = account_state(db, user_id, account_id)
         if legacy_blocked(state):
             return 0
@@ -631,3 +722,55 @@ def settle_captured(db, user_id, account_id=None, as_of=None):
             )
             count += 1
         return count
+
+
+def settings_for_account(db, user_id, account_id=None):
+    from app.services.analytics.paper_equity import owner
+
+    account = owner(db, user_id, account_id)
+    settings = (
+        db.query(UserSettings).filter_by(user_id=user_id).first()
+        if account.is_default
+        else db.query(AccountSettings).filter_by(account_id=account.id).first()
+    )
+    if settings is not None and not account.is_default:
+        # The existing safety gate accepts UserSettings-shaped objects. This
+        # transient owner identity is never persisted or accepted from a caller.
+        settings.user_id = user_id
+    return settings
+
+
+def paper_positions(db, user_id, account_id=None):
+    from app.services.analytics.paper_equity import owner
+
+    account = owner(db, user_id, account_id)
+    state = db.get(PaperAccount, account.id)
+    if state is None:
+        return []
+    if legacy_blocked(state):
+        return []
+    ledger = restore(db, state)
+    _, conditions = position_rule_versions(db, state)
+    return [
+        {
+            "asset_id": token,
+            "size": float(position.shares),
+            "condition_id": conditions.get(token),
+            "avgPrice": float(position.cost_basis / position.shares),
+        }
+        for token, position in ledger.positions.items()
+        if position.shares
+    ]
+
+
+def open_conditions(db, state):
+    """Discovery only; fresh accounting is re-read after the native receipts arrive."""
+    positions = restore(db, state).positions
+    _, conditions = position_rule_versions(db, state)
+    return sorted(
+        {
+            conditions[token]
+            for token, position in positions.items()
+            if position.shares and token in conditions
+        }
+    )[:10]

@@ -237,6 +237,8 @@ class FollowingFeedEventResponse(BaseModel):
 
 
 class CopyTradeRecord(BaseModel):
+    model_version: str | None = None
+    execution_quality: str = "live"
     id: int
     trader_wallet: str
     market_id: str
@@ -790,6 +792,17 @@ async def get_copy_trades(
             copy_wallet_mode_applied=t.get("copy_wallet_mode_applied"),
             calculation_warning=t.get("calculation_warning"),
             calculation_details=_safe_json_obj(t.get("calculation_details")),
+            model_version=(_safe_json_obj(t.get("calculation_details")) or {}).get(
+                "model_version", "legacy_unverified"
+            )
+            if t.get("status") == "simulated"
+            else None,
+            execution_quality="modeled_not_exchange_confirmed"
+            if t.get("status") == "simulated"
+            and (_safe_json_obj(t.get("calculation_details")) or {}).get("paper_journal_order_id")
+            else "legacy_unverified"
+            if t.get("status") == "simulated"
+            else "live",
         )
         for t in trades
     ]
@@ -1253,6 +1266,8 @@ class EdgeScoreResponse(BaseModel):
 
 
 class ExecutionTradeRecord(BaseModel):
+    model_version: str | None = None
+    execution_quality: str = "live_order_record"
     id: int
     market_id: str
     token_id: str | None = None
