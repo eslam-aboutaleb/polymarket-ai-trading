@@ -324,7 +324,8 @@ async def market_research_stream(
                 async with asyncio.timeout(settings.grpc_timeout * 2):
                     response = await client.analyze_market(
                         market_title=context.question,
-                        market_description=research_prompt(context),
+                        market_description=context.rules.text,
+                        research_instructions=research_prompt(context),
                         yes_price=prices["YES"],
                         no_price=prices["NO"],
                         volume_24h=0,
@@ -332,6 +333,8 @@ async def market_research_stream(
                         include_research=request.include_research,
                         llm_config=llm_config,
                     )
+                if response.get("metadata", {}).get("research_contract") != "market-research-v1":
+                    raise RuntimeError("Provider does not support the typed research contract")
                 result = finalize_research(
                     context,
                     response.get("analysis", ""),
