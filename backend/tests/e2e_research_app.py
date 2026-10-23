@@ -8,7 +8,9 @@ No wallet, signing key, production database, or live provider is needed.
 import asyncio
 import json
 from copy import deepcopy
+from datetime import UTC, datetime
 
+import httpx
 from fastapi import FastAPI
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -16,10 +18,11 @@ from sqlalchemy.pool import StaticPool
 
 from app.api.routes.analysis import analysis
 from app.api.routes.auth.auth import get_current_user_from_token, get_optional_user_from_token
-from app.api.routes.trading import follower_replay, market_maker
+from app.api.routes.trading import follower_replay, market_maker, replay_evidence
 from app.config import get_settings
 from app.models.analytics.follower_experiment import FollowerExperimentRun
 from app.models.market_data.market_observation import MarketObservation
+from app.models.market_data.replay_capture import ReplayCapture
 from app.models.trading.market_maker_config import MarketMakerConfig
 from app.models.trading.paper_maker_intent import PaperMakerIntent
 from app.models.users.account import Account
@@ -40,6 +43,7 @@ class FixtureVenue:
                 "Resolves YES if the official final tally passes the measure. A tie resolves NO."
             ),
             "active": True,
+            "accepting_orders": True,
             "closed": False,
             "end_date_iso": "2026-11-03T23:59:00Z",
             "tokens": [
@@ -71,6 +75,7 @@ for table in (
     User.__table__,
     Account.__table__,
     MarketObservation.__table__,
+    ReplayCapture.__table__,
     FollowerExperimentRun.__table__,
     MarketMakerConfig.__table__,
     PaperMakerIntent.__table__,
@@ -94,10 +99,12 @@ with FixtureSession() as seed:
         )
     )
     seed.commit()
+app.include_router(replay_evidence.router)
 app.include_router(follower_replay.router)
 app.include_router(market_maker.router)
 app.dependency_overrides[get_current_user_from_token] = lambda: {"user_id": 1}
 get_settings().follower_replay_enabled = True
+get_settings().native_capture_enabled = True
 
 
 def fixture_db():
@@ -198,3 +205,71 @@ async def fixture_maker_cycle():
             [{"token_id": "YES", "side": "BUY", "price": 0.45, "size": 10}],
             {"best_bid": 0.49, "best_ask": 0.51, "depth": 1000},
         )
+
+
+async def fixture_capture_venue():
+    from app.services.market_data.replay_capture import PublicVenueCapture
+
+    last_condition = CID
+
+    async def respond(request):
+        nonlocal last_condition
+        now = datetime.now(UTC)
+        if request.url.path.startswith("/markets/"):
+            last_condition = request.url.path.rsplit("/", 1)[1]
+            return httpx.Response(
+                200, json=await FixtureVenue().get_market_outcome_tokens(last_condition)
+            )
+        if request.url.path == "/markets":
+            condition = request.url.params["condition_ids"]
+            raw = await FixtureVenue().get_market_outcome_tokens(condition)
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "conditionId": condition,
+                        "question": raw["question"],
+                        "description": raw.get("description", ""),
+                        "resolutionSource": "https://official.example/tally",
+                        "active": True,
+                        "closed": False,
+                        "outcomes": '["No","Yes"]',
+                        "clobTokenIds": '["22","11"]',
+                    }
+                ],
+            )
+        if request.url.path == "/activity":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "conditionId": CID,
+                        "asset": "11",
+                        "proxyWallet": request.url.params["user"],
+                        "type": "TRADE",
+                        "side": "BUY",
+                        "price": ".4",
+                        "size": "25",
+                        "timestamp": int(now.timestamp()) - 10,
+                        "transactionHash": "0x" + "aa" * 32,
+                    }
+                ],
+            )
+        if request.url.path == "/book":
+            return httpx.Response(
+                200,
+                json={
+                    "market": last_condition,
+                    "asset_id": request.url.params["token_id"],
+                    "timestamp": str(int(now.timestamp() * 1000)),
+                    "bids": [{"price": ".39", "size": "100"}],
+                    "asks": [{"price": ".4", "size": "100"}],
+                },
+            )
+        return httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        yield PublicVenueCapture(client)
+
+
+app.dependency_overrides[replay_evidence.get_capture_venue] = fixture_capture_venue
