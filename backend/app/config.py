@@ -34,6 +34,7 @@ _ROLES = frozenset(role.value for role in ProcessRole)
 class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
 
+    native_capture_enabled: bool = False
     follower_replay_enabled: bool = False
 
     # API Configuration

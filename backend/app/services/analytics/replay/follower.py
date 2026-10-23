@@ -23,6 +23,13 @@ class Signal(FrozenInput):
     token_id: Identifier
     first_seen_at: AwareDatetime
     side: Literal["BUY", "SELL"]
+    source_at: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def source_clock(self):
+        if self.source_at is not None and self.source_at > self.first_seen_at:
+            raise ValueError("signal source clock cannot exceed first receipt")
+        return self
 
 
 class Level(FrozenInput):
@@ -31,6 +38,7 @@ class Level(FrozenInput):
 
 
 class Book(FrozenInput):
+    liquidity_id: Identifier | None = None
     snapshot_id: Identifier
     token_id: Identifier
     observed_at: AwareDatetime
@@ -117,7 +125,7 @@ def replay(experiment: FollowerExperiment) -> dict:
     """All scenario arithmetic uses a fixed context, independent of host settings."""
     with localcontext(ACCOUNTING_CONTEXT):
         return {
-            "model_version": "follower-replay-v1",
+            "model_version": "follower-replay-v2",
             "dataset_hash": hashlib.sha256(
                 experiment.dataset.model_dump_json().encode()
             ).hexdigest(),
@@ -137,6 +145,8 @@ def _scenario(exp: FollowerExperiment, delay: int) -> dict:
     seen = set()
     for signal in exp.dataset.signals:
         if signal.event_id in seen or not exp.start_at <= signal.first_seen_at <= exp.end_at:
+            continue
+        if signal.source_at is not None and signal.source_at < exp.start_at:
             continue
         seen.add(signal.event_id)
         eligible = signal.first_seen_at + timedelta(seconds=delay)
@@ -196,7 +206,12 @@ def _scenario(exp: FollowerExperiment, delay: int) -> dict:
             if level.price % exp.tick_size:
                 row["reason"] = "invalid_tick"
                 break
-            key = (book.snapshot_id, event.side, index)
+            key = (
+                event.token_id,
+                book.liquidity_id or book.snapshot_id,
+                event.side,
+                level.price if book.liquidity_id else index,
+            )
             capacity = level.shares - used.get(key, Decimal(0))
             shares = min(capacity, remaining / level.price)
             if event.side == "SELL":

@@ -126,6 +126,12 @@ jobs:
       - name: Run PostgreSQL schema migrations
         working-directory: backend
         run: uv run --frozen alembic upgrade head
+      - name: Native capture PostgreSQL concurrency
+        working-directory: backend
+        env:
+          PYTHONPATH: .:../services/shared
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: uv run --frozen pytest --no-cov tests/integration/test_native_capture_postgres.py
       - name: Seed disposable admin test wallet
         env:
           PYTHONPATH: ${{ github.workspace }}/backend:${{ github.workspace }}/services/shared
