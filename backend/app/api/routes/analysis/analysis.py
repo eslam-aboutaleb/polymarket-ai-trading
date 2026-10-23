@@ -5,12 +5,14 @@ import contextlib
 import json
 import logging
 from collections import OrderedDict
+from datetime import datetime
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.deps import optional_plan_quota
@@ -38,6 +40,7 @@ from app.services.intelligence.market_research import (
     research_prompt,
 )
 from app.services.intelligence.user_preferences import get_user_settings
+from app.services.market_data.market_observations import append_observation, observation_history
 from app.services.market_data.polymarket_service import get_polymarket_service
 from app.services.users.entitlement_service import CAP_OPPORTUNITY_SCAN
 from app.utils.cache import opportunity_cache
@@ -245,10 +248,13 @@ async def get_analysis_client_for_user(
 )
 async def market_context(
     condition_id: str = Path(pattern=r"^0x[0-9a-fA-F]{64}$"),
+    db: Session = Depends(get_db),
 ):
     """Public, read-only venue context. Never reads credentials or places orders."""
     try:
-        return await fetch_market_context(get_polymarket_service(), condition_id)
+        context = await fetch_market_context(get_polymarket_service(), condition_id)
+        append_observation(db, context)
+        return context
     except MarketIdentityError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except httpx.HTTPStatusError as exc:
@@ -256,6 +262,40 @@ async def market_context(
         raise HTTPException(status_code=code, detail="Market source unavailable") from exc
     except (httpx.RequestError, ValueError) as exc:
         raise HTTPException(status_code=503, detail="Market source unavailable") from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=503, detail="Market observation storage unavailable"
+        ) from exc
+
+
+class MarketContextHistory(BaseModel):
+    observations: list[MarketContext]
+
+
+@router.get(
+    "/markets/{condition_id}/observations",
+    response_model=MarketContextHistory,
+    dependencies=[Depends(_analysis_rate_limit)],
+)
+async def market_observations(
+    condition_id: str = Path(pattern=r"^0x[0-9a-fA-F]{64}$"),
+    as_of: datetime | None = Query(default=None),
+    limit: int = Query(default=25, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """Public observations received by as_of, newest first; no private analyses."""
+    boundary = as_of or utc_now()
+    if boundary.tzinfo is None:
+        raise HTTPException(status_code=422, detail="as_of must include a timezone")
+    try:
+        return MarketContextHistory(
+            observations=observation_history(db, condition_id, boundary, limit)
+        )
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503, detail="Market observation storage unavailable"
+        ) from exc
 
 
 @router.post("/market/research/stream", dependencies=[Depends(_analysis_rate_limit)])
@@ -265,7 +305,7 @@ async def market_research_stream(
     db: Session = Depends(get_db),
 ):
     """Typed research over the existing user-selected agent; no trading actions."""
-    context = await market_context(request.condition_id)
+    context = await market_context(request.condition_id, db=db)
 
     async def events():
         client = None

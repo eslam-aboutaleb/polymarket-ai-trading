@@ -58,6 +58,23 @@ export function isMarketContext(value: unknown): value is MarketContext {
 }
 
 export const marketContextService = {
+  async history(conditionId: string, asOf?: string): Promise<MarketContext[]> {
+    const query = new URLSearchParams({ limit: "25" });
+    if (asOf) query.set("as_of", asOf);
+    const result = await apiClient.get<{ observations: unknown[] }>(
+      `/api/analysis/markets/${encodeURIComponent(conditionId)}/observations?${query}`,
+    );
+    if (
+      !Array.isArray(result.observations) ||
+      !result.observations.every(
+        (value) =>
+          isMarketContext(value) && value.condition_id.toLowerCase() === conditionId.toLowerCase(),
+      )
+    ) {
+      throw new Error("Observation history returned an invalid or mismatched market.");
+    }
+    return result.observations as MarketContext[];
+  },
   async get(conditionId: string): Promise<MarketContext> {
     const context = await apiClient.get<unknown>(
       `/api/analysis/markets/${encodeURIComponent(conditionId)}/context`,

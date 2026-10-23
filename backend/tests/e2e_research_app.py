@@ -10,14 +10,18 @@ import json
 from copy import deepcopy
 
 from fastapi import FastAPI
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.api.routes.analysis import analysis
 from app.api.routes.auth.auth import get_optional_user_from_token
+from app.models.market_data.market_observation import MarketObservation
 from app.security.rate_limit import limiter
 from app.utils.database import get_db
 
 CID = "0x" + "ab" * 32
-revised_source = False
+revised_conditions: set[str] = set()
 
 
 class FixtureVenue:
@@ -41,7 +45,7 @@ class FixtureVenue:
             raw["tokens"][0]["price"] = None
         if condition_id == "0x" + "ef" * 32:
             raw["condition_id"] = CID
-        if condition_id == "0x" + "16" * 32 and revised_source:
+        if condition_id in revised_conditions:
             raw["description"] += " Revised: certification must be final."
             raw["tokens"][1]["price"] = "0.8"
         return deepcopy(raw)
@@ -53,7 +57,19 @@ limiter.enabled = False  # Deterministic parallel test traffic, not a production
 analysis.get_polymarket_service = FixtureVenue
 app.include_router(analysis.router)
 app.dependency_overrides[get_optional_user_from_token] = lambda: None
-app.dependency_overrides[get_db] = lambda: None
+fixture_engine = create_engine(
+    "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+)
+MarketObservation.__table__.create(fixture_engine)
+FixtureSession = sessionmaker(bind=fixture_engine)
+
+
+def fixture_db():
+    with FixtureSession() as session:
+        yield session
+
+
+app.dependency_overrides[get_db] = fixture_db
 
 
 class FixtureAgent:
@@ -115,9 +131,8 @@ analysis.get_analysis_client_for_user = fixture_agent
 
 
 @app.post("/fixtures/revise-source")
-def revise_source():
-    global revised_source
-    revised_source = True
+def revise_source(condition_id: str = "0x" + "16" * 32):
+    revised_conditions.add(condition_id)
     return {"revised": True}
 
 
