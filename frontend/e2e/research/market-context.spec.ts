@@ -7,7 +7,10 @@ test.beforeEach(async ({ page }) => {
   // FastAPI, which uses a controlled external venue boundary.
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (path.startsWith("/api/analysis/markets/")) {
+    if (
+      path.startsWith("/api/analysis/markets/") ||
+      path === "/api/analysis/market/research/stream"
+    ) {
       return route.continue();
     }
     if (path === "/api/accounts") return route.fulfill({ json: [] });
