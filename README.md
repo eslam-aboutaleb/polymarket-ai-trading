@@ -5,6 +5,149 @@ following your portfolio, and managing trading strategies from one place. Connec
 wallet, choose how much automation you want, and use the research agents to turn a
 question into a clear, reviewable analysis.
 
+## User guide
+
+Start the workspace using [How to use the project](#how-to-use-the-project).
+Connect your wallet and sign the login request when prompted. Signing in creates
+an application session; trading credentials are configured separately. Choose the
+account you want to work in before running or reopening saved experiments.
+
+The screenshots below are captured from the running React application and real
+API using disposable, synthetic market/provider fixtures. They show the reviewed
+research and simulation workflows, not live market prices, actual customer
+accounts or demonstrated investment returns. Click any image to inspect it at
+full size.
+
+[Research a market](#1-open-a-market-for-research) ·
+[Run a Deep Dive](#3-review-a-deep-dive) ·
+[Inspect history](#4-compare-captured-source-history) ·
+[Simulate following](#5-run-a-follower-simulation) ·
+[Inspect maker intents](#6-inspect-paper-maker-quote-intents)
+
+### 1. Open a market for research
+
+Open **Opportunities**, find a market, and expand its details using the market's
+**Open market details** button. Choose **Research market** to open its
+source-backed research view. The separate **AI Analysis** action is the legacy
+analysis flow.
+
+![Opportunities market details expanded with the Research market action](.github/images/user-guide/01-open-research.png)
+
+### 2. Check the source before interpreting the price
+
+Review the market question, YES/NO prices and **What determines the outcome?**
+section. Use **Review original market source** to inspect the venue's source.
+Expand **Source identity** to check the condition ID, rule/token mapping hash and captured
+source identity. Check the retrieval time and any missing-data warnings.
+
+Prices here are indicative. A displayed price does not establish available order
+book depth or an executable trade. Missing rules or prices remain unavailable;
+the title alone does not verify settlement rules, the oracle or cutoff time.
+
+![Source-backed market context showing indicative prices, venue rules and verification limits](.github/images/user-guide/02-source-context.png)
+
+### 3. Review a Deep Dive
+
+Choose **Run Deep Dive**. Your deployment needs a configured AI provider and
+compatible backend/AI services. Review the status, supporting and contradicting
+evidence, claim-source links, missing information and research limits.
+
+**Investigate further** means there is material to review, not approval to trade.
+**Insufficient evidence** means the inputs or structured result do not support a
+usable brief. A matched quotation proves attribution to captured text, not that
+the claim is true. You can cancel a running request; after an error, use the
+retry action shown on screen.
+
+![Completed Deep Dive with supporting and contradicting evidence and missing information](.github/images/user-guide/03-deep-dive.png)
+
+### 4. Compare captured source history
+
+In **Source observation history**, choose **Load observation history**. Expand a
+captured observation to inspect its rules and source identity. To see only what
+had been received by a particular time, set **Received by (UTC, optional)** and
+load the history again.
+
+History starts when this workspace captures observations; it does not backfill
+past order books. A later rule revision leaves earlier captured observations
+intact. This history stores public source context, not your private AI briefs.
+
+![Observation history showing earlier and revised source captures without overwriting older rules](.github/images/user-guide/04-observation-history.png)
+
+### 5. Run a follower simulation
+
+Your administrator must run the migrations and enable
+`FOLLOWER_REPLAY_ENABLED=true` first. Open **Copy Trading** and locate
+**Simulate following a trader**.
+
+1. Choose **Download synthetic example**, then select that file with
+   **Import frozen experiment JSON**. Use the example to learn the format before
+   supplying your own frozen signals and bid/ask depth.
+2. Review the trader wallet, follow/end timestamps, initial funding, per-signal
+   USDC notional and assumed fee. Timestamps need a timezone. A blank fee means
+   unknown, not zero. Delay scenarios come from the imported JSON.
+3. Choose **Run and save simulation**. Compare each delay's NAV, net P&L, fees
+   and cash with the no-copy baseline.
+4. Expand a delay's **signal outcomes and accounting journal** to inspect partial
+   fills and nonfills; use **Download journal** to export the accounting events.
+5. After reloading, expand **Saved experiments in this account** and choose a run
+   to reopen its saved inputs and results.
+
+The example shows how a delay can turn a modeled gain into a loss. All imported
+inputs and resulting metrics are unverified research. Missing fees or eligible
+depth prevent fills; missing fresh final marks make NAV and net P&L **Unknown**.
+A simulation does not enable live following or establish trader skill.
+
+![Saved synthetic follower experiment comparing delays, with one scenario's outcomes and journal download expanded](.github/images/user-guide/05-follower-simulation.png)
+
+### 6. Inspect paper maker quote intents
+
+Open **Market Making** and find an existing paper configuration. Choose
+**Inspect paper quote intents** on its card to inspect the desired quotes. This
+panel is for reviewing definitions; do not switch a live strategy on to reproduce
+the example.
+
+`UNFILLED_DATA_MISSING` means there is no qualifying execution evidence. The
+quote is not an executed trade or an inventory reservation. Removed definitions
+become `WITHDRAWN`. Repeated unchanged paper syncs retain their identities and do
+not add executed volume. Historical paper counters remain unverified.
+
+![Market Making card with a persisted unfilled paper quote definition and zero executed volume](.github/images/user-guide/06-maker-intents.png)
+
+If a workflow is unavailable, first check your login and selected account, then
+ask your administrator to check migrations, feature flags and AI-provider
+configuration. Source/provider failures should show an error or missing data;
+do not interpret them as a zero price, successful fill or completed analysis.
+
+<details>
+<summary>Refresh guide screenshots (contributors)</summary>
+
+The guide targets the reviewed feature stack through PR #73. Captures use
+`backend/tests/e2e_research_app.py` with a disposable database and controlled
+venue/provider responses. Session, navigation, price polling and the separate
+opportunity-scanner APIs are stubbed; the documented research, history,
+follower and maker API paths are real. Screenshots are unmodified full-page
+Chromium captures at a 1440 × 1080 viewport, stored in
+`.github/images/user-guide/`. Capture times and run IDs vary between runs.
+
+From the repository root:
+
+```bash
+uv sync --project backend --frozen
+cd frontend
+npm ci
+npx playwright install chromium
+npx playwright test --config playwright.user-guide.config.ts
+```
+
+Ports 8002 and 5187 must be free. The opt-in config starts and stops its own
+backend and Vite servers. On Linux, install browser system libraries if needed
+with `npx playwright install --with-deps chromium`. Three capture scenarios
+assert the expected workflow states before writing the six screenshots. Review
+the images and guide labels together before committing a refresh. The regular
+CI regression suite does not rewrite these assets.
+
+</details>
+
 ## What you can do
 
 ### Explore markets and compare prices
