@@ -2,11 +2,13 @@
 
 import asyncio
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from py_clob_client.clob_types import BookParams
@@ -1691,8 +1693,13 @@ class PolymarketService:
         Fail-closed: a transport or HTTP error is raised instead of returning
         an empty mapping that a caller could mistake for "no token".
         """
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.get(f"{POLYMARKET_CLOB_API}/markets/{condition_id}")
+        if not isinstance(condition_id, str) or not re.fullmatch(
+            r"0x[0-9a-fA-F]{64}", condition_id
+        ):
+            raise ValueError("Expected a canonical 32-byte condition ID")
+        path_id = quote(condition_id.lower(), safe="")
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
+            response = await client.get(f"{POLYMARKET_CLOB_API}/markets/{path_id}")
         if response.status_code != 200:
             raise httpx.HTTPStatusError(
                 f"CLOB market lookup returned HTTP {response.status_code}",
