@@ -39,7 +39,7 @@ for (const [name, url, heading] of screens) {
     expect(errors).toEqual([]);
     expect([...unknown], `Unmapped endpoints on ${name}`).toEqual([]);
     await page.screenshot({
-      path: path.resolve(`../.github/images/user-guide/app-${name}.png`),
+      path: path.resolve(`../user guide/images/app-${name}.png`),
       animations: "disabled",
     });
   });
@@ -58,7 +58,7 @@ for (const tab of ["Profile", "Trading", "Notifications", "Accounts", "Admin Set
     expect([...unknown], `Unmapped endpoints on ${tab}`).toEqual([]);
     await page.screenshot({
       path: path.resolve(
-        `../.github/images/user-guide/app-settings-${tab.toLowerCase().replace(/ /g, "-")}.png`,
+        `../user guide/images/app-settings-${tab.toLowerCase().replace(/ /g, "-")}.png`,
       ),
       animations: "disabled",
       fullPage: true,
@@ -74,7 +74,7 @@ test("capture position management and exit review dialogs", async ({ page }) => 
   await page.getByRole("button", { name: "Your Positions", exact: true }).click();
   await expect(page.getByRole("button", { name: "Stop Loss", exact: true })).toBeVisible();
   await page.screenshot({
-    path: path.resolve("../.github/images/user-guide/app-positions.png"),
+    path: path.resolve("../user guide/images/app-positions.png"),
     animations: "disabled",
   });
   for (const [label, image] of [
@@ -86,7 +86,7 @@ test("capture position management and exit review dialogs", async ({ page }) => 
     const dialog = page.getByRole("dialog").last();
     await expect(dialog).toBeVisible();
     await page.screenshot({
-      path: path.resolve(`../.github/images/user-guide/app-${image}.png`),
+      path: path.resolve(`../user guide/images/app-${image}.png`),
       animations: "disabled",
     });
     await page.keyboard.press("Escape");
@@ -116,7 +116,7 @@ for (const [url, name, button, heading] of [
     expect(errors).toEqual([]);
     expect([...unknown]).toEqual([]);
     await page.screenshot({
-      path: path.resolve(`../.github/images/user-guide/app-${name}.png`),
+      path: path.resolve(`../user guide/images/app-${name}.png`),
       animations: "disabled",
     });
   });
@@ -152,7 +152,7 @@ test("capture forecasting collaboration", async ({ page }) => {
   expect(errors).toEqual([]);
   expect([...unknown]).toEqual([]);
   await page.screenshot({
-    path: path.resolve("../.github/images/user-guide/app-forecasting.png"),
+    path: path.resolve("../user guide/images/app-forecasting.png"),
     fullPage: true,
     animations: "disabled",
   });
@@ -180,7 +180,7 @@ test("capture notification inbox", async ({ page }) => {
   expect(errors).toEqual([]);
   expect([...unknown]).toEqual([]);
   await page.screenshot({
-    path: path.resolve("../.github/images/user-guide/app-notification-inbox.png"),
+    path: path.resolve("../user guide/images/app-notification-inbox.png"),
     animations: "disabled",
   });
 });
@@ -199,7 +199,7 @@ test("capture account risk and simulation settings", async ({ page }) => {
   expect([...unknown]).toEqual([]);
   await page.getByRole("heading", { name: /^Settings —/ }).scrollIntoViewIfNeeded();
   await page.screenshot({
-    path: path.resolve("../.github/images/user-guide/app-account-risk-settings.png"),
+    path: path.resolve("../user guide/images/app-account-risk-settings.png"),
     fullPage: true,
     animations: "disabled",
   });
