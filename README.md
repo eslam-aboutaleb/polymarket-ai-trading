@@ -43,8 +43,10 @@ results do not approve an order. Legacy paper/backtest metrics remain unverified
 ### Sign in and find your way
 
 1. Open **Login** or choose a sign-in action on a public page.
-2. Choose your browser wallet or, when configured, WalletConnect, then approve
-   the login signature.
+2. Choose your browser wallet or WalletConnect, then approve
+   the login signature. WalletConnect is enabled when the frontend is built
+   with `VITE_WALLETCONNECT_PROJECT_ID` (the frontend CI build reads it from the GitHub Actions repository secret of the same name). For Docker Compose production deployments, also supply it through the deployment environment or `.env.prod` before rebuilding.
+   Existing deployments must rebuild the frontend after changing this variable.
    The signature creates an application session; it is separate from depositing
    funds, submitting an order or connecting a trading key.
 3. After login, use the account selector when multiple accounts are available.
@@ -52,7 +54,36 @@ results do not approve an order. Legacy paper/backtest metrics remain unverified
 4. Use the top navigation, **More**, or the mobile navigation menu to open a page.
    Use **Logout** when finished. The app’s **Your Guide** page also offers a tour.
 
-![Wallet sign-in screen in the application](.github/images/user-guide/app-login.png)
+![Wallet sign-in screen with WalletConnect selected](.github/images/user-guide/app-login.png)
+
+Choose **WalletConnect**, click **Connect Wallet**, and scan the pairing QR with
+your wallet app. Then approve the connection and the separate sign-in signature.
+
+![WalletConnect pairing QR from the application](.github/images/user-guide/app-walletconnect-qr.png)
+
+These screenshots come from the running application. The QR shown above is an
+expired test pairing; generate a new QR in your own session.
+
+Run `npm run test:walletconnect` from `frontend/` for browser regression tests
+(success, rejection/retry, empty accounts, and missing configuration). The tests
+replace the external SDK boundary and use an explicit fixture ID; they do not
+prove the real relay accepts a project ID.
+
+To check the real SDK and relay against the **production build**, set
+`VITE_WALLETCONNECT_PROJECT_ID` in your environment and run:
+
+```bash
+WALLETCONNECT_LIVE_CANARY=1 npm run test:walletconnect
+```
+
+The live test requires a real 32-character project ID, checks a pairing QR and
+successful project validation and a relay WebSocket handshake, and rejects browser security-policy violations;
+it does not pair a wallet, sign a message, or submit a transaction. Add
+`UPDATE_WALLET_SCREENSHOT=1` to refresh the QR screenshot. Use the same update
+flag without the live flag to refresh the login screenshot. CI offers the real
+test as the opt-in `walletconnect_live_canary` workflow-dispatch input, using
+the repository Actions secret. In Reown, permit your deployed origin and local
+test origin `http://127.0.0.1:5190` if you use an origin allowlist.
 
 ### Dashboard and notifications
 

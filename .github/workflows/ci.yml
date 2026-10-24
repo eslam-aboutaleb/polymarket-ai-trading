@@ -99,7 +99,8 @@ jobs:
       RATE_LIMIT_PER_MINUTE: "1000"
       ADMIN_WALLETS: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
       VITE_API_URL: ""
-      VITE_WALLETCONNECT_PROJECT_ID: ${{ secrets.VITE_WALLETCONNECT_PROJECT_ID }}
+      # Deliberately fake identifier: never expose repository secrets to PR E2E.
+      VITE_WALLETCONNECT_PROJECT_ID: "ci-walletconnect-project-id"
       E2E_BASE_URL: http://localhost:5174
       CORS_ALLOWED_ORIGINS: "http://localhost:5174,http://localhost:5173,http://localhost:3000"
       PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/e2e-junit.xml
@@ -136,6 +137,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.walletconnect_live_canary
         working-directory: frontend
         env:
+          VITE_WALLETCONNECT_PROJECT_ID: ${{ secrets.VITE_WALLETCONNECT_PROJECT_ID }}
           WALLETCONNECT_LIVE_CANARY: "1"
         run: npm run test:walletconnect
       - name: Run PostgreSQL schema migrations
@@ -221,6 +223,10 @@ jobs:
         continue-on-error: true
         run: npm audit --audit-level=high
       - name: Type-check and build
+        env:
+          # Vite embeds this public identifier into its browser bundle at build time.
+          # Secrets may be unavailable on forked PRs; the build still validates.
+          VITE_WALLETCONNECT_PROJECT_ID: ${{ secrets.VITE_WALLETCONNECT_PROJECT_ID }}
         run: npm run build
       - name: Prettier check
         run: npx prettier --check "src/**/*.{ts,tsx,css,json,html}"

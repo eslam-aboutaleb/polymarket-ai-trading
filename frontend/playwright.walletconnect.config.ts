@@ -33,7 +33,10 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: "node_modules/.bin/vite --host 127.0.0.1 --port 5190 --strictPort",
+      command: live
+        ? "npm run build && node_modules/.bin/vite preview --host 127.0.0.1 --port 5190 --strictPort"
+        : "node_modules/.bin/vite --host 127.0.0.1 --port 5190 --strictPort",
+      timeout: 180_000,
       url: "http://127.0.0.1:5190",
       reuseExistingServer: false,
       env: {
