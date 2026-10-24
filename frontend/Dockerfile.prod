@@ -18,6 +18,9 @@ COPY . .
 # produce "/api/api/..." requests.
 ARG VITE_API_URL=
 ENV VITE_API_URL=${VITE_API_URL}
+# Public Vite client identifier provided by the deployment build environment.
+ARG VITE_WALLETCONNECT_PROJECT_ID=
+ENV VITE_WALLETCONNECT_PROJECT_ID=${VITE_WALLETCONNECT_PROJECT_ID}
 RUN npm run build
 
 # ── Stage 2: Serve ────────────────────────────────────────────

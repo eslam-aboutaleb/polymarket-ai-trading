@@ -38,18 +38,25 @@ export default defineConfig(({ command, mode }) => {
     // Dev-only visibility of the origin the client will use.
     console.warn(`[vite.config] using VITE_API_URL: ${bakedApiUrl}`);
   }
-  // Only allow-list the configured origin when one is actually set. With an
-  // empty VITE_API_URL the app talks to its own origin via nginx, so connect-src
-  // must be exactly 'self' — never a hardcoded localhost fallback.
+  // API traffic stays same-origin unless an explicit API origin is supplied.
   const cspConnectSrc =
     bakedApiUrl && /^https?:\/\//.test(bakedApiUrl) ? ["'self'", bakedApiUrl].join(" ") : "'self'";
+  // WalletConnect performs browser HTTPS/WSS requests even behind same-origin nginx.
+  // Include these only when the build enables the public connector.
+  const walletConnectEnabled = Boolean(
+    (process.env.VITE_WALLETCONNECT_PROJECT_ID ?? env.VITE_WALLETCONNECT_PROJECT_ID ?? "").trim(),
+  );
+  const walletConnectOrigins = walletConnectEnabled
+    ? " https://*.walletconnect.com wss://*.walletconnect.com https://*.walletconnect.org wss://*.walletconnect.org https://*.reown.com https://api.web3modal.org https://polygon-rpc.com"
+    : "";
   const productionCsp = [
     "default-src 'self'",
     "script-src 'self'",
-    "style-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "img-src 'self' data: https:",
-    "font-src 'self' data:",
-    `connect-src ${cspConnectSrc}`,
+    `font-src 'self' data: https://fonts.gstatic.com${walletConnectEnabled ? " https://fonts.reown.com" : ""}`,
+    `frame-src 'self'${walletConnectEnabled ? " https://verify.walletconnect.org https://verify.walletconnect.com" : ""}`,
+    `connect-src ${cspConnectSrc}${walletConnectOrigins}`,
     "object-src 'none'",
     // frame-ancestors is ignored when delivered via <meta>; nginx.conf sets
     // X-Frame-Options: DENY. Keep it here for documentation value only.

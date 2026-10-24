@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { installGuideFixtures } from "../../scripts/user-guide-fixtures";
 import { address, installWalletConnectFixture } from "./provider-fixture";
 
 async function connect(page: import("@playwright/test").Page) {
@@ -43,4 +44,21 @@ test("empty WalletConnect accounts cannot become a connected session", async ({ 
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Continue to Sign" })).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).__walletConnectTest.disconnects)).toBe(1);
+});
+
+// Documentation uses the real application with controlled API responses.
+test("configured wallet login documentation screenshot", async ({ page }) => {
+  await installGuideFixtures(page, true);
+  await page.goto("/login");
+  const walletConnect = page.getByRole("button", { name: "WalletConnect", exact: true });
+  await expect(walletConnect).toBeEnabled();
+  await walletConnect.click();
+  await expect(walletConnect).toHaveClass(/tab-toggle-active/);
+  await expect(page.getByText(/WalletConnect disabled: set/)).toHaveCount(0);
+  if (process.env.UPDATE_WALLET_SCREENSHOT === "1") {
+    await page.screenshot({
+      path: new URL("../../../.github/images/user-guide/app-login.png", import.meta.url).pathname,
+      animations: "disabled",
+    });
+  }
 });

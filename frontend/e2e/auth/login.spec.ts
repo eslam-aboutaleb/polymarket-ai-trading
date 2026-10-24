@@ -20,6 +20,13 @@ test.describe("Login page", () => {
     await expect(page.getByText("AI-Powered Trading Automation")).toBeVisible();
     await expect(page.getByRole("button", { name: "Connect Wallet" })).toBeVisible();
     await expect(page.getByText("Sign in with your Ethereum wallet")).toBeVisible();
+    // Regression: configured WalletConnect must be selectable and the missing-ID warning absent.
+    await expect(page.getByRole("button", { name: "WalletConnect", exact: true })).toBeEnabled();
+    await expect(page.getByText(/WalletConnect disabled: set/)).toHaveCount(0);
+    await page.getByRole("button", { name: "WalletConnect", exact: true }).click();
+    await expect(page.getByRole("button", { name: "WalletConnect", exact: true })).toHaveClass(
+      /tab-toggle-active/,
+    );
   });
 
   test("reports a missing browser wallet", async ({ page }) => {
