@@ -852,17 +852,6 @@ Simulation and historical replay remain separate and cannot authorize live order
    controls and owned live-order checks/cancellation. Following wallets and
    configuring sizing remain explicit steps.
 
-Manual/external order requests require a stable `Idempotency-Key`. BUY API sizes
-are collateral notional; SELL API sizes are shares. The internal gateway always
-uses shares. Orders and principal reservations commit before submission; an
-unknown acknowledgement retains its reservation and never automatically retries.
-Authenticated confirmation and settlement evidence own execution prices and
-quantities. A missing order never proves cancellation.
-Recovery rotates failed observations behind unattempted orders. Exchange calls
-run outside the event loop, and cancellation waits for session ownership to return.
-Followed-wallet polling uses the public Data API with stable source identities;
-an optional WebSocket timeout does not stop subsequent polling.
-
 Purchase principal is conservatively charged against shared wallet budgets and
 any selected sub-account budget. Only exchange-confirmed cancellation releases
 unfilled reservations; simulated or unverified profits never replenish budgets.
@@ -877,7 +866,9 @@ even when the open-order snapshot is empty. It does not claim positions closed
 or implement automatic liquidation. Independent analysis still has no general
 raw-analysis history store. Other venues remain research/data adapters.
 
-Verification used a disposable PostgreSQL instance and mocked remote exchange I/O;
-no funded orders were submitted. The full backend suite, PostgreSQL concurrency
-checks, browser safety flows, frontend build and migration upgrade/downgrade
-checks passed. Existing repository-wide frontend lint findings remain unchanged.
+## WalletConnect configuration and browser tests
+
+Set `VITE_WALLETCONNECT_PROJECT_ID` in the frontend environment to the project ID
+from the Reown dashboard. For GitHub Actions, add a repository Actions secret with
+that exact name
+
