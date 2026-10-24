@@ -46,7 +46,7 @@ jobs:
   # Shared workflows are reviewed and pinned as one immutable revision.
   # Update all pins together after reviewing ci-workflows changes.
   backend-tests:
-    uses: eslam-aboutaleb/ci-workflows/.github/workflows/python.yml@57c21925ec0fd1aa1969922136fa7b2594ce6a4e
+    uses: eslam-aboutaleb/ci-workflows/.github/workflows/python.yml@6ee99d0643c40945d4d00a80462b6250897509c3
     with:
       project-dir: backend
       manager: uv
@@ -55,13 +55,13 @@ jobs:
       coverage-min: 80
 
   trading-safety:
-    uses: eslam-aboutaleb/ci-workflows/.github/workflows/integration.yml@57c21925ec0fd1aa1969922136fa7b2594ce6a4e
+    uses: eslam-aboutaleb/ci-workflows/.github/workflows/integration.yml@6ee99d0643c40945d4d00a80462b6250897509c3
     with:
       project-dir: backend
       python-version: "3.11"
 
   emergency-browser:
-    uses: eslam-aboutaleb/ci-workflows/.github/workflows/browser.yml@57c21925ec0fd1aa1969922136fa7b2594ce6a4e
+    uses: eslam-aboutaleb/ci-workflows/.github/workflows/browser.yml@6ee99d0643c40945d4d00a80462b6250897509c3
     with:
       project-dir: frontend
       manager: npm
@@ -184,10 +184,10 @@ jobs:
           retention-days: 7
 
   workflow-lint:
-    uses: eslam-aboutaleb/ci-workflows/.github/workflows/workflow-lint.yml@57c21925ec0fd1aa1969922136fa7b2594ce6a4e
+    uses: eslam-aboutaleb/ci-workflows/.github/workflows/workflow-lint.yml@6ee99d0643c40945d4d00a80462b6250897509c3
 
   security:
-    uses: eslam-aboutaleb/ci-workflows/.github/workflows/security.yml@57c21925ec0fd1aa1969922136fa7b2594ce6a4e
+    uses: eslam-aboutaleb/ci-workflows/.github/workflows/security.yml@6ee99d0643c40945d4d00a80462b6250897509c3
     permissions:
       contents: read
       actions: read
