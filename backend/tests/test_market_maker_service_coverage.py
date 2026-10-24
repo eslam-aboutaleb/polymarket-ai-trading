@@ -306,7 +306,13 @@ class PaperSyncCycleTests(unittest.IsolatedAsyncioTestCase):
         config = _config(num_bands=1)
         db = _session([config, _user(), SimpleNamespace()])
         self.fetch_midpoint.return_value = 0.5
-        with self._run(db):
+        with (
+            self._run(db),
+            patch(
+                "app.services.trading.execution.live.get_settings",
+                return_value=SimpleNamespace(live_trading_enabled=False),
+            ),
+        ):
             result = await market_maker_service._sync_market_maker(1)
         self.assertEqual(result, {"error": "LIVE_TRADING_DISABLED"})
         self.credentials.assert_not_called()

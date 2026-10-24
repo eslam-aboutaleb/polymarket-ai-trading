@@ -190,6 +190,10 @@ class MarketMakerPaperModeTests(unittest.IsolatedAsyncioTestCase):
         settings = _settings(simulation_mode=False)
         db = _session(first_results=[config, SimpleNamespace(wallet_address="0xwallet"), settings])
         with (
+            patch(
+                "app.services.trading.execution.live.get_settings",
+                return_value=SimpleNamespace(live_trading_enabled=False),
+            ),
             patch.object(market_maker_service, "SessionLocal", return_value=db),
             patch.object(market_maker_service, "_fetch_midpoint", AsyncMock(return_value=0.5)),
             patch("app.services.trading.execution.clob_transport.submit") as submit,
