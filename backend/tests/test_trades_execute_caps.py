@@ -1,197 +1,110 @@
-"""Safety-cap tests for the manual execute endpoint (plan 01, F1).
+"""Manual API behavior against the real durable gateway and a real test DB."""
 
-The manual execute path must run the same pre-trade gate as
-copy trading before any order reaches the exchange: an
-over-cap order is rejected with 403 naming the violated
-limit, and exposure caps count pending (unfilled) notional
-so stacked pending orders cannot exceed the position cap.
-"""
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+from test_live_gateway import gateway as gateway
 
-import unittest
-from unittest.mock import patch
-
-from fastapi import HTTPException
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-
-import app.models  # noqa: F401  (register models on Base.metadata)
-from app.api.routes.trading.trades import ExecuteTradeRequest, execute_trade
-from app.models.base import Base
+from app.api.routes.auth.auth import get_current_user_from_token
+from app.api.routes.trading import trades
+from app.models.trading.live_order import LiveOrder
+from app.models.trading.trading_control import TradingControlState
 from app.models.trading.user_trade import UserTrade
-from app.models.users.user import User
-from app.models.users.user_settings import UserSettings
-from app.services.trading.pre_trade_gate import OrderIdempotencyKey  # noqa: F401
-
-WALLET = "0xexecute-cap-wallet"
-USER_ID = 4242
+from app.utils.database import get_db
 
 
-def _make_db():
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
+def client_for(db):
+    app = FastAPI()
+    app.include_router(trades.router)
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_current_user_from_token] = lambda: {
+        "user_id": 1,
+        "wallet_address": "wallet",
+    }
+    return TestClient(app)
+
+
+def payload(**changes):
+    return {
+        "execution_mode": "live",
+        "token_id": "123",
+        "side": "BUY",
+        "price": 0.5,
+        "size": 5,
+        **changes,
+    }
+
+
+def test_manual_order_uses_notional_buys_and_records_pending_before_exchange(gateway):
+    db, _, _, submit = gateway
+    response = client_for(db).post(
+        "/api/trades/execute", json=payload(), headers={"Idempotency-Key": "manual"}
     )
-    Base.metadata.create_all(engine)
-    db = sessionmaker(bind=engine)()
-    db.add(User(id=USER_ID, wallet_address=WALLET))
-    db.add(
-        UserSettings(
-            user_id=USER_ID,
-            copy_trading_enabled=False,
-            max_position_size=100.0,
-            daily_loss_limit=500.0,
-        ),
+    assert response.status_code == 200 and response.json()["success"]
+    row = db.scalar(select(LiveOrder))
+    assert row.shares == 10 and row.notional == 5
+    assert db.get(UserTrade, row.trade_id).status == "pending"
+    assert db.get(UserTrade, row.trade_id).executed_at is None
+    submit.assert_called_once()
+
+
+def test_manual_duplicate_request_replays_real_order(gateway):
+    db, _, _, submit = gateway
+    client = client_for(db)
+    headers = {"Idempotency-Key": "manual"}
+    first = client.post("/api/trades/execute", json=payload(), headers=headers)
+    again = client.post("/api/trades/execute", json=payload(), headers=headers)
+    assert again.json() == first.json()
+    submit.assert_called_once()
+
+
+def test_manual_pending_orders_count_against_shared_budget(gateway):
+    db, _, _, submit = gateway
+    client = client_for(db)
+    assert client.post(
+        "/api/trades/execute", json=payload(size=40), headers={"Idempotency-Key": "one"}
+    ).json()["success"]
+    response = client.post(
+        "/api/trades/execute", json=payload(size=20), headers={"Idempotency-Key": "two"}
     )
+    assert response.status_code == 503 and "DAILY_BUDGET_EXCEEDED" in response.text
+    submit.assert_called_once()
+
+
+def test_manual_order_requires_economic_identity(gateway):
+    db, _, _, submit = gateway
+    response = client_for(db).post("/api/trades/execute", json=payload())
+    assert response.status_code == 422
+    submit.assert_not_called()
+
+
+def test_manual_order_respects_durable_halt(gateway):
+    db, _, _, submit = gateway
+    db.get(TradingControlState, "user:1").state = "HALTED"
     db.commit()
-    return db
-
-
-def _body(size: float) -> ExecuteTradeRequest:
-    return ExecuteTradeRequest(
-        execution_mode="live",
-        token_id="0xtoken",
-        market_id="0xmarket",
-        side="BUY",
-        price=0.5,
-        size=size,
+    response = client_for(db).post(
+        "/api/trades/execute", json=payload(), headers={"Idempotency-Key": "halted"}
     )
+    assert response.status_code == 503
+    submit.assert_not_called()
 
 
-def _current_user() -> dict:
-    return {"user_id": USER_ID, "wallet_address": WALLET, "is_admin": False}
+def test_cash_out_preserves_share_units_and_forces_sell(gateway):
+    db, _, _, submit = gateway
+    response = client_for(db).post(
+        "/api/trades/cash-out", json=payload(size=8), headers={"Idempotency-Key": "sell"}
+    )
+    assert response.status_code == 200 and response.json()["side"] == "SELL"
+    assert db.scalar(select(LiveOrder)).shares == 8
+    assert db.scalar(select(LiveOrder)).side == "SELL"
+    assert submit.call_args.args[2] == "FOK"
 
 
-class ExecuteCapsTests(unittest.IsolatedAsyncioTestCase):
-    """The pre-trade gate guards manual execution."""
-
-    def setUp(self):
-        # Only legacy accounting is under test here; exchange I/O is mocked.
-        # The real production barrier is covered by tests/security/.
-        barrier = patch("app.services.trading.live_trading_policy.block_legacy_live_execution")
-        barrier.start()
-        self.addCleanup(barrier.stop)
-        self.db = _make_db()
-
-    def tearDown(self):
-        self.db.close()
-
-    async def _execute(self, size: float):
-        with (
-            patch(
-                "app.api.routes.trading.trades.load_wallet_credentials",
-                return_value={"private_key": "0xpk", "clob_creds": None},
-            ),
-            patch(
-                "app.api.routes.trading.trades._place_order_on_polymarket",
-                return_value={
-                    "success": True,
-                    "order_hash": "0xorder",
-                    "status": "submitted",
-                },
-            ) as place_order,
-        ):
-            response = await execute_trade(
-                body=_body(size),
-                idempotency_key=None,
-                current_user=_current_user(),
-                db=self.db,
-            )
-        return response, place_order
-
-    async def test_over_cap_order_is_rejected(self):
-        with self.assertRaises(HTTPException) as ctx:
-            await self._execute(150.0)
-        self.assertEqual(ctx.exception.status_code, 403)
-        self.assertEqual(ctx.exception.detail, "max_position_size")
-
-    async def test_under_cap_order_is_submitted(self):
-        response, place_order = await self._execute(50.0)
-        self.assertTrue(response.success)
-        self.assertEqual(response.size, 50.0)
-        place_order.assert_called_once()
-        self.assertEqual(place_order.call_args.kwargs["size"], 50.0)
-
-    async def test_pending_exposure_reduces_the_allowance(self):
-        self.db.add(
-            UserTrade(
-                user_id=USER_ID,
-                market_id="0xmarket",
-                token_id="0xtoken",
-                action="buy",
-                amount=60.0,
-                price=0.5,
-                status="pending",
-                order_hash="0xpending",
-            ),
-        )
-        self.db.commit()
-        response, place_order = await self._execute(50.0)
-        self.assertTrue(response.success)
-        # 100 cap − 60 pending = 40 remaining allowance.
-        self.assertEqual(response.size, 40.0)
-        self.assertEqual(place_order.call_args.kwargs["size"], 40.0)
-
-    async def test_pending_exposure_exhausting_the_cap_is_rejected(self):
-        self.db.add(
-            UserTrade(
-                user_id=USER_ID,
-                market_id="0xmarket",
-                token_id="0xtoken",
-                action="buy",
-                amount=100.0,
-                price=0.5,
-                status="pending",
-                order_hash="0xpending",
-            ),
-        )
-        self.db.commit()
-        with self.assertRaises(HTTPException) as ctx:
-            await self._execute(50.0)
-        self.assertEqual(ctx.exception.status_code, 403)
-        self.assertEqual(
-            ctx.exception.detail,
-            "Max position size reached (pending exposure)",
-        )
-
-    async def test_submitted_order_is_pending_until_fill(self):
-        response, _place_order = await self._execute(50.0)
-        self.assertEqual(response.status, "submitted")
-        trade = self.db.query(UserTrade).filter(UserTrade.user_id == USER_ID).first()
-        self.assertIsNotNone(trade)
-        self.assertEqual(trade.status, "pending")
-        self.assertIsNone(trade.executed_at)
-        self.assertEqual(trade.token_id, "0xtoken")
-
-    async def test_failed_submission_is_recorded_failed(self):
-        with (
-            patch(
-                "app.api.routes.trading.trades.load_wallet_credentials",
-                return_value={"private_key": "0xpk", "clob_creds": None},
-            ),
-            patch(
-                "app.api.routes.trading.trades._place_order_on_polymarket",
-                return_value={
-                    "success": False,
-                    "order_hash": None,
-                    "status": "failed",
-                    "error": "exchange rejected",
-                },
-            ),
-        ):
-            response = await execute_trade(
-                body=_body(50.0),
-                idempotency_key=None,
-                current_user=_current_user(),
-                db=self.db,
-            )
-        self.assertFalse(response.success)
-        self.assertEqual(response.status, "failed")
-        trade = self.db.query(UserTrade).filter(UserTrade.user_id == USER_ID).first()
-        self.assertEqual(trade.status, "failed")
-        self.assertIsNone(trade.executed_at)
-
-
-if __name__ == "__main__":
-    unittest.main()
+def test_lost_exchange_ack_is_exposed_as_unknown_without_fabricated_fill(gateway):
+    db, _, _, submit = gateway
+    submit.side_effect = TimeoutError()
+    response = client_for(db).post(
+        "/api/trades/execute", json=payload(), headers={"Idempotency-Key": "lost"}
+    )
+    assert response.json()["status"] == "unknown" and not response.json()["success"]
+    assert db.scalar(select(LiveOrder)).reserved == 5

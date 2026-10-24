@@ -75,6 +75,7 @@ from app.repositories.trading.bots import TradingBotRepository
 from app.repositories.trading.orders import TradingOrderRepository
 from app.services.market_data import binance_ws_service, crypto_markets_service
 from app.services.market_data.crypto_markets_service import CryptoMarket
+from app.services.trading.execution.async_io import run_blocking_execution
 from app.utils.cache import get_cache
 from app.utils.database import SessionLocal
 from app.utils.scheduler_lock import (
@@ -842,107 +843,42 @@ async def _execute_paper(
 async def _execute_live(
     db: Session,
     user: User,
-    settings: UserSettings,
+    settings: UserSettings,  # noqa: ARG001 - shared runner signature
     opportunity: Opportunity,
     token_id: str,
     reference_price: float,
     size: float,
-    feed_to_order_ms: float,
+    feed_to_order_ms: float,  # noqa: ARG001 - shared runner signature
 ) -> dict[str, Any]:
-    """Submit a FOK order on the CLOB (live mode only)."""
-    if not _PRE_TRADE_GATE_AVAILABLE or build_clob_client is None:
-        return {"status": "rejected", "reason": "pre-trade gate unavailable"}
-    from app.security.credential_store import (
-        CredentialStoreError,
-        load_wallet_credentials,
-    )
+    """Submit a real FOK order through durable execution and shared risk budgets."""
+    from decimal import ROUND_DOWN, Decimal
 
+    from app.services.trading.execution.live import place_live_order
+    from app.services.trading.live_trading_policy import LiveTradingBlocked
+
+    shares = (Decimal(str(size)) / Decimal(str(reference_price))).quantize(
+        Decimal("0.01"),
+        rounding=ROUND_DOWN,
+    )
+    # One economic order per opportunity/window/token survives restarts.
+    identity = f"latency:{opportunity.symbol}:{opportunity.window_start_epoch}:{token_id}"
     try:
-        stored = load_wallet_credentials(user.wallet_address)
-    except CredentialStoreError as exc:
-        return {"status": "rejected", "reason": f"credential store unavailable: {exc}"}
-    if not stored:
-        return {"status": "rejected", "reason": "no stored wallet credentials"}
-    private_key = stored["private_key"]
-    clob_creds = stored.get("clob_creds")
-    proxy_address = None
-    if _get_poly_proxy_wallet_address is not None:
-        with contextlib.suppress(Exception):
-            from py_clob_client.signer import Signer
-
-            eoa_address = Signer(private_key, 137).address()
-            proxy_address = _get_poly_proxy_wallet_address(eoa_address)
-    try:
-        response = await _place_fok_order(
-            private_key,
-            clob_creds,
-            proxy_address,
-            token_id,
-            reference_price,
-            size,
+        result = await run_blocking_execution(
+            place_live_order,
+            db,
+            user_id=user.id,
+            token_id=token_id,
+            side="BUY",
+            price=reference_price,
+            size=float(shares),
+            idempotency_key=identity,
+            strategy="latency_arb",
+            market_id=opportunity.market.condition_id,
+            order_type="FOK",
         )
-    except Exception as exc:
-        logger.warning(
-            "Latency-arb FOK order failed user=%s %s %sm %s: %s",
-            settings.user_id,
-            opportunity.symbol,
-            opportunity.window_minutes,
-            opportunity.side,
-            exc,
-        )
-        return {"status": "failed", "reason": str(exc)}
-
-    order_hash = str(response.get("orderID") or response.get("order_id") or "")
-    if response.get("success") is False or response.get("errorMsg"):
-        reason = response.get("errorMsg") or response.get("error") or "order rejected"
-        logger.info(
-            "Latency-arb FOK order rejected user=%s %s %sm %s: %s",
-            settings.user_id,
-            opportunity.symbol,
-            opportunity.window_minutes,
-            opportunity.side,
-            reason,
-        )
-        return {"status": "rejected", "reason": str(reason)}
-
-    # Recorded pending until a fill is observed (plan 01 convention:
-    # trade_monitor matches fills by order_hash and updates
-    # filled_*/fee_paid/slippage_bps/latency_ms).
-    trade = UserTrade(
-        user_id=settings.user_id,
-        market_id=opportunity.market.condition_id,
-        token_id=token_id,
-        action="buy",
-        amount=size,
-        price=reference_price,
-        status="pending",
-        order_hash=order_hash,
-        expected_price=reference_price,
-        expected_size=size,
-        strategy_source=STRATEGY_SOURCE,
-        executed_at=None,
-        calculation_details=_calculation_details(
-            opportunity,
-            {"mode": "live", "feed_to_order_ms": round(feed_to_order_ms, 1)},
-        ),
-    )
-    db.add(trade)
-    db.commit()
-    db.refresh(trade)
-    logger.info(
-        "Latency-arb FOK order placed user=%s %s %sm %s hash=%s",
-        settings.user_id,
-        opportunity.symbol,
-        opportunity.window_minutes,
-        opportunity.side,
-        order_hash[:16],
-    )
-    return {
-        "status": "submitted",
-        "trade_id": trade.id,
-        "order_hash": order_hash,
-        "size": size,
-    }
+    except (LiveTradingBlocked, ValueError) as exc:
+        return {"status": "rejected", "reason": str(exc)}
+    return {**result, "size": size}
 
 
 async def _execute_opportunity(

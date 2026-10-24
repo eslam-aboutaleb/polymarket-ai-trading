@@ -38,8 +38,12 @@ def live_flags(request):
         live_copy_trading_enabled=request.param,
         live_market_making_enabled=request.param,
         live_latency_arb_enabled=request.param,
+        live_inverse_trading_enabled=request.param,
     )
-    with patch("app.services.trading.live_trading_policy.get_settings", return_value=settings):
+    with (
+        patch("app.services.trading.live_trading_policy.get_settings", return_value=settings),
+        patch("app.services.trading.execution.live.get_settings", return_value=settings),
+    ):
         yield settings
 
 
@@ -91,11 +95,17 @@ def test_ambiguous_engine_modes_are_rejected(mode):
 
 
 def test_paper_does_not_sign_or_submit(live_flags):
-    with patch("py_clob_client.client.ClobClient") as client:
+    with (
+        patch("py_clob_client.client.ClobClient") as client,
+        patch("app.services.trading.execution.clob_transport.build_client") as live_client,
+        patch("app.services.trading.execution.clob_transport.submit") as submit,
+    ):
         engine = get_execution_engine(ExecutionMode.PAPER)
         result = asyncio.run(engine.place_order(OrderPlacementRequest(1, "token", 0.5, 2, "BUY")))
     assert result.is_simulated
     client.assert_not_called()
+    live_client.assert_not_called()
+    submit.assert_not_called()
 
 
 def test_manual_api_blocks_before_credentials(live_flags):
@@ -145,4 +155,7 @@ def test_submission_inventory_cannot_grow_without_security_review():
         "services/trading/copy_trade_service.py",
         "services/trading/market_maker_service.py",
         "services/trading/latency_arb_service.py",
+        # New path has durable reservation/identity and rejection/restart tests
+        # in test_live_gateway.py; legacy submission methods remain frozen.
+        "services/trading/execution/clob_transport.py",
     }, "A live submission path changed; review its release barrier and add bypass tests"

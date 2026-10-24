@@ -741,12 +741,23 @@ class SyncMarketMakerTests(unittest.IsolatedAsyncioTestCase):
             ("_place_maker_order", self.place_order),
             ("load_wallet_credentials", MagicMock(return_value={"private_key": "0xpk"})),
         ):
-            patcher = patch.object(market_maker_service, name, new=mock)
+            patcher = (
+                patch("app.services.trading.execution.live.load_wallet_credentials", new=mock)
+                if name == "load_wallet_credentials"
+                else patch.object(market_maker_service, name, new=mock)
+            )
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+        self.gateway = MagicMock(return_value={"success": True, "status": "submitted"})
+        for name, value in (("require_enabled", MagicMock()), ("place_live_order", self.gateway)):
+            patcher = patch(f"app.services.trading.execution.live.{name}", value)
             patcher.start()
             self.addCleanup(patcher.stop)
 
     @staticmethod
     def _run(db):
+        db.scalars.return_value.all.return_value = []
         return patch.object(market_maker_service, "SessionLocal", return_value=db)
 
     async def test_missing_config_is_skipped(self):
@@ -780,25 +791,14 @@ class SyncMarketMakerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config.status, "idle")
         self.fetch_midpoint.assert_not_awaited()
 
-    async def test_credential_failure_marks_config_error(self):
-        config = _config()
-        db = _session([config, _user()])
-
-        with (
-            self._run(db),
-            patch.object(
-                market_maker_service,
-                "load_wallet_credentials",
-                side_effect=RuntimeError("keystore down"),
-            ),
-        ):
+    async def test_gateway_credential_failure_marks_config_error(self):
+        config = _config(num_bands=1)
+        db = _session([config, _user(), _no_paper_settings(), config])
+        self.gateway.side_effect = ValueError("TRADING_CREDENTIALS_REQUIRED")
+        with self._run(db):
             result = await market_maker_service._sync_market_maker(1)
-
-        self.assertEqual(result, {"error": "keystore down"})
+        self.assertEqual(result, {"error": "TRADING_CREDENTIALS_REQUIRED"})
         self.assertEqual(config.status, "error")
-        self.assertEqual(config.last_error, "Credential error: keystore down")
-        db.commit.assert_called_once_with()
-        self.fetch_midpoint.assert_not_awaited()
 
     async def test_missing_midpoint_is_reported(self):
         config = _config()
@@ -813,33 +813,16 @@ class SyncMarketMakerTests(unittest.IsolatedAsyncioTestCase):
         self.cancel_all.assert_not_awaited()
         db.close.assert_called_once_with()
 
-    async def test_bands_cycle_updates_counters_and_status(self):
+    async def test_bands_cycle_submits_post_only_through_gateway(self):
         config = _config(num_bands=1, min_spread=0.02, max_spread=0.10)
-        db = _session([config, _user()])
-        self.cancel_all.return_value = 2
-
+        db = _session([config, _user(), _no_paper_settings()])
         with self._run(db):
             result = await market_maker_service._sync_market_maker(1)
-
-        self.assertEqual(
-            result,
-            {"midpoint": 0.5, "expected_orders": 2, "cancelled": 2, "placed": 2},
-        )
-        self.cancel_all.assert_awaited_once_with("0xpk", "token-yes")
-        self.assertEqual(
-            [call.args for call in self.place_order.await_args_list],
-            [
-                ("0xpk", "token-yes", "BUY", 0.48, 10.0),
-                ("0xpk", "token-yes", "SELL", 0.52, 10.0),
-            ],
-        )
-        self.assertEqual(config.status, "running")
-        self.assertIsNone(config.last_error)
-        self.assertIsNotNone(config.last_sync_at)
-        self.assertEqual(config.total_orders_cancelled, 2)
+        self.assertEqual(result["placed"], 2)
+        self.assertTrue(all(call.kwargs["post_only"] for call in self.gateway.call_args_list))
         self.assertEqual(config.total_orders_placed, 2)
-        self.assertEqual(config.current_open_orders, 2)
-        self.assertEqual(config.total_volume_usdc, 20.0)
+        self.assertEqual(config.total_volume_usdc, 0)
+        self.cancel_all.assert_not_awaited()
 
     async def test_amm_strategy_uses_amm_calculator(self):
         config = _config(strategy="amm", num_bands=1)
@@ -860,7 +843,7 @@ class SyncMarketMakerTests(unittest.IsolatedAsyncioTestCase):
         amm.assert_called_once_with(0.5, config)
         bands.assert_not_called()
         self.assertEqual(result["expected_orders"], 1)
-        self.assertEqual(config.total_volume_usdc, 10.0)
+        self.assertEqual(config.total_volume_usdc, 0.0)
 
     async def test_unknown_strategy_falls_back_to_bands(self):
         config = _config(strategy="v2-experimental", num_bands=1)
@@ -879,18 +862,19 @@ class SyncMarketMakerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["placed"], 0)
         self.assertEqual(config.status, "running")
 
-    async def test_rejected_orders_are_not_counted_as_volume(self):
+    async def test_rejected_quote_stops_cycle_without_reporting_volume(self):
         config = _config(num_bands=1)
-        db = _session([config, _user()])
-        self.place_order.side_effect = ["order-1", None]
-
+        db = _session([config, _user(), _no_paper_settings(), config])
+        self.gateway.return_value = {
+            "success": False,
+            "status": "unknown",
+            "error": "Unverified ACK",
+        }
         with self._run(db):
             result = await market_maker_service._sync_market_maker(1)
-
-        self.assertEqual(result["expected_orders"], 2)
-        self.assertEqual(result["placed"], 1)
-        self.assertEqual(config.total_orders_placed, 1)
-        self.assertEqual(config.total_volume_usdc, 10.0)
+        self.assertEqual(result, {"error": "Unverified ACK"})
+        self.assertEqual(config.total_volume_usdc, 0)
+        self.gateway.assert_called_once()
 
     async def test_unexpected_error_marks_config_error(self):
         config = _config()
@@ -971,6 +955,21 @@ def _blocking_sleep():
 
 
 class MakerLoopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_config_id_is_numeric_before_locking_or_logging(self):
+        with (
+            patch.object(
+                market_maker_service, "acquire_scheduler_lock", return_value=False
+            ) as lock,
+            patch.object(market_maker_service, "logger") as logger,
+        ):
+            await market_maker_service._maker_loop("1\r\n")
+            lock.assert_called_once_with("market_maker:1")
+            lock.reset_mock()
+            with self.assertRaises(ValueError):
+                await market_maker_service._maker_loop("1\r\nFORGED")
+            lock.assert_not_called()
+            logger.info.assert_not_called()
+
     async def test_disabled_config_stops_loop_and_marks_idle(self):
         config = _config(enabled=False)
         db = _session([config, config, _user()])
@@ -981,16 +980,15 @@ class MakerLoopTests(unittest.IsolatedAsyncioTestCase):
             patch.object(market_maker_service, "SessionLocal", return_value=db),
             patch.object(market_maker_service, "_sync_market_maker", new=sync),
             patch.object(market_maker_service, "_cancel_all_orders", new=cancel_all),
-            patch.object(
-                market_maker_service,
-                "load_wallet_credentials",
+            patch(
+                "app.services.trading.execution.live.load_wallet_credentials",
                 return_value={"private_key": "0xpk"},
             ),
         ):
             await market_maker_service._maker_loop(1)
 
         sync.assert_not_awaited()
-        cancel_all.assert_awaited_once_with("0xpk", "token-yes")
+        cancel_all.assert_not_awaited()
         self.assertEqual(config.status, "idle")
         self.assertEqual(config.current_open_orders, 0)
         db.commit.assert_called_once_with()
@@ -1029,9 +1027,8 @@ class MakerLoopTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(market_maker_service, "SessionLocal", return_value=db),
-            patch.object(
-                market_maker_service,
-                "load_wallet_credentials",
+            patch(
+                "app.services.trading.execution.live.load_wallet_credentials",
                 side_effect=RuntimeError("keystore down"),
             ),
             patch.object(market_maker_service, "_cancel_all_orders", new=cancel_all),
@@ -1082,6 +1079,7 @@ class MakerLoopTests(unittest.IsolatedAsyncioTestCase):
         db = _session([config])
         sync = AsyncMock(return_value={"placed": 0})
         release = MagicMock()
+        cleanup = MagicMock(side_effect=lambda _config_id: release.assert_not_called())
         fake_sleep, parked = _blocking_sleep()
 
         with (
@@ -1091,6 +1089,7 @@ class MakerLoopTests(unittest.IsolatedAsyncioTestCase):
             ) as acquire,
             patch.object(market_maker_service, "_sync_market_maker", new=sync),
             patch.object(market_maker_service, "release_scheduler_lock", new=release),
+            patch.object(market_maker_service, "_cleanup_maker_quotes", new=cleanup),
             patch.object(market_maker_service.asyncio, "sleep", new=fake_sleep),
             patch.object(market_maker_service, "logger", MagicMock()),
         ):
@@ -1104,6 +1103,7 @@ class MakerLoopTests(unittest.IsolatedAsyncioTestCase):
 
         acquire.assert_called_once_with("market_maker:1")
         sync.assert_awaited_once_with(1)
+        cleanup.assert_called_once_with(1)
         release.assert_called_once_with("market_maker:1")
 
     async def test_stop_market_maker_releases_the_lock_on_cancel(self):

@@ -104,7 +104,7 @@ services:
   backend:
     build:
       context: ./backend
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile
     ports:
       - "8002:8002"
     environment:
@@ -121,6 +121,12 @@ services:
       CREDENTIAL_CACHE_TTL_SECONDS: ${CREDENTIAL_CACHE_TTL_SECONDS:-3600}
       REQUIRE_REDIS_FOR_CREDENTIALS: ${REQUIRE_REDIS_FOR_CREDENTIALS:-true}
       ENVIRONMENT: ${ENVIRONMENT:-development}
+      LIVE_TRADING_ENABLED: ${LIVE_TRADING_ENABLED:-true}
+      LIVE_COPY_TRADING_ENABLED: ${LIVE_COPY_TRADING_ENABLED:-true}
+      LIVE_MARKET_MAKING_ENABLED: ${LIVE_MARKET_MAKING_ENABLED:-true}
+      LIVE_LATENCY_ARB_ENABLED: ${LIVE_LATENCY_ARB_ENABLED:-true}
+      LATENCY_ARB_LIVE: ${LATENCY_ARB_LIVE:-true}
+      LIVE_INVERSE_TRADING_ENABLED: ${LIVE_INVERSE_TRADING_ENABLED:-true}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}
       DEBUG_ENDPOINTS_ENABLED: ${DEBUG_ENDPOINTS_ENABLED:-false}
       DEBUG_LOG_HASH_SALT: ${DEBUG_LOG_HASH_SALT:-}

@@ -3,7 +3,7 @@ Trade monitor – watches followed traders' activity via WebSocket + HTTP pollin
 
 Uses a dual strategy:
   1. WebSocket: Connect to Polymarket's CLOB WebSocket for real-time trade events.
-  2. HTTP polling: Fallback that polls CLOB /data/trades for each watched wallet.
+  2. HTTP polling: Fallback that polls the public Data API /trades for each watched wallet.
 
 When a new trade is detected the monitor:
   - Records it in trade_history
@@ -29,6 +29,7 @@ Also owns the fill-tracking reconciliation jobs:
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 from collections import OrderedDict
@@ -56,7 +57,8 @@ from app.services.analytics.execution_analytics import (
     compute_latency_ms,
     compute_slippage_bps,
 )
-from app.services.market_data.polymarket_service import POLYMARKET_CLOB_API
+from app.services.market_data.polymarket_service import POLYMARKET_DATA_API
+from app.services.trading.execution.async_io import run_blocking_execution
 from app.services.trading.pre_trade_gate import (
     build_clob_client,
     clob_trades_for_order,
@@ -155,67 +157,84 @@ def refresh_watched_wallets(db: Session):
 # ────────────── HTTP polling (reliable fallback) ──────────────
 
 
+def _normalize_public_trades(payload: Any) -> list[dict]:
+    """Map Data API trades to monitor records with stable, immutable identities."""
+    items = (
+        payload
+        if isinstance(payload, list)
+        else (payload.get("trades", payload.get("data", [])) if isinstance(payload, dict) else [])
+    )
+    if not isinstance(items, list):
+        return []
+    trades = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        trade = dict(item)
+        if item.get("conditionId"):
+            trade["market"] = item["conditionId"]
+        if item.get("asset"):
+            trade["token_id"] = item["asset"]
+        if not trade.get("id"):
+            # A transaction may contain multiple trades. Include its economic
+            # fields and token, while excluding mutable profile/title metadata.
+            identity = [
+                item.get("transactionHash"),
+                item.get("proxyWallet"),
+                trade.get("market") or trade.get("condition_id"),
+                trade.get("token_id") or trade.get("asset_id"),
+                item.get("side"),
+                str(item.get("size")),
+                str(item.get("price")),
+                item.get("timestamp"),
+            ]
+            if not identity[0] or not identity[3]:
+                continue
+            trade["id"] = "data:" + hashlib.sha256(json.dumps(identity).encode()).hexdigest()
+        trades.append(trade)
+    return trades
+
+
+async def _fetch_public_trades(wallet: str, limit: int) -> list[dict]:
+    params = {"user": wallet.lower(), "limit": limit, "takerOnly": "false"}
+    if _poll_http_client is None:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(f"{POLYMARKET_DATA_API}/trades", params=params)
+    else:
+        response = await _poll_http_client.get(f"{POLYMARKET_DATA_API}/trades", params=params)
+    return _normalize_public_trades(response.json()) if response.status_code == 200 else []
+
+
 async def _poll_trader_trades(wallet: str) -> list[dict]:
-    """Fetch recent trades for a wallet via CLOB public API."""
+    """Fetch real followed-wallet trades from the unauthenticated Data API."""
     try:
-        client = _poll_http_client
-        if client is None:
-            async with httpx.AsyncClient(timeout=15.0) as temp_client:
-                resp = await temp_client.get(
-                    f"{POLYMARKET_CLOB_API}/data/trades",
-                    params={"user": wallet, "limit": 20},
-                )
-        else:
-            resp = await client.get(
-                f"{POLYMARKET_CLOB_API}/data/trades",
-                params={"user": wallet, "limit": 20},
-            )
-        if resp.status_code == 200:
-            data = resp.json()
-            return data if isinstance(data, list) else data.get("trades", data.get("data", []))
-    except Exception as e:
-        logger.debug("Poll trades for %s failed: %s", wallet[:10], e)
-    return []
+        return await _fetch_public_trades(wallet, 20)
+    except Exception as exc:
+        logger.debug(
+            "Poll trades for %s failed: %s",
+            wallet[:10].replace("\r", "\\r").replace("\n", "\\n"),
+            str(exc).replace("\r", "\\r").replace("\n", "\\n"),
+        )
+        return []
 
 
 async def seed_wallet_cursor(wallet: str) -> None:
-    """Seed the per-wallet cursor with the wallet's newest trade id.
-
-    Called when a wallet starts being watched (follow) and
-    before the WS subscribe, so the monitor's first poll
-    does not replay the wallet's trade history as "new"
-    trades (which would fire copy orders for trades the
-    follower never saw live).
-    """
+    """Seed the newest source identity so historical trades are never copied."""
     normalized = wallet.lower()
+    wallet_hint = normalized[:10].replace("\r", "\\r").replace("\n", "\\n")
     if normalized in _last_seen_trades:
         return
     try:
-        client = _poll_http_client
-        params = {"user": normalized, "limit": 1}
-        if client is None:
-            async with httpx.AsyncClient(timeout=15.0) as temp_client:
-                resp = await temp_client.get(
-                    f"{POLYMARKET_CLOB_API}/data/trades",
-                    params=params,
-                )
-        else:
-            resp = await client.get(
-                f"{POLYMARKET_CLOB_API}/data/trades",
-                params=params,
-            )
-        if resp.status_code == 200:
-            data = resp.json()
-            trades = data if isinstance(data, list) else data.get("trades", data.get("data", []))
-            if trades:
-                _last_seen_trades[normalized] = trades[0].get("id", "")
-                logger.info(
-                    "Seeded trade cursor for %s at %s",
-                    normalized[:10],
-                    _last_seen_trades[normalized],
-                )
-    except Exception as e:
-        logger.warning("Could not seed trade cursor for %s: %s", normalized[:10], e)
+        trades = await _fetch_public_trades(normalized, 1)
+        if trades:
+            _last_seen_trades[normalized] = trades[0]["id"]
+            logger.info("Seeded trade cursor for %s", wallet_hint)
+    except Exception as exc:
+        logger.warning(
+            "Could not seed trade cursor for %s: %s",
+            wallet_hint,
+            str(exc).replace("\r", "\\r").replace("\n", "\\n"),
+        )
 
 
 async def _detect_new_trades(wallet: str, trades: list[dict]) -> list[dict]:
@@ -362,7 +381,7 @@ async def _ws_monitor():
                     timeout=60,
                 )
                 ws_consecutive_fails = 0
-            except (TimeoutError, asyncio.CancelledError):
+            except asyncio.CancelledError:
                 raise  # let cancellation propagate
             except Exception as e:
                 ws_consecutive_fails += 1
@@ -458,8 +477,10 @@ async def _handle_ws_event(data: dict):
     if wallet not in _watched_wallets:
         return
 
-    logger.info("WS trade event for watched wallet %s", wallet[:10])
-    await _process_new_trade(wallet, data)
+    # Public websocket events do not establish followed-wallet execution or
+    # share Data API identities. Use them only to wake the authoritative poll,
+    # so WS and scheduled delivery cannot copy one source trade twice.
+    await _poll_and_process(wallet)
 
 
 def _event_order_hash(data: dict) -> str | None:
@@ -1056,8 +1077,20 @@ async def _fill_reconciliation_loop():
         _release_job_lock(job_name)
 
 
+def _reconcile_live_orders_in_thread() -> None:
+    """Keep synchronous exchange requests and their session off the event loop."""
+    from app.services.trading.execution.live import reconcile_pending_live_orders
+
+    db = SessionLocal()
+    try:
+        reconcile_pending_live_orders(db)
+    finally:
+        db.close()
+
+
 async def _reconcile_pending_fills() -> None:
     """Query the CLOB for fills of pending orders older than the grace window."""
+    await run_blocking_execution(_reconcile_live_orders_in_thread)
     cutoff = utc_now() - timedelta(seconds=FILL_RECON_PENDING_AGE_SECONDS)
     db = SessionLocal()
     try:

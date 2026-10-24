@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from datetime import UTC, datetime
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 from cryptography.fernet import InvalidToken
 
@@ -24,6 +25,8 @@ CREDENTIAL_ENVELOPE_VERSION = 1
 class WalletCredentials(TypedDict):
     private_key: str
     clob_creds: dict[str, str] | None
+    signature_type: NotRequired[int]
+    funder: NotRequired[str]
 
 
 class CredentialStoreError(RuntimeError):
@@ -92,7 +95,18 @@ def _decrypt_payload(payload: dict[str, Any]) -> WalletCredentials:
         if not clob_creds:
             clob_creds = None
 
-    return {"private_key": private_key, "clob_creds": clob_creds}
+    credentials: WalletCredentials = {"private_key": private_key, "clob_creds": clob_creds}
+    if payload.get("execution_identity_enc"):
+        try:
+            identity = json.loads(decrypt_text(payload["execution_identity_enc"]))
+        except (TypeError, ValueError) as exc:
+            raise InvalidToken("Invalid execution identity") from exc
+        if not isinstance(identity, dict) or identity.get("signature_type") not in (0, 1, 2, 3):
+            raise InvalidToken("Invalid execution identity")
+        credentials["signature_type"] = identity["signature_type"]
+        if identity.get("funder"):
+            credentials["funder"] = identity["funder"]
+    return credentials
 
 
 def _is_encrypted_payload(payload: Any) -> bool:
@@ -112,6 +126,9 @@ def store_wallet_credentials(
     private_key: str,
     clob_creds: dict[str, str] | None = None,
     ttl_seconds: int | None = None,
+    *,
+    signature_type: int | None = None,
+    funder: str | None = None,
 ) -> None:
     """Encrypt and store wallet credentials in cache."""
     settings = get_settings()
@@ -120,6 +137,13 @@ def store_wallet_credentials(
     ttl = ttl_seconds if ttl_seconds is not None else settings.credential_cache_ttl_seconds
     try:
         payload = _encrypt_payload(private_key, _normalize_clob_creds(clob_creds))
+        if signature_type is not None:
+            if signature_type not in (0, 1, 2, 3):
+                raise ValueError("Unsupported wallet signature type")
+            if signature_type != 0 and not funder:
+                raise ValueError("A funding wallet is required for contract wallets")
+            identity = {"signature_type": signature_type, "funder": funder}
+            payload["execution_identity_enc"], _ = encrypt_text(json.dumps(identity))
     except EncryptionConfigError as exc:
         raise CredentialStoreError(str(exc)) from exc
     key_store.set(_cache_key(wallet_address), payload, ttl_seconds=ttl)

@@ -316,3 +316,166 @@ def test_legacy_resume_and_recovery_cannot_reenable_trading(sessions):
         settings = db.scalar(select(UserSettings).where(UserSettings.user_id == 1))
         assert settings.copy_trading_enabled is False
         assert settings.trading_halted is True
+
+
+@pytest.fixture
+def live_gateway(sessions, monkeypatch):
+    from decimal import Decimal
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from app.services.trading.execution import clob_transport, live
+
+    with sessions.begin() as db:
+        db.get(TradingControlState, "global").state = "RUNNING"
+        db.add(TradingControlState(scope="user:1", user_id=1, state="RUNNING", reason="test"))
+        db.add(
+            UserSettings(
+                user_id=1,
+                max_position_size=10,
+                daily_loss_limit=10,
+                initial_capital=1000,
+                simulation_mode=False,
+                require_ai_approval=False,
+            )
+        )
+    monkeypatch.setattr(live, "get_settings", lambda: SimpleNamespace(live_trading_enabled=True))
+    monkeypatch.setattr(live, "load_wallet_credentials", lambda _: {"private_key": "test"})
+    monkeypatch.setattr(clob_transport, "build_client", lambda *_: object())
+    monkeypatch.setattr(clob_transport, "balance", lambda *_: Decimal(100))
+
+    def prepare(client, token, side, price, shares):
+        import hashlib
+
+        order_hash = "0x" + hashlib.sha256(token.encode()).hexdigest()
+        return order_hash, order_hash, shares, shares * price
+
+    submit = MagicMock(side_effect=lambda client, signed, *_: {"success": True, "orderID": signed})
+    monkeypatch.setattr(clob_transport, "prepare", prepare)
+    monkeypatch.setattr(clob_transport, "submit", submit)
+
+    def place(key="one", token="123"):
+        with sessions() as db:
+            return live.place_live_order(
+                db, user_id=1, token_id=token, side="BUY", price=0.5, size=16, idempotency_key=key
+            )
+
+    return place, submit
+
+
+def test_live_concurrent_duplicate_source_submits_once(live_gateway):
+    place, submit = live_gateway
+    start = threading.Barrier(2)
+
+    def concurrent():
+        start.wait(timeout=5)
+        return place()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: concurrent(), range(2)))
+    assert results[0]["order_hash"] == results[1]["order_hash"]
+    submit.assert_called_once()
+    assert place()["status"] == "submitted"
+
+
+def test_live_concurrent_strategies_cannot_overspend_budget(live_gateway):
+    from app.services.trading.live_trading_policy import LiveTradingBlocked
+
+    place, submit = live_gateway
+    start = threading.Barrier(2)
+
+    def concurrent(index):
+        start.wait(timeout=5)
+        try:
+            return place(str(index), str(index))
+        except LiveTradingBlocked as exc:
+            return str(exc)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(concurrent, range(2)))
+    assert sum(isinstance(result, dict) and result["success"] for result in results) == 1
+    assert any(
+        "BUDGET_EXCEEDED" in result or "UNRESOLVED_LIVE_ORDER" in result
+        for result in results
+        if isinstance(result, str)
+    )
+    with pytest.raises(LiveTradingBlocked, match="BUDGET_EXCEEDED"):
+        place("third", "third")
+    submit.assert_called_once()
+
+
+def test_live_crash_after_durable_intent_never_resubmits(live_gateway, sessions):
+    from app.models.trading.live_order import LiveOrder
+
+    place, submit = live_gateway
+    submit.side_effect = SystemExit("worker died after request could have reached exchange")
+    with pytest.raises(SystemExit):
+        place()
+    with sessions() as db:
+        assert db.scalar(select(LiveOrder)).state == "SUBMITTING"
+    submit.side_effect = None
+    result = place()
+    assert result["status"] == "submitting"
+    submit.assert_called_once()
+
+
+def test_live_halt_waits_for_inflight_submission_then_blocks_new_orders(live_gateway, sessions):
+    from app.services.trading.live_trading_policy import LiveTradingBlocked
+
+    place, submit = live_gateway
+    sending = threading.Event()
+    finish = threading.Event()
+    halt_started = threading.Event()
+
+    def exchange(client, signed, *_):
+        sending.set()
+        assert finish.wait(timeout=5)
+        return {"success": True, "orderID": signed}
+
+    def halt():
+        halt_started.set()
+        with sessions() as db:
+            return request_halt(db, user_id=1)
+
+    submit.side_effect = exchange
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        order = pool.submit(place)
+        assert sending.wait(timeout=5)
+        halted = pool.submit(halt)
+        assert halt_started.wait(timeout=5)
+        assert not halted.done()
+        finish.set()
+        assert order.result(timeout=5)["success"]
+        halted.result(timeout=5)
+    with pytest.raises(LiveTradingBlocked, match="HALTED_OR_RECOVERY"):
+        place("later", "later")
+    submit.assert_called_once()
+
+
+def test_halt_cancels_durable_unknown_order_even_if_open_order_snapshot_is_empty(
+    live_gateway, sessions
+):
+    place, submit = live_gateway
+    submit.side_effect = TimeoutError()
+    unknown = place()
+    cancelled = []
+
+    class Adapter:
+        def get_orders(self):
+            return []
+
+        def cancel(self, order_id):
+            cancelled.append(order_id)
+
+        def get_order(self, order_id):
+            return {"id": order_id, "status": "CANCELED"}
+
+    with sessions() as db:
+        operation = request_halt(db, user_id=1)[0]
+        operation_id = operation.id
+    process_next_halt(sessions, adapter_factory=lambda *_: Adapter())
+    assert cancelled == [unknown["order_hash"]]
+    with sessions() as db:
+        report = operation_status(db, operation_id=operation_id, user_id=1)
+        assert report["orders_confirmed_cancelled"] == 1
+        assert report["positions_confirmed_closed"] == 0

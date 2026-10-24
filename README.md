@@ -20,11 +20,11 @@ Displayed balances, prices and example results are illustrations, not live accou
 statements or demonstrated returns. Empty charts show where a fresh workspace has
 no observations; they are not populated with invented trading history.
 
-The current application explicitly disables live orders and automated position
-exits pending safety verification. Trading screens and strategy controls are
-shown so you can understand their configuration; a sign-in, stored key or paper
-mode badge does not remove those server restrictions. Research and simulation
-results do not approve an order. Legacy paper/backtest metrics remain unverified.
+Live trading features are enabled by default through the durable execution gateway.
+Real orders require server strategy switches, global administrator activation, wallet activation and
+risk budgets. Simulation and replay never grant live authority. Legacy direct
+signers remain blocked. See the [live execution setup](#live-execution-setup)
+for the supported paths and remaining limits.
 
 | Goal | Start here | Access or prerequisite |
 | --- | --- | --- |
@@ -863,23 +863,43 @@ slice does not add historical venue datasets, automatic settlement, trader-skill
 scoring, continuous collection, or legacy paper-runner/NAV migration.
 
 
+### Live execution setup
+
+Real CLOB v2 execution is available for manual orders/cash-out, copy trading,
+market making, latency arbitrage, inverse reversals and conditional exits.
+Simulation and historical replay remain separate and cannot authorize live orders.
+
+1. Install the locked backend dependencies with `uv sync --frozen`, then run
+   `uv run --frozen alembic upgrade head` from `backend/`.
+2. Configure the trading key in Settings. Choose the actual EOA, Polymarket proxy,
+   Safe or deposit wallet type; contract wallets require the funding address.
+3. Set risk budgets and initial capital. `LIVE_TRADING_ENABLED`, the strategy
+   flags and `LATENCY_ARB_LIVE` default to true. Both Compose web and worker
+   services receive these flags; operators can set them to false to disable live
+   features. Choose paper/simulation mode when using virtual funds.
+4. An administrator activates global execution with `POST /api/v1/risk/activate`
+   and `{"scope":"global"}`. Each wallet owner then activates their own account.
+   The Copy Trading panel exposes activation, initial capital, simulation/stop
+   controls and owned live-order checks/cancellation. Following wallets and
+   configuring sizing remain explicit steps.
+
+Purchase principal is conservatively charged against shared wallet budgets and
+any selected sub-account budget. Only exchange-confirmed cancellation releases
+unfilled reservations; simulated or unverified profits never replenish budgets.
+These controls are spending limits, not a verified NAV/margin ledger. Historical
+live exposure outside the new ledger blocks new purchases until migrated.
+Inventory-backed exits remain available after activation. Inverse reversals pause
+when either leg's settlement is uncertain, and maker shutdown verifies only the
+orders owned by that configuration.
+
+Emergency halt persists before cancellation and includes durable unknown orders
+even when the open-order snapshot is empty. It does not claim positions closed
+or implement automatic liquidation. Independent analysis still has no general
+raw-analysis history store. Other venues remain research/data adapters.
+
 ## WalletConnect configuration and browser tests
 
 Set `VITE_WALLETCONNECT_PROJECT_ID` in the frontend environment to the project ID
 from the Reown dashboard. For GitHub Actions, add a repository Actions secret with
-that exact name; the E2E job passes it to Vite before startup. Configure the Reown
-project's allowed origins for your deployment and CI origin `http://127.0.0.1:5190`.
-The project ID is a public browser identifier, not a wallet key or server API secret.
-Never use a wallet private key as this value.
+that exact name
 
-Run `npm run test:walletconnect` from `frontend` for deterministic configured/missing
-ID, connection, rejection/retry, empty-account and disconnect checks. These replace
-only the external WalletConnect SDK boundary and do not prove a real relay pairing.
-Existing injected-wallet authentication tests remain in the full-stack suite.
-
-To check the real SDK/relay, manually run the CI workflow with
-`walletconnect_live_canary` enabled, or run
-`WALLETCONNECT_LIVE_CANARY=1 npm run test:walletconnect` with the real project ID
-set locally. Missing/invalid configuration fails this canary. It checks QR pairing
-initialization only: completing a real connection/sign-in requires wallet approval.
-The canary never supplies a private key, signs a message or submits a transaction.

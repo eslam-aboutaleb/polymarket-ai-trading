@@ -1,6 +1,8 @@
 """Services for Polymarket operations - portfolio, balance, and positions."""
 
 import asyncio
+import hashlib
+import json
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -617,8 +619,8 @@ class PolymarketService:
         ``get_trades()`` method (Level-2 auth) which returns the real trade
         log.  Market condition-IDs are resolved to human-readable questions.
 
-        Falls back to the unauthenticated public endpoints and finally to
-        synthetic entries derived from positions.
+        Falls back to public trade/activity records. A current position is
+        never fabricated into a historical trade.
         """
         # ── Authenticated path (preferred) ──────────────────────────
         if private_key:
@@ -649,11 +651,11 @@ class PolymarketService:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 endpoints = [
                     (
-                        f"{POLYMARKET_CLOB_API}/data/trades",
+                        f"{POLYMARKET_DATA_API}/trades",
                         {"user": user, "limit": limit, "offset": offset},
                     ),
                     (
-                        f"{POLYMARKET_CLOB_API}/data/activity",
+                        f"{POLYMARKET_DATA_API}/activity",
                         {"user": user, "limit": limit, "offset": offset},
                     ),
                 ]
@@ -672,7 +674,31 @@ class PolymarketService:
                         for item in items:
                             if not isinstance(item, dict):
                                 continue
-                            tid = item.get("id", "")
+                            # Data API records normally identify their transaction,
+                            # rather than carrying a CLOB trade UUID. Hashing the
+                            # complete source record avoids collapsing every id-less
+                            # trade into one empty-string identity.
+                            tid = (
+                                item.get("id")
+                                or hashlib.sha256(
+                                    json.dumps(item, sort_keys=True).encode()
+                                ).hexdigest()
+                            )
+                            timestamp = (
+                                item.get("timestamp")
+                                or item.get("createdAt")
+                                or item.get("matchTime")
+                            )
+                            if isinstance(timestamp, (int, float)) or (
+                                isinstance(timestamp, str)
+                                and timestamp.replace(".", "", 1).isdigit()
+                            ):
+                                try:
+                                    timestamp = datetime.fromtimestamp(
+                                        float(timestamp), UTC
+                                    ).isoformat()
+                                except (ValueError, OverflowError, OSError):
+                                    timestamp = None
                             if tid in seen:
                                 continue
                             seen.add(tid)
@@ -689,9 +715,10 @@ class PolymarketService:
                                     "price": self._to_float(item.get("price"), 0.0),
                                     "type": item.get("type") or "TRADE",
                                     "status": (item.get("status") or "filled").upper(),
-                                    "timestamp": item.get("timestamp")
-                                    or item.get("createdAt")
-                                    or item.get("matchTime"),
+                                    "timestamp": timestamp,
+                                    "transaction_hash": item.get("transactionHash"),
+                                    "condition_id": item.get("conditionId"),
+                                    "source": "polymarket_data_api",
                                     "fee": self._to_float(
                                         item.get("fee") or item.get("feeAmount"), 0.0
                                     ),
@@ -704,29 +731,6 @@ class PolymarketService:
                             break
                     except Exception as inner:
                         logger.debug("Trade endpoint %s failed: %s", url, inner)
-
-            # Last resort — derive pseudo-trades from positions
-            if not normalized_fallback:
-                positions = await self.get_positions(wallet_address)
-                for pos in positions:
-                    normalized_fallback.append(
-                        {
-                            "id": pos.get("id"),
-                            "market": pos.get("title") or pos.get("market") or pos.get("asset"),
-                            "market_slug": pos.get("marketSlug"),
-                            "outcome": pos.get("outcome"),
-                            "side": "BUY",
-                            "size": self._to_float(pos.get("size"), 0.0),
-                            "price": self._to_float(pos.get("avgPrice"), 0.0),
-                            "type": "POSITION",
-                            "status": "OPEN",
-                            "timestamp": pos.get("updatedAt") or pos.get("createdAt"),
-                            "fee": 0.0,
-                            "pnl": self._to_float(pos.get("pnl"), 0.0)
-                            if pos.get("pnl") is not None
-                            else None,
-                        }
-                    )
 
             normalized_fallback.sort(key=lambda t: t.get("timestamp") or "", reverse=True)
             return normalized_fallback[:limit]

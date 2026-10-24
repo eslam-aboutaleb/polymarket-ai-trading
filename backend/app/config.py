@@ -98,12 +98,13 @@ class Settings(BaseSettings):
     prompts_path: str = "prompts/prompts.json"
 
     # Trading
-    # Emergency exposure controls. Enabling these does not authorize legacy
-    # execution: the durable gateway and signer must pass the release gates.
-    live_trading_enabled: bool = False
-    live_market_making_enabled: bool = False
-    live_copy_trading_enabled: bool = False
-    live_latency_arb_enabled: bool = False
+    # Live features are available by default. Paper/simulation select execution mode;
+    # real orders still require the durable gateway, activation and risk budgets.
+    live_trading_enabled: bool = True
+    live_market_making_enabled: bool = True
+    live_copy_trading_enabled: bool = True
+    live_inverse_trading_enabled: bool = True
+    live_latency_arb_enabled: bool = True
     execution_mode: str = "approval"  # auto or approval
     max_position_size: float = 1000.0  # Max USDC per trade
     stop_loss_check_interval_seconds: int = 10
@@ -189,11 +190,11 @@ class Settings(BaseSettings):
     slippage_sim_min: float = 0.003
     slippage_sim_max: float = 0.03
 
-    # Latency arbitrage (plan 06). Paper-first: the engine runs
+    # Latency arbitrage (plan 06). The engine runs
     # simulated fills for users with simulation_mode=true and
     # only submits real FOK orders when LATENCY_ARB_LIVE=true
     # AND the user's simulation_mode is false.
-    latency_arb_live: bool = False
+    latency_arb_live: bool = True
     # Minimum |P_model − p_market| gap to consider a candidate.
     latency_arb_edge_threshold: float = 0.03
     # Max notional per trade (USDC).
