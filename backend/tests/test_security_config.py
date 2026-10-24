@@ -1,6 +1,24 @@
 import unittest
 
+import pytest
+
 from app.config import Settings
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_environment_can_enable_and_disable_live_features(monkeypatch, enabled):
+    flags = (
+        "live_trading_enabled",
+        "live_market_making_enabled",
+        "live_copy_trading_enabled",
+        "live_inverse_trading_enabled",
+        "live_latency_arb_enabled",
+        "latency_arb_live",
+    )
+    for name in flags:
+        monkeypatch.setenv(name.upper(), str(enabled).lower())
+    settings = Settings(_env_file=None, jwt_secret_key="a" * 32, environment="test")
+    assert all(getattr(settings, name) is enabled for name in flags)
 
 
 def test_live_features_default_enabled_and_allow_explicit_operator_disable(monkeypatch):

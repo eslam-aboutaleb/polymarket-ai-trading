@@ -6,9 +6,13 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+from app.api.routes.auth.auth import get_current_user_from_token
+from app.api.routes.trading import risk, trades
 from app.models import Base
 from app.models.trading.followed_trader import FollowedTrader
 from app.models.trading.live_order import LiveOrder
@@ -18,6 +22,7 @@ from app.models.users.user import User
 from app.models.users.user_settings import UserSettings
 from app.services.trading.execution import clob_transport, live
 from app.services.trading.live_trading_policy import LiveTradingBlocked
+from app.utils.database import get_db
 from app.utils.time import utc_now
 
 
@@ -48,6 +53,7 @@ def gateway(tmp_path, monkeypatch):
         live_copy_trading_enabled=True,
         live_market_making_enabled=True,
         live_latency_arb_enabled=True,
+        live_inverse_trading_enabled=True,
     )
     monkeypatch.setattr(live, "get_settings", lambda: flags)
     monkeypatch.setattr(live, "load_wallet_credentials", lambda _: {"private_key": "test-only"})
@@ -152,13 +158,134 @@ def test_exchange_rejection_releases_reservation(gateway):
     assert db.get(UserTrade, result["trade_id"]).status == "rejected"
 
 
-@pytest.mark.parametrize("field", ["live_trading_enabled", "live_copy_trading_enabled"])
-def test_release_flags_checked_before_remote_io(gateway, field):
-    db, _, flags, submit = gateway
-    setattr(flags, field, False)
-    with pytest.raises(LiveTradingBlocked):
-        place(db, strategy="copy")
-    submit.assert_not_called()
+@pytest.mark.parametrize("enabled", [False, True], ids=["live-disabled", "live-enabled"])
+@pytest.mark.parametrize("strategy", list(live.STRATEGY_FLAGS))
+@pytest.mark.parametrize("side", ["BUY", "SELL"])
+def test_master_live_switch_controls_every_strategy(gateway, monkeypatch, enabled, strategy, side):
+    db, client, flags, submit = gateway
+    flags.live_trading_enabled = enabled
+    build = MagicMock(return_value=client)
+    monkeypatch.setattr(clob_transport, "build_client", build)
+    kwargs = {
+        "strategy": strategy,
+        "side": side,
+        "copied_from_wallet": "0x" + "2" * 40 if strategy == "copy" else None,
+    }
+    if enabled:
+        result = place(db, **kwargs)
+        assert result["success"] and not result["simulated"]
+        row = db.scalar(select(LiveOrder))
+        assert row.strategy == strategy and row.side == side and row.state == "SUBMITTED"
+        assert row.reserved == (Decimal(5) if side == "BUY" else 0)
+        assert db.get(UserTrade, result["trade_id"]).filled_size is None
+        build.assert_called_once()
+        submit.assert_called_once()
+    else:
+        with pytest.raises(LiveTradingBlocked, match="^LIVE_TRADING_DISABLED$"):
+            place(db, **kwargs)
+        assert db.scalar(select(LiveOrder.id)) is None
+        assert db.scalar(select(UserTrade.id)) is None
+        build.assert_not_called()
+        submit.assert_not_called()
+
+
+@pytest.mark.parametrize("enabled", [False, True], ids=["strategy-disabled", "strategy-enabled"])
+@pytest.mark.parametrize(
+    "strategy,field", [(s, flag) for s, flag in live.STRATEGY_FLAGS.items() if flag]
+)
+def test_strategy_switch_is_independent_of_master_and_manual(
+    gateway, monkeypatch, enabled, strategy, field
+):
+    db, client, flags, submit = gateway
+    setattr(flags, field, enabled)
+    build = MagicMock(return_value=client)
+    monkeypatch.setattr(clob_transport, "build_client", build)
+    kwargs = {"strategy": strategy}
+    if strategy == "copy":
+        kwargs["copied_from_wallet"] = "0x" + "2" * 40
+    if enabled:
+        assert place(db, **kwargs)["success"]
+        submit.assert_called_once()
+    else:
+        with pytest.raises(LiveTradingBlocked, match="^LIVE_STRATEGY_DISABLED$"):
+            place(db, **kwargs)
+        build.assert_not_called()
+        submit.assert_not_called()
+        # A disabled automated strategy must not disable authorized manual trading.
+        assert place(db, strategy="manual")["success"]
+        submit.assert_called_once()
+
+
+@pytest.mark.parametrize("enabled", [False, True], ids=["live-disabled", "live-enabled"])
+@pytest.mark.parametrize("path", ["execute", "cash-out"])
+def test_manual_http_order_switch(gateway, monkeypatch, enabled, path):
+    db, client, flags, submit = gateway
+    flags.live_trading_enabled = enabled
+    build = MagicMock(return_value=client)
+    monkeypatch.setattr(clob_transport, "build_client", build)
+    app = FastAPI()
+    app.include_router(trades.router)
+    app.dependency_overrides[get_current_user_from_token] = lambda: {"user_id": 1}
+    app.dependency_overrides[get_db] = lambda: db
+    with TestClient(app) as http:
+        response = http.post(
+            f"/api/trades/{path}",
+            json={
+                "execution_mode": "live",
+                "token_id": "123",
+                "side": "BUY",
+                "price": 0.5,
+                "size": 5,
+            },
+            headers={"Idempotency-Key": "http-switch"},
+        )
+    if enabled:
+        assert response.status_code == 200
+        assert response.json()["success"]
+        row = db.scalar(select(LiveOrder))
+        assert row.side == ("SELL" if path == "cash-out" else "BUY")
+        assert row.shares == (5 if path == "cash-out" else 10)
+        submit.assert_called_once()
+    else:
+        assert response.status_code == 503
+        assert response.json()["detail"] == "LIVE_TRADING_DISABLED"
+        assert db.scalar(select(LiveOrder.id)) is None
+        build.assert_not_called()
+        submit.assert_not_called()
+
+
+@pytest.mark.parametrize("enabled", [False, True], ids=["live-disabled", "live-enabled"])
+@pytest.mark.parametrize("scope", ["global", "user"])
+def test_http_activation_respects_live_switch(gateway, monkeypatch, enabled, scope):
+    db, client, flags, submit = gateway
+    flags.live_trading_enabled = enabled
+    db.get(User, 1).is_admin = True
+    control_scope = "global" if scope == "global" else "user:1"
+    db.get(TradingControlState, control_scope).state = "HALTED"
+    db.commit()
+    client.get_open_orders.return_value = []
+    credentials = MagicMock(return_value={"private_key": "test-only"})
+    monkeypatch.setattr("app.security.credential_store.load_wallet_credentials", credentials)
+    app = FastAPI()
+    app.include_router(risk.router)
+    app.dependency_overrides[get_current_user_from_token] = lambda: {"user_id": 1}
+    app.dependency_overrides[get_db] = lambda: db
+    with TestClient(app) as http:
+        response = http.post(
+            "/api/v1/risk/activate", json={"scope": scope, "initial_capital": 1000}
+        )
+    if enabled:
+        assert response.status_code == 200
+        assert response.json()["state"] == "RUNNING"
+        assert db.get(TradingControlState, control_scope).state == "RUNNING"
+        if scope == "user":
+            credentials.assert_called_once()
+    else:
+        assert response.status_code == 409
+        assert response.json()["detail"] == "LIVE_TRADING_DISABLED"
+        assert db.get(TradingControlState, control_scope).state == "HALTED"
+        credentials.assert_not_called()
+    submit.assert_not_called()  # Activation itself never places an order.
 
 
 @pytest.mark.parametrize("scope", ["global", "user:1"])
@@ -192,11 +319,14 @@ def test_copy_requires_active_follow_and_explicit_ai_approval(gateway):
     submit.assert_called_once()
 
 
-def test_simulation_cannot_authorize_real_order(gateway):
-    db, _, _, submit = gateway
+@pytest.mark.parametrize("enabled", [False, True], ids=["live-disabled", "live-enabled"])
+def test_simulation_cannot_authorize_real_order(gateway, enabled):
+    db, _, flags, submit = gateway
+    flags.live_trading_enabled = enabled
     db.scalar(select(UserSettings)).simulation_mode = True
     db.commit()
-    with pytest.raises(LiveTradingBlocked, match="NOT_IN_LIVE"):
+    reason = "NOT_IN_LIVE" if enabled else "LIVE_TRADING_DISABLED"
+    with pytest.raises(LiveTradingBlocked, match=reason):
         place(db)
     submit.assert_not_called()
 
