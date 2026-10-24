@@ -9,6 +9,7 @@
  * @module components/CopyTrading
  */
 import FollowerExperiments from "./FollowerExperiments";
+import LiveExecutionControls from "./LiveExecutionControls";
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   tradesService,
@@ -1082,6 +1083,8 @@ export default function CopyTrading() {
           )}
         </div>
       )}
+
+      {activeTab === "copy" && <LiveExecutionControls />}
 
       {activeTab === "copy" && (
         <div className="surface-panel p-6 rounded-lg space-y-4">

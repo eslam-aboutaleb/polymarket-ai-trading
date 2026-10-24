@@ -94,6 +94,7 @@ def _sl_order(order_id, user_id, token_id, stop_price, wallet="0xwallet", size=1
         executed_price=None,
         triggered_at=None,
         updated_at=None,
+        created_at=__import__("datetime").datetime(2026, 1, 1),
         user=None if wallet is None else SimpleNamespace(wallet_address=wallet),
     )
 
@@ -114,6 +115,7 @@ def _tp_order(order_id, user_id, token_id, take_profit_price, wallet="0xwallet",
         executed_price=None,
         triggered_at=None,
         updated_at=None,
+        created_at=__import__("datetime").datetime(2026, 1, 1),
         user=None if wallet is None else SimpleNamespace(wallet_address=wallet),
     )
 
@@ -851,22 +853,26 @@ class ExecuteStopLossTests(unittest.IsolatedAsyncioTestCase):
         order = _sl_order(1, 1, "tok-1", 0.4, size=5.0)
         place_mock = MagicMock(return_value={"success": True, "order_hash": "0xhash"})
 
-        with patch.object(stop_loss_monitor, "_place_order_on_polymarket", new=place_mock):
+        with patch("app.services.trading.execution.live.place_live_order", new=place_mock):
             await stop_loss_monitor._execute_stop_loss(
                 self.db, order, "0xpk", {"api_key": "k"}, 0.35
             )
 
         place_mock.assert_called_once_with(
-            private_key="0xpk",
-            clob_creds={"api_key": "k"},
+            self.db,
+            user_id=1,
+            market_id="cond-mkt",
+            strategy="stop_loss",
+            idempotency_key="stop_loss:1:2026-01-01T00:00:00",
+            order_type="FOK",
             token_id="tok-1",
             side="SELL",
-            price=0.35,
+            price=max(0.0001, 0.35 * 0.95),
             size=5.0,
         )
         self.assertEqual(order.status, "triggered")
         self.assertEqual(order.order_hash, "0xhash")
-        self.assertEqual(order.executed_price, 0.35)
+        self.assertIsNone(order.executed_price)
         self.assertIsNotNone(order.triggered_at)
         self.assertIsNotNone(order.updated_at)
         self.assertIs(order.updated_at, order.triggered_at)
@@ -877,7 +883,7 @@ class ExecuteStopLossTests(unittest.IsolatedAsyncioTestCase):
         order = _sl_order(1, 1, "tok-1", 0.4, size=5.0)
         place_mock = MagicMock(return_value={"success": False, "error": "insufficient balance"})
 
-        with patch.object(stop_loss_monitor, "_place_order_on_polymarket", new=place_mock):
+        with patch("app.services.trading.execution.live.place_live_order", new=place_mock):
             await stop_loss_monitor._execute_stop_loss(self.db, order, "0xpk", None, 0.35)
 
         self.assertEqual(order.status, "failed")
@@ -891,7 +897,7 @@ class ExecuteStopLossTests(unittest.IsolatedAsyncioTestCase):
         order = _sl_order(2, 1, "tok-2", 0.4, size=1.0)
         place_mock = MagicMock(side_effect=RuntimeError("network unreachable"))
 
-        with patch.object(stop_loss_monitor, "_place_order_on_polymarket", new=place_mock):
+        with patch("app.services.trading.execution.live.place_live_order", new=place_mock):
             await stop_loss_monitor._execute_stop_loss(self.db, order, "0xpk", None, 0.30)
 
         self.assertEqual(order.status, "failed")
@@ -906,7 +912,7 @@ class ExecuteStopLossTests(unittest.IsolatedAsyncioTestCase):
         # Every commit attempt explodes, so the inner recovery fails too.
         self.db.commit.side_effect = RuntimeError("session is gone")
 
-        with patch.object(stop_loss_monitor, "_place_order_on_polymarket", new=place_mock):
+        with patch("app.services.trading.execution.live.place_live_order", new=place_mock):
             await stop_loss_monitor._execute_stop_loss(self.db, order, "0xpk", None, 0.30)
 
         # Placement raised, so the only commit is the recovery commit; it
@@ -920,7 +926,7 @@ class ExecuteStopLossTests(unittest.IsolatedAsyncioTestCase):
         order = _sl_order(4, 1, "tok-4", 0.4, size=1.0)
         place_mock = MagicMock(return_value=None)
 
-        with patch.object(stop_loss_monitor, "_place_order_on_polymarket", new=place_mock):
+        with patch("app.services.trading.execution.live.place_live_order", new=place_mock):
             await stop_loss_monitor._execute_stop_loss(self.db, order, "0xpk", None, 0.30)
 
         self.assertEqual(order.status, "failed")
@@ -940,22 +946,26 @@ class ExecuteTakeProfitTests(unittest.IsolatedAsyncioTestCase):
         order = _tp_order(7, 2, "tok-7", 0.8, size=4.0)
         place_mock = MagicMock(return_value={"success": True, "order_hash": "0xtphash"})
 
-        with patch.object(stop_loss_monitor, "_place_order_on_polymarket", new=place_mock):
+        with patch("app.services.trading.execution.live.place_live_order", new=place_mock):
             await stop_loss_monitor._execute_take_profit(
                 self.db, order, "0xpk", {"api_key": "k"}, 0.85
             )
 
         place_mock.assert_called_once_with(
-            private_key="0xpk",
-            clob_creds={"api_key": "k"},
+            self.db,
+            user_id=2,
+            market_id="cond-mkt",
+            strategy="take_profit",
+            idempotency_key="take_profit:7:2026-01-01T00:00:00",
+            order_type="FOK",
             token_id="tok-7",
             side="SELL",
-            price=0.85,
+            price=max(0.0001, 0.85 * 0.95),
             size=4.0,
         )
         self.assertEqual(order.status, "triggered")
         self.assertEqual(order.order_hash, "0xtphash")
-        self.assertEqual(order.executed_price, 0.85)
+        self.assertIsNone(order.executed_price)
         self.assertIsNotNone(order.triggered_at)
         self.assertIsNotNone(order.updated_at)
         self.assertIs(order.updated_at, order.triggered_at)
@@ -965,7 +975,7 @@ class ExecuteTakeProfitTests(unittest.IsolatedAsyncioTestCase):
         order = _tp_order(7, 2, "tok-7", 0.8, size=4.0)
         place_mock = MagicMock(return_value={"success": False, "error": "no such market"})
 
-        with patch.object(stop_loss_monitor, "_place_order_on_polymarket", new=place_mock):
+        with patch("app.services.trading.execution.live.place_live_order", new=place_mock):
             await stop_loss_monitor._execute_take_profit(self.db, order, "0xpk", None, 0.85)
 
         self.assertEqual(order.status, "failed")
@@ -978,18 +988,18 @@ class ExecuteTakeProfitTests(unittest.IsolatedAsyncioTestCase):
         order = _tp_order(7, 2, "tok-7", 0.8, size=4.0)
         place_mock = MagicMock(return_value={"success": True})
 
-        with patch.object(stop_loss_monitor, "_place_order_on_polymarket", new=place_mock):
+        with patch("app.services.trading.execution.live.place_live_order", new=place_mock):
             await stop_loss_monitor._execute_take_profit(self.db, order, "0xpk", None, 0.85)
 
         self.assertEqual(order.status, "triggered")
         self.assertIsNone(order.order_hash)
-        self.assertEqual(order.executed_price, 0.85)
+        self.assertIsNone(order.executed_price)
 
     async def test_raised_exception_marks_order_failed_and_commits(self):
         order = _tp_order(7, 2, "tok-7", 0.8, size=4.0)
         place_mock = MagicMock(side_effect=ValueError("bad signer"))
 
-        with patch.object(stop_loss_monitor, "_place_order_on_polymarket", new=place_mock):
+        with patch("app.services.trading.execution.live.place_live_order", new=place_mock):
             await stop_loss_monitor._execute_take_profit(self.db, order, "0xpk", None, 0.85)
 
         self.assertEqual(order.status, "failed")
@@ -1001,7 +1011,7 @@ class ExecuteTakeProfitTests(unittest.IsolatedAsyncioTestCase):
         place_mock = MagicMock(side_effect=ValueError("bad signer"))
         self.db.commit.side_effect = RuntimeError("session is gone")
 
-        with patch.object(stop_loss_monitor, "_place_order_on_polymarket", new=place_mock):
+        with patch("app.services.trading.execution.live.place_live_order", new=place_mock):
             await stop_loss_monitor._execute_take_profit(self.db, order, "0xpk", None, 0.85)
 
         self.assertEqual(order.status, "failed")

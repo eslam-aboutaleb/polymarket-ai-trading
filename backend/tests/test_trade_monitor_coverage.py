@@ -20,7 +20,7 @@ Covered:
 * ``_get_processed_ids_cache`` / ``_shared_already_processed`` /
   ``_shared_mark_processed`` / ``_already_processed`` -- lazy cache
   creation, shared hit/miss/error paths, LRU eviction.
-* ``_ws_monitor`` -- poll cycle runs, WS timeout propagation, WS
+* ``_ws_monitor`` -- poll cycle runs, WS timeout recovery, WS
   failure counting, idle 60s sleep.
 * ``_ws_session`` -- cursor seeding, per-wallet subscribe, JSON
   decode errors, handler exceptions.
@@ -299,8 +299,53 @@ class PollTraderTradesTests(_MonitorTestCase):
         client.get.assert_awaited_once()
         self.assertEqual(
             client.get.call_args.kwargs["params"],
-            {"user": WALLET, "limit": 20},
+            {"user": WALLET, "limit": 20, "takerOnly": "false"},
         )
+
+    async def test_data_api_trades_keep_distinct_stable_ids_across_seed_and_poll(self):
+        prior = {
+            "transactionHash": "0xold",
+            "proxyWallet": WALLET,
+            "conditionId": "condition-1",
+            "asset": "token-yes",
+            "side": "BUY",
+            "size": 10,
+            "price": 0.4,
+            "timestamp": 1720000000,
+            "title": "Original title",
+        }
+        recent = {**prior, "transactionHash": "0xnew", "timestamp": 1720000010}
+        other_leg = {**recent, "asset": "token-no"}
+        client = MagicMock()
+        client.get = AsyncMock(
+            side_effect=[
+                _response(payload=[prior]),
+                _response(payload=[other_leg, recent, {**prior, "title": "Updated title"}]),
+            ]
+        )
+        trade_monitor._poll_http_client = client
+
+        await trade_monitor.seed_wallet_cursor(WALLET)
+        cursor = trade_monitor._last_seen_trades[WALLET]
+        trades = await trade_monitor._poll_trader_trades(WALLET)
+        new = await trade_monitor._detect_new_trades(WALLET, trades)
+
+        self.assertEqual(
+            client.get.call_args.args[0], f"{trade_monitor.POLYMARKET_DATA_API}/trades"
+        )
+        self.assertEqual(trades[-1]["id"], cursor)
+        self.assertEqual(len(new), 2)
+        self.assertNotEqual(new[0]["id"], new[1]["id"])
+        self.assertEqual(new[0]["market"], "condition-1")
+        self.assertEqual(new[0]["token_id"], "token-no")
+        self.assertEqual(new[0]["timestamp"], 1720000010)
+        self.assertEqual(await trade_monitor._detect_new_trades(WALLET, trades), [])
+
+    async def test_data_api_ignores_malformed_unidentifiable_records(self):
+        client = MagicMock()
+        client.get = AsyncMock(return_value=_response(payload=[None, "bad", {}, {"size": 3}]))
+        trade_monitor._poll_http_client = client
+        self.assertEqual(await trade_monitor._poll_trader_trades(WALLET), [])
 
     async def test_poll_uses_temp_client_when_none(self):
         trade_monitor._poll_http_client = None
@@ -375,6 +420,44 @@ class PollTraderTradesTests(_MonitorTestCase):
 
 
 class SeedWalletCursorTests(_MonitorTestCase):
+    async def test_seed_logs_escape_wallet_and_upstream_error_line_breaks(self):
+        wallet = "0x\r\nFORGED"
+        cases = (([{"id": "t9"}], None), (None, RuntimeError("remote\r\nFORGED error")))
+        for trades, error in cases:
+            with self.subTest(error=error):
+                trade_monitor._last_seen_trades.clear()
+                with (
+                    patch.object(
+                        trade_monitor,
+                        "_fetch_public_trades",
+                        new=AsyncMock(return_value=trades, side_effect=error),
+                    ),
+                    self.assertLogs(trade_monitor.logger, level="INFO") as captured,
+                ):
+                    await trade_monitor.seed_wallet_cursor(wallet)
+                self.assertEqual(len(captured.output), 1)
+                message = captured.records[0].getMessage()
+                self.assertNotIn("\r", message)
+                self.assertNotIn("\n", message)
+                self.assertIn("0x\\r\\nforged", message)
+                if error:
+                    self.assertIn("remote\\r\\nFORGED error", message)
+
+    async def test_poll_failure_logs_escape_wallet_and_upstream_error_line_breaks(self):
+        with (
+            patch.object(
+                trade_monitor,
+                "_fetch_public_trades",
+                new=AsyncMock(side_effect=RuntimeError("remote\r\nFORGED error")),
+            ),
+            self.assertLogs(trade_monitor.logger, level="DEBUG") as captured,
+        ):
+            self.assertEqual(await trade_monitor._poll_trader_trades("0x\r\nFORGED"), [])
+        message = captured.records[0].getMessage()
+        self.assertNotIn("\r", message)
+        self.assertNotIn("\n", message)
+        self.assertIn("remote\\r\\nFORGED error", message)
+
     async def test_seed_skips_when_already_seeded(self):
         trade_monitor._last_seen_trades[WALLET] = "t9"
         client = MagicMock()
@@ -396,7 +479,7 @@ class SeedWalletCursorTests(_MonitorTestCase):
         self.assertEqual(trade_monitor._last_seen_trades[WALLET], "t9")
         self.assertEqual(
             client.get.call_args.kwargs["params"],
-            {"user": WALLET, "limit": 1},
+            {"user": WALLET, "limit": 1, "takerOnly": "false"},
         )
 
     async def test_seed_with_temp_client(self):
@@ -643,19 +726,22 @@ class ProcessedIdsCacheTests(_MonitorTestCase):
 
 
 class WsMonitorTests(_MonitorTestCase):
-    async def test_poll_cycle_runs_then_ws_timeout_propagates(self):
+    async def test_polling_continues_after_ws_timeout_but_cancellation_propagates(self):
         trade_monitor._watched_wallets = {WALLET}
         poll = AsyncMock()
-        ws = AsyncMock(side_effect=TimeoutError())
+        ws = AsyncMock(side_effect=[TimeoutError(), asyncio.CancelledError()])
+        sleep = AsyncMock()
         with (
             patch.object(trade_monitor, "_http_poll_cycle", poll),
             patch.object(trade_monitor, "_ws_session", ws),
-            self.assertRaises(TimeoutError),
+            patch("asyncio.sleep", sleep),
+            self.assertRaises(asyncio.CancelledError),
         ):
             await trade_monitor._ws_monitor()
 
-        poll.assert_awaited_once()
-        ws.assert_awaited_once()
+        self.assertEqual(poll.await_count, 2)
+        self.assertEqual(ws.await_count, 2)
+        sleep.assert_awaited_once_with(30)
 
     async def test_ws_failures_are_counted_and_logged(self):
         trade_monitor._watched_wallets = {WALLET}
@@ -864,13 +950,44 @@ class HandleWsEventTests(_MonitorTestCase):
         with (
             patch.object(trade_monitor, "SessionLocal", return_value=session),
             patch.object(trade_monitor, "_mark_pending_trades_filled", marked),
-            patch.object(trade_monitor, "_process_new_trade", process),
+            patch.object(trade_monitor, "_poll_and_process", process),
         ):
             await trade_monitor._handle_ws_event(data)
 
         # No order hash on the event → no fill marking, no DB session.
         marked.assert_not_called()
-        process.assert_awaited_once_with(WALLET, data)
+        process.assert_awaited_once_with(WALLET)
+
+    async def test_ws_hint_and_scheduled_poll_share_authoritative_source_identity(self):
+        trade_monitor._watched_wallets = {WALLET}
+        prior = {
+            "transactionHash": "0xold",
+            "asset": "yes",
+            "conditionId": "market-1",
+            "side": "BUY",
+            "size": 4,
+            "price": 0.5,
+            "timestamp": 1700000000,
+        }
+        recent = {**prior, "transactionHash": "0xnew", "timestamp": 1700000010}
+        client = MagicMock()
+        client.get = AsyncMock(
+            side_effect=[
+                _response(payload=[prior]),
+                _response(payload=[recent, prior]),
+                _response(payload=[recent, prior]),
+            ]
+        )
+        trade_monitor._poll_http_client = client
+        process = AsyncMock()
+        await trade_monitor.seed_wallet_cursor(WALLET)
+        with patch.object(trade_monitor, "_process_new_trade", process):
+            await trade_monitor._handle_ws_event(
+                {"type": "trade", "user": WALLET, "id": "clob-uuid"}
+            )
+            await trade_monitor._poll_and_process(WALLET)
+        process.assert_awaited_once()
+        self.assertTrue(process.call_args.args[1]["id"].startswith("data:"))
 
     async def test_taker_and_maker_wallet_fallbacks(self):
         trade_monitor._watched_wallets = {WALLET}
@@ -880,11 +997,11 @@ class HandleWsEventTests(_MonitorTestCase):
         with (
             patch.object(trade_monitor, "SessionLocal", return_value=session),
             patch.object(trade_monitor, "_mark_pending_trades_filled", MagicMock()),
-            patch.object(trade_monitor, "_process_new_trade", process),
+            patch.object(trade_monitor, "_poll_and_process", process),
         ):
             await trade_monitor._handle_ws_event(data)
 
-        process.assert_awaited_once_with(WALLET, data)
+        process.assert_awaited_once_with(WALLET)
 
 
 class EventOrderHashTests(unittest.TestCase):
@@ -1860,6 +1977,43 @@ class FillReconciliationLoopTests(_MonitorTestCase):
 
 
 class ReconcilePendingFillsTests(_MonitorTestCase):
+    def setUp(self):
+        super().setUp()
+        patcher = patch("app.services.trading.execution.live.reconcile_pending_live_orders")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    async def test_live_reconciliation_owns_session_in_worker_thread(self):
+        import threading
+
+        main_thread = threading.get_ident()
+        live_db = MagicMock()
+        old_db = FakeSession()
+        old_db.register(UserTrade, all_results=[])
+        observed = []
+
+        def session_factory():
+            observed.append(threading.get_ident())
+            return old_db if threading.get_ident() == main_thread else live_db
+
+        def reconcile(db):
+            self.assertIs(db, live_db)
+            self.assertNotEqual(threading.get_ident(), main_thread)
+
+        with (
+            patch.object(trade_monitor, "SessionLocal", side_effect=session_factory),
+            patch(
+                "app.services.trading.execution.live.reconcile_pending_live_orders",
+                side_effect=reconcile,
+            ),
+        ):
+            await trade_monitor._reconcile_pending_fills()
+
+        self.assertNotEqual(observed[0], main_thread)
+        self.assertEqual(observed[1], main_thread)
+        live_db.close.assert_called_once()
+        self.assertTrue(old_db.closed)
+
     async def test_no_pending_returns(self):
         db = FakeSession()
         db.register(UserTrade, all_results=[])

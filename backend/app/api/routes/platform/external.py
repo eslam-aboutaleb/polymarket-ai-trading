@@ -58,20 +58,13 @@ from app.services.platform.audit_service import (
     parse_moment,
     to_csv,
 )
-from app.services.trading.copy_trade_service import _place_order_on_polymarket
-from app.services.trading.external_order_service import (
-    persist_external_order,
-    persist_risk_gate_state,
-)
+from app.services.trading.execution.async_io import run_blocking_execution
 from app.services.trading.external_trade_query_service import (
     list_account_trades,
     list_exposure_trades,
 )
 from app.services.trading.pre_trade_gate import (
     _to_float,
-    apply_global_safety_caps,
-    get_idempotent_order_result,
-    store_idempotent_order_result,
 )
 from app.services.users.account_service import get_account_by_id, get_settings_row, resolve_account
 from app.services.users.api_key_management_service import (
@@ -568,113 +561,53 @@ async def external_create_order(
     auth: AuthContext = Depends(require_external_plan(CAP_EXTERNAL_API_TRADE, SCOPE_TRADE)),
     db: Session = Depends(get_db),
 ):
-    """Place a limit order on Polymarket through the manual-order path.
+    """Submit an authenticated primary-account order through the durable gateway."""
+    from decimal import ROUND_DOWN, Decimal
 
-    Safety parity with ``POST /api/trades/execute`` is the contract, in
-    this order: idempotent replay first, then the credentials, then the
-    position-cap pre-check, then ``apply_global_safety_caps`` *before*
-    anything is signed, then ``_place_order_on_polymarket``, then
-    ``record_user_trade`` — which is the only sanctioned ``UserTrade``
-    constructor and also emits the ``order_*`` audit event, so the
-    external order appears in the audit trail exactly like a manual one
-    and is never double-logged.
-    """
-    from app.services.trading.live_trading_policy import (
-        LiveTradingBlocked,
-        block_legacy_live_execution,
-    )
+    from app.services.trading.execution.live import place_live_order, require_enabled
+    from app.services.trading.live_trading_policy import LiveTradingBlocked
 
     try:
-        block_legacy_live_execution("external")
-    except LiveTradingBlocked as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-    # Idempotency: a replayed key returns the stored result, so a
-    # retried request can never place a second order.
-    # Namespace the replay key by the key's account so a multi-account
-    # owner reusing the same Idempotency-Key on a second account cannot
-    # collide with the first account's stored result. An unscoped key
-    # (personal account) keeps the original key.
-    replay_key = idempotency_key
-    if idempotency_key and auth.account_id is not None:
-        replay_key = f"acct{auth.account_id}:{idempotency_key}"
-    if idempotency_key:
-        prior = get_idempotent_order_result(db, auth.user_id, replay_key)
-        if prior is not None:
-            logger.info(
-                "Replaying idempotent external order result for user_id=%s key=%s",
-                auth.user_id,
-                replay_key[:16],
-            )
-            return ExternalOrderResponse(**prior)
-
-    stored = _load_credentials(auth.wallet_address)
-    settings, account = _settings_for_auth(db, auth)
-
-    # Position-cap pre-check, identical to the manual path: an over-cap
-    # order is rejected, naming the violated limit.
-    max_position_size = _to_float(settings.max_position_size)
-    if max_position_size > 0 and body.size > max_position_size:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="max_position_size",
+        require_enabled("external")
+        if db is None or auth is None:
+            raise LiveTradingBlocked("DURABLE_EXECUTION_CONTEXT_REQUIRED")
+        _, account = _settings_for_auth(db, auth)
+        if not idempotency_key:
+            raise HTTPException(422, "Idempotency-Key is required for live orders")
+        shares = Decimal(str(body.size))
+        if body.side == "BUY":
+            shares /= Decimal(str(body.price))
+        shares = shares.quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        result = await run_blocking_execution(
+            place_live_order,
+            db,
+            user_id=auth.user_id,
+            token_id=body.token_id,
+            market_id=body.market_id,
+            side=body.side,
+            price=body.price,
+            size=float(shares),
+            strategy="external",
+            account_id=account.id,
+            idempotency_key=f"external:{account.id}:{idempotency_key}",
+            order_type="FOK" if body.side == "SELL" else "GTC",
         )
-
-    # Global safety caps — halt, cooldown, loss limits, drawdown and
-    # position size counting pending exposure — run before signing.
-    trade_size, rejection = apply_global_safety_caps(
-        settings, body.size, db, account_id=auth.account_id
-    )
-    if rejection:
-        # Persist any halt / drawdown flags the gate set.
-        persist_risk_gate_state(db)
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=rejection)
-
-    logger.info(
-        "External order via key %s: %s token=%s price=%.4f size=%.4f account=%s",
-        auth.key_prefix,
-        body.side,
-        body.token_id[:20],
-        body.price,
-        trade_size,
-        account.id,
-    )
-
-    result = _place_order_on_polymarket(
-        private_key=stored["private_key"],
-        clob_creds=stored.get("clob_creds"),
-        token_id=body.token_id,
+    except LiveTradingBlocked as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return ExternalOrderResponse(
+        success=result["success"],
+        order_hash=result["order_hash"],
+        trade_id=result["trade_id"],
+        status=result["status"],
         side=body.side,
+        size=body.size,
         price=body.price,
-        size=trade_size,
-    )
-
-    # The recorder is the only sanctioned UserTrade constructor; it also
-    # appends the order_* audit event on this same session.
-    trade = persist_external_order(
-        db,
-        user_id=auth.user_id,
-        market_id=body.market_id or body.token_id,
-        token_id=body.token_id,
-        action=body.side.lower(),
-        amount=trade_size,
-        price=body.price,
-        status="pending" if result.get("success") else "failed",
-        order_hash=result.get("order_hash"),
         account_id=account.id,
+        strategy_source="external",
+        error=result.get("error"),
     )
-
-    response = _order_response(
-        result=result,
-        trade_size=trade_size,
-        price=body.price,
-        side=body.side,
-        trade_id=trade.id if trade is not None else None,
-        account_id=account.id,
-    )
-    if idempotency_key:
-        store_idempotent_order_result(db, auth.user_id, replay_key, response.model_dump())
-    return response
 
 
 # ── API-key management (internal, cookie/JWT) ───────────────

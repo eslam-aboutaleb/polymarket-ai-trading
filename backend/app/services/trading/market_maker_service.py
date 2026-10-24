@@ -23,8 +23,8 @@ from sqlalchemy.orm import Session
 
 from app.models.trading.market_maker_config import MarketMakerConfig
 from app.repositories.trading.bots import TradingBotRepository
-from app.security.credential_store import load_wallet_credentials
 from app.services.market_data.polymarket_service import POLYMARKET_CLOB_API
+from app.services.trading.execution.async_io import run_blocking_execution
 from app.utils.database import SessionLocal
 from app.utils.scheduler_lock import (
     acquire_scheduler_lock,
@@ -460,17 +460,6 @@ async def _sync_market_maker(config_id: int) -> dict[str, Any]:
         user_settings = repository.get_user_settings(config.user_id)
         simulation_mode = bool(user_settings and getattr(user_settings, "simulation_mode", False))
 
-        # Load credentials (not required in paper mode)
-        if not simulation_mode:
-            try:
-                cred_data = load_wallet_credentials(user.wallet_address)
-                private_key = cred_data["private_key"]
-            except Exception as e:
-                config.status = "error"
-                config.last_error = f"Credential error: {e}"
-                db.commit()
-                return {"error": str(e)}
-
         # 1. Fetch midpoint (paper mode also needs book depth)
         if simulation_mode:
             book = await _fetch_order_book(config.token_id_yes)
@@ -497,24 +486,44 @@ async def _sync_market_maker(config_id: int) -> dict[str, Any]:
         if simulation_mode:
             return await _sync_market_maker_paper(db, config, midpoint, expected, book)
 
-        # 3. Cancel all existing orders (simple approach: full replace)
-        cancelled = await _cancel_all_orders(private_key, config.token_id_yes)
+        from decimal import ROUND_DOWN, Decimal
+        from uuid import uuid4
+
+        from app.services.trading.execution.live import (
+            place_live_order,
+            require_enabled,
+        )
+
+        require_enabled("market_maker")
+        cancelled, unresolved = await run_blocking_execution(_cancel_owned_maker_quotes, db, config)
+        if unresolved:
+            raise ValueError("Quote replacement requires confirmed cancellation")
         config.total_orders_cancelled += cancelled
 
-        # 4. Place new orders
         placed = 0
-        for order_spec in expected:
-            order_id = await _place_maker_order(
-                private_key,
-                order_spec["token_id"],
-                order_spec["side"],
-                order_spec["price"],
-                order_spec["size"],
+        cycle = uuid4().hex
+        for index, order_spec in enumerate(expected):
+            shares = Decimal(str(order_spec["size"]))
+            if order_spec["side"] == "BUY":
+                shares /= Decimal(str(order_spec["price"]))
+            shares = shares.quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+            result = await run_blocking_execution(
+                place_live_order,
+                db,
+                user_id=config.user_id,
+                token_id=order_spec["token_id"],
+                side=order_spec["side"],
+                price=order_spec["price"],
+                size=float(shares),
+                market_id=config.condition_id,
+                strategy="market_maker",
+                post_only=True,
+                idempotency_key=f"maker:{config.id}:{cycle}:{index}",
             )
-            if order_id:
-                placed += 1
-                config.total_volume_usdc += order_spec["size"]
-
+            if not result["success"]:
+                raise ValueError(result.get("error") or result["status"])
+            placed += 1
+        # Submitting a quote is not executed volume.
         config.total_orders_placed += placed
         config.current_open_orders = placed
         config.last_sync_at = utc_now()
@@ -572,6 +581,8 @@ async def _sync_market_maker_paper(
 
 async def _maker_loop(config_id: int):
     """Continuous loop for a single market maker config."""
+    # Annotations do not enforce runtime types for direct service callers.
+    config_id = int(config_id)
     lock_name = f"market_maker:{config_id}"
     if not acquire_scheduler_lock(lock_name):
         return
@@ -609,36 +620,66 @@ async def _maker_loop(config_id: int):
         # design for the next worker). release_scheduler_lock is a no-op when
         # the lock is no longer held, and a CancelledError still propagates
         # out through the finally instead of being swallowed.
-        release_scheduler_lock(lock_name)
+        try:
+            await run_blocking_execution(_cleanup_maker_quotes, config_id)
+        finally:
+            release_scheduler_lock(lock_name)
 
-    # Graceful shutdown: cancel all open orders (paper mode never
-    # places real orders, so there is nothing to cancel on the CLOB)
+    logger.info("Market maker loop ended for config_id=%d", config_id)
+
+
+def _cancel_owned_maker_quotes(db: Session, config: MarketMakerConfig) -> tuple[int, int]:
+    from sqlalchemy import select
+
+    from app.models.trading.live_order import LiveOrder
+    from app.services.trading.execution.live import reconcile_order
+
+    resting = db.scalars(
+        select(LiveOrder).where(
+            LiveOrder.user_id == config.user_id,
+            LiveOrder.strategy == "market_maker",
+            LiveOrder.idempotency_key.like(f"maker:{config.id}:%"),
+            LiveOrder.state.in_(("SUBMITTED", "PARTIALLY_FILLED", "UNKNOWN", "SUBMITTING")),
+        )
+    ).all()
+    cancelled, unresolved = 0, 0
+    for order in resting:
+        try:
+            result = reconcile_order(
+                db, user_id=config.user_id, order_hash=order.order_hash, cancel=True
+            )
+            if result["status"] == "cancelled":
+                cancelled += 1
+            else:
+                unresolved += 1
+        except Exception:
+            db.rollback()
+            unresolved += 1
+    return cancelled, unresolved
+
+
+def _cleanup_maker_quotes(config_id: int) -> None:
+    db = None
     try:
         db = SessionLocal()
-        repository = TradingBotRepository(db)
-        config = repository.get_market_maker_config(config_id)
-        if config:
-            user = repository.get_user(config.user_id)
-            user_settings = repository.get_user_settings(config.user_id)
-            simulation_mode = bool(
-                user_settings and getattr(user_settings, "simulation_mode", False)
-            )
-            if user and not simulation_mode:
-                # Best-effort cancel on shutdown; a failure here must not stop
-                # the loop from marking the config idle.
-                with contextlib.suppress(Exception):
-                    cred_data = load_wallet_credentials(user.wallet_address)
-                    await _cancel_all_orders(cred_data["private_key"], config.token_id_yes)
-            config.status = "idle"
-            config.current_open_orders = 0
+        config = TradingBotRepository(db).get_market_maker_config(config_id)
+        if config is not None:
+            # A switch to simulation does not erase real orders already resting.
+            _, unresolved = _cancel_owned_maker_quotes(db, config)
+            config.current_open_orders = unresolved
+            config.status = "error" if unresolved else "idle"
+            if unresolved:
+                config.last_error = "Live quote cancellation remains unverified"
             db.commit()
-        db.close()
     except Exception:
+        if db is not None:
+            db.rollback()
         logger.warning(
             "Market maker loop cleanup failed for config_id=%d", config_id, exc_info=True
         )
-
-    logger.info("Market maker loop ended for config_id=%d", config_id)
+    finally:
+        if db is not None:
+            db.close()
 
 
 # ─────────────── Public API ───────────────

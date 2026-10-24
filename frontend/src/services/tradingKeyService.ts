@@ -39,10 +39,12 @@ export async function getTradingKeyStatus(): Promise<TradingKeyStatus> {
 export async function connectTradingKey(
   privateKey: string,
   clobCredentials?: object,
+  identity?: { signature_type: number; funder?: string },
 ): Promise<TradingKeyResponse> {
   return apiClient.post<TradingKeyResponse>("/api/auth/trading-key", {
     private_key: privateKey,
     clob_credentials: clobCredentials ?? null,
+    ...identity,
   });
 }
 

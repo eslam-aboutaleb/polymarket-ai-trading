@@ -375,18 +375,32 @@ export const tradesService = {
     return apiClient.get<SizeSuggestion>(`/api/trades/size-suggestion?${params.toString()}`);
   },
 
-  async executeTrade(request: ExecuteTradeRequest): Promise<ExecuteTradeResponse> {
-    return apiClient.post<ExecuteTradeResponse>("/api/trades/execute", {
-      ...request,
-      execution_mode: "live",
-    });
+  async executeTrade(
+    request: ExecuteTradeRequest,
+    idempotencyKey = crypto.randomUUID(),
+  ): Promise<ExecuteTradeResponse> {
+    return apiClient.post<ExecuteTradeResponse>(
+      "/api/trades/execute",
+      {
+        ...request,
+        execution_mode: "live",
+      },
+      { headers: { "Idempotency-Key": idempotencyKey } },
+    );
   },
 
-  async cashOut(request: ExecuteTradeRequest): Promise<ExecuteTradeResponse> {
-    return apiClient.post<ExecuteTradeResponse>("/api/trades/cash-out", {
-      ...request,
-      side: "SELL",
-      execution_mode: "live",
-    });
+  async cashOut(
+    request: ExecuteTradeRequest,
+    idempotencyKey = crypto.randomUUID(),
+  ): Promise<ExecuteTradeResponse> {
+    return apiClient.post<ExecuteTradeResponse>(
+      "/api/trades/cash-out",
+      {
+        ...request,
+        side: "SELL",
+        execution_mode: "live",
+      },
+      { headers: { "Idempotency-Key": idempotencyKey } },
+    );
   },
 };

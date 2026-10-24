@@ -13,6 +13,7 @@ from typing import Protocol
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.trading.live_order import LiveOrder
 from app.models.trading.trading_control import EmergencyHaltOperation, TradingControlState
 from app.models.users.user import User
 from app.services.trading.trading_halt_service import empty_report
@@ -92,24 +93,26 @@ def reconcile_cancellations(
 
 
 def _adapter_for_user(db: Session, user_id: int) -> CancellationAdapter:
-    from py_clob_client.signer import Signer
-
     from app.security.credential_store import load_wallet_credentials
-    from app.services.trading.copy_trade_service import _get_poly_proxy_wallet_address
-    from app.services.trading.pre_trade_gate import build_clob_client
+    from app.services.trading.execution.clob_transport import build_client, cancel
 
     user = db.get(User, user_id)
     stored = load_wallet_credentials(user.wallet_address)
     if not stored:
         raise ValueError("Credentials unavailable")
-    private_key = stored["private_key"]
-    eoa = Signer(private_key, 137).address()
-    proxy = _get_poly_proxy_wallet_address(eoa)
-    # Cancellation must use the same maker identity as order creation. Guessing
-    # EOA after a proxy lookup failure could query the wrong empty portfolio.
-    if not proxy:
-        raise ValueError("Wallet identity unverified")
-    return build_clob_client(private_key, stored.get("clob_creds"), proxy)
+    client = build_client(user.wallet_address, stored)
+
+    class Adapter:
+        def get_orders(self):
+            return client.get_open_orders()
+
+        def cancel(self, order_id):
+            return cancel(client, order_id)
+
+        def get_order(self, order_id):
+            return client.get_order(order_id)
+
+    return Adapter()
 
 
 def process_next_halt(
@@ -133,7 +136,17 @@ def process_next_halt(
         if "known_order_ids" not in operation.report:
             try:
                 adapter = adapter_factory(db, operation.user_id)
-                discovered = sorted(_open_order_ids(adapter))
+                known_live = set(
+                    db.scalars(
+                        select(LiveOrder.order_hash).where(
+                            LiveOrder.user_id == operation.user_id,
+                            LiveOrder.state.in_(
+                                ("SUBMITTING", "UNKNOWN", "SUBMITTED", "PARTIALLY_FILLED")
+                            ),
+                        )
+                    )
+                )
+                discovered = sorted(_open_order_ids(adapter) | known_live)
             except Exception:
                 report = empty_report()
                 report["reconciliation_status"] = "RECOVERY_REQUIRED"

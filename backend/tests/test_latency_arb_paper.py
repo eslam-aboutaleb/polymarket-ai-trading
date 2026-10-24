@@ -305,76 +305,28 @@ class LatencyArbPaperModeTests(unittest.IsolatedAsyncioTestCase):
         # The opportunity alert fired for the paper fill.
         dispatch_alert.assert_called_once()
 
-    async def test_live_mode_places_fok_order(self):
-        """Control: with simulation_mode off and
-        LATENCY_ARB_LIVE on, the book fetch and FOK
-        placement run and the trade is recorded pending."""
-        db = _session()
-        market = _market()
-        settings = _settings(simulation_mode=False)
-        config = _config()
-        user = _user()
-
-        clob_cls = MagicMock(name="ClobClient")
-        book = {
-            "bids": [[0.499, 1000.0]],
-            "asks": [[0.501, 1000.0]],
-        }
-        fetch_book = AsyncMock(return_value=book)
-        place_fok_order = AsyncMock(return_value={"success": True, "orderID": "0xabc123"})
-        load_creds = MagicMock(
-            return_value={
-                "private_key": "0x" + "11" * 32,
-                "clob_creds": None,
-            }
-        )
-
-        with _engine_patches(
-            db,
-            config,
-            settings,
-            user,
-            market,
-            engine_settings=_engine_settings(latency_arb_live=True),
-            fetch_book=fetch_book,
-            place_fok_order=place_fok_order,
-            clob_cls=clob_cls,
-            extra=[
-                patch.object(
-                    latency_arb_service,
-                    "_get_poly_proxy_wallet_address",
-                    return_value="0xproxy",
+    async def test_live_mode_delegates_to_durable_fok_gateway(self):
+        with patch(
+            "app.services.trading.execution.live.place_live_order",
+            return_value={"success": True, "status": "submitted", "trade_id": 1},
+        ) as gateway:
+            result = await latency_arb_service._execute_live(
+                _session(),
+                _user(),
+                _settings(False),
+                SimpleNamespace(
+                    symbol="BTC",
+                    window_start_epoch=100,
+                    market=SimpleNamespace(condition_id="market"),
                 ),
-                patch(
-                    "app.security.credential_store.load_wallet_credentials",
-                    load_creds,
-                ),
-            ],
-        ):
-            await latency_arb_service._engine_cycle()
-
-        # The live path ran: book fetched, FOK placed with
-        # the underpriced up token at the 0.50 reference.
-        fetch_book.assert_awaited_once_with("token-up-1")
-        place_fok_order.assert_awaited_once()
-        order_args = place_fok_order.await_args.args
-        self.assertEqual(order_args[3], "token-up-1")
-        self.assertAlmostEqual(order_args[4], 0.5)
-        self.assertAlmostEqual(order_args[5], 50.0)
-        # No real ClobClient was constructed (the placement
-        # helper is the I/O boundary under test).
-        clob_cls.assert_not_called()
-
-        trades = _added_objects(db, UserTrade)
-        self.assertEqual(len(trades), 1)
-        trade = trades[0]
-        self.assertEqual(trade.status, "pending")
-        self.assertEqual(trade.strategy_source, "latency_arb")
-        self.assertEqual(trade.order_hash, "0xabc123")
-        self.assertEqual(trade.expected_price, 0.5)
-        self.assertEqual(trade.expected_size, 50.0)
-        self.assertIsNone(trade.executed_at)
-        db.commit.assert_called_once()
+                "token-up",
+                0.5,
+                10,
+                50,
+            )
+        self.assertEqual(result["status"], "submitted")
+        self.assertEqual(gateway.call_args.kwargs["order_type"], "FOK")
+        self.assertEqual(gateway.call_args.kwargs["size"], 20)
 
     async def test_stale_feed_aborts_before_order(self):
         """A feed→order latency over the budget aborts with

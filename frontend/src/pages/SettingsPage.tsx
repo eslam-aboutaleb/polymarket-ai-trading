@@ -137,6 +137,8 @@ export default function SettingsPage() {
   const { hasTradingKey, refresh: refreshTradingKeyStatus } = useTradingKeyStatus();
   const [tradingPrivateKey, setTradingPrivateKey] = useState("");
   const [clobCredentialsJson, setClobCredentialsJson] = useState("");
+  const [tradingWalletType, setTradingWalletType] = useState(0);
+  const [tradingFunder, setTradingFunder] = useState("");
   const [tradingKeySaving, setTradingKeySaving] = useState(false);
   const [tradingKeyError, setTradingKeyError] = useState<string | null>(null);
 
@@ -572,7 +574,10 @@ export default function SettingsPage() {
         }
         clobCredentials = parsed as Record<string, string>;
       }
-      await tradingKeyService.connectTradingKey(tradingPrivateKey, clobCredentials);
+      await tradingKeyService.connectTradingKey(tradingPrivateKey, clobCredentials, {
+        signature_type: tradingWalletType,
+        funder: tradingWalletType === 0 ? undefined : tradingFunder.trim(),
+      });
       setTradingPrivateKey("");
       setClobCredentialsJson("");
       await refreshTradingKeyStatus();
@@ -960,6 +965,36 @@ export default function SettingsPage() {
                     Only enter your key on trusted devices. It is transmitted over HTTPS and
                     encrypted at rest.
                   </p>
+                </div>
+                <div className="space-y-2">
+                  <label htmlFor="trading-wallet-type" className="block text-sm text-soft">
+                    Trading wallet type
+                  </label>
+                  <select
+                    id="trading-wallet-type"
+                    value={tradingWalletType}
+                    onChange={(event) => setTradingWalletType(Number(event.target.value))}
+                    className="w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-3 py-2"
+                  >
+                    <option value={0}>EOA (funds held by the signing wallet)</option>
+                    <option value={1}>Polymarket proxy wallet</option>
+                    <option value={2}>Safe wallet</option>
+                    <option value={3}>Deposit wallet</option>
+                  </select>
+                  {tradingWalletType !== 0 && (
+                    <>
+                      <label htmlFor="trading-funder" className="block text-sm text-soft">
+                        Funding wallet address
+                      </label>
+                      <input
+                        id="trading-funder"
+                        value={tradingFunder}
+                        onChange={(event) => setTradingFunder(event.target.value)}
+                        placeholder="0x…"
+                        className="w-full bg-[var(--bg-soft)] border border-[var(--line)] rounded px-3 py-2"
+                      />
+                    </>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-1">

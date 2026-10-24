@@ -25,6 +25,7 @@ I/O boundary replaced by a local double:
 from __future__ import annotations
 
 import unittest
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -144,7 +145,7 @@ class MarketMakerPaperModeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(market_maker_service, "_place_maker_order", place_order),
             patch.object(market_maker_service, "_get_open_orders", get_open_orders),
             patch.object(market_maker_service, "_cancel_order", cancel_order),
-            patch.object(market_maker_service, "load_wallet_credentials", load_creds),
+            patch("app.services.trading.execution.live.load_wallet_credentials", load_creds),
             patch("py_clob_client.client.ClobClient", clob_cls),
             patch(
                 "app.services.trading.paper_maker_intents.sync_intents",
@@ -184,36 +185,22 @@ class MarketMakerPaperModeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(config.last_error)
         db.commit.assert_called_once()
 
-    async def test_live_mode_still_places_orders(self):
-        """Control: with simulation_mode off the CLOB placement path runs."""
+    async def test_live_mode_requires_the_durable_release_gate(self):
         config = _maker_config()
-        user = _user()
         settings = _settings(simulation_mode=False)
-        db = _session(first_results=[config, user, settings])
-
-        fetch_book = AsyncMock(return_value=BOOK)
-        fetch_midpoint = AsyncMock(return_value=0.5)
-        cancel_all = AsyncMock(return_value=0)
-        place_order = AsyncMock(return_value="order-1")
-        load_creds = MagicMock(return_value={"private_key": "0xpk"})
-
+        db = _session(first_results=[config, SimpleNamespace(wallet_address="0xwallet"), settings])
         with (
+            patch(
+                "app.services.trading.execution.live.get_settings",
+                return_value=SimpleNamespace(live_trading_enabled=False),
+            ),
             patch.object(market_maker_service, "SessionLocal", return_value=db),
-            patch.object(market_maker_service, "_fetch_order_book", fetch_book),
-            patch.object(market_maker_service, "_fetch_midpoint", fetch_midpoint),
-            patch.object(market_maker_service, "_cancel_all_orders", cancel_all),
-            patch.object(market_maker_service, "_place_maker_order", place_order),
-            patch.object(market_maker_service, "load_wallet_credentials", load_creds),
+            patch.object(market_maker_service, "_fetch_midpoint", AsyncMock(return_value=0.5)),
+            patch("app.services.trading.execution.clob_transport.submit") as submit,
         ):
             result = await market_maker_service._sync_market_maker(1)
-
-        self.assertNotIn("simulated", result)
-        fetch_midpoint.assert_awaited_once_with("token-yes")
-        fetch_book.assert_not_awaited()
-        load_creds.assert_called_once_with("0xwallet")
-        cancel_all.assert_awaited_once_with("0xpk", "token-yes")
-        self.assertEqual(place_order.await_count, result["expected_orders"])
-        self.assertEqual(_added_objects(db, UserTrade), [])
+        self.assertEqual(result, {"error": "LIVE_TRADING_DISABLED"})
+        submit.assert_not_called()
 
 
 # ─────────────── inverse bot ───────────────
@@ -333,55 +320,37 @@ class InverseBotPaperModeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(row.last_reversed_at)
         db.commit.assert_called_once()
 
-    async def test_live_mode_submits_orders(self):
-        """Control: with simulation_mode off both legs are submitted."""
-        user = _user(user_id=3)
-        settings = _inverse_settings(simulation_mode=False)
+    async def test_live_reversal_requires_confirmed_sell_before_buy(self):
         row = _inverse_row()
-        db = _session(first_results=[settings])
-
-        positions_by_token = {
-            "tok-held": {"asset_id": "tok-held", "size": 100.0, "title": "Will it rain?"}
-        }
-        market_tokens = AsyncMock(
-            return_value={
-                "tokens": [
-                    {"token_id": "tok-held", "outcome": "Yes", "price": 0.40},
-                    {"token_id": "tok-alt", "outcome": "No", "price": 0.60},
-                ],
-                "question": "Will it rain?",
-            }
-        )
-        ai_eval = AsyncMock(
-            return_value={
-                "recommendation": "reverse",
-                "confidence": 90.0,
-                "reasoning": "test reasoning",
-                "alt_outcome": "No",
-                "alt_token_id": "tok-alt",
-            }
-        )
-        place_order = MagicMock(return_value={"success": True, "order_hash": "0xhash"})
-
+        db = MagicMock()
+        db.scalar.return_value = None
         with (
-            patch.object(inverse_bot_monitor, "_fetch_market_tokens", market_tokens),
-            patch.object(inverse_bot_monitor, "_evaluate_with_ai", ai_eval),
-            patch.object(inverse_bot_monitor, "_place_order_on_polymarket", place_order),
-            patch.object(inverse_bot_monitor, "_best_ask_for_token", return_value=0.6),
+            patch(
+                "app.services.trading.execution.live.place_live_order",
+                return_value={"success": True, "order_hash": "sell", "trade_size": 10},
+            ) as place,
+            patch(
+                "app.services.trading.execution.live.reconcile_order",
+                return_value={"settled": False, "status": "submitted"},
+            ),
         ):
-            result = await inverse_bot_monitor.evaluate_inverse_position_row(
-                db=db,
-                user=user,
-                settings=settings,
-                row=row,
-                stored_creds={"private_key": "0xpk", "clob_creds": None},
-                positions_by_token=positions_by_token,
-                force=True,
+            result = inverse_bot_monitor._execute_durable_reversal(
+                db,
+                row,
+                _settings(simulation_mode=False),
+                {},
+                10,
+                0.5,
+                "opposite",
+                "No",
+                0.5,
+                90,
+                "reverse",
             )
-
-        self.assertEqual(result["status"], "success")
-        self.assertEqual(place_order.call_count, 2)
-        self.assertEqual(_added_objects(db, InverseBotAction)[0].status, "success")
+        self.assertEqual(result["status"], "sell_only")
+        self.assertIn("settlement pending", result["error"])
+        place.assert_called_once()
+        self.assertEqual(place.call_args.kwargs["side"], "SELL")
 
 
 # ─────────────── stop-loss / take-profit ───────────────
@@ -399,6 +368,7 @@ class StopLossPaperModeTests(unittest.IsolatedAsyncioTestCase):
             "size": 100.0,
             "stop_price": 0.50,
             "status": "active",
+            "created_at": datetime(2026, 1, 1, tzinfo=UTC),
         }
         base.update(overrides)
         return StopLossOrder(**base)
@@ -414,6 +384,7 @@ class StopLossPaperModeTests(unittest.IsolatedAsyncioTestCase):
             "size": 100.0,
             "take_profit_price": 0.40,
             "status": "active",
+            "created_at": datetime(2026, 1, 1, tzinfo=UTC),
         }
         base.update(overrides)
         return TakeProfitOrder(**base)
@@ -433,7 +404,7 @@ class StopLossPaperModeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(stop_loss_monitor, "_fetch_public_prices", fetch_public),
             patch.object(stop_loss_monitor, "_fetch_live_prices", fetch_live),
             patch.object(stop_loss_monitor, "load_wallet_credentials", load_creds),
-            patch.object(stop_loss_monitor, "_place_order_on_polymarket", place_order),
+            patch("app.services.trading.execution.live.place_live_order", place_order),
             patch("py_clob_client.client.ClobClient", clob_cls),
         ):
             triggered = await stop_loss_monitor._check_user_price_orders(
@@ -478,7 +449,7 @@ class StopLossPaperModeTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(stop_loss_monitor, "_fetch_public_prices", fetch_public),
-            patch.object(stop_loss_monitor, "_place_order_on_polymarket", place_order),
+            patch("app.services.trading.execution.live.place_live_order", place_order),
         ):
             triggered = await stop_loss_monitor._check_user_price_orders(
                 db=db,
@@ -533,7 +504,7 @@ class StopLossPaperModeTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(stop_loss_monitor, "_fetch_public_prices", fetch_public),
-            patch.object(stop_loss_monitor, "_place_order_on_polymarket", MagicMock()),
+            patch("app.services.trading.execution.live.place_live_order", MagicMock()),
         ):
             await stop_loss_monitor._check_user_price_orders(
                 db=db,
@@ -567,7 +538,7 @@ class StopLossPaperModeTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(stop_loss_monitor, "_fetch_live_prices", fetch_live),
             patch.object(stop_loss_monitor, "load_wallet_credentials", load_creds),
-            patch.object(stop_loss_monitor, "_place_order_on_polymarket", place_order),
+            patch("app.services.trading.execution.live.place_live_order", place_order),
         ):
             triggered = await stop_loss_monitor._check_user_price_orders(
                 db=db,
@@ -583,18 +554,6 @@ class StopLossPaperModeTests(unittest.IsolatedAsyncioTestCase):
         place_order.assert_called_once()
         self.assertEqual(sl.status, "triggered")
         self.assertEqual(sl.order_hash, "0xabc")
-        self.assertEqual(sl.executed_price, 0.30)
-        # Live mode now records an attributed trade (plan 03 Phase A).
-        # Before this the live close only touched StopLossOrder, so the
-        # sell never reached the FIFO matcher and the position's
-        # realized P&L stayed at zero — with every loss limit derived
-        # from it.
-        trades = _added_objects(db, UserTrade)
-        self.assertEqual(len(trades), 1)
-        self.assertEqual(trades[0].strategy_source, "stop_loss")
-        self.assertEqual(trades[0].status, "pending")
-        self.assertEqual(trades[0].order_hash, "0xabc")
-
-
-if __name__ == "__main__":
-    unittest.main()
+        self.assertIsNone(sl.executed_price)
+        # The durable gateway owns attribution; the monitor must not duplicate it.
+        self.assertEqual(_added_objects(db, UserTrade), [])

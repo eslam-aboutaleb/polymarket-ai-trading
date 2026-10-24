@@ -127,6 +127,8 @@ def make_settings(**overrides):
         "kelly_fraction": 0.25,
         "require_ai_approval": False,
         "simulation_mode": False,
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
     }
     values.update(overrides)
     return UserSettings(**values)
@@ -1315,32 +1317,16 @@ class ExecuteCopyTradeTests(CopyTradeServiceTestCase):
         self.addCleanup(patcher.stop)
 
     def _patch_order(self, result):
+        response = {"success": False, "status": "rejected", "trade_id": 1, **result}
         patcher = patch(
-            "app.services.trading.copy_trade_service._place_order_on_polymarket",
-            MagicMock(return_value=result),
+            "app.services.trading.execution.live.place_live_order", return_value=response
         )
-        patcher.start()
+        mocked = patcher.start()
         self.addCleanup(patcher.stop)
+        return mocked
 
     def _patch_idempotency(self, prior=None):
-        stored = []
-        get_patcher = patch(
-            "app.services.trading.copy_trade_service.get_idempotent_order_result",
-            MagicMock(return_value=prior),
-        )
-        get_patcher.start()
-        self.addCleanup(get_patcher.stop)
-
-        def store(db, user_id, key, result):
-            stored.append((user_id, key, result))
-
-        store_patcher = patch(
-            "app.services.trading.copy_trade_service.store_idempotent_order_result",
-            MagicMock(side_effect=store),
-        )
-        store_patcher.start()
-        self.addCleanup(store_patcher.stop)
-        return stored
+        return self._patch_order(prior or {"success": True, "status": "submitted", "trade_id": 1})
 
     def _patch_credentials(self, stored=None, error=None):
         def load(wallet_address):
@@ -1451,27 +1437,24 @@ class ExecuteCopyTradeTests(CopyTradeServiceTestCase):
         )
         self.assertEqual(result["reason"], "AI recommends: skip")
 
-    async def test_ai_gate_accepts_hold(self):
+    async def test_ai_gate_rejects_hold_without_explicit_approval(self):
         self.db.first_results[UserSettings] = make_settings(require_ai_approval=True)
-        self._patch_credentials(stored={"private_key": "0xpk", "clob_creds": None})
-        self._patch_plan()
-        self._patch_caps()
-        self._patch_order({"success": True, "order_hash": "0x1", "status": "submitted"})
-        self._patch_idempotency()
-        result = await copy_trade_service.execute_copy_trade(
-            self.db,
-            1,
-            TRADER_WALLET,
-            MARKET_ID,
-            TOKEN_ID,
-            "BUY",
-            0.5,
-            100.0,
-            trade_history_id=7,
-            assessment={"recommendation": "hold"},
-        )
-        self.assertTrue(result["executed"])
-        self.assertEqual(result["status"], "pending")
+        with patch("app.services.trading.execution.live.place_live_order") as gateway:
+            result = await copy_trade_service.execute_copy_trade(
+                self.db,
+                1,
+                TRADER_WALLET,
+                MARKET_ID,
+                TOKEN_ID,
+                "BUY",
+                0.5,
+                100,
+                trade_history_id=7,
+                assessment={"recommendation": "hold"},
+            )
+        self.assertFalse(result["executed"])
+        self.assertEqual(result["reason"], "AI approval required")
+        gateway.assert_not_called()
 
     async def test_no_credentials_rejected(self):
         self._patch_credentials(stored=None)
@@ -1497,15 +1480,14 @@ class ExecuteCopyTradeTests(CopyTradeServiceTestCase):
         self.assertEqual(result["status"], "simulated")
         simulated = self.db.added[0]
         self.assertEqual(simulated.status, "simulated")
-        # Streak counters advance on simulated success.
-        self.assertEqual(self.db.first_results[UserSettings].consecutive_wins, 1)
+        # A simulated submission is not a realized win.
+        self.assertEqual(self.db.first_results[UserSettings].consecutive_wins, 0)
 
-    async def test_idempotent_replay(self):
-        self._patch_credentials(stored={"private_key": "0xpk", "clob_creds": None})
+    async def test_stable_source_identity_is_delegated_to_durable_gateway(self):
+        self._patch_credentials(stored={"private_key": "0xpk"})
         self._patch_plan()
         self._patch_caps()
-        prior = {"executed": True, "trade_id": 99, "order_hash": "0xprior"}
-        self._patch_idempotency(prior=prior)
+        gateway = self._patch_order({"success": True, "status": "submitted", "trade_id": 99})
         result = await copy_trade_service.execute_copy_trade(
             self.db,
             1,
@@ -1514,17 +1496,19 @@ class ExecuteCopyTradeTests(CopyTradeServiceTestCase):
             TOKEN_ID,
             "BUY",
             0.5,
-            100.0,
+            100,
             trade_history_id=7,
         )
-        self.assertEqual(result, prior)
+        self.assertEqual(result["trade_id"], 99)
+        self.assertEqual(gateway.call_args.kwargs["idempotency_key"], "copy-trade:7")
+        self.assertEqual(gateway.call_args.kwargs["size"], 100.0)
+        self.assertEqual(self.db.added, [])
 
-    async def test_order_success_stores_idempotent_result(self):
-        self._patch_credentials(stored={"private_key": "0xpk", "clob_creds": None})
+    async def test_accepted_live_order_does_not_fabricate_win(self):
+        self._patch_credentials(stored={"private_key": "0xpk"})
         self._patch_plan()
         self._patch_caps()
-        self._patch_order({"success": True, "order_hash": "0x1", "status": "submitted"})
-        stored = self._patch_idempotency()
+        self._patch_order({"success": True, "status": "submitted", "order_hash": "0x1"})
         result = await copy_trade_service.execute_copy_trade(
             self.db,
             1,
@@ -1533,25 +1517,18 @@ class ExecuteCopyTradeTests(CopyTradeServiceTestCase):
             TOKEN_ID,
             "BUY",
             0.5,
-            100.0,
+            100,
             trade_history_id=7,
         )
         self.assertTrue(result["executed"])
-        self.assertEqual(result["status"], "pending")
-        self.assertEqual(result["order_hash"], "0x1")
-        self.assertEqual(result["trade_id"], 1)
-        # Streak advanced and result stored under the derived key.
-        self.assertEqual(self.db.first_results[UserSettings].consecutive_wins, 1)
-        self.assertEqual(len(stored), 1)
-        self.assertEqual(stored[0][1], "copy-trade:7")
-        self.assertEqual(stored[0][2]["order_hash"], "0x1")
+        self.assertEqual(result["status"], "submitted")
+        self.assertEqual(self.db.first_results[UserSettings].consecutive_wins, 0)
 
-    async def test_order_failure_advances_loss_streak(self):
-        self._patch_credentials(stored={"private_key": "0xpk", "clob_creds": None})
+    async def test_exchange_rejection_is_not_realized_loss(self):
+        self._patch_credentials(stored={"private_key": "0xpk"})
         self._patch_plan()
         self._patch_caps()
-        self._patch_order({"success": False, "error": "rejected by exchange"})
-        self._patch_idempotency()
+        self._patch_order({"success": False, "status": "rejected", "error": "exchange rejection"})
         result = await copy_trade_service.execute_copy_trade(
             self.db,
             1,
@@ -1560,20 +1537,17 @@ class ExecuteCopyTradeTests(CopyTradeServiceTestCase):
             TOKEN_ID,
             "BUY",
             0.5,
-            100.0,
+            100,
             trade_history_id=7,
         )
         self.assertFalse(result["executed"])
-        self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["error"], "rejected by exchange")
-        self.assertEqual(self.db.first_results[UserSettings].consecutive_losses, 1)
+        self.assertEqual(self.db.first_results[UserSettings].consecutive_losses, 0)
 
     async def test_explicit_idempotency_key_used(self):
-        self._patch_credentials(stored={"private_key": "0xpk", "clob_creds": None})
+        self._patch_credentials(stored={"private_key": "0xpk"})
         self._patch_plan()
         self._patch_caps()
-        self._patch_order({"success": True, "order_hash": "0x1", "status": "submitted"})
-        stored = self._patch_idempotency()
+        gateway = self._patch_order({"success": True, "status": "submitted"})
         await copy_trade_service.execute_copy_trade(
             self.db,
             1,
@@ -1582,21 +1556,29 @@ class ExecuteCopyTradeTests(CopyTradeServiceTestCase):
             TOKEN_ID,
             "BUY",
             0.5,
-            100.0,
-            idempotency_key="custom-key",
+            100,
+            idempotency_key="explicit-key",
         )
-        self.assertEqual(stored[0][1], "custom-key")
+        self.assertEqual(gateway.call_args.kwargs["idempotency_key"], "explicit-key")
 
-    async def test_no_idempotency_key_skips_store(self):
-        self._patch_credentials(stored={"private_key": "0xpk", "clob_creds": None})
+    async def test_missing_source_identity_cannot_submit_live_order(self):
+        self._patch_credentials(stored={"private_key": "0xpk"})
         self._patch_plan()
         self._patch_caps()
-        self._patch_order({"success": True, "order_hash": "0x1", "status": "submitted"})
-        stored = self._patch_idempotency()
-        await copy_trade_service.execute_copy_trade(
-            self.db, 1, TRADER_WALLET, MARKET_ID, TOKEN_ID, "BUY", 0.5, 100.0
+        gateway = self._patch_order({"success": True})
+        result = await copy_trade_service.execute_copy_trade(
+            self.db,
+            1,
+            TRADER_WALLET,
+            MARKET_ID,
+            TOKEN_ID,
+            "BUY",
+            0.5,
+            100,
         )
-        self.assertEqual(stored, [])
+        self.assertFalse(result["executed"])
+        self.assertEqual(result["reason"], "Source trade identity required")
+        gateway.assert_not_called()
 
 
 # ────────────── Assessment persistence ──────────────

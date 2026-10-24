@@ -26,6 +26,7 @@ from app.repositories.trading.bots import TradingBotRepository
 from app.security.credential_store import CredentialStoreError, load_wallet_credentials
 from app.services.market_data.polymarket_service import POLYMARKET_CLOB_API, get_polymarket_service
 from app.services.trading.copy_trade_service import _place_order_on_polymarket
+from app.services.trading.execution.async_io import run_blocking_execution
 from app.utils.database import SessionLocal
 from app.utils.scheduler_lock import (
     acquire_scheduler_lock,
@@ -444,7 +445,9 @@ async def evaluate_inverse_position_row(
             to_price=reverse_token["price"],
         )
     else:
-        execution = _execute_reversal(
+        execution = await run_blocking_execution(
+            _execute_reversal,
+            db=db,
             row=row,
             settings=settings,
             stored_creds=stored_creds,
@@ -513,16 +516,17 @@ async def evaluate_inverse_position_row(
     # Attributable trade rows for both legs (plan 03 Phase A). The
     # action row above records the decision; these rows are what the
     # FIFO P&L matcher and the execution-analytics endpoints read.
-    _record_reversal_trades(
-        db,
-        user_id=user.id,
-        condition_id=row.condition_id,
-        from_token_id=row.token_id,
-        from_size=size,
-        execution=execution,
-        to_token_id=reverse_token["token_id"],
-        buy_notional=execution.get("buy_notional"),
-    )
+    if getattr(settings, "simulation_mode", False):
+        _record_reversal_trades(
+            db,
+            user_id=user.id,
+            condition_id=row.condition_id,
+            from_token_id=row.token_id,
+            from_size=size,
+            execution=execution,
+            to_token_id=reverse_token["token_id"],
+            buy_notional=execution.get("buy_notional"),
+        )
 
     db.commit()
     db.refresh(action)
@@ -652,6 +656,119 @@ def _resolve_size_mode(row: InverseBotPosition, settings: UserSettings) -> str:
     return mode
 
 
+def _execute_durable_reversal(
+    db: Session,
+    row: InverseBotPosition,
+    settings: UserSettings,
+    stored_creds: dict,  # noqa: ARG001 - evaluator contract
+    from_size: float,
+    from_price: float,
+    to_token_id: str,
+    to_outcome: str,  # noqa: ARG001 - evaluator contract
+    to_price: float,
+    confidence: float,  # noqa: ARG001 - evaluator contract
+    recommendation: str,  # noqa: ARG001 - evaluator contract
+) -> dict[str, Any]:
+    """Reverse real holdings only after the SELL has settled on the exchange."""
+    from decimal import ROUND_DOWN, Decimal
+
+    from sqlalchemy import select
+
+    from app.models.trading.live_order import LiveOrder
+    from app.services.trading.execution.live import order_result, place_live_order, reconcile_order
+
+    execution = {
+        "status": "failed",
+        "sell_order_hash": None,
+        "buy_order_hash": None,
+        "buy_notional": None,
+        "sell_price": from_price,
+        "buy_price": to_price,
+    }
+    previous = row.last_reversed_at.isoformat() if row.last_reversed_at else "initial"
+    cycle = f"inverse:{row.id}:{previous}"
+    try:
+        # Persisted identities survive a process restart and a later price change.
+        sell_row = db.scalar(
+            select(LiveOrder).where(
+                LiveOrder.user_id == row.user_id,
+                LiveOrder.idempotency_key == f"{cycle}:sell",
+            )
+        )
+        sell = (
+            order_result(sell_row)
+            if sell_row
+            else place_live_order(
+                db,
+                user_id=row.user_id,
+                token_id=row.token_id,
+                market_id=row.condition_id,
+                side="SELL",
+                price=max(0.0001, from_price * 0.95),
+                size=float(Decimal(str(from_size)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)),
+                strategy="inverse",
+                idempotency_key=f"{cycle}:sell",
+                order_type="FOK",
+            )
+        )
+        execution["sell_order_hash"] = sell["order_hash"]
+        if not sell["success"]:
+            execution["error"] = sell.get("error") or sell["status"]
+            return execution
+        settled_sell = reconcile_order(db, user_id=row.user_id, order_hash=sell["order_hash"])
+        if not settled_sell.get("settled"):
+            execution.update(
+                status="sell_only", error="SELL settlement pending; BUY was not submitted"
+            )
+            return execution
+        if _resolve_size_mode(row, settings) == InverseBotSizeMode.FIXED_AMOUNT.value:
+            amount = row.fixed_amount_override or settings.inverse_bot_fixed_amount
+        else:
+            amount = settled_sell["filled_notional"] * (1 - BUY_SLIPPAGE_GUARD)
+        buy_limit = min(0.9999, to_price * (1 + BUY_SLIPPAGE_GUARD))
+        shares = (Decimal(str(amount)) / Decimal(str(buy_limit))).quantize(
+            Decimal("0.01"),
+            rounding=ROUND_DOWN,
+        )
+        execution.update(status="sell_only", buy_notional=float(amount))
+        buy_row = db.scalar(
+            select(LiveOrder).where(
+                LiveOrder.user_id == row.user_id,
+                LiveOrder.idempotency_key == f"{cycle}:buy",
+            )
+        )
+        buy = (
+            order_result(buy_row)
+            if buy_row
+            else place_live_order(
+                db,
+                user_id=row.user_id,
+                token_id=to_token_id,
+                market_id=row.condition_id,
+                side="BUY",
+                price=buy_limit,
+                size=float(shares),
+                strategy="inverse",
+                idempotency_key=f"{cycle}:buy",
+                order_type="FOK",
+            )
+        )
+        execution["buy_order_hash"] = buy["order_hash"]
+        if not buy["success"]:
+            execution["error"] = buy.get("error") or buy["status"]
+            return execution
+        settled_buy = reconcile_order(db, user_id=row.user_id, order_hash=buy["order_hash"])
+        if settled_buy.get("settled"):
+            execution.update(status="success", error=None)
+        else:
+            execution["error"] = "BUY settlement pending; review the live order before resuming"
+        return execution
+    except Exception as exc:
+        db.rollback()
+        execution["error"] = str(exc)[:500]
+        return execution
+
+
 def _execute_reversal(
     row: InverseBotPosition,
     settings: UserSettings,
@@ -663,7 +780,22 @@ def _execute_reversal(
     to_price: float,
     confidence: float,  # noqa: ARG001 - retained for callers and action context
     recommendation: str,  # noqa: ARG001 - retained for callers and action context
+    db: Session | None = None,
 ) -> dict[str, Any]:
+    if db is not None:
+        return _execute_durable_reversal(
+            db,
+            row,
+            settings,
+            stored_creds,
+            from_size,
+            from_price,
+            to_token_id,
+            to_outcome,
+            to_price,
+            confidence,
+            recommendation,
+        )
     private_key = stored_creds.get("private_key")
     clob_creds = stored_creds.get("clob_creds")
 
