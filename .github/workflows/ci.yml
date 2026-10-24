@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       walletconnect_live_canary:
-        description: Test real WalletConnect pairing QR (requires project ID secret)
+        description: "Verify real Reown project and QR initialization (requires repository secret)"
         type: boolean
         default: false
   schedule:
@@ -130,10 +130,10 @@ jobs:
       - name: Install Chromium and system dependencies
         working-directory: frontend
         run: npx playwright install --with-deps chromium
-      - name: WalletConnect browser regression tests
+      - name: WalletConnect browser regressions (controlled SDK boundary)
         working-directory: frontend
         run: npm run test:walletconnect
-      - name: Real WalletConnect pairing canary
+      - name: Live WalletConnect QR canary
         if: github.event_name == 'workflow_dispatch' && inputs.walletconnect_live_canary
         working-directory: frontend
         env:
