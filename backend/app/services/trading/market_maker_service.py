@@ -581,6 +581,8 @@ async def _sync_market_maker_paper(
 
 async def _maker_loop(config_id: int):
     """Continuous loop for a single market maker config."""
+    # Annotations do not enforce runtime types for direct service callers.
+    config_id = int(config_id)
     lock_name = f"market_maker:{config_id}"
     if not acquire_scheduler_lock(lock_name):
         return

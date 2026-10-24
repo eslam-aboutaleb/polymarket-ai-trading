@@ -955,6 +955,21 @@ def _blocking_sleep():
 
 
 class MakerLoopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_config_id_is_numeric_before_locking_or_logging(self):
+        with (
+            patch.object(
+                market_maker_service, "acquire_scheduler_lock", return_value=False
+            ) as lock,
+            patch.object(market_maker_service, "logger") as logger,
+        ):
+            await market_maker_service._maker_loop("1\r\n")
+            lock.assert_called_once_with("market_maker:1")
+            lock.reset_mock()
+            with self.assertRaises(ValueError):
+                await market_maker_service._maker_loop("1\r\nFORGED")
+            lock.assert_not_called()
+            logger.info.assert_not_called()
+
     async def test_disabled_config_stops_loop_and_marks_idle(self):
         config = _config(enabled=False)
         db = _session([config, config, _user()])
