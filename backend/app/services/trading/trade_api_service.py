@@ -57,7 +57,9 @@ def follow_trader(
             sizing_mode=changes.get("sizing_mode") or "inherit_global",
             fixed_trade_amount_override=changes.get("fixed_trade_amount_override"),
             copy_wallet_mode=changes.get("copy_wallet_mode") or "dynamic_main_wallet_percentage",
-            copy_wallet_percentage=changes.get("copy_wallet_percentage") or 100.0,
+            copy_wallet_percentage=changes.get("copy_wallet_percentage")
+            if changes.get("copy_wallet_percentage") is not None
+            else 100.0,
             copy_wallet_fixed_amount=changes.get("copy_wallet_fixed_amount"),
         )
         return repository.save_new(record)
@@ -76,7 +78,11 @@ def follow_trader(
             changes.get("copy_wallet_mode") or "dynamic_main_wallet_percentage"
         )
     if "copy_wallet_percentage" in provided_fields:
-        record.copy_wallet_percentage = changes.get("copy_wallet_percentage") or 100.0
+        record.copy_wallet_percentage = (
+            changes.get("copy_wallet_percentage")
+            if changes.get("copy_wallet_percentage") is not None
+            else 100.0
+        )
     if "copy_wallet_fixed_amount" in provided_fields:
         record.copy_wallet_fixed_amount = changes.get("copy_wallet_fixed_amount")
     record.updated_at = utc_now()

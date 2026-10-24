@@ -463,7 +463,7 @@ class GatedRouteTest(EntitlementBaseTest):
 
         with (
             patch.object(external_routes, "_load_credentials") as load,
-            patch.object(external_routes, "_place_order_on_polymarket") as place,
+            patch("app.services.trading.execution.live.place_live_order") as place,
         ):
             load.return_value = {"private_key": "0xkey", "clob_creds": None}
             place.return_value = {"success": True, "order_hash": "0xhash"}

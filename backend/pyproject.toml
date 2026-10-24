@@ -29,6 +29,7 @@ dependencies = [
     "slowapi>=0.1.9",
     "grpcio>=1.60.0",
     "grpcio-tools>=1.60.0",
+    "py-clob-client-v2==1.2.1",
 ]
 
 [dependency-groups]

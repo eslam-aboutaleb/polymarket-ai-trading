@@ -270,11 +270,11 @@ const sections: GuideSection[] = [
       },
       {
         heading: "Review Simulated Trades",
-        body: "All simulated trades are stored with a 'simulated' tag. View them on the Trades page to evaluate strategy performance before switching to live mode.",
+        body: "Simulated trades carry a simulated tag. Their estimates do not prove executable fills or realized profit. Review them separately from confirmed exchange trades.",
       },
       {
         heading: "Go Live",
-        body: "When you're satisfied with simulated results, turn simulation_mode OFF and the bot will start executing real trades immediately. Your simulated history is preserved for comparison.",
+        body: "Configure your trading key and funding wallet, set risk budgets and initial capital, then use Activate Live Copying on the Copy Trading page. The server operator must enable the strategy switches and an administrator must activate global execution first. Simulation results never authorize real orders.",
       },
     ],
   },

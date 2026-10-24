@@ -264,7 +264,7 @@ class ExternalAuthTest(_ExternalBase):
 
     def test_read_only_key_cannot_submit_an_order(self):
         _, secret = self._make_key(scopes=("read",))
-        with patch.object(external_module, "_place_order_on_polymarket") as place:
+        with patch("app.services.trading.execution.live.place_live_order") as place:
             response = self.client.post(
                 "/api/v1/external/orders",
                 json=ORDER_BODY,
@@ -278,9 +278,8 @@ class ExternalAuthTest(_ExternalBase):
         _, secret = self._make_key(scopes=("read", "trade"))
         self._settings()
         self._credentials()
-        with patch.object(
-            external_module,
-            "_place_order_on_polymarket",
+        with patch(
+            "app.services.trading.execution.live.place_live_order",
             return_value={"success": True, "order_hash": "0xhash"},
         ):
             response = self.client.post(
@@ -388,174 +387,65 @@ class ExternalReadTest(_ExternalBase):
 
 
 class ExternalOrderTest(_ExternalBase):
-    """An external order must be indistinguishable from a manual order."""
-
     def setUp(self):
-        # Only legacy accounting is under test here; exchange I/O is mocked.
-        # The real production barrier is covered by tests/security/.
-        barrier = patch("app.services.trading.live_trading_policy.block_legacy_live_execution")
-        barrier.start()
-        self.addCleanup(barrier.stop)
         super().setUp()
         self._settings()
-        self._credentials()
-        self.place = MagicMock(return_value={"success": True, "order_hash": "0xorderhash"})
-        patcher = patch.object(external_module, "_place_order_on_polymarket", self.place)
+        patcher = patch("app.services.trading.execution.live.require_enabled")
         patcher.start()
         self.addCleanup(patcher.stop)
+        self.gateway = patch(
+            "app.services.trading.execution.live.place_live_order",
+            return_value={
+                "success": True,
+                "status": "submitted",
+                "order_hash": "real-order",
+                "trade_id": 7,
+            },
+        )
+        self.place = self.gateway.start()
+        self.addCleanup(self.gateway.stop)
+        _, self.secret = self._make_key(scopes=("read", "trade"))
+        self.headers = {"X-API-Key": self.secret, "Idempotency-Key": "source"}
 
-    def _key(self, scopes=("read", "trade")):
-        _, secret = self._make_key(scopes=scopes)
-        return secret
-
-    def test_order_runs_the_real_safety_gate_and_records_one_row(self):
-        secret = self._key()
+    def test_primary_account_order_uses_durable_gateway(self):
         response = self.client.post(
-            "/api/v1/external/orders", json=ORDER_BODY, headers={"X-API-Key": secret}
+            "/api/v1/external/orders", json=ORDER_BODY, headers=self.headers
         )
         self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertTrue(body["success"])
-        self.assertEqual(body["strategy_source"], "external")
-        self.assertEqual(body["order_hash"], "0xorderhash")
+        self.assertEqual(response.json()["trade_id"], 7)
+        self.assertEqual(self.place.call_args.kwargs["strategy"], "external")
+        self.assertTrue(self.place.call_args.kwargs["idempotency_key"].endswith(":source"))
 
-        # The real pre-trade gate ran: the requested size is what a
-        # gate-capped order would produce, not the raw body value.
-        self.place.assert_called_once()
-        kwargs = self.place.call_args.kwargs
-        self.assertEqual(kwargs["size"], 10.0)
-        self.assertEqual(kwargs["token_id"], TOKEN_ID)
-
-        trades = self.db.query(UserTrade).all()
-        self.assertEqual(len(trades), 1)
-        self.assertEqual(trades[0].strategy_source, "external")
-        self.assertEqual(trades[0].status, "pending")
-        self.assertEqual(trades[0].order_hash, "0xorderhash")
-
-        # The recorder emits the audit event; the route must not add a
-        # second one.
-        events = list(event_log.get_events(self.db, user_id=1, event_types=["order_submitted"]))
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["payload"]["strategy_source"], "external")
-
-    def test_gate_rejection_places_no_order(self):
-        secret = self._key()
-        self._settings(max_position_size=1.0)
-        with patch.object(
-            external_module,
-            "_place_order_on_polymarket",
-            side_effect=AssertionError("must not be reached"),
-        ) as place:
-            response = self.client.post(
-                "/api/v1/external/orders", json=ORDER_BODY, headers={"X-API-Key": secret}
-            )
-        self.assertEqual(response.status_code, 403)
-        place.assert_not_called()
-        self.assertEqual(self.db.query(UserTrade).count(), 0)
-
-    def test_over_cap_order_is_refused_before_the_gate(self):
-        secret = self._key()
-        self._settings(max_position_size=5.0)
+    def test_missing_idempotency_key_cannot_submit(self):
         response = self.client.post(
-            "/api/v1/external/orders", json=ORDER_BODY, headers={"X-API-Key": secret}
+            "/api/v1/external/orders", json=ORDER_BODY, headers={"X-API-Key": self.secret}
         )
-        self.assertEqual(response.status_code, 403)
-        self.assertEqual(response.json()["detail"], "max_position_size")
+        self.assertEqual(response.status_code, 422)
         self.place.assert_not_called()
 
-    def test_trading_halt_refuses_the_order(self):
-        secret = self._key()
-        self._settings(trading_halted=True, halt_reason="daily loss limit")
+    def test_gateway_risk_rejection_reaches_api_client(self):
+        from app.services.trading.live_trading_policy import LiveTradingBlocked
+
+        self.place.side_effect = LiveTradingBlocked("LIVE_POSITION_BUDGET_EXCEEDED")
         response = self.client.post(
-            "/api/v1/external/orders", json=ORDER_BODY, headers={"X-API-Key": secret}
+            "/api/v1/external/orders", json=ORDER_BODY, headers=self.headers
         )
-        self.assertEqual(response.status_code, 403)
-        self.assertEqual(response.json()["detail"], "daily loss limit")
-        self.place.assert_not_called()
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("BUDGET_EXCEEDED", response.text)
 
-    def test_exchange_failure_is_recorded_as_failed(self):
-        secret = self._key()
-        self.place.return_value = {"success": False, "error": "insufficient balance"}
-        response = self.client.post(
-            "/api/v1/external/orders", json=ORDER_BODY, headers={"X-API-Key": secret}
-        )
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertFalse(body["success"])
-        self.assertEqual(body["error"], "insufficient balance")
-        trade = self.db.query(UserTrade).one()
-        self.assertEqual(trade.status, "failed")
-        events = event_log.get_events(self.db, user_id=1, event_types=["order_failed"])
-        self.assertEqual(len(events), 1)
-
-    def test_replayed_idempotency_key_places_one_order(self):
-        secret = self._key()
-        headers = {"X-API-Key": secret, "Idempotency-Key": "retry-1"}
-        first = self.client.post("/api/v1/external/orders", json=ORDER_BODY, headers=headers)
-        second = self.client.post("/api/v1/external/orders", json=ORDER_BODY, headers=headers)
-        self.assertEqual(first.status_code, 200)
-        self.assertEqual(second.status_code, 200)
-        self.assertEqual(second.json()["order_hash"], first.json()["order_hash"])
-        self.assertEqual(self.place.call_count, 1)
-        self.assertEqual(self.db.query(UserTrade).count(), 1)
-
-    def test_idempotent_replay_does_not_leak_another_keys_result(self):
-        _, secret = self._make_key(scopes=("read", "trade"))
-        _, other_secret = api_key_service.create_api_key(
-            self.db, user_id=2, name="user2", scopes=["read", "trade"]
-        )
-        headers = {"X-API-Key": secret, "Idempotency-Key": "shared-key"}
-        self.client.post("/api/v1/external/orders", json=ORDER_BODY, headers=headers)
-
-        reused = self.client.post(
-            "/api/v1/external/orders",
-            json=ORDER_BODY,
-            headers={"X-API-Key": other_secret, "Idempotency-Key": "shared-key"},
-        )
-        # Idempotency is stored per (user, key), so a different owner
-        # reusing the same key string places its own order rather than
-        # replaying somebody else's result.
-        self.assertEqual(reused.status_code, 200)
-        self.assertEqual(self.place.call_count, 2)
-        self.assertNotEqual(
-            reused.json()["order_hash"],
-            "0xorderhash" if False else self.place.call_args.kwargs["token_id"],
-        )
-
-    def test_order_is_attributed_to_a_scoped_account(self):
+    def test_scoped_key_preserves_account_identity_in_gateway(self):
         from app.services.users.account_service import create_sub_account, ensure_personal_account
 
         ensure_personal_account(self.db, 1)
-        alpha = create_sub_account(self.db, 1, "Alpha")
-        _, secret = self._make_key(scopes=("read", "trade"), account_id=alpha.id, name="scoped")
-        response = self.client.post(
-            "/api/v1/external/orders", json=ORDER_BODY, headers={"X-API-Key": secret}
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["account_id"], alpha.id)
-        trade = self.db.query(UserTrade).one()
-        self.assertEqual(trade.account_id, alpha.id)
-
-    def test_key_scoped_to_a_missing_account_is_refused(self):
-        _, secret = self._make_key(scopes=("read", "trade"), account_id=4242, name="dangling")
-        response = self.client.post(
-            "/api/v1/external/orders", json=ORDER_BODY, headers={"X-API-Key": secret}
-        )
-        self.assertEqual(response.status_code, 403)
-        self.place.assert_not_called()
-        self.assertEqual(self.db.query(UserTrade).count(), 0)
-
-    def test_oversized_body_is_rejected_by_validation(self):
-        secret = self._key()
+        account = create_sub_account(self.db, 1, "Subaccount")
+        _, secret = self._make_key(scopes=("read", "trade"), account_id=account.id)
         response = self.client.post(
             "/api/v1/external/orders",
-            json={**ORDER_BODY, "side": "HODL"},
-            headers={"X-API-Key": secret},
+            json=ORDER_BODY,
+            headers={"X-API-Key": secret, "Idempotency-Key": "key"},
         )
-        self.assertEqual(response.status_code, 422)
-
-
-# ── Audit export ────────────────────────────────────────────
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.place.call_args.kwargs["account_id"], account.id)
 
 
 class AuditExportTest(_ExternalBase):

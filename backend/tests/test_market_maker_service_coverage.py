@@ -251,7 +251,11 @@ class PaperSyncCycleTests(unittest.IsolatedAsyncioTestCase):
             ("_sync_market_maker_paper", self.paper_sync),
             ("load_wallet_credentials", self.credentials),
         ):
-            patcher = patch.object(market_maker_service, name, new=mock)
+            patcher = (
+                patch("app.services.trading.execution.live.load_wallet_credentials", new=mock)
+                if name == "load_wallet_credentials"
+                else patch.object(market_maker_service, name, new=mock)
+            )
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -298,22 +302,15 @@ class PaperSyncCycleTests(unittest.IsolatedAsyncioTestCase):
         db.commit.assert_called_once_with()
         self.paper_sync.assert_not_awaited()
 
-    async def test_missing_simulation_flag_defaults_to_live_mode(self):
-        # A UserSettings row without the attribute is treated as
-        # live mode (getattr default), so credentials are required.
+    async def test_missing_simulation_flag_cannot_release_live_execution(self):
         config = _config(num_bands=1)
-        settings = SimpleNamespace()  # no simulation_mode attribute
-        db = _session([config, _user(), settings])
+        db = _session([config, _user(), SimpleNamespace()])
         self.fetch_midpoint.return_value = 0.5
-
         with self._run(db):
             result = await market_maker_service._sync_market_maker(1)
-
-        self.credentials.assert_called_once_with("0xwallet")
-        self.fetch_order_book.assert_not_awaited()
-        self.fetch_midpoint.assert_awaited_once_with("token-yes")
+        self.assertEqual(result, {"error": "LIVE_TRADING_DISABLED"})
+        self.credentials.assert_not_called()
         self.paper_sync.assert_not_awaited()
-        self.assertEqual(result["midpoint"], 0.5)
 
 
 class MakerLoopGuardTests(unittest.IsolatedAsyncioTestCase):
@@ -385,9 +382,8 @@ class MakerLoopGuardTests(unittest.IsolatedAsyncioTestCase):
             patch.object(market_maker_service, "_sync_market_maker", new=sync),
             patch.object(market_maker_service, "release_scheduler_lock") as release,
             patch.object(market_maker_service, "_cancel_all_orders", new=cancel_all),
-            patch.object(
-                market_maker_service,
-                "load_wallet_credentials",
+            patch(
+                "app.services.trading.execution.live.load_wallet_credentials",
                 return_value={"private_key": "0xpk"},
             ),
         ):
@@ -395,7 +391,7 @@ class MakerLoopGuardTests(unittest.IsolatedAsyncioTestCase):
 
         sync.assert_awaited_once_with(1)
         release.assert_called_once_with("market_maker:1")
-        cancel_all.assert_awaited_once_with("0xpk", "token-yes")
+        cancel_all.assert_not_awaited()
         self.assertEqual(config.status, "idle")
         self.assertEqual(config.current_open_orders, 0)
         db.commit.assert_called_once_with()

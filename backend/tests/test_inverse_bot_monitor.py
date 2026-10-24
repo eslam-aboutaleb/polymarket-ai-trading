@@ -1320,6 +1320,7 @@ class EvaluatePositionRowTests(_MonitorStateMixin, unittest.IsolatedAsyncioTestC
         await self._evaluate(row=self._persisted_row())
 
         self.execute.assert_called_once_with(
+            db=self.db,
             row=self.row,
             settings=self.settings,
             stored_creds={"private_key": "0xpk"},

@@ -32,11 +32,11 @@ from app.services.market_data.polymarket_service import (
     get_polymarket_service,
 )
 from app.services.trading.copy_trade_service import (
-    _place_order_on_polymarket,
     get_copy_trade_evaluation,
     get_copy_trade_history,
     get_daily_copy_pnl,
 )
+from app.services.trading.execution.async_io import run_blocking_execution
 from app.services.trading.order_management_service import (
     cancel_stop_loss as cancel_stop_loss_service,
 )
@@ -58,15 +58,12 @@ from app.services.trading.order_management_service import (
 from app.services.trading.pre_trade_gate import (
     _to_float,
     apply_global_safety_caps,
-    get_idempotent_order_result,
-    store_idempotent_order_result,
 )
 from app.services.trading.trade_api_service import (
     follow_trader as follow_trader_service,
 )
 from app.services.trading.trade_api_service import (
     followed_wallets_for_user,
-    record_manual_trade,
 )
 from app.services.trading.trade_api_service import (
     list_following as get_following_service,
@@ -124,6 +121,7 @@ class TradeRecord(BaseModel):
     fee_rate_bps: float | None = None
     pnl: float | None = None
     transaction_hash: str | None = None
+    source: str | None = None
     maker_address: str | None = None
     trader_side: str | None = None
 
@@ -362,155 +360,50 @@ async def execute_trade(
     current_user: dict = Depends(get_current_user_from_token),
     db: Session = Depends(get_db),
 ):
-    """
-    Execute a Buy or Sell limit order on Polymarket via py-clob-client.
-    Requires the user to have logged in with a private key.
+    """Submit a real order with durable identity and authenticated risk checks."""
+    from decimal import ROUND_DOWN, Decimal
 
-    The global safety caps (halt, cooldown, loss limits, drawdown,
-    position size — counting pending exposure) run before any order
-    is submitted, and a replayed Idempotency-Key returns the stored
-    result so a retried request can never place a second order.
-    """
-    from app.services.trading.live_trading_policy import (
-        LiveTradingBlocked,
-        block_legacy_live_execution,
-    )
+    from app.services.trading.execution.live import place_live_order, require_enabled
+    from app.services.trading.live_trading_policy import LiveTradingBlocked
 
     try:
-        block_legacy_live_execution("manual")
-    except LiveTradingBlocked as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-    wallet_address = current_user["wallet_address"]
-    user_id = current_user.get("user_id")
-
-    # Get stored credentials
-    try:
-        stored = load_wallet_credentials(wallet_address)
-    except CredentialStoreError as exc:
-        logger.exception("Credential store unavailable for user %s", user_id)
-        raise HTTPException(
-            status_code=503,
-            detail="Trading credentials are temporarily unavailable",
-        ) from exc
-    if not stored:
-        raise HTTPException(
-            status_code=400,
-            detail="No trading credentials found. Please re-login with your private key.",
-        )
-
-    # Idempotency: a replayed key returns the stored result
-    # so a retried request can never place a second order.
-    if idempotency_key:
-        prior = get_idempotent_order_result(db, user_id, idempotency_key)
-        if prior is not None:
-            logger.info(
-                "Replaying idempotent order result for user %s",
-                user_id,
-            )
-            return ExecuteTradeResponse(**prior)
-
-    # Load (or create) user settings — the pre-trade gate
-    # reads the same caps copy trading enforces.
-    settings = get_or_create_trading_settings(db, user_id, commit_new=True)
-
-    # Validate the requested size against the position cap
-    # before anything else: an over-cap manual order is
-    # rejected, naming the violated limit.
-    max_position_size = _to_float(settings.max_position_size)
-    if max_position_size > 0 and body.size > max_position_size:
-        raise HTTPException(
-            status_code=403,
-            detail="max_position_size",
-        )
-
-    # Pre-trade gate — identical caps to copy trading.
-    trade_size, rejection = apply_global_safety_caps(settings, body.size, db)
-    if rejection:
-        # Persist any halt / drawdown flags the gate set.
-        commit_trading_settings(db)
-        raise HTTPException(
-            status_code=403,
-            detail=rejection,
-        )
-
-    pk = stored["private_key"]
-    creds = stored.get("clob_creds")
-
-    logger.info(
-        "Executing %s order: token=%s price=%.4f size=%.4f market=%s",
-        body.side,
-        body.token_id[:20],
-        body.price,
-        trade_size,
-        (body.market_id or "")[:20],
-    )
-
-    # Place order
-    result = _place_order_on_polymarket(
-        private_key=pk,
-        clob_creds=creds,
-        token_id=body.token_id,
-        side=body.side,
-        price=body.price,
-        size=trade_size,
-    )
-
-    logger.info(
-        "Order result: success=%s hash=%s error=%s",
-        result.get("success"),
-        result.get("order_hash"),
-        result.get("error"),
-    )
-
-    # Record in user_trades table.  A submitted order is
-    # pending until a fill is observed (trade_monitor WS
-    # events or the fill reconciliation job); executed_at
-    # is set only on an observed fill.
-    trade_id = None
-    try:
-        status_value = "pending" if result["success"] else "failed"
-        user_trade = record_manual_trade(
+        require_enabled("manual")
+        if db is None:
+            raise LiveTradingBlocked("DURABLE_EXECUTION_CONTEXT_REQUIRED")
+        if not idempotency_key:
+            raise HTTPException(422, "Idempotency-Key is required for a live order")
+        # Existing manual API: buys are collateral notional, sells are shares.
+        shares = Decimal(str(body.size))
+        if body.side == "BUY":
+            shares /= Decimal(str(body.price))
+        shares = shares.quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        result = await run_blocking_execution(
+            place_live_order,
             db,
-            user_id=user_id,
-            market_id=body.market_id or body.token_id,
+            user_id=current_user["user_id"],
             token_id=body.token_id,
-            action=body.side.lower(),
-            amount=trade_size,
-            price=body.price,
-            status=status_value,
-            order_hash=result.get("order_hash"),
-        )
-        trade_id = user_trade.id
-    except Exception as e:
-        logger.error("Failed to record trade: %s", e)
-
-    if not result["success"]:
-        response = ExecuteTradeResponse(
-            success=False,
-            status="failed",
+            market_id=body.market_id,
             side=body.side,
-            size=trade_size,
             price=body.price,
-            error=result.get("error", "Order placement failed"),
-            trade_id=trade_id,
+            size=float(shares),
+            idempotency_key=idempotency_key,
+            strategy="manual",
+            order_type="FOK" if body.side == "SELL" else "GTC",
         )
-    else:
-        response = ExecuteTradeResponse(
-            success=True,
-            order_hash=result.get("order_hash"),
-            trade_id=trade_id,
-            status="submitted",
-            side=body.side,
-            size=trade_size,
-            price=body.price,
-        )
-    if idempotency_key:
-        store_idempotent_order_result(db, user_id, idempotency_key, response.model_dump())
-    return response
-
-
-# ────────────── Cash-Out (Sell Position) ──────────────
+    except LiveTradingBlocked as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return ExecuteTradeResponse(
+        success=result["success"],
+        order_hash=result["order_hash"],
+        trade_id=result["trade_id"],
+        status=result["status"],
+        side=body.side,
+        size=body.size,
+        price=body.price,
+        error=result.get("error"),
+    )
 
 
 @router.post("/cash-out")

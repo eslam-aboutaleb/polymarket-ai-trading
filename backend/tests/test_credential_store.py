@@ -34,6 +34,16 @@ class CredentialStoreTests(unittest.TestCase):
         get_settings.cache_clear()
         get_fernet_keyring.cache_clear()
 
+    def test_execution_identity_is_encrypted_and_survives_reload(self):
+        funder = "0x" + "2" * 40
+        store_wallet_credentials("0xowner", "key", signature_type=1, funder=funder)
+        loaded = load_wallet_credentials("0xowner")
+        self.assertEqual(loaded["signature_type"], 1)
+        self.assertEqual(loaded["funder"], funder)
+        raw = self.cache.get("pk:0xowner")
+        self.assertNotIn(funder, str(raw))
+        self.assertIn("execution_identity_enc", raw)
+
     def test_store_and_load_roundtrip(self):
         wallet = "0xabc123"
         store_wallet_credentials(

@@ -113,36 +113,67 @@ class PaperExecutionEngine:
 
 
 class ClobExecutionEngine:
-    """Unimplemented CLOB adapter kept as an explicit extension point.
-
-    It deliberately fails closed. Returning fabricated order IDs, fills, or
-    cancellation results would make callers believe a live order was handled
-    when no exchange operation took place. Register a complete adapter with
-    ``execution_registry`` before enabling live execution.
-    """
+    """Real exchange execution through durable account authorization."""
 
     mode = ExecutionMode.LIVE
 
-    def __init__(self, clob_client: Any = None) -> None:
-        self.clob_client = clob_client
+    def __init__(self, db=None, user_id: int | None = None) -> None:
+        if db is None or user_id is None:
+            raise ExecutionEngineUnavailable("A database session and account owner are required")
+        self.db = db
+        self.user_id = user_id
 
-    async def place_order(
-        self,
-        request: OrderPlacementRequest,  # noqa: ARG002 - protocol signature
-    ) -> OrderPlacementResult:
-        raise ExecutionEngineUnavailable(
-            "Live CLOB order placement is not implemented; register a complete live adapter."
+    async def place_order(self, request: OrderPlacementRequest) -> OrderPlacementResult:
+        from app.services.trading.execution.async_io import run_blocking_execution
+        from app.services.trading.execution.live import place_live_order
+
+        if request.user_id != self.user_id:
+            raise ValueError("Execution engine owner mismatch")
+        result = await run_blocking_execution(
+            place_live_order,
+            self.db,
+            user_id=self.user_id,
+            token_id=request.token_id,
+            side=request.side,
+            price=request.price,
+            size=request.size,
+            strategy=request.strategy,
+            account_id=request.account_id,
+            order_type=request.order_type,
+            **request.metadata,
+        )
+        return OrderPlacementResult(
+            order_id=result.get("order_hash") or "",
+            status=result["status"],
+            executed_price=0,
+            executed_size=0,
+            is_simulated=False,
+            raw_response=result,
+            error_message=result.get("error"),
         )
 
     async def cancel_order(self, order_id: str, **kwargs: Any) -> bool:  # noqa: ARG002
-        raise ExecutionEngineUnavailable(
-            "Live CLOB cancellation is not implemented; register a complete live adapter."
-        )
+        from app.services.trading.execution.async_io import run_blocking_execution
+        from app.services.trading.execution.live import reconcile_order
 
-    async def get_midpoint(self, token_id: str) -> float | None:  # noqa: ARG002
-        raise ExecutionEngineUnavailable(
-            "Live CLOB midpoint lookup is not implemented; register a complete live adapter."
+        result = await run_blocking_execution(
+            reconcile_order, self.db, user_id=self.user_id, order_hash=order_id, cancel=True
         )
+        return result["status"] == "cancelled"
+
+    async def get_midpoint(self, token_id: str) -> float | None:
+        import asyncio
+
+        from py_clob_client_v2 import ClobClient
+
+        from app.services.market_data.polymarket_service import POLYMARKET_CLOB_API
+
+        client = ClobClient(host=POLYMARKET_CLOB_API, chain_id=137)
+        response = await asyncio.to_thread(client.get_midpoint, token_id)
+        value = float(response["mid"])
+        if not 0 < value < 1:
+            raise ValueError("Invalid exchange midpoint")
+        return value
 
 
 class ExecutionEngineRegistry:
@@ -160,9 +191,12 @@ class ExecutionEngineRegistry:
     def get(self, mode: str | ExecutionMode, **kwargs: Any) -> ExecutionEngine:
         key = str(mode).lower()
         if key == ExecutionMode.LIVE:
-            from app.services.trading.live_trading_policy import block_legacy_live_execution
+            from app.services.trading.execution.live import require_enabled
+            from app.services.trading.live_trading_policy import LiveTradingBlocked
 
-            block_legacy_live_execution("manual")
+            require_enabled("manual")
+            if kwargs.get("db") is None or kwargs.get("user_id") is None:
+                raise LiveTradingBlocked("DURABLE_EXECUTION_CONTEXT_REQUIRED")
         with self._lock:
             factory = self._factories.get(key)
         if factory is None:
@@ -176,6 +210,7 @@ class ExecutionEngineRegistry:
 
 execution_registry = ExecutionEngineRegistry()
 execution_registry.register(ExecutionMode.PAPER, lambda **kw: PaperExecutionEngine(**kw))
+execution_registry.register(ExecutionMode.LIVE, lambda **kw: ClobExecutionEngine(**kw))
 
 
 def get_execution_engine(mode: str | ExecutionMode, **kwargs: Any) -> ExecutionEngine:
