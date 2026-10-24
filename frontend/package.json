@@ -20,7 +20,7 @@
   "dependencies": {
     "@walletconnect/ethereum-provider": "^2.23.7",
     "axios": "^1.20.0",
-    "ethers": "^6.9.0",
+    "ethers": "^6.17.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-hook-form": "^7.48.0",
