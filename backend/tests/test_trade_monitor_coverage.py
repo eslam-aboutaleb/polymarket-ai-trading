@@ -420,6 +420,44 @@ class PollTraderTradesTests(_MonitorTestCase):
 
 
 class SeedWalletCursorTests(_MonitorTestCase):
+    async def test_seed_logs_escape_wallet_and_upstream_error_line_breaks(self):
+        wallet = "0x\r\nFORGED"
+        cases = (([{"id": "t9"}], None), (None, RuntimeError("remote\r\nFORGED error")))
+        for trades, error in cases:
+            with self.subTest(error=error):
+                trade_monitor._last_seen_trades.clear()
+                with (
+                    patch.object(
+                        trade_monitor,
+                        "_fetch_public_trades",
+                        new=AsyncMock(return_value=trades, side_effect=error),
+                    ),
+                    self.assertLogs(trade_monitor.logger, level="INFO") as captured,
+                ):
+                    await trade_monitor.seed_wallet_cursor(wallet)
+                self.assertEqual(len(captured.output), 1)
+                message = captured.records[0].getMessage()
+                self.assertNotIn("\r", message)
+                self.assertNotIn("\n", message)
+                self.assertIn("0x\\r\\nforged", message)
+                if error:
+                    self.assertIn("remote\\r\\nFORGED error", message)
+
+    async def test_poll_failure_logs_escape_wallet_and_upstream_error_line_breaks(self):
+        with (
+            patch.object(
+                trade_monitor,
+                "_fetch_public_trades",
+                new=AsyncMock(side_effect=RuntimeError("remote\r\nFORGED error")),
+            ),
+            self.assertLogs(trade_monitor.logger, level="DEBUG") as captured,
+        ):
+            self.assertEqual(await trade_monitor._poll_trader_trades("0x\r\nFORGED"), [])
+        message = captured.records[0].getMessage()
+        self.assertNotIn("\r", message)
+        self.assertNotIn("\n", message)
+        self.assertIn("remote\\r\\nFORGED error", message)
+
     async def test_seed_skips_when_already_seeded(self):
         trade_monitor._last_seen_trades[WALLET] = "t9"
         client = MagicMock()

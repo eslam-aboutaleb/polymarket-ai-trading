@@ -210,22 +210,31 @@ async def _poll_trader_trades(wallet: str) -> list[dict]:
     try:
         return await _fetch_public_trades(wallet, 20)
     except Exception as exc:
-        logger.debug("Poll trades for %s failed: %s", wallet[:10], exc)
+        logger.debug(
+            "Poll trades for %s failed: %s",
+            wallet[:10].replace("\r", "\\r").replace("\n", "\\n"),
+            str(exc).replace("\r", "\\r").replace("\n", "\\n"),
+        )
         return []
 
 
 async def seed_wallet_cursor(wallet: str) -> None:
     """Seed the newest source identity so historical trades are never copied."""
     normalized = wallet.lower()
+    wallet_hint = normalized[:10].replace("\r", "\\r").replace("\n", "\\n")
     if normalized in _last_seen_trades:
         return
     try:
         trades = await _fetch_public_trades(normalized, 1)
         if trades:
             _last_seen_trades[normalized] = trades[0]["id"]
-            logger.info("Seeded trade cursor for %s", normalized[:10])
+            logger.info("Seeded trade cursor for %s", wallet_hint)
     except Exception as exc:
-        logger.warning("Could not seed trade cursor for %s: %s", normalized[:10], exc)
+        logger.warning(
+            "Could not seed trade cursor for %s: %s",
+            wallet_hint,
+            str(exc).replace("\r", "\\r").replace("\n", "\\n"),
+        )
 
 
 async def _detect_new_trades(wallet: str, trades: list[dict]) -> list[dict]:
