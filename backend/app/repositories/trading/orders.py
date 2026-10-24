@@ -5,13 +5,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import case, func
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.analytics.assessment import Assessment
 from app.models.market_data.market import Market
 from app.models.market_data.winner import Winner
 from app.models.trading.followed_trader import FollowedTrader
+from app.models.trading.live_order import LiveOrder
 from app.models.trading.stop_loss import StopLossOrder
 from app.models.trading.take_profit import TakeProfitOrder
 from app.models.trading.trade_history import TradeHistory
@@ -258,7 +259,11 @@ class TradingOrderRepository(SQLAlchemyRepository[object]):
     def list_pending_order_hash(self, order_hash: str) -> list[UserTrade]:
         return (
             self.db.query(UserTrade)
-            .filter(UserTrade.order_hash == order_hash, UserTrade.status == "pending")
+            .filter(
+                UserTrade.order_hash == order_hash,
+                UserTrade.status == "pending",
+                ~UserTrade.id.in_(select(LiveOrder.trade_id)),
+            )
             .all()
         )
 
@@ -269,6 +274,7 @@ class TradingOrderRepository(SQLAlchemyRepository[object]):
                 UserTrade.status == "pending",
                 UserTrade.created_at < cutoff,
                 UserTrade.order_hash.isnot(None),
+                ~UserTrade.id.in_(select(LiveOrder.trade_id)),
             )
             .all()
         )

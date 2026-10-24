@@ -33,12 +33,11 @@ from app.services.market_data.polymarket_service import (
     get_polymarket_service,
 )
 from app.services.trading import kelly_service
+from app.services.trading.execution.async_io import run_blocking_execution
 from app.services.trading.pre_trade_gate import (
     _to_float,
     apply_global_safety_caps,
-    get_idempotent_order_result,
     order_landed_on_clob,
-    store_idempotent_order_result,
 )
 from app.utils.database import SessionLocal
 from app.utils.time import utc_now
@@ -1017,13 +1016,33 @@ async def execute_copy_trade(
     if not user_settings or not user_settings.copy_trading_enabled:
         return {"executed": False, "reason": "Copy-trading disabled"}
 
+    # Required approval must be explicit even for direct service callers.
+    if user_settings.require_ai_approval and (
+        not assessment
+        or str(assessment.get("recommendation", "")).lower()
+        not in {
+            "buy",
+            "strong_buy",
+            "sell",
+            "strong_sell",
+            "copy",
+            "approve",
+            "reduce_size",
+            "avoid",
+            "skip",
+        }
+    ):
+        return {"executed": False, "status": "rejected", "reason": "AI approval required"}
+
     # 2 – Load user + credentials (also needed for balance-aware sizing)
 
     user = bot_repository.get_user(user_id)
     if not user:
         return {"executed": False, "reason": "User not found"}
     try:
-        stored = load_wallet_credentials(user.wallet_address)
+        stored = (
+            None if user_settings.simulation_mode else load_wallet_credentials(user.wallet_address)
+        )
     except CredentialStoreError as exc:
         return {"executed": False, "reason": f"Credential store unavailable: {exc}"}
     pk = stored["private_key"] if stored else None
@@ -1177,8 +1196,6 @@ async def execute_copy_trade(
             plan=plan,
             reason=None,
         )
-        # Update streak counters (simulate success)
-        _update_streak(user_settings, won=True)
         db.commit()
         return {
             "executed": True,
@@ -1189,70 +1206,44 @@ async def execute_copy_trade(
             "status": "simulated",
         }
 
-    # 7 – Place order (idempotent: a replayed key returns the
-    # stored result so the same source trade can never place
-    # a second order, even across restarts or Redis loss).
+    # Real copy trading uses the durable gateway, never the frozen legacy signer.
+    from decimal import ROUND_DOWN, Decimal
+
+    from app.services.trading.execution.live import place_live_order
+    from app.services.trading.live_trading_policy import LiveTradingBlocked
+
     idem_key = idempotency_key or (
         f"copy-trade:{trade_history_id}" if trade_history_id is not None else None
     )
-    if idem_key:
-        prior = get_idempotent_order_result(db, user_id, idem_key)
-        if prior is not None:
-            logger.info(
-                "Replaying idempotent copy-trade result for user %d key %s",
-                user_id,
-                str(idem_key)[:32],
-            )
-            return prior
-
-    result = _place_order_on_polymarket(
-        private_key=pk,
-        clob_creds=creds,
-        token_id=token_id,
-        side=side,
-        price=price,
-        size=trade_size,
+    if not idem_key:
+        return {"executed": False, "status": "rejected", "reason": "Source trade identity required"}
+    if not 0 < price < 1:
+        return {"executed": False, "status": "rejected", "reason": "Invalid source price"}
+    shares = (Decimal(str(trade_size)) / Decimal(str(price))).quantize(
+        Decimal("0.01"),
+        rounding=ROUND_DOWN,
     )
-
-    # 8 – Record trade and update streak.  A successfully
-    # submitted order is pending until a fill is observed
-    # (trade_monitor WS events or the fill reconciliation
-    # job); executed_at is set only on an observed fill.
-    status = "pending" if result["success"] else "failed"
-    user_trade = _record_copy_trade_attempt(
-        db=db,
-        user_id=user_id,
-        market_id=market_id,
-        side=side,
-        trade_size=trade_size,
-        price=price,
-        status=status,
-        trader_wallet=trader_wallet,
-        order_hash=result.get("order_hash"),
-        trade_history_id=trade_history_id,
-        token_id=token_id,
-        plan=plan,
-        reason=result.get("error"),
-    )
-
-    # Update consecutive win/loss streak
-    if result["success"]:
-        _update_streak(user_settings, won=True)
-    else:
-        _update_streak(user_settings, won=False)
-    db.commit()
-
-    response = {
-        "executed": result["success"],
-        "trade_id": user_trade.id,
-        "order_hash": result.get("order_hash"),
-        "trade_size": trade_size,
-        "status": status,
-        "error": result.get("error"),
-    }
-    if idem_key:
-        store_idempotent_order_result(db, user_id, idem_key, response)
-    return response
+    try:
+        result = await run_blocking_execution(
+            place_live_order,
+            db,
+            user_id=user_id,
+            token_id=token_id,
+            side=side.upper(),
+            price=price,
+            size=float(shares),
+            idempotency_key=idem_key,
+            strategy="copy",
+            market_id=market_id,
+            copied_from_wallet=trader_wallet.lower(),
+            source_trade_history_id=trade_history_id,
+            ai_approved=bool(assessment),
+            order_type="FOK" if side.upper() == "SELL" else "GTC",
+        )
+    except (LiveTradingBlocked, ValueError) as exc:
+        return {"executed": False, "status": "rejected", "reason": str(exc)}
+    # Submission and simulation are not realized wins. Streaks belong to P&L reconciliation.
+    return {**result, "executed": result["success"]}
 
 
 def _coerce_probability(value: Any) -> float | None:

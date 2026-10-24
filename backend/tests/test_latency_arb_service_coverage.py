@@ -805,242 +805,39 @@ class ExecutePaperTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ExecuteLiveTests(unittest.IsolatedAsyncioTestCase):
-    async def test_live_rejected_without_pre_trade_gate(self):
-        db = _session()
-        with (
-            patch.object(latency_arb_service, "_PRE_TRADE_GATE_AVAILABLE", False),
-            patch.object(latency_arb_service, "build_clob_client", None),
-        ):
-            result = await _execute_live(
-                db,
-                _user(),
-                _user_settings(simulation_mode=False),
-                _opportunity(),
-                "token-1",
-                0.5,
-                50.0,
-                100.0,
-            )
-        self.assertEqual(result["status"], "rejected")
-        self.assertEqual(result["reason"], "pre-trade gate unavailable")
-
-    async def test_live_rejected_on_credential_store_error(self):
-        from app.security.credential_store import CredentialStoreError
-
-        db = _session()
+    async def test_live_delegates_fok_and_stable_identity_to_gateway(self):
+        response = {"success": True, "status": "submitted", "trade_id": 7}
         with patch(
-            "app.security.credential_store.load_wallet_credentials",
-            side_effect=CredentialStoreError("vault locked"),
-        ):
+            "app.services.trading.execution.live.place_live_order", return_value=response
+        ) as gateway:
             result = await _execute_live(
-                db,
-                _user(),
-                _user_settings(simulation_mode=False),
-                _opportunity(),
-                "token-1",
-                0.5,
-                50.0,
-                100.0,
+                _session(), _user(), _user_settings(), _opportunity(), "token-1", 0.5, 50, 100
             )
-        self.assertEqual(result["status"], "rejected")
-        self.assertIn("credential store unavailable", result["reason"])
-        self.assertIn("vault locked", result["reason"])
+        self.assertEqual(result["trade_id"], 7)
+        self.assertEqual(gateway.call_args.kwargs["size"], 100.0)
+        self.assertEqual(gateway.call_args.kwargs["order_type"], "FOK")
+        self.assertTrue(gateway.call_args.kwargs["idempotency_key"].startswith("latency:"))
 
-    async def test_live_rejected_without_stored_credentials(self):
-        db = _session()
+    async def test_live_preserves_unknown_exchange_outcome(self):
+        response = {"success": False, "status": "unknown", "order_hash": "ambiguous"}
+        with patch("app.services.trading.execution.live.place_live_order", return_value=response):
+            result = await _execute_live(
+                _session(), _user(), _user_settings(), _opportunity(), "token-1", 0.5, 50, 100
+            )
+        self.assertEqual(result["status"], "unknown")
+        self.assertEqual(result["order_hash"], "ambiguous")
+
+    async def test_live_fails_closed_on_durable_risk_rejection(self):
+        from app.services.trading.live_trading_policy import LiveTradingBlocked
+
         with patch(
-            "app.security.credential_store.load_wallet_credentials",
-            return_value=None,
+            "app.services.trading.execution.live.place_live_order",
+            side_effect=LiveTradingBlocked("LIVE_DAILY_BUDGET_EXCEEDED"),
         ):
             result = await _execute_live(
-                db,
-                _user(),
-                _user_settings(simulation_mode=False),
-                _opportunity(),
-                "token-1",
-                0.5,
-                50.0,
-                100.0,
+                _session(), _user(), _user_settings(), _opportunity(), "token-1", 0.5, 50, 100
             )
-        self.assertEqual(result["status"], "rejected")
-        self.assertEqual(result["reason"], "no stored wallet credentials")
-
-    async def test_live_resolves_proxy_address(self):
-        db = _session()
-        place = AsyncMock(return_value={"success": True, "orderID": "0xabc"})
-        signer_cls = MagicMock(name="Signer")
-        signer_cls.return_value.address.return_value = "0xeoa"
-        with (
-            patch(
-                "app.security.credential_store.load_wallet_credentials",
-                return_value={"private_key": "0x" + "11" * 32, "clob_creds": None},
-            ),
-            patch.object(
-                latency_arb_service,
-                "_get_poly_proxy_wallet_address",
-                return_value="0xproxy",
-            ),
-            patch("py_clob_client.signer.Signer", signer_cls),
-            patch.object(latency_arb_service, "_place_fok_order", place),
-        ):
-            result = await _execute_live(
-                db,
-                _user(),
-                _user_settings(simulation_mode=False),
-                _opportunity(),
-                "token-1",
-                0.5,
-                50.0,
-                100.0,
-            )
-        self.assertEqual(result["status"], "submitted")
-        self.assertEqual(result["order_hash"], "0xabc")
-        place.assert_awaited_once()
-        # (private_key, clob_creds, proxy_address, token_id, price, size)
-        self.assertEqual(place.await_args.args[2], "0xproxy")
-        signer_cls.assert_called_once_with("0x" + "11" * 32, 137)
-
-    async def test_live_skips_proxy_when_unavailable(self):
-        db = _session()
-        place = AsyncMock(return_value={"success": True, "orderID": "0xabc"})
-        with (
-            patch(
-                "app.security.credential_store.load_wallet_credentials",
-                return_value={"private_key": "0x" + "11" * 32, "clob_creds": None},
-            ),
-            patch.object(latency_arb_service, "_get_poly_proxy_wallet_address", None),
-            patch.object(latency_arb_service, "_place_fok_order", place),
-        ):
-            result = await _execute_live(
-                db,
-                _user(),
-                _user_settings(simulation_mode=False),
-                _opportunity(),
-                "token-1",
-                0.5,
-                50.0,
-                100.0,
-            )
-        self.assertEqual(result["status"], "submitted")
-        self.assertEqual(place.await_args.args[2], None)
-
-    async def test_live_fok_failure(self):
-        db = _session()
-        place = AsyncMock(side_effect=RuntimeError("order failed"))
-        with (
-            patch(
-                "app.security.credential_store.load_wallet_credentials",
-                return_value={"private_key": "0x" + "11" * 32, "clob_creds": None},
-            ),
-            patch.object(latency_arb_service, "_get_poly_proxy_wallet_address", None),
-            patch.object(latency_arb_service, "_place_fok_order", place),
-            self.assertLogs(latency_arb_service.logger, level="WARNING"),
-        ):
-            result = await _execute_live(
-                db,
-                _user(),
-                _user_settings(simulation_mode=False),
-                _opportunity(),
-                "token-1",
-                0.5,
-                50.0,
-                100.0,
-            )
-        self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["reason"], "order failed")
-        db.add.assert_not_called()
-
-    async def test_live_exchange_rejection_with_error_msg(self):
-        db = _session()
-        place = AsyncMock(return_value={"success": False, "errorMsg": "rejected by exchange"})
-        with (
-            patch(
-                "app.security.credential_store.load_wallet_credentials",
-                return_value={"private_key": "0x" + "11" * 32, "clob_creds": None},
-            ),
-            patch.object(latency_arb_service, "_get_poly_proxy_wallet_address", None),
-            patch.object(latency_arb_service, "_place_fok_order", place),
-        ):
-            result = await _execute_live(
-                db,
-                _user(),
-                _user_settings(simulation_mode=False),
-                _opportunity(),
-                "token-1",
-                0.5,
-                50.0,
-                100.0,
-            )
-        self.assertEqual(result["status"], "rejected")
-        self.assertEqual(result["reason"], "rejected by exchange")
-        db.add.assert_not_called()
-
-    async def test_live_error_field_only_records_pending_trade(self):
-        # An ``error`` field without ``success: false`` or
-        # ``errorMsg`` does not trigger the rejection branch;
-        # the order is recorded pending with an empty hash.
-        db = _session()
-        place = AsyncMock(return_value={"error": "some error"})
-        with (
-            patch(
-                "app.security.credential_store.load_wallet_credentials",
-                return_value={"private_key": "0x" + "11" * 32, "clob_creds": None},
-            ),
-            patch.object(latency_arb_service, "_get_poly_proxy_wallet_address", None),
-            patch.object(latency_arb_service, "_place_fok_order", place),
-        ):
-            result = await _execute_live(
-                db,
-                _user(),
-                _user_settings(simulation_mode=False),
-                _opportunity(),
-                "token-1",
-                0.5,
-                50.0,
-                100.0,
-            )
-        self.assertEqual(result["status"], "submitted")
-        self.assertEqual(result["order_hash"], "")
-        trade = db.add.call_args.args[0]
-        self.assertEqual(trade.status, "pending")
-        self.assertEqual(trade.order_hash, "")
-
-    async def test_live_records_pending_trade(self):
-        db = _session()
-        place = AsyncMock(return_value={"success": True, "order_id": "0xdef"})
-        with (
-            patch(
-                "app.security.credential_store.load_wallet_credentials",
-                return_value={"private_key": "0x" + "11" * 32, "clob_creds": None},
-            ),
-            patch.object(latency_arb_service, "_get_poly_proxy_wallet_address", None),
-            patch.object(latency_arb_service, "_place_fok_order", place),
-        ):
-            result = await _execute_live(
-                db,
-                _user(),
-                _user_settings(simulation_mode=False),
-                _opportunity(),
-                "token-1",
-                0.5,
-                50.0,
-                100.0,
-            )
-        self.assertEqual(result["status"], "submitted")
-        self.assertEqual(result["order_hash"], "0xdef")  # order_id fallback
-        trade = db.add.call_args.args[0]
-        self.assertEqual(trade.status, "pending")
-        self.assertEqual(trade.order_hash, "0xdef")
-        self.assertEqual(trade.price, 0.5)
-        self.assertEqual(trade.amount, 50.0)
-        self.assertEqual(trade.expected_price, 0.5)
-        self.assertEqual(trade.expected_size, 50.0)
-        self.assertIsNone(trade.executed_at)
-        self.assertEqual(trade.strategy_source, "latency_arb")
-        db.commit.assert_called_once()
-
-
-# ── Opportunity execution gates ───────────────────────────
+        self.assertEqual(result, {"status": "rejected", "reason": "LIVE_DAILY_BUDGET_EXCEEDED"})
 
 
 class ExecuteOpportunityTests(unittest.IsolatedAsyncioTestCase):

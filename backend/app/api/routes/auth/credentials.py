@@ -9,6 +9,7 @@ store a key for another wallet.
 
 import logging
 import re
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
@@ -31,6 +32,8 @@ class TradingKeyRequest(BaseModel):
     """Store a trading private key for the session user's own wallet."""
 
     private_key: str = Field(min_length=1, description="Wallet private key")
+    signature_type: Literal[0, 1, 2, 3] | None = None
+    funder: str | None = Field(default=None, pattern=r"^0x[0-9a-fA-F]{40}$")
     clob_credentials: dict[str, str] | None = Field(
         None,
         description="Optional CLOB API credentials (api_key/api_secret/api_passphrase)",
@@ -70,11 +73,19 @@ def store_trading_key(
     wallet_address = current_user["wallet_address"]
     # Reject a malformed key before it is encrypted and persisted.
     _validate_private_key_format(request.private_key)
+    if request.signature_type not in (None, 0) and not request.funder:
+        raise HTTPException(422, "Funding wallet is required for this wallet type")
+    if request.funder and request.signature_type is None:
+        raise HTTPException(422, "Select a signature type for the funding wallet")
+    identity = {}
+    if request.signature_type is not None:
+        identity = {"signature_type": request.signature_type, "funder": request.funder}
     try:
         store_wallet_credentials(
             wallet_address=wallet_address,
             private_key=request.private_key,
             clob_creds=request.clob_credentials,
+            **identity,
         )
     except CredentialStoreError as e:
         logger.error(

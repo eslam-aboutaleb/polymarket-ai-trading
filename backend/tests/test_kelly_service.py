@@ -416,6 +416,7 @@ class KellyCopyTradeIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 user_id=USER_ID,
                 copy_trading_enabled=True,
                 simulation_mode=True,
+                require_ai_approval=False,
                 max_position_size=100.0,
                 daily_loss_limit=500.0,
                 kelly_fraction=0.25,

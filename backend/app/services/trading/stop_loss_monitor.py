@@ -27,8 +27,8 @@ from app.security.credential_store import CredentialStoreError, load_wallet_cred
 from app.services.market_data.polymarket_service import POLYMARKET_CLOB_API, get_polymarket_service
 from app.services.trading.copy_trade_service import (
     _get_poly_proxy_wallet_address,
-    _place_order_on_polymarket,
 )
+from app.services.trading.execution.async_io import run_blocking_execution
 from app.services.trading.trade_recorder import record_user_trade
 from app.services.users.price_alert_service import (
     STOP_LOSS_EVENT,
@@ -494,8 +494,8 @@ async def _fetch_public_prices(token_ids: list[str]) -> dict[str, float]:
 async def _execute_stop_loss(
     db: Session,
     order: StopLossOrder,
-    private_key: str,
-    clob_creds: dict | None,
+    private_key: str,  # noqa: ARG001 - gateway resolves credentials
+    clob_creds: dict | None,  # noqa: ARG001 - gateway resolves credentials
     live_price: float,
     simulation_mode: bool = False,
 ):
@@ -509,14 +509,23 @@ async def _execute_stop_loss(
         return
 
     try:
-        result = await asyncio.to_thread(
-            _place_order_on_polymarket,
-            private_key=private_key,
-            clob_creds=clob_creds,
+        from decimal import ROUND_DOWN, Decimal
+
+        from app.services.trading.execution.live import place_live_order
+
+        shares = Decimal(str(order.size)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        result = await run_blocking_execution(
+            place_live_order,
+            db,
+            user_id=order.user_id,
             token_id=order.token_id,
+            market_id=order.market_id,
             side="SELL",
-            price=live_price,
-            size=order.size,
+            price=max(0.0001, live_price * 0.95),
+            size=float(shares),
+            strategy="stop_loss",
+            idempotency_key=f"stop_loss:{order.id}:{order.created_at.isoformat()}",
+            order_type="FOK",
         )
 
         now = datetime.now(UTC)
@@ -524,7 +533,7 @@ async def _execute_stop_loss(
         if submitted:
             order.status = "triggered"
             order.order_hash = result.get("order_hash")
-            order.executed_price = live_price
+            order.executed_price = None  # Submission is not an observed fill.
             order.triggered_at = now
             logger.info("Stop-loss executed: order=%d hash=%s", order.id, order.order_hash)
         else:
@@ -540,20 +549,6 @@ async def _execute_stop_loss(
         # P&L — and therefore every loss limit derived from it — stayed
         # at zero. A submitted order is ``pending`` until the trade
         # monitor observes the fill.
-        record_user_trade(
-            db,
-            user_id=order.user_id,
-            market_id=order.market_id,
-            token_id=order.token_id,
-            action="sell",
-            amount=order.size,
-            price=live_price,
-            status="pending" if submitted else "failed",
-            strategy_source="stop_loss",
-            order_hash=result.get("order_hash"),
-            expected_price=live_price,
-            expected_size=order.size,
-        )
 
         order.updated_at = now
         db.commit()
@@ -583,7 +578,6 @@ async def _execute_stop_loss_simulated(
     equity. No sell is submitted.
     """
     from app.services.analytics.simulation import average_entry_price, simulate_fill
-    from app.services.trading.trade_recorder import record_user_trade
 
     market = {"best_bid": live_price, "best_ask": live_price}
     fill = simulate_fill(market, "SELL", order.size)
@@ -627,8 +621,8 @@ async def _execute_stop_loss_simulated(
 async def _execute_take_profit(
     db: Session,
     order: TakeProfitOrder,
-    private_key: str,
-    clob_creds: dict | None,
+    private_key: str,  # noqa: ARG001 - gateway resolves credentials
+    clob_creds: dict | None,  # noqa: ARG001 - gateway resolves credentials
     live_price: float,
     simulation_mode: bool = False,
 ):
@@ -642,14 +636,23 @@ async def _execute_take_profit(
         return
 
     try:
-        result = await asyncio.to_thread(
-            _place_order_on_polymarket,
-            private_key=private_key,
-            clob_creds=clob_creds,
+        from decimal import ROUND_DOWN, Decimal
+
+        from app.services.trading.execution.live import place_live_order
+
+        shares = Decimal(str(order.size)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        result = await run_blocking_execution(
+            place_live_order,
+            db,
+            user_id=order.user_id,
             token_id=order.token_id,
+            market_id=order.market_id,
             side="SELL",
-            price=live_price,
-            size=order.size,
+            price=max(0.0001, live_price * 0.95),
+            size=float(shares),
+            strategy="take_profit",
+            idempotency_key=f"take_profit:{order.id}:{order.created_at.isoformat()}",
+            order_type="FOK",
         )
 
         now = datetime.now(UTC)
@@ -657,7 +660,7 @@ async def _execute_take_profit(
         if submitted:
             order.status = "triggered"
             order.order_hash = result.get("order_hash")
-            order.executed_price = live_price
+            order.executed_price = None  # Submission is not an observed fill.
             order.triggered_at = now
             logger.info("Take-profit executed: order=%d hash=%s", order.id, order.order_hash)
         else:
@@ -669,20 +672,6 @@ async def _execute_take_profit(
 
         # Attributable trade row (plan 03 Phase A) — see the stop-loss
         # note: without it the close never reached the FIFO matcher.
-        record_user_trade(
-            db,
-            user_id=order.user_id,
-            market_id=order.market_id,
-            token_id=order.token_id,
-            action="sell",
-            amount=order.size,
-            price=live_price,
-            status="pending" if submitted else "failed",
-            strategy_source="take_profit",
-            order_hash=result.get("order_hash"),
-            expected_price=live_price,
-            expected_size=order.size,
-        )
 
         order.updated_at = now
         db.commit()
@@ -705,7 +694,6 @@ async def _execute_take_profit_simulated(
 ):
     """Paper mode: record a simulated take-profit close (no sell submitted)."""
     from app.services.analytics.simulation import average_entry_price, simulate_fill
-    from app.services.trading.trade_recorder import record_user_trade
 
     market = {"best_bid": live_price, "best_ask": live_price}
     fill = simulate_fill(market, "SELL", order.size)

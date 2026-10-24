@@ -20,11 +20,11 @@ Displayed balances, prices and example results are illustrations, not live accou
 statements or demonstrated returns. Empty charts show where a fresh workspace has
 no observations; they are not populated with invented trading history.
 
-The current application explicitly disables live orders and automated position
-exits pending safety verification. Trading screens and strategy controls are
-shown so you can understand their configuration; a sign-in, stored key or paper
-mode badge does not remove those server restrictions. Research and simulation
-results do not approve an order. Legacy paper/backtest metrics remain unverified.
+Live orders are available through the opt-in durable execution gateway. They require
+server strategy switches, global administrator activation, wallet activation and
+risk budgets. Simulation and replay never grant live authority. Legacy direct
+signers remain blocked. See the [live execution setup](#live-execution-setup)
+for the supported paths and remaining limits.
 
 | Goal | Start here | Access or prerequisite |
 | --- | --- | --- |
@@ -830,3 +830,53 @@ inputs and results are frozen in the existing account archive. The simulator now
 reports `follower-replay-v2`; older saved results are retained unchanged. This
 slice does not add historical venue datasets, automatic settlement, trader-skill
 scoring, continuous collection, or legacy paper-runner/NAV migration.
+
+
+### Live execution setup
+
+Real CLOB v2 execution is available for manual orders/cash-out, copy trading,
+market making, latency arbitrage, inverse reversals and conditional exits.
+Simulation and historical replay remain separate and cannot authorize live orders.
+
+1. Install the locked backend dependencies with `uv sync --frozen`, then run
+   `uv run --frozen alembic upgrade head` from `backend/`.
+2. Configure the trading key in Settings. Choose the actual EOA, Polymarket proxy,
+   Safe or deposit wallet type; contract wallets require the funding address.
+3. Set risk budgets and initial capital. Enable `LIVE_TRADING_ENABLED` and the
+   required strategy flags in the deployment environment; all default to false.
+   Both Compose web and worker services receive these flags.
+4. An administrator activates global execution with `POST /api/v1/risk/activate`
+   and `{"scope":"global"}`. Each wallet owner then activates their own account.
+   The Copy Trading panel exposes activation, initial capital, simulation/stop
+   controls and owned live-order checks/cancellation. Following wallets and
+   configuring sizing remain explicit steps.
+
+Manual/external order requests require a stable `Idempotency-Key`. BUY API sizes
+are collateral notional; SELL API sizes are shares. The internal gateway always
+uses shares. Orders and principal reservations commit before submission; an
+unknown acknowledgement retains its reservation and never automatically retries.
+Authenticated confirmation and settlement evidence own execution prices and
+quantities. A missing order never proves cancellation.
+Recovery rotates failed observations behind unattempted orders. Exchange calls
+run outside the event loop, and cancellation waits for session ownership to return.
+Followed-wallet polling uses the public Data API with stable source identities;
+an optional WebSocket timeout does not stop subsequent polling.
+
+Purchase principal is conservatively charged against shared wallet budgets and
+any selected sub-account budget. Only exchange-confirmed cancellation releases
+unfilled reservations; simulated or unverified profits never replenish budgets.
+These controls are spending limits, not a verified NAV/margin ledger. Historical
+live exposure outside the new ledger blocks new purchases until migrated.
+Inventory-backed exits remain available after activation. Inverse reversals pause
+when either leg's settlement is uncertain, and maker shutdown verifies only the
+orders owned by that configuration.
+
+Emergency halt persists before cancellation and includes durable unknown orders
+even when the open-order snapshot is empty. It does not claim positions closed
+or implement automatic liquidation. Independent analysis still has no general
+raw-analysis history store. Other venues remain research/data adapters.
+
+Verification used a disposable PostgreSQL instance and mocked remote exchange I/O;
+no funded orders were submitted. The full backend suite, PostgreSQL concurrency
+checks, browser safety flows, frontend build and migration upgrade/downgrade
+checks passed. Existing repository-wide frontend lint findings remain unchanged.

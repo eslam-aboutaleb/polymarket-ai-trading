@@ -145,4 +145,7 @@ def test_submission_inventory_cannot_grow_without_security_review():
         "services/trading/copy_trade_service.py",
         "services/trading/market_maker_service.py",
         "services/trading/latency_arb_service.py",
+        # New path has durable reservation/identity and rejection/restart tests
+        # in test_live_gateway.py; legacy submission methods remain frozen.
+        "services/trading/execution/clob_transport.py",
     }, "A live submission path changed; review its release barrier and add bypass tests"

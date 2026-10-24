@@ -30,6 +30,7 @@ from app.models.trading.followed_trader import FollowedTrader
 from app.models.trading.inverse_bot_action import InverseBotAction
 from app.models.trading.inverse_bot_position import InverseBotPosition
 from app.models.trading.latency_arb_config import LatencyArbConfig
+from app.models.trading.live_order import LiveOrder
 from app.models.trading.market_maker_config import MarketMakerConfig
 from app.models.trading.paper_maker_intent import PaperMakerIntent
 from app.models.trading.redemption_attempt import RedemptionAttempt
@@ -48,6 +49,7 @@ from app.models.users.user_settings import UserSettings
 
 __all__ = [
     "Base",
+    "LiveOrder",
     "MarketObservation",
     "ReplayCapture",
     "TradingControlState",

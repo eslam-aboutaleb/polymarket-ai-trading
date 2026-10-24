@@ -1347,7 +1347,7 @@ class GetTradeHistoryTests(_PolymarketServiceTestCase):
         self.service._get_clob_client = MagicMock(side_effect=RuntimeError("auth failed"))
         self._patch_http(
             {
-                f"{POLYMARKET_CLOB_API}/data/trades": _FakeResponse(
+                f"{POLYMARKET_DATA_API}/trades": _FakeResponse(
                     200,
                     [
                         {
@@ -1372,8 +1372,8 @@ class GetTradeHistoryTests(_PolymarketServiceTestCase):
     async def test_first_endpoint_empty_falls_through_to_second(self):
         self._patch_http(
             {
-                f"{POLYMARKET_CLOB_API}/data/trades": _FakeResponse(200, []),
-                f"{POLYMARKET_CLOB_API}/data/activity": _FakeResponse(
+                f"{POLYMARKET_DATA_API}/trades": _FakeResponse(200, []),
+                f"{POLYMARKET_DATA_API}/activity": _FakeResponse(
                     200,
                     [
                         {
@@ -1406,8 +1406,8 @@ class GetTradeHistoryTests(_PolymarketServiceTestCase):
     async def test_first_endpoint_non_200_uses_second(self):
         self._patch_http(
             {
-                f"{POLYMARKET_CLOB_API}/data/trades": _FakeResponse(500, None),
-                f"{POLYMARKET_CLOB_API}/data/activity": _FakeResponse(
+                f"{POLYMARKET_DATA_API}/trades": _FakeResponse(500, None),
+                f"{POLYMARKET_DATA_API}/activity": _FakeResponse(
                     200, [{"id": "a2", "size": "1", "price": "0.5"}]
                 ),
             }
@@ -1418,7 +1418,7 @@ class GetTradeHistoryTests(_PolymarketServiceTestCase):
     async def test_payload_dict_with_trades_key(self):
         self._patch_http(
             {
-                f"{POLYMARKET_CLOB_API}/data/trades": _FakeResponse(
+                f"{POLYMARKET_DATA_API}/trades": _FakeResponse(
                     200,
                     {"trades": [{"id": "d1", "size": "1", "price": "0.5"}]},
                 )
@@ -1430,7 +1430,7 @@ class GetTradeHistoryTests(_PolymarketServiceTestCase):
     async def test_payload_dict_with_data_key(self):
         self._patch_http(
             {
-                f"{POLYMARKET_CLOB_API}/data/trades": _FakeResponse(
+                f"{POLYMARKET_DATA_API}/trades": _FakeResponse(
                     200,
                     {"data": [{"id": "d2", "size": "1", "price": "0.5"}]},
                 )
@@ -1442,7 +1442,7 @@ class GetTradeHistoryTests(_PolymarketServiceTestCase):
     async def test_duplicate_ids_are_deduplicated(self):
         self._patch_http(
             {
-                f"{POLYMARKET_CLOB_API}/data/trades": _FakeResponse(
+                f"{POLYMARKET_DATA_API}/trades": _FakeResponse(
                     200,
                     [
                         {"id": "dup", "size": "1", "price": "0.5"},
@@ -1458,7 +1458,7 @@ class GetTradeHistoryTests(_PolymarketServiceTestCase):
     async def test_non_dict_items_are_skipped(self):
         self._patch_http(
             {
-                f"{POLYMARKET_CLOB_API}/data/trades": _FakeResponse(
+                f"{POLYMARKET_DATA_API}/trades": _FakeResponse(
                     200, ["junk", 42, {"id": "ok", "size": "1", "price": "0.5"}]
                 )
             }
@@ -1469,7 +1469,7 @@ class GetTradeHistoryTests(_PolymarketServiceTestCase):
     async def test_pnl_none_when_absent(self):
         self._patch_http(
             {
-                f"{POLYMARKET_CLOB_API}/data/trades": _FakeResponse(
+                f"{POLYMARKET_DATA_API}/trades": _FakeResponse(
                     200, [{"id": "p", "size": "1", "price": "0.5"}]
                 )
             }
@@ -1477,75 +1477,33 @@ class GetTradeHistoryTests(_PolymarketServiceTestCase):
         result = await self.service.get_trade_history(WALLET)
         self.assertIsNone(result[0]["pnl"])
 
-    async def test_all_endpoints_fail_derives_from_positions(self):
+    async def test_failed_trade_sources_never_invent_history_from_positions(self):
         self._patch_http(
             {
-                f"{POLYMARKET_CLOB_API}/data/trades": _FakeResponse(500, None),
-                f"{POLYMARKET_CLOB_API}/data/activity": _FakeResponse(500, None),
+                f"{POLYMARKET_DATA_API}/trades": _FakeResponse(500, None),
+                f"{POLYMARKET_DATA_API}/activity": _FakeResponse(500, None),
             }
         )
-        positions = [
-            {
-                "id": "p1",
-                "title": "T",
-                "market": "M",
-                "outcome": "Yes",
-                "size": "10",
-                "avgPrice": "0.5",
-                "pnl": "1.5",
-                "updatedAt": "2026-01-02",
-            }
-        ]
-        self.service.get_positions = AsyncMock(return_value=positions)
+        self.service.get_positions = AsyncMock(return_value=[{"id": "p1", "size": 10}])
+        self.assertEqual(await self.service.get_trade_history(WALLET), [])
+        self.service.get_positions.assert_not_awaited()
 
-        result = await self.service.get_trade_history(WALLET)
-
-        self.service.get_positions.assert_awaited_once_with(WALLET)
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["id"], "p1")
-        self.assertEqual(result[0]["market"], "T")
-        self.assertEqual(result[0]["side"], "BUY")
-        self.assertEqual(result[0]["size"], 10.0)
-        self.assertEqual(result[0]["price"], 0.5)
-        self.assertEqual(result[0]["type"], "POSITION")
-        self.assertEqual(result[0]["status"], "OPEN")
-        self.assertEqual(result[0]["timestamp"], "2026-01-02")
-        self.assertEqual(result[0]["fee"], 0.0)
-        self.assertEqual(result[0]["pnl"], 1.5)
-
-    async def test_positions_derived_trades_sorted_desc(self):
+    async def test_empty_trade_history_is_not_replaced_with_positions(self):
         self._patch_http(
             {
-                f"{POLYMARKET_CLOB_API}/data/trades": _FakeResponse(200, []),
-                f"{POLYMARKET_CLOB_API}/data/activity": _FakeResponse(200, []),
+                f"{POLYMARKET_DATA_API}/trades": _FakeResponse(200, []),
+                f"{POLYMARKET_DATA_API}/activity": _FakeResponse(200, []),
             }
         )
-        positions = [
-            {
-                "title": "Old",
-                "size": "1",
-                "avgPrice": "0.5",
-                "pnl": 0.0,
-                "createdAt": "2026-01-01",
-            },
-            {
-                "title": "New",
-                "size": "1",
-                "avgPrice": "0.5",
-                "pnl": 0.0,
-                "createdAt": "2026-01-03",
-            },
-        ]
-        self.service.get_positions = AsyncMock(return_value=positions)
-
-        result = await self.service.get_trade_history(WALLET)
-        self.assertEqual([t["market"] for t in result], ["New", "Old"])
+        self.service.get_positions = AsyncMock(return_value=[{"title": "Open", "size": 3}])
+        self.assertEqual(await self.service.get_trade_history(WALLET), [])
+        self.service.get_positions.assert_not_awaited()
 
     async def test_positions_failure_returns_empty(self):
         self._patch_http(
             {
-                f"{POLYMARKET_CLOB_API}/data/trades": _FakeResponse(200, []),
-                f"{POLYMARKET_CLOB_API}/data/activity": _FakeResponse(200, []),
+                f"{POLYMARKET_DATA_API}/trades": _FakeResponse(200, []),
+                f"{POLYMARKET_DATA_API}/activity": _FakeResponse(200, []),
             }
         )
         self.service.get_positions = AsyncMock(side_effect=RuntimeError("positions down"))
@@ -1554,7 +1512,7 @@ class GetTradeHistoryTests(_PolymarketServiceTestCase):
     async def test_limit_is_applied(self):
         self._patch_http(
             {
-                f"{POLYMARKET_CLOB_API}/data/trades": _FakeResponse(
+                f"{POLYMARKET_DATA_API}/trades": _FakeResponse(
                     200,
                     [{"id": f"t{i}", "size": "1", "price": "0.5"} for i in range(10)],
                 )
@@ -1571,8 +1529,8 @@ class GetTradeHistoryTests(_PolymarketServiceTestCase):
 
         self._patch_http(
             {
-                f"{POLYMARKET_CLOB_API}/data/trades": boom,
-                f"{POLYMARKET_CLOB_API}/data/activity": boom,
+                f"{POLYMARKET_DATA_API}/trades": boom,
+                f"{POLYMARKET_DATA_API}/activity": boom,
             }
         )
         result = await self.service.get_trade_history(WALLET)
@@ -1581,12 +1539,47 @@ class GetTradeHistoryTests(_PolymarketServiceTestCase):
     async def test_both_endpoints_empty_and_no_positions(self):
         self._patch_http(
             {
-                f"{POLYMARKET_CLOB_API}/data/trades": _FakeResponse(200, []),
-                f"{POLYMARKET_CLOB_API}/data/activity": _FakeResponse(200, []),
+                f"{POLYMARKET_DATA_API}/trades": _FakeResponse(200, []),
+                f"{POLYMARKET_DATA_API}/activity": _FakeResponse(200, []),
             }
         )
         self.service.get_positions = AsyncMock(return_value=[])
         self.assertEqual(await self.service.get_trade_history(WALLET), [])
+
+    async def test_real_data_api_records_without_clob_ids_keep_distinct_history(self):
+        self._patch_http(
+            {
+                f"{POLYMARKET_DATA_API}/trades": _FakeResponse(
+                    200,
+                    [
+                        {
+                            "transactionHash": "tx1",
+                            "conditionId": "market",
+                            "asset": "yes",
+                            "timestamp": 1700000000,
+                            "side": "BUY",
+                            "size": 10,
+                            "price": 0.5,
+                        },
+                        {
+                            "transactionHash": "tx2",
+                            "conditionId": "market",
+                            "asset": "yes",
+                            "timestamp": 1700000010,
+                            "side": "SELL",
+                            "size": 5,
+                            "price": 0.6,
+                        },
+                    ],
+                )
+            }
+        )
+        result = await self.service.get_trade_history(WALLET)
+        self.assertEqual(len(result), 2)
+        self.assertNotEqual(result[0]["id"], result[1]["id"])
+        self.assertEqual(result[0]["transaction_hash"], "tx2")
+        self.assertEqual(result[0]["timestamp"], "2023-11-14T22:13:30+00:00")
+        self.assertEqual(result[0]["source"], "polymarket_data_api")
 
 
 class GetActiveMarketsTests(_PolymarketServiceTestCase):

@@ -103,6 +103,7 @@ class Settings(BaseSettings):
     live_trading_enabled: bool = False
     live_market_making_enabled: bool = False
     live_copy_trading_enabled: bool = False
+    live_inverse_trading_enabled: bool = False
     live_latency_arb_enabled: bool = False
     execution_mode: str = "approval"  # auto or approval
     max_position_size: float = 1000.0  # Max USDC per trade

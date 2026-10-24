@@ -21,7 +21,7 @@ from __future__ import annotations
 import unittest
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -35,9 +35,7 @@ from app.models.trading.user_trade import UserTrade
 from app.models.users.user import User
 from app.services.analytics.execution_analytics import get_strategy_breakdown
 from app.services.trading.stop_loss_monitor import (
-    _execute_stop_loss,
     _execute_stop_loss_simulated,
-    _execute_take_profit,
     _execute_take_profit_simulated,
 )
 
@@ -106,53 +104,6 @@ class _AttributionTestBase(unittest.TestCase):
 class StopLossAttributionTest(_AttributionTestBase):
     """Both the live and paper stop-loss paths leave an attributed row."""
 
-    def test_live_close_records_pending_attributed_trade(self):
-        order = self._stop_loss()
-        self.db.expire_all()
-
-        async def _run():
-            with patch(
-                "app.services.trading.stop_loss_monitor._place_order_on_polymarket",
-                MagicMock(return_value={"success": True, "order_hash": "0xhash-sl"}),
-            ):
-                await _execute_stop_loss(self.db, order, "0xpk", None, 0.35)
-
-        import asyncio
-
-        asyncio.run(_run())
-
-        rows = self._trades(strategy_source="stop_loss")
-        self.assertEqual(len(rows), 1)
-        row = rows[0]
-        self.assertEqual(row.action, "sell")
-        # A submitted order is pending until the trade monitor observes
-        # the fill — never "executed" at submission time.
-        self.assertEqual(row.status, "pending")
-        self.assertEqual(row.order_hash, "0xhash-sl")
-        self.assertEqual(row.market_id, MARKET_ID)
-        self.assertEqual(row.token_id, TOKEN_ID)
-        self.assertEqual(row.expected_price, 0.35)
-        self.assertEqual(row.expected_size, 100.0)
-
-    def test_failed_close_records_failed_attributed_trade(self):
-        order = self._stop_loss()
-        self.db.expire_all()
-
-        async def _run():
-            with patch(
-                "app.services.trading.stop_loss_monitor._place_order_on_polymarket",
-                MagicMock(return_value={"success": False, "error": "book empty"}),
-            ):
-                await _execute_stop_loss(self.db, order, "0xpk", None, 0.35)
-
-        import asyncio
-
-        asyncio.run(_run())
-
-        rows = self._trades(strategy_source="stop_loss")
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0].status, "failed")
-
     def test_paper_close_records_simulated_attributed_trade(self):
         order = self._stop_loss()
         self.db.expire_all()
@@ -172,28 +123,6 @@ class StopLossAttributionTest(_AttributionTestBase):
 
 class TakeProfitAttributionTest(_AttributionTestBase):
     """Both the live and paper take-profit paths leave an attributed row."""
-
-    def test_live_close_records_pending_attributed_trade(self):
-        order = self._take_profit()
-        self.db.expire_all()
-
-        async def _run():
-            with patch(
-                "app.services.trading.stop_loss_monitor._place_order_on_polymarket",
-                MagicMock(return_value={"success": True, "order_hash": "0xhash-tp"}),
-            ):
-                await _execute_take_profit(self.db, order, "0xpk", None, 0.95)
-
-        import asyncio
-
-        asyncio.run(_run())
-
-        rows = self._trades(strategy_source="take_profit")
-        self.assertEqual(len(rows), 1)
-        row = rows[0]
-        self.assertEqual(row.status, "pending")
-        self.assertEqual(row.order_hash, "0xhash-tp")
-        self.assertEqual(row.action, "sell")
 
     def test_paper_close_records_simulated_attributed_trade(self):
         order = self._take_profit()
@@ -452,7 +381,7 @@ class EmergencyStopAttributionTest(_AttributionTestBase):
 
         from app.api.routes.trading.trades import emergency_stop
 
-        with patch("app.api.routes.trading.trades._place_order_on_polymarket") as place:
+        with patch("app.services.trading.execution.live.place_live_order") as place:
             result = asyncio.run(
                 emergency_stop(
                     close_positions=True,

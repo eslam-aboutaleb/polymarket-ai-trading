@@ -626,7 +626,7 @@ class MigrationBackfillTest(unittest.TestCase):
             # 20 tables the migration widened, plus api_keys (plan 06b)
             # and the collaboration tables (plan 02), which were created
             # with account_id already in place.
-            self.assertEqual(len(migrated), 23)
+            self.assertEqual(len(migrated), 24)
             for table in migrated:
                 columns = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})"))}
                 self.assertIn("account_id", columns, msg=table)
@@ -648,7 +648,7 @@ class MigrationBackfillTest(unittest.TestCase):
                 )
         # 20 widened tables + api_keys (plan 06b) + the 3 collaboration
         # tables (plan 02), all created with the column.
-        self.assertEqual(checked, 23)
+        self.assertEqual(checked, 24)
 
     def test_migration_is_idempotent(self):
         """Re-running the migration must not duplicate accounts or rows."""
