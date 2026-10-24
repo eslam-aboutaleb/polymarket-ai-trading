@@ -278,9 +278,15 @@ class ExternalAuthTest(_ExternalBase):
         _, secret = self._make_key(scopes=("read", "trade"))
         self._settings()
         self._credentials()
-        with patch(
-            "app.services.trading.execution.live.place_live_order",
-            return_value={"success": True, "order_hash": "0xhash"},
+        with (
+            patch(
+                "app.services.trading.execution.live.get_settings",
+                return_value=SimpleNamespace(live_trading_enabled=False),
+            ),
+            patch(
+                "app.services.trading.execution.live.place_live_order",
+                return_value={"success": True, "order_hash": "0xhash"},
+            ),
         ):
             response = self.client.post(
                 "/api/v1/external/orders",
