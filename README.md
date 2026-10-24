@@ -861,3 +861,25 @@ inputs and results are frozen in the existing account archive. The simulator now
 reports `follower-replay-v2`; older saved results are retained unchanged. This
 slice does not add historical venue datasets, automatic settlement, trader-skill
 scoring, continuous collection, or legacy paper-runner/NAV migration.
+
+
+## WalletConnect configuration and browser tests
+
+Set `VITE_WALLETCONNECT_PROJECT_ID` in the frontend environment to the project ID
+from the Reown dashboard. For GitHub Actions, add a repository Actions secret with
+that exact name; the E2E job passes it to Vite before startup. Configure the Reown
+project's allowed origins for your deployment and CI origin `http://127.0.0.1:5190`.
+The project ID is a public browser identifier, not a wallet key or server API secret.
+Never use a wallet private key as this value.
+
+Run `npm run test:walletconnect` from `frontend` for deterministic configured/missing
+ID, connection, rejection/retry, empty-account and disconnect checks. These replace
+only the external WalletConnect SDK boundary and do not prove a real relay pairing.
+Existing injected-wallet authentication tests remain in the full-stack suite.
+
+To check the real SDK/relay, manually run the CI workflow with
+`walletconnect_live_canary` enabled, or run
+`WALLETCONNECT_LIVE_CANARY=1 npm run test:walletconnect` with the real project ID
+set locally. Missing/invalid configuration fails this canary. It checks QR pairing
+initialization only: completing a real connection/sign-in requires wallet approval.
+The canary never supplies a private key, signs a message or submits a transaction.
