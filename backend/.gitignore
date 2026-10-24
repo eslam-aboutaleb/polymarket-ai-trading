@@ -8,3 +8,17 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Testing and coverage
+.coverage
+.coverage.*
+coverage.xml
+coverage/
+.pytest_cache/
+test-results/
+
+# Linters and tool caches
+.ruff_cache/
+
+# OS-specific
+.DS_Store
