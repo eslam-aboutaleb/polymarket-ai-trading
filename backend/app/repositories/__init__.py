@@ -4,7 +4,7 @@ Application persistence flows follow
 ``app.api.routes`` -> ``app.services.<domain>`` -> ``app.repositories.<domain>``
 -> ``app.models.<domain>``. Domain modules own query construction; this root
 package keeps common historical imports working while callers migrate to the
-canonical modules. See ``backend/ARCHITECTURE.md`` for the layer boundaries.
+canonical modules. See ``docs/backend/ARCHITECTURE.md`` for the layer boundaries.
 """
 
 from app.repositories.base import SQLAlchemyRepository

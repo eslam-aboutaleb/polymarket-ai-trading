@@ -104,7 +104,7 @@ services:
   backend:
     build:
       context: ./backend
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile
     ports:
       - "8002:8002"
     environment:
