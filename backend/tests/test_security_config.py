@@ -3,6 +3,24 @@ import unittest
 from app.config import Settings
 
 
+def test_live_features_default_enabled_and_allow_explicit_operator_disable(monkeypatch):
+    flags = (
+        "live_trading_enabled",
+        "live_market_making_enabled",
+        "live_copy_trading_enabled",
+        "live_inverse_trading_enabled",
+        "live_latency_arb_enabled",
+        "latency_arb_live",
+    )
+    for name in flags:
+        monkeypatch.delenv(name.upper(), raising=False)
+    config = {"_env_file": None, "jwt_secret_key": "a" * 32, "environment": "test"}
+    defaults = Settings(**config)
+    assert all(getattr(defaults, name) is True for name in flags)
+    disabled = Settings(**config, **dict.fromkeys(flags, False))
+    assert all(getattr(disabled, name) is False for name in flags)
+
+
 class SettingsValidationTests(unittest.TestCase):
     def test_jwt_secret_rejects_placeholder(self):
         with self.assertRaises(ValueError):

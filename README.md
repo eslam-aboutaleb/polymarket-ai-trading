@@ -20,8 +20,8 @@ Displayed balances, prices and example results are illustrations, not live accou
 statements or demonstrated returns. Empty charts show where a fresh workspace has
 no observations; they are not populated with invented trading history.
 
-Live orders are available through the opt-in durable execution gateway. They require
-server strategy switches, global administrator activation, wallet activation and
+Live trading features are enabled by default through the durable execution gateway.
+Real orders require server strategy switches, global administrator activation, wallet activation and
 risk budgets. Simulation and replay never grant live authority. Legacy direct
 signers remain blocked. See the [live execution setup](#live-execution-setup)
 for the supported paths and remaining limits.
@@ -842,9 +842,10 @@ Simulation and historical replay remain separate and cannot authorize live order
    `uv run --frozen alembic upgrade head` from `backend/`.
 2. Configure the trading key in Settings. Choose the actual EOA, Polymarket proxy,
    Safe or deposit wallet type; contract wallets require the funding address.
-3. Set risk budgets and initial capital. Enable `LIVE_TRADING_ENABLED` and the
-   required strategy flags in the deployment environment; all default to false.
-   Both Compose web and worker services receive these flags.
+3. Set risk budgets and initial capital. `LIVE_TRADING_ENABLED`, the strategy
+   flags and `LATENCY_ARB_LIVE` default to true. Both Compose web and worker
+   services receive these flags; operators can set them to false to disable live
+   features. Choose paper/simulation mode when using virtual funds.
 4. An administrator activates global execution with `POST /api/v1/risk/activate`
    and `{"scope":"global"}`. Each wallet owner then activates their own account.
    The Copy Trading panel exposes activation, initial capital, simulation/stop
