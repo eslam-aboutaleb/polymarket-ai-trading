@@ -24,7 +24,7 @@ concurrency:
 jobs:
   commit-messages:
     name: Commit message format
-    uses: eslam-aboutaleb/ci-workflows/.github/workflows/commit-messages.yml@4c4fe5ab336debb608fcee263a875d58bd14acc3
+    uses: eslam-aboutaleb/ci-workflows/.github/workflows/commit-messages.yml@68615e1c52d02f621ea67dec67386179eeeac35e
     permissions:
       contents: read
       pull-requests: read
@@ -53,7 +53,7 @@ jobs:
   # Shared workflows are reviewed and pinned as one immutable revision.
   # Update all pins together after reviewing ci-workflows changes.
   backend-tests:
-    uses: eslam-aboutaleb/ci-workflows/.github/workflows/python.yml@4c4fe5ab336debb608fcee263a875d58bd14acc3
+    uses: eslam-aboutaleb/ci-workflows/.github/workflows/python.yml@68615e1c52d02f621ea67dec67386179eeeac35e
     with:
       project-dir: backend
       manager: uv
@@ -62,13 +62,13 @@ jobs:
       coverage-min: 80
 
   trading-safety:
-    uses: eslam-aboutaleb/ci-workflows/.github/workflows/integration.yml@4c4fe5ab336debb608fcee263a875d58bd14acc3
+    uses: eslam-aboutaleb/ci-workflows/.github/workflows/integration.yml@68615e1c52d02f621ea67dec67386179eeeac35e
     with:
       project-dir: backend
       python-version: "3.11"
 
   emergency-browser:
-    uses: eslam-aboutaleb/ci-workflows/.github/workflows/browser.yml@4c4fe5ab336debb608fcee263a875d58bd14acc3
+    uses: eslam-aboutaleb/ci-workflows/.github/workflows/browser.yml@68615e1c52d02f621ea67dec67386179eeeac35e
     with:
       project-dir: frontend
       manager: npm
@@ -191,10 +191,10 @@ jobs:
           retention-days: 7
 
   workflow-lint:
-    uses: eslam-aboutaleb/ci-workflows/.github/workflows/workflow-lint.yml@4c4fe5ab336debb608fcee263a875d58bd14acc3
+    uses: eslam-aboutaleb/ci-workflows/.github/workflows/workflow-lint.yml@68615e1c52d02f621ea67dec67386179eeeac35e
 
   security:
-    uses: eslam-aboutaleb/ci-workflows/.github/workflows/security.yml@4c4fe5ab336debb608fcee263a875d58bd14acc3
+    uses: eslam-aboutaleb/ci-workflows/.github/workflows/security.yml@68615e1c52d02f621ea67dec67386179eeeac35e
     permissions:
       contents: read
       actions: read
