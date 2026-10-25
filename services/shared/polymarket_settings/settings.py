@@ -29,7 +29,9 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
+
+from polymarket_settings.gateway import GatewaySettings
 
 
 class LLMProvider(StrEnum):
@@ -39,6 +41,7 @@ class LLMProvider(StrEnum):
     ``cli-agent`` handles GITHUB_MODELS.
     """
 
+    LITELLM = "litellm"
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     GOOGLE = "google"
@@ -60,6 +63,7 @@ class ModelTier(StrEnum):
 #: ``MODEL_SUGGESTIONS`` dicts that still advertised retired models
 #: (``gpt-4-turbo-preview``, ``claude-3-*``, ``gemini-1.5-*``).
 MODEL_CATALOG: dict[LLMProvider, list[str]] = {
+    LLMProvider.LITELLM: [],  # Custom aliases are supplied by deployment configuration.
     LLMProvider.OPENAI: [
         "gpt-4.1",
         "gpt-4.1-mini",
@@ -160,7 +164,7 @@ TIER_DEFAULTS: dict[ModelTier, dict[str, Any]] = {
 }
 
 
-class SharedLLMSettings(BaseSettings):
+class SharedLLMSettings(GatewaySettings):
     """LLM settings shared by every deployable.
 
     Services inherit from this class and add their own fields::

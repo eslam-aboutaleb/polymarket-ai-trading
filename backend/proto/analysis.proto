@@ -12,6 +12,7 @@ enum LLMProvider {
   LLM_PROVIDER_GOOGLE = 3;     // Google Gemini models
   LLM_PROVIDER_GROQ = 4;       // Groq fast inference
   LLM_PROVIDER_OLLAMA = 5;     // Local Ollama models
+  LLM_PROVIDER_LITELLM = 7;    // Portable LiteLLM provider
   LLM_PROVIDER_GITHUB = 6;     // GitHub Models API
 }
 

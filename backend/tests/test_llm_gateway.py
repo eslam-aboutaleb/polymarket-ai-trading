@@ -63,6 +63,7 @@ class ProviderMappingTests(unittest.TestCase):
                 LLMProviderType.GROQ: 4,
                 LLMProviderType.OLLAMA: 5,
                 LLMProviderType.GITHUB_MODELS: 6,
+                LLMProviderType.LITELLM: 7,
             },
         )
 
@@ -77,7 +78,7 @@ class ProviderMappingTests(unittest.TestCase):
     def test_provider_values_are_the_lowercase_wire_strings(self):
         self.assertEqual(
             sorted(p.value for p in LLMProviderType),
-            ["anthropic", "github_models", "google", "groq", "ollama", "openai"],
+            ["anthropic", "github_models", "google", "groq", "litellm", "ollama", "openai"],
         )
 
 
@@ -320,7 +321,10 @@ class ListProvidersTests(unittest.TestCase):
     def test_model_suggestions_are_published_for_every_provider(self):
         for provider in LLMProviderType:
             self.assertEqual(self.by_id[provider.value]["models"], MODEL_SUGGESTIONS[provider])
-            self.assertTrue(self.by_id[provider.value]["models"])
+            if provider != LLMProviderType.LITELLM:
+                self.assertTrue(self.by_id[provider.value]["models"])
+            else:
+                self.assertEqual(self.by_id[provider.value]["models"], [])
 
     def test_ollama_is_advertised_as_requiring_no_api_key(self):
         ollama = self.by_id["ollama"]
@@ -348,7 +352,8 @@ class GetDefaultModelTests(unittest.TestCase):
     def test_default_model_is_the_first_suggestion(self):
         for provider in LLMProviderType:
             self.assertEqual(
-                self.gateway.get_default_model(provider), MODEL_SUGGESTIONS[provider][0]
+                self.gateway.get_default_model(provider),
+                MODEL_SUGGESTIONS[provider][0] if MODEL_SUGGESTIONS[provider] else None,
             )
 
     def test_known_default(self):

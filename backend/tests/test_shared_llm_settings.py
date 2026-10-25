@@ -131,5 +131,8 @@ def test_model_catalog_contains_no_retired_models():
 
 def test_model_catalog_covers_every_provider():
     assert set(MODEL_CATALOG) == set(LLMProvider)
-    assert all(MODEL_CATALOG[provider] for provider in LLMProvider)
+    assert all(
+        MODEL_CATALOG[provider] for provider in LLMProvider if provider != LLMProvider.LITELLM
+    )
+    assert MODEL_CATALOG[LLMProvider.LITELLM] == []
     assert ModelTier.CHEAP in set(ModelTier)

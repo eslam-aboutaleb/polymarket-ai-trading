@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import HumanMessage
+from polymarket_settings.gateway import create_embeddings, embedding_identity
 
 from src.config import get_settings
 
@@ -98,7 +99,11 @@ class MarketRAGService:
         """Initialize a local SQLite vector store without a network service."""
         if self._initialized:
             return True
-        if not _ensure_imports():
+        if (
+            not self.settings.embedding_model
+            and self.settings.llm_provider.value != "litellm"
+            and not _ensure_imports()
+        ):
             return False
 
         try:
@@ -114,10 +119,11 @@ class MarketRAGService:
                         embedding TEXT NOT NULL
                     )"""
                 )
-            self._embedding_fn = _OpenAIEmbeddings(
-                model=self.settings.rag_embedding_model,
-                openai_api_key=self.settings.openai_api_key,
-            )
+                db.execute(
+                    "CREATE TABLE IF NOT EXISTS vector_config ("
+                    "id INTEGER PRIMARY KEY CHECK(id=1), identity TEXT, dimensions INTEGER)"
+                )
+            self._embedding_fn = create_embeddings(self.settings, _OpenAIEmbeddings)
             self._initialized = True
             logger.info(
                 "SQLite RAG store initialized: collection=%s, persist=%s",
@@ -128,6 +134,29 @@ class MarketRAGService:
         except Exception as e:
             logger.error("Failed to initialize SQLite RAG store: %s", e)
             return False
+
+    def _check_vectors(self, db, vectors, *, write=False):
+        """Reject mixed embedding spaces before any write or similarity calculation."""
+        dimensions = {len(vector) for vector in vectors}
+        if len(dimensions) != 1 or not vectors or 0 in dimensions:
+            raise ValueError("Embedding vectors must have one nonzero dimension")
+        dimension = dimensions.pop()
+        if any(not math.isfinite(float(value)) for vector in vectors for value in vector):
+            raise ValueError("Embedding vectors must be finite")
+        expected = self.settings.embedding_dimensions
+        if expected is not None and dimension != expected:
+            raise ValueError("Embedding dimensions differ from configuration; reindex required")
+        identity = embedding_identity(self.settings)
+        previous = db.execute(
+            "SELECT identity, dimensions FROM vector_config WHERE id=1"
+        ).fetchone()
+        populated = db.execute("SELECT EXISTS(SELECT 1 FROM market_vectors)").fetchone()[0]
+        if populated and (previous is None or previous != (identity, dimension)):
+            raise ValueError("Incompatible or unversioned vector index; clear and fully reindex")
+        if write:
+            db.execute(
+                "INSERT OR REPLACE INTO vector_config VALUES (1, ?, ?)", (identity, dimension)
+            )
 
     def index_markets(self, markets: list[dict[str, Any]], force: bool = False) -> int:
         """
@@ -198,6 +227,8 @@ class MarketRAGService:
         try:
             embeddings = self._embedding_fn.embed_documents(documents)
             with sqlite3.connect(self._database_path) as db:
+                db.execute("BEGIN IMMEDIATE")
+                self._check_vectors(db, embeddings, write=True)
                 db.executemany(
                     """INSERT INTO market_vectors (condition_id, document, metadata, embedding)
                        VALUES (?, ?, ?, ?)
@@ -248,6 +279,8 @@ class MarketRAGService:
             query_embedding = self._embedding_fn.embed_query(query)
 
             with sqlite3.connect(self._database_path) as db:
+                db.execute("BEGIN")
+                self._check_vectors(db, [query_embedding])
                 rows = db.execute(
                     "SELECT condition_id, document, metadata, embedding FROM market_vectors"
                 ).fetchall()
@@ -358,6 +391,7 @@ class MarketRAGService:
             try:
                 with sqlite3.connect(self._db_path) as db:
                     db.execute("DELETE FROM market_vectors")
+                    db.execute("DELETE FROM vector_config")
                 self._last_index_time = 0
                 logger.info("Cleared SQLite RAG store")
             except Exception as e:
