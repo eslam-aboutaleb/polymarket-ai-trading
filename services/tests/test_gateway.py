@@ -361,3 +361,41 @@ def test_tool_call_reaches_sdk_transport_without_network(settings):
     assert requests[0]["model"] == "custom-chat"
     assert requests[0]["tools"][0]["function"]["name"] == "echo"
     assert reply.tool_calls[0]["args"] == {"text": "OK"}
+
+
+def test_concurrent_ingestion_cannot_mix_embedding_spaces(settings, tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from src import market_rag
+
+    ready = Barrier(2, timeout=10)
+
+    class ConcurrentEmbeddings:
+        def __init__(self, **_kwargs):
+            pass
+
+        def embed_documents(self, documents):
+            ready.wait()
+            return [[1.0, 0.0] for _ in documents]
+
+    settings.chroma_persist_dir = str(tmp_path)
+    monkeypatch.setattr(market_rag, "_OpenAIEmbeddings", ConcurrentEmbeddings)
+    monkeypatch.setattr(market_rag, "get_settings", lambda: settings)
+    first = market_rag.MarketRAGService()
+    second_settings = settings.model_copy(
+        update={"rag_embedding_model": "different-embedding-space"}
+    )
+    monkeypatch.setattr(market_rag, "get_settings", lambda: second_settings)
+    second = market_rag.MarketRAGService()
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(
+                store.index_markets,
+                [{"condition_id": str(index), "question": "Synthetic concurrency question"}],
+                True,
+            )
+            for index, store in enumerate([first, second])
+        ]
+        assert sorted(future.result(timeout=20) for future in futures) == [0, 1]
+    assert first.get_collection_size() == 1

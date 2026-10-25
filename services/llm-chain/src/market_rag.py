@@ -227,6 +227,7 @@ class MarketRAGService:
         try:
             embeddings = self._embedding_fn.embed_documents(documents)
             with sqlite3.connect(self._database_path) as db:
+                db.execute("BEGIN IMMEDIATE")
                 self._check_vectors(db, embeddings, write=True)
                 db.executemany(
                     """INSERT INTO market_vectors (condition_id, document, metadata, embedding)
@@ -278,6 +279,7 @@ class MarketRAGService:
             query_embedding = self._embedding_fn.embed_query(query)
 
             with sqlite3.connect(self._database_path) as db:
+                db.execute("BEGIN")
                 self._check_vectors(db, [query_embedding])
                 rows = db.execute(
                     "SELECT condition_id, document, metadata, embedding FROM market_vectors"
