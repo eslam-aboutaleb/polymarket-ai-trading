@@ -59,6 +59,9 @@ fingerprint of model alias, explicit endpoint and requested dimensions alongside
 the observed vector length. Both ingestion and retrieval reject a nonempty index
 with a different fingerprint/dimension or missing metadata. Ingestion checks the
 whole batch before upserting and commits metadata and vectors together.
+A write transaction locks compatibility checking and upserting together, so
+concurrent workers cannot initialize different embedding spaces in one
+collection. Retrieval reads metadata and vectors from one database snapshot.
 
 Existing nonempty indexes predate this metadata and require a **full reindex**.
 Stop indexing workers, back up the SQLite file, select a new
@@ -101,17 +104,18 @@ Live checks consume the virtual key's budget and rate limit.
 Dependency references: [LiteLLM SDK](https://docs.litellm.ai/docs/) and
 [LangChain ChatLiteLLM](https://reference.langchain.com/python/langchain-litellm/chat_models/litellm/ChatLiteLLM).
 
-## Dependency security blocker
+## Dependency compatibility
 
-The locked service environment audit reports three advisories in
-`filelock==3.32.7`: `CVE-2026-112940`, `CVE-2026-112913` and `CVE-2026-112907`.
-The reported fixed versions start at `4.2.1`, but the selected LiteLLM SDK
-requires `filelock>=3.16.1,<4.0`. A normal dependency resolution cannot install
-that fix. The integration retains the SDK's declared compatibility bounds;
-this is an unresolved security review blocker, not a clean dependency audit.
-Re-audit and update the lockfile when a compatible upstream release is available.
-The pull request remains a draft; no deployment or merge is performed.
+The SDK range is constrained to `litellm>=1.103.9,<1.104`, with an explicit
+`filelock>=4.2.1,<5` security minimum. This keeps normal dependency resolution
+compatible with the patched locking library. Later SDK releases currently cap
+`filelock<4`, which conflicts with the fixes for CVE-2026-112940,
+CVE-2026-112913 and CVE-2026-112907. Update this range after verifying that a newer
+SDK accepts patched dependencies and passes the factory, tool, streaming and
+embedding tests. No package compatibility constraints are overridden.
 
-The SDK's `mcp` extra is explicit because this LiteLLM release imports its MCP
-runtime for ordinary tool calls as well. A keyless transport test exercises
-that real SDK path to catch missing runtime dependencies.
+The locked service environment uses LiteLLM 1.103.9 and filelock 4.2.4. Its
+`pip-audit` check reports no known vulnerabilities (the local editable project
+is not a PyPI audit target). Ordinary tool calls work with the SDK's base
+dependencies; no additional MCP runtime or proxy dependencies are installed.
+A keyless transport test exercises the real SDK tool-call path.

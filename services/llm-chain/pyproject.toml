@@ -24,9 +24,11 @@ dependencies = [
     "tavily-python>=0.3.0",
     # News API
     "newsapi-python>=0.2.7",
-    # LangChain adapter plus LiteLLM's tool-call/MCP runtime dependencies.
+    # Keep a compatible SDK range that accepts patched filelock releases.
+    # Later LiteLLM releases currently cap filelock below the security fixes.
     "langchain-litellm>=0.8,<0.9",
-    "litellm[mcp]>=1.106.4,<2",
+    "litellm>=1.103.9,<1.104",
+    "filelock>=4.2.1,<5",
 ]
 
 [project.optional-dependencies]
