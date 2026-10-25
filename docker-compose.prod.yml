@@ -71,6 +71,14 @@ services:
     expose:
       - "50051"
     environment:
+      LITELLM_API_BASE:
+      LITELLM_API_KEY:
+      LITELLM_MODEL:
+      LITELLM_EMBEDDING_MODEL:
+      LITELLM_EMBEDDING_API_KEY:
+      LITELLM_EMBEDDING_API_BASE:
+      LITELLM_EMBEDDING_DIMENSIONS:
+      RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-text-embedding-3-small}
       LLM_PROVIDER: ${LLM_PROVIDER:-openai}
       LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
       LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.3}

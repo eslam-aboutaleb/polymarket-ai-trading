@@ -47,6 +47,12 @@ jobs:
         run: uv run --project backend --frozen ruff format --check --config ruff.toml backend services
       - name: Backend/service protocol compatibility
         run: uv run --project backend --frozen pytest --no-cov services/tests
+      - name: Install locked LLM service dependencies (keyless)
+        run: uv sync --project services/llm-chain --frozen --python 3.11
+      - name: Gateway adapter regression tests (no production secrets)
+        env:
+          PYTHONPATH: services/shared:services/llm-chain
+        run: uv run --project services/llm-chain --frozen pytest services/tests/test_gateway.py -q
       - name: Duplication check (jscpd, < 3%)
         run: ./scripts/check-duplication.sh
 
