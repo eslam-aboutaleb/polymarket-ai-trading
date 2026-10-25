@@ -27,6 +27,7 @@ LLMProviderType = LLMProvider
 
 # Map provider types to proto enum values (must match analysis.proto LLMProvider enum)
 PROVIDER_TO_PROTO = {
+    LLMProviderType.LITELLM: 7,
     LLMProviderType.OPENAI: 1,  # LLM_PROVIDER_OPENAI
     LLMProviderType.ANTHROPIC: 2,  # LLM_PROVIDER_ANTHROPIC
     LLMProviderType.GOOGLE: 3,  # LLM_PROVIDER_GOOGLE
@@ -37,6 +38,7 @@ PROVIDER_TO_PROTO = {
 
 # Map provider types to the backend service that handles them
 PROVIDER_TO_BACKEND = {
+    LLMProviderType.LITELLM: AIBackend.LLM_CHAIN,
     LLMProviderType.OPENAI: AIBackend.LLM_CHAIN,
     LLMProviderType.ANTHROPIC: AIBackend.LLM_CHAIN,
     LLMProviderType.GOOGLE: AIBackend.LLM_CHAIN,
