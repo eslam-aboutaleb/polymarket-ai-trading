@@ -3,6 +3,7 @@
 from functools import lru_cache
 
 from polymarket_settings import SharedLLMSettings
+from pydantic import Field
 from pydantic_settings import SettingsConfigDict
 
 
@@ -21,10 +22,10 @@ class Settings(SharedLLMSettings):
     grpc_port: int = 50051
 
     # Provider API Keys (only the selected provider's key is required)
-    openai_api_key: str = ""
-    anthropic_api_key: str = ""
-    google_api_key: str = ""
-    groq_api_key: str = ""
+    openai_api_key: str = Field(default="", repr=False, exclude=True)
+    anthropic_api_key: str = Field(default="", repr=False, exclude=True)
+    google_api_key: str = Field(default="", repr=False, exclude=True)
+    groq_api_key: str = Field(default="", repr=False, exclude=True)
 
     # Ollama (local) settings
     ollama_base_url: str = "http://localhost:11434"
@@ -40,11 +41,11 @@ class Settings(SharedLLMSettings):
     rag_multi_query_count: int = 5
 
     # Tavily premium search (optional)
-    tavily_api_key: str = ""
+    tavily_api_key: str = Field(default="", repr=False, exclude=True)
     tavily_enabled: bool = False
 
     # NewsAPI (optional)
-    newsapi_api_key: str = ""
+    newsapi_api_key: str = Field(default="", repr=False, exclude=True)
     newsapi_enabled: bool = False
 
     # Binance enrichment is gated by the BINANCE_SKILLS_ENABLED environment

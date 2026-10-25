@@ -2,13 +2,13 @@
 
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1] / "llm-chain"
 sys.path.insert(0, str(SERVICE_ROOT))
 sys.path.insert(0, str(SERVICE_ROOT.parent / "shared"))
 
 from src import market_rag  # noqa: E402
+from src.config import Settings  # noqa: E402
 
 
 class FakeEmbeddings:
@@ -27,7 +27,8 @@ def test_sqlite_rag_store_upserts_filters_searches_and_clears(tmp_path, monkeypa
     monkeypatch.setattr(
         market_rag,
         "get_settings",
-        lambda: SimpleNamespace(
+        lambda: Settings(
+            _env_file=None,
             rag_enabled=True,
             chroma_persist_dir=str(tmp_path),
             chroma_collection_name="markets",

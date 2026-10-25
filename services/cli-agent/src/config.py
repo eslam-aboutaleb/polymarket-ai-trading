@@ -3,6 +3,7 @@
 from functools import lru_cache
 
 from polymarket_settings import SharedLLMSettings
+from pydantic import Field
 from pydantic_settings import SettingsConfigDict
 
 
@@ -21,7 +22,7 @@ class Settings(SharedLLMSettings):
     grpc_port: int = 50052
 
     # GitHub Models API (OpenAI-compatible endpoint using GITHUB_TOKEN)
-    github_token: str = ""
+    github_token: str = Field(default="", repr=False, exclude=True)
     github_models_endpoint: str = "https://models.inference.ai.azure.com"
     github_model: str = "gpt-4o-mini"
     github_model_temperature: float = 0.3
@@ -31,13 +32,13 @@ class Settings(SharedLLMSettings):
     copilot_timeout: int = 120  # seconds
 
     # Fallback: OpenAI direct (if GITHUB_TOKEN is missing)
-    openai_api_key: str = ""
+    openai_api_key: str = Field(default="", repr=False, exclude=True)
 
     # Prompts
     prompts_path: str = "/app/prompts/prompts.json"
 
     # Search API Keys (for MCPs)
-    brave_api_key: str = ""
+    brave_api_key: str = Field(default="", repr=False, exclude=True)
 
     # Logging
     log_level: str = "INFO"

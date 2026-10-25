@@ -24,6 +24,11 @@ dependencies = [
     "tavily-python>=0.3.0",
     # News API
     "newsapi-python>=0.2.7",
+    # Keep a compatible SDK range that accepts patched filelock releases.
+    # Later LiteLLM releases currently cap filelock below the security fixes.
+    "langchain-litellm>=0.8,<0.9",
+    "litellm>=1.103.9,<1.104",
+    "filelock>=4.2.1,<5",
 ]
 
 [project.optional-dependencies]
@@ -45,3 +50,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9",
+    "ruff>=0.6.9",
+]

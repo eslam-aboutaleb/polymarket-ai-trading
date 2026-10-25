@@ -903,3 +903,6 @@ Set `VITE_WALLETCONNECT_PROJECT_ID` in the frontend environment to the project I
 from the Reown dashboard. For GitHub Actions, add a repository Actions secret with
 that exact name
 
+
+For portable model gateway configuration, embedding connection overrides and vector
+reindexing requirements, see [LiteLLM gateway integration](docs/litellm-gateway.md).

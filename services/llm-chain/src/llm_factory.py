@@ -10,6 +10,7 @@ from typing import Any
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models.chat_models import BaseChatModel
 from polymarket_settings import MODEL_CATALOG, LLMProvider, resolve_tier_config
+from polymarket_settings.gateway import create_chat
 
 from src.config import get_settings
 
@@ -53,6 +54,8 @@ def create_llm(
     if callbacks:
         common_kwargs["callbacks"] = callbacks
 
+    if provider == LLMProvider.LITELLM:
+        return create_chat(settings, common_kwargs)
     if provider == LLMProvider.OPENAI:
         return _create_openai_llm(settings, common_kwargs)
     if provider == LLMProvider.ANTHROPIC:
@@ -119,6 +122,8 @@ def create_llm_for_request(
     model_override = None
     if request_config and request_config.model:
         model_override = request_config.model
+    elif provider == LLMProvider.LITELLM:
+        model_override = settings.gateway_model or settings.llm_model
     elif (
         request_config
         and request_config.provider
@@ -134,6 +139,8 @@ def create_llm_for_request(
     if request_config and request_config.reasoning_effort:
         reasoning_effort = request_config.reasoning_effort
 
+    if provider == LLMProvider.LITELLM:
+        return create_chat(settings, common_kwargs, model_override)
     if provider == LLMProvider.OPENAI:
         return _create_openai_llm(settings, common_kwargs, model_override, reasoning_effort)
     if provider == LLMProvider.ANTHROPIC:
@@ -169,6 +176,16 @@ def create_llm_for_task(
     )
     if llm_override and llm_override.model:
         model_override = llm_override.model
+    elif provider == LLMProvider.LITELLM:
+        from polymarket_settings import TASK_TIERS, ModelTier
+
+        tier = TASK_TIERS.get(task_name, ModelTier.STANDARD)
+        configured_tier = (
+            getattr(settings, f"llm_tier_{tier.value}_model", "")
+            if settings.llm_tiering_enabled
+            else ""
+        )
+        model_override = configured_tier or settings.gateway_model or settings.llm_model
     elif provider == LLMProvider.OPENAI:
         # Tier defaults are OpenAI models.
         model_override = tier_model
@@ -201,6 +218,8 @@ def create_llm_for_task(
     if callbacks:
         common_kwargs["callbacks"] = callbacks
 
+    if provider == LLMProvider.LITELLM:
+        return create_chat(settings, common_kwargs, model_override)
     if provider == LLMProvider.OPENAI:
         return _create_openai_llm(settings, common_kwargs, model_override, reasoning_effort)
     if provider == LLMProvider.ANTHROPIC:
@@ -306,7 +325,9 @@ def get_provider_info() -> dict:
     settings = get_settings()
     return {
         "provider": settings.llm_provider.value,
-        "model": settings.llm_model,
+        "model": (settings.gateway_model or settings.llm_model)
+        if settings.llm_provider == LLMProvider.LITELLM
+        else settings.llm_model,
         "temperature": settings.llm_temperature,
         "max_tokens": settings.llm_max_tokens,
     }
@@ -334,6 +355,7 @@ def parse_llm_config_from_proto(llm_config) -> LLMRequestConfig | None:
         3: LLMProvider.GOOGLE,
         4: LLMProvider.GROQ,
         5: LLMProvider.OLLAMA,
+        7: LLMProvider.LITELLM,
         # 6 = GITHUB is handled by CLI-agent, not llm-chain
     }
 
@@ -361,6 +383,12 @@ def get_available_providers() -> dict[str, dict[str, Any]]:
     settings = get_settings()
 
     return {
+        LLMProvider.LITELLM.value: {
+            "name": "LiteLLM",
+            "configured": bool(settings.gateway_model),
+            "models": [settings.gateway_model] if settings.gateway_model else [],
+            "description": "Configured gateway or native LiteLLM provider",
+        },
         LLMProvider.OPENAI.value: {
             "name": "OpenAI",
             "configured": bool(settings.openai_api_key),
