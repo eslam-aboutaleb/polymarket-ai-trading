@@ -1,8 +1,9 @@
 """Read-side bridge from immutable native receipts to the binary-book model."""
 
 import json
+from contextlib import suppress
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from typing import Annotated, Literal
 
 import httpx
@@ -15,25 +16,31 @@ from app.services.market_data.binary_book import (
     Contract,
     Level,
     MarketSpec,
+    NoQueueEvidencePolicy,
     WalkRequest,
     complement_summary,
     reconstruct,
+    round_trip_cost,
     walk_depth,
 )
 from app.services.market_data.replay_capture import digest, native_active
-from app.services.market_data.venue_observations import append_event, serialize
+from app.services.market_data.venue_observations import REST_SOURCE, append_event, serialize
 from app.utils.time import utc_now
 
 
 class ResearchQuery(Contract):
     condition_id: str = Field(pattern=r"^0x[a-fA-F0-9]{64}$")
     as_of: AwareDatetime | None = None
+    capture_ids: list[Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]] | None = Field(
+        default=None, max_length=201
+    )
     outcome: Literal["YES", "NO"] = "YES"
     sizes: list[Annotated[Decimal, Field(gt=0, le=1_000_000_000, decimal_places=8)]] = Field(
         default_factory=lambda: [Decimal("10")], min_length=1, max_length=8
     )
     side: Literal["BUY", "SELL"] = "BUY"
     units: Literal["SHARES", "USDC"] = "SHARES"
+    limit_price: Decimal | None = Field(default=None, gt=0, lt=1, decimal_places=8)
     fee_bps: Decimal | None = Field(default=None, ge=0, le=10000, decimal_places=8)
     fee_version: str | None = Field(default=None, min_length=1, max_length=80)
     lot: Decimal = Field(default=Decimal("0.01"), gt=0, le=1, decimal_places=8)
@@ -156,6 +163,7 @@ def analyze_values(query: ResearchQuery, values: list[dict], as_of):
         "research_only": True,
         "condition_id": query.condition_id.lower(),
         "as_of": as_of.isoformat(),
+        "capture_ids": sorted(v["snapshot_id"] for v in visible),
         "actual_fills": None,
         "queue_policy": "unavailable_no_probability",
         "money_path_changed": False,
@@ -201,12 +209,43 @@ def analyze_values(query: ResearchQuery, values: list[dict], as_of):
                 amount=size,
                 fee_bps=query.fee_bps,
                 fee_version=query.fee_version,
+                limit_price=query.limit_price,
             ),
         ).model_dump(mode="json")
         for size in query.sizes
     ]
+    from app.services.analytics.replay.ledger import ACCOUNTING_CONTEXT
+
+    top = {}
+    with localcontext(ACCOUNTING_CONTEXT):
+        for label, book in books.items():
+            top[label] = (
+                {
+                    "best_bid": str(book.bids[0].price),
+                    "best_ask": str(book.asks[0].price),
+                    "spread": str(book.asks[0].price - book.bids[0].price),
+                }
+                if book.grade == "VERIFIED_BOOK"
+                else None
+            )
     return {
         **base,
+        "top_of_book": top,
+        "maker_queue": NoQueueEvidencePolicy().assess(books[query.outcome]).model_dump(mode="json"),
+        "round_trip": [
+            round_trip_cost(
+                spec,
+                books[query.outcome],
+                WalkRequest(
+                    side=query.side,
+                    units=query.units,
+                    amount=size,
+                    fee_bps=query.fee_bps,
+                    fee_version=query.fee_version,
+                ),
+            )
+            for size in query.sizes
+        ],
         "status": "modeled" if any(e["status"] == "modeled" for e in estimates) else "abstain",
         "reason": None
         if any(e["status"] == "modeled" for e in estimates)
@@ -222,6 +261,20 @@ def analyze_values(query: ResearchQuery, values: list[dict], as_of):
 
 def load_analysis(db, query):
     as_of = query.as_of or utc_now()
+    if query.capture_ids is not None:
+        if len(set(query.capture_ids)) != len(query.capture_ids):
+            raise ValueError("DUPLICATE_CAPTURE_ID")
+        rows = (
+            db.query(VenueObservation)
+            .filter(
+                VenueObservation.id.in_(query.capture_ids), VenueObservation.received_at <= as_of
+            )
+            .all()
+        )
+        if len(rows) != len(query.capture_ids):
+            raise ValueError("CAPTURE_UNAVAILABLE_AT_CUTOFF")
+        values = [serialize(row) for row in rows]
+        return analyze_values(query, values, as_of), values
     metadata = (
         db.query(VenueObservation)
         .filter(
@@ -268,7 +321,9 @@ async def capture_market_books(db, condition_id, venue):
         "gamma": gamma,
         "context": context.model_dump(mode="json"),
     }
-    meta = append_event(db, raw, received_at=context.observed_at, connection_id="native-rest")
+    meta = append_event(
+        db, raw, received_at=context.observed_at, connection_id="native-rest", source=REST_SOURCE
+    )
     saved, failures = [], []
     for outcome in context.outcomes:
         try:
@@ -278,6 +333,7 @@ async def capture_market_books(db, condition_id, venue):
                 {**raw_book, "event_type": "book", "_rule_hash": context.rules.content_hash},
                 received_at=book.observed_at,
                 connection_id="native-rest",
+                source=REST_SOURCE,
             )
             saved.append(row.id)
         except (ValueError, ArithmeticError, httpx.HTTPError):
@@ -291,6 +347,7 @@ async def capture_market_books(db, condition_id, venue):
                 },
                 received_at=utc_now(),
                 connection_id="native-rest",
+                source=REST_SOURCE,
             )
             failures.append(outcome.token_id)
     return {
@@ -379,3 +436,31 @@ def replay_research(db, row):
     if digest(recomputed) != row.result_hash:
         raise ValueError("ANALYSIS_REPLAY_MISMATCH")
     return {"id": row.id, "result_hash": row.result_hash, "result": recomputed}
+
+
+def record_capture_failure(db, condition):
+    row = (
+        db.query(VenueObservation)
+        .filter_by(condition_id=condition, kind="market_metadata")
+        .order_by(VenueObservation.received_at.desc(), VenueObservation.id.desc())
+        .first()
+    )
+    tokens = [""]
+    if row:
+        with suppress(KeyError, ValueError, TypeError):
+            tokens = [v["token_id"] for v in json.loads(row.payload_json)["context"]["outcomes"]]
+    now = utc_now()
+    for token in tokens:
+        append_event(
+            db,
+            {
+                "event_type": "source_status",
+                "market": condition,
+                "asset_id": token,
+                "status": "SOURCE_CAPTURE_UNAVAILABLE",
+                "timestamp": str(int(now.timestamp() * 1000)),
+            },
+            received_at=now,
+            connection_id="native-rest",
+            source=REST_SOURCE,
+        )

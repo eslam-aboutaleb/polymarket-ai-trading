@@ -116,7 +116,8 @@ class PublicVenueCapture:
                 if len(body) + len(chunk) > 1_000_000:
                     raise ValueError("venue response exceeds capture bound")
                 body.extend(chunk)
-            return json.loads(body)
+            # Retain decimal lexemes without binary-float rounding in source receipts.
+            return json.loads(body, parse_float=str)
 
     async def market(self, condition_id):
         if not isinstance(condition_id, str) or not re.fullmatch(

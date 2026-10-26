@@ -2,9 +2,12 @@
 
 import asyncio
 import logging
+from datetime import datetime
+from decimal import Decimal
+from typing import Literal
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -44,7 +47,12 @@ def owned_account(
 ):
     if x_account_id is None:
         return ensure_personal_account(db, user["user_id"])
-    if not x_account_id.isascii() or not x_account_id.isdigit() or int(x_account_id) <= 0:
+    if (
+        len(x_account_id) > 10
+        or not x_account_id.isascii()
+        or not x_account_id.isdigit()
+        or not 0 < int(x_account_id) <= 2_147_483_647
+    ):
         raise HTTPException(400, "Invalid account header")
     try:
         account = get_owned_account(db, user["user_id"], int(x_account_id))
@@ -65,8 +73,30 @@ def analyze(query: ResearchQuery, db: Session = Depends(get_db)):
 
 
 @router.get("/book", dependencies=[Depends(enabled)])
-def book(query: ResearchQuery = Depends(), db: Session = Depends(get_db)):
-    return analyze(query, db)
+def book(
+    condition_id: str = Query(pattern=r"^0x[a-fA-F0-9]{64}$"),
+    as_of: datetime | None = None,
+    outcome: Literal["YES", "NO"] = "YES",
+    side: Literal["BUY", "SELL"] = "BUY",
+    shares: Decimal = Query(Decimal("10"), gt=0, le=1_000_000_000, decimal_places=8),
+    fee_bps: Decimal | None = Query(None, ge=0, le=10000, decimal_places=8),
+    fee_version: str | None = Query(None, min_length=1, max_length=80),
+    db: Session = Depends(get_db),
+):
+    if as_of is not None and as_of.tzinfo is None:
+        raise HTTPException(422, "as_of requires a timezone")
+    return analyze(
+        ResearchQuery(
+            condition_id=condition_id,
+            as_of=as_of,
+            outcome=outcome,
+            side=side,
+            sizes=[shares],
+            fee_bps=fee_bps,
+            fee_version=fee_version,
+        ),
+        db,
+    )
 
 
 @router.post("/capture", dependencies=[Depends(enabled)])
@@ -88,6 +118,13 @@ async def capture(
         return result
     except (ValueError, httpx.HTTPError, TimeoutError, SQLAlchemyError) as exc:
         db.rollback()
+        from app.services.market_data.book_research import record_capture_failure
+
+        try:
+            record_capture_failure(db, query.condition_id.lower())
+            db.commit()
+        except SQLAlchemyError:
+            db.rollback()
         raise HTTPException(503, "Public book capture unavailable") from exc
 
 
@@ -117,3 +154,54 @@ def replay(run_id: str, account: Account = Depends(owned_account), db: Session =
         return replay_research(db, row)
     except (ValueError, LookupError) as exc:
         raise HTTPException(409, "Book research integrity check failed") from exc
+
+
+@router.get("/schema", dependencies=[Depends(enabled)])
+def schema():
+    from app.services.market_data.binary_book import (
+        BinaryBook,
+        BookEvent,
+        CostEstimate,
+        MarketSpec,
+        WalkRequest,
+    )
+
+    return {
+        "version": "binary-book-v1",
+        "research_only": True,
+        "schemas": {
+            model.__name__: model.model_json_schema()
+            for model in (
+                MarketSpec,
+                BookEvent,
+                BinaryBook,
+                WalkRequest,
+                CostEstimate,
+                ResearchQuery,
+            )
+        },
+    }
+
+
+@router.get("/runs/{run_id}/executions/{trade_id}", dependencies=[Depends(enabled)])
+def compare_observed_execution(
+    run_id: str,
+    trade_id: int,
+    account: Account = Depends(owned_account),
+    db: Session = Depends(get_db),
+):
+    from app.services.analytics.book_execution_benchmark import compare_execution
+
+    row = (
+        db.query(BookResearchRun)
+        .filter_by(id=run_id, user_id=account.owner_user_id, account_id=account.id)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(404, "Book research not found")
+    try:
+        return compare_execution(db, row, trade_id, account)
+    except LookupError as exc:
+        raise HTTPException(404, "Recorded execution unavailable") from exc
+    except ValueError as exc:
+        raise HTTPException(409, "Execution comparison evidence inconsistent") from exc
