@@ -16,6 +16,11 @@ from app.models.market_data.market import Market
 from app.models.market_data.market_observation import MarketObservation
 from app.models.market_data.replay_capture import ReplayCapture
 from app.models.market_data.venue_market import VenueMarket
+from app.models.market_data.venue_observation import (
+    ObservationDataset,
+    ObservationDatasetMember,
+    VenueObservation,
+)
 from app.models.market_data.whale_config import WhaleConfig
 from app.models.market_data.whale_event import WhaleEvent
 from app.models.market_data.winner import Winner
@@ -51,6 +56,9 @@ __all__ = [
     "Base",
     "LiveOrder",
     "MarketObservation",
+    "VenueObservation",
+    "ObservationDataset",
+    "ObservationDatasetMember",
     "ReplayCapture",
     "TradingControlState",
     "EmergencyHaltOperation",
