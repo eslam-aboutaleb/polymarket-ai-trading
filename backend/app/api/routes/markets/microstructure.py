@@ -114,7 +114,7 @@ async def capture(
         async with asyncio.timeout(30):
             result = await capture_market_books(db, query.condition_id.lower(), venue)
         db.commit()
-        logger.info("Book resnapshot condition=%s status=%s", query.condition_id, result["status"])
+        logger.info("Public book resnapshot completed")
         return result
     except (ValueError, httpx.HTTPError, TimeoutError, SQLAlchemyError) as exc:
         db.rollback()
