@@ -147,3 +147,34 @@ PostgreSQL tests cover simultaneous retries, shared strategy depth, process exit
 before commit, bootstrap upgrade and reversible schema changes. CI runs these with
 its PostgreSQL service. Browser tests never use real wallet keys or permit private
 order execution. They are separate from WalletConnect pairing tests.
+
+## Acceptance evidence
+
+The following maps the acceptance checklists in #27 and #35 to executable
+regressions. Test paths below are relative to `backend/tests/` unless noted.
+
+| Issue criterion | Evidence |
+| --- | --- |
+| #27 identical cash/share accounting across runners | `test_paper_runners.py::test_identical_native_events_book_identical_economics_without_signing` compares copy, latency and generic adapters on matched native receipts. |
+| #27 partial/cancel/retry, depth, stale book, fees, unresolved settlement | `test_paper_ledger.py` exercises reservations, partial fills, cancellation, duplicate events and conservation; `test_paper_accounting.py` covers shared depth, missing fees, stale evidence, disputed and revised payouts. |
+| #27 separate live fills, modeled fills and indicative marks | `test_paper_runners.py::test_paper_realized_profits_never_enter_live_execution_metrics`, account API tests and browser NAV tests verify separate aggregates and modeled/unknown labels. |
+| #27 no signer/post access | Runner regressions patch both SDKs, wallet credential loading and the live gateway; the browser backend rejects both SDKs' create/post calls. |
+| #27 flags and legacy compatibility | `test_feature_disabled_never_writes_economic_events` and `test_legacy_reprocessor_preserves_numbers_and_requires_exclusion_epoch` in `test_paper_accounting.py`; legacy snapshots remain explicitly unverified. |
+| #35 1,000 funding, 25 shares at 0.40, 0.60 mark gives 1,005 NAV | `test_paper_accounting.py::test_mark_change_without_trade_and_partial_exit_reconcile`, API regression and `frontend/e2e/paper/nav.spec.ts`. |
+| #35 close 10 shares at 0.70 | The same golden regression asserts 997 cash, 3 realized PnL and 1,007.50 NAV; browser tests verify partial close and funding separation. |
+| #35 fees, partials, reservations, insufficient cash, inverse, settlement, retries | Ledger/accounting suites, inverse two-leg runner test, and PostgreSQL concurrent retry/shared-depth regressions. |
+| #35 funding is not running NAV; empty account funding | `test_snapshot_api_returns_the_persisted_hour_and_never_resets_funding` and account-isolation API regression in `test_paper_equity.py`. |
+| #35 missing/stale mark is unknown | Accounting missing-mark regression and browser mark-movement/stale-gap scenario. |
+| #35 mode/account/time isolation | `test_null_gaps_cashflows_and_mode_never_mix`, `test_asof_window_excludes_later_receipts_and_normalizes_timezone`, strict account API checks and delayed-response browser regression. |
+| #35 API, migration, history, chart, scheduled writer | `test_paper_equity.py`, `integration/test_paper_accounts_postgres.py`, legacy classifier regression and all four paper browser scenarios. |
+| #35 live gates preserved | Private execution fences above; existing trading-safety CI runs unchanged. No live release policy is relaxed. |
+
+The maker acceptance is **safe abstention without queue evidence**, not a claim
+that partial maker executions have been reconstructed. The common ledger tests
+partial fill/cancel economics independently of strategy; production maker quotes
+remain unfilled. Queue-driven maker execution belongs to #34. Likewise, #25 owns
+indicator backtest execution changes and consumes this accounting contract.
+
+Security regression `test_paper_conflicts_hide_internal_errors_and_rollback` covers
+all four mutating financial API endpoints: exception details never reach clients
+and a flushed mutation is rolled back before returning a fixed conflict response.

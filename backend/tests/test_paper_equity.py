@@ -2,6 +2,7 @@ import asyncio
 from datetime import timedelta
 from decimal import Decimal
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from paper_account_fixtures import db as _paper_db
@@ -162,3 +163,42 @@ def test_asof_window_excludes_later_receipts_and_normalizes_timezone(db):
     rows = equity.get_snapshots(session, 1, is_paper=True, end=cutoff)
     assert len(rows) == 1
     assert rows[0]["captured_at"].endswith("+00:00")
+
+
+@pytest.mark.parametrize(
+    "path,body,operation",
+    [
+        ("account", {"fee_bps": "0"}, "configure_account"),
+        (
+            "orders",
+            {
+                "token_id": "11",
+                "side": "BUY",
+                "amount": "1",
+                "units": "SHARES",
+                "intent_key": "security",
+            },
+            "submit_paper_order",
+        ),
+        ("cash-flows", {"amount": "1", "event_id": "security"}, "cash_flow"),
+        ("snapshot", None, "settle_captured"),
+    ],
+)
+def test_paper_conflicts_hide_internal_errors_and_rollback(db, monkeypatch, path, body, operation):
+    session, _ = db
+    session.commit()
+    original = session.get(PaperAccount, 1).funding
+    sensitive = "internal database path /srv/private/account.db token=never-expose"
+
+    def fail(*args, **kwargs):
+        session.get(PaperAccount, 1).funding = Decimal("777")
+        session.flush()
+        raise ValueError(sensitive)
+
+    monkeypatch.setattr(paper, operation, fail)
+    with client_for(session) as client:
+        response = client.post("/api/paper/" + path, json=body)
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Paper operation conflicts with account state or intent"}
+    assert sensitive not in response.text
+    assert session.get(PaperAccount, 1).funding == original
