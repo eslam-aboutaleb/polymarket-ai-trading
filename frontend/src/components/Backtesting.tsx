@@ -17,6 +17,7 @@ import {
 } from "../services/backtestingService";
 import { getApiErrorMessage } from "../utils/apiError";
 import { Banner, ConfirmModal, Skeleton } from "./ui";
+import MarketDataQuality from "./MarketDataQuality";
 
 type FormState = CreateBacktestRequest;
 
@@ -160,6 +161,8 @@ export default function Backtesting() {
           {error}
         </Banner>
       )}
+
+      <MarketDataQuality />
 
       {/* Create Form */}
       {showForm && (

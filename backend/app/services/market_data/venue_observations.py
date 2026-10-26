@@ -6,7 +6,11 @@ from decimal import Decimal, InvalidOperation
 
 from sqlalchemy.exc import IntegrityError
 
-from app.models.market_data.venue_observation import VenueObservation
+from app.models.market_data.venue_observation import (
+    ObservationDataset,
+    ObservationDatasetMember,
+    VenueObservation,
+)
 from app.services.market_data.replay_capture import aware, digest
 
 SOURCE = "polymarket-clob-ws"
@@ -42,11 +46,33 @@ def normalize(raw):
     except (KeyError, TypeError, ValueError, InvalidOperation):
         value = {"version": VERSION, "kind": kind}
         flags.append("INVALID_OR_MISSING_DEPTH")
+    if kind == "source_status":
+        value["status"] = raw.get("status")
+    if (
+        kind == "book"
+        and value.get("bids")
+        and value.get("asks")
+        and max(Decimal(v["price"]) for v in value["bids"])
+        >= min(Decimal(v["price"]) for v in value["asks"])
+    ):
+        flags.append("CROSSED_BOOK")
     return value, flags
+
+
+def ensure_transaction(db):
+    # pysqlite does not begin a transaction for SELECT. A SAVEPOINT must not
+    # become the outer transaction and commit before the caller commits.
+    connection = db.connection()
+    if (
+        connection.dialect.name == "sqlite"
+        and not connection.connection.driver_connection.in_transaction
+    ):
+        connection.exec_driver_sql("BEGIN")
 
 
 def append_event(db, raw, *, received_at, connection_id):
     """Caller owns transaction. Duplicate identity preserves first committed receipt."""
+    ensure_transaction(db)
     received_at = aware(received_at)
     token = str(raw.get("asset_id") or raw.get("token_id") or "")
     content = digest(raw)
@@ -113,6 +139,15 @@ def append_event(db, raw, *, received_at, connection_id):
 
 
 def serialize(row):
+    raw = json.loads(row.payload_json)
+    normalized, _ = normalize(raw)
+    if (
+        row.source != SOURCE
+        or digest(raw) != row.content_hash
+        or digest([SOURCE, row.token_id, row.content_hash]) != row.id
+        or normalized != json.loads(row.normalized_json)
+    ):
+        raise ValueError("observation integrity mismatch")
     return {
         "snapshot_id": row.id,
         "source": row.source,
@@ -130,10 +165,29 @@ def serialize(row):
     }
 
 
-def history(db, token_id, as_of, limit=100):
+def history(db, token_id, as_of, limit=100, before=None):
+    from sqlalchemy import and_, or_
+
+    query = db.query(VenueObservation)
+    if before:
+        cursor = db.get(VenueObservation, before)
+        if (
+            cursor is None
+            or cursor.token_id != token_id
+            or aware(cursor.received_at) > aware(as_of)
+        ):
+            raise ValueError("invalid observation cursor")
+        query = query.filter(
+            or_(
+                VenueObservation.received_at < cursor.received_at,
+                and_(
+                    VenueObservation.received_at == cursor.received_at,
+                    VenueObservation.id < cursor.id,
+                ),
+            )
+        )
     return (
-        db.query(VenueObservation)
-        .filter(
+        query.filter(
             VenueObservation.token_id == token_id,
             VenueObservation.received_at <= aware(as_of),
         )
@@ -161,3 +215,86 @@ def persist_message(raw, received_at, connection_id):
                         received_at=received_at,
                         connection_id=connection_id,
                     )
+
+
+def freeze_dataset(db, token_id, as_of, limit=100):
+    ensure_transaction(db)
+    rows = list(reversed(history(db, token_id, as_of, limit)))
+    manifest = {
+        "version": VERSION,
+        "token_id": token_id,
+        "as_of": aware(as_of).isoformat(),
+        "quality": "INSUFFICIENT_DATA",
+        "rights_scope": "public endpoint; reuse permissions require operator verification",
+        "source_contract": "polymarket-clob-market-channel",
+        "truncated": len(rows) == limit,
+        "observations": [
+            {
+                "snapshot_id": row.id,
+                "content_hash": serialize(row)["content_hash"],
+                "receipt_hash": digest(serialize(row)),
+            }
+            for row in rows
+        ],
+    }
+    identity = digest(manifest)
+    if db.get(ObservationDataset, identity) is None:
+        try:
+            with db.begin_nested():
+                db.add(
+                    ObservationDataset(
+                        id=identity,
+                        manifest_json=json.dumps(manifest, sort_keys=True),
+                        created_at=datetime.now(UTC),
+                    )
+                )
+                for row in rows:
+                    db.add(ObservationDatasetMember(dataset_id=identity, observation_id=row.id))
+                db.flush()
+        except IntegrityError:
+            if db.get(ObservationDataset, identity) is None:
+                raise
+    return {"dataset_id": identity, **manifest}
+
+
+def replay_dataset(db, identity):
+    dataset = db.get(ObservationDataset, identity)
+    if dataset is None:
+        raise LookupError("dataset unavailable")
+    manifest = json.loads(dataset.manifest_json)
+    if digest(manifest) != identity:
+        raise ValueError("dataset integrity mismatch")
+    observations = []
+    for reference in manifest["observations"]:
+        row = db.get(VenueObservation, reference["snapshot_id"])
+        if row is None or row.content_hash != reference["content_hash"]:
+            raise ValueError("dataset observation unavailable")
+        value = serialize(row)
+        if digest(value) != reference["receipt_hash"]:
+            raise ValueError("dataset receipt integrity mismatch")
+        if aware(row.received_at) > datetime.fromisoformat(manifest["as_of"]):
+            raise ValueError("dataset observation after cutoff")
+        observations.append(value)
+    return {"dataset_id": identity, "manifest": manifest, "observations": observations}
+
+
+def prune_unpinned(db, before, limit=1000):
+    """Explicit operator action; frozen evidence is never deleted by retention."""
+    pinned = (
+        db.query(ObservationDatasetMember.observation_id)
+        .filter(ObservationDatasetMember.observation_id == VenueObservation.id)
+        .exists()
+    )
+    rows = (
+        db.query(VenueObservation)
+        .filter(
+            VenueObservation.received_at < aware(before),
+            ~pinned,
+        )
+        .order_by(VenueObservation.received_at, VenueObservation.id)
+        .limit(limit)
+        .all()
+    )
+    for row in rows:
+        db.delete(row)
+    return len(rows)

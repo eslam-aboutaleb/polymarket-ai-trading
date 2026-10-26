@@ -121,6 +121,7 @@ class ClobWsManager:
         max_subscriptions: int = _MAX_SUBSCRIPTIONS,
     ):
         self._connection_id = str(uuid4())
+        self._archive_gap = False
         self._url = url
         self._max_subscriptions = max_subscriptions
         # token_id → refcount (multiple SSE clients may share a token)
@@ -251,6 +252,7 @@ class ClobWsManager:
                 raise
             except Exception as exc:
                 logger.warning("CLOB WS session ended: %s", exc)
+                await self._archive_status("SOURCE_DISCONNECTED")
             if self._stop_event.is_set():
                 break
             await asyncio.sleep(delay)
@@ -270,6 +272,7 @@ class ClobWsManager:
             self._ws = ws
             self._is_connected = True
             logger.info("CLOB WS connected to %s", self._url)
+            await self._archive_status("SOURCE_CONNECTED")
             heartbeat = asyncio.create_task(self._heartbeat(ws))
             try:
                 async with self._lock:
@@ -285,6 +288,7 @@ class ClobWsManager:
                     await heartbeat
                 self._ws = None
                 self._is_connected = False
+                await self._archive_status("SOURCE_DISCONNECTED")
 
     async def _heartbeat(self, ws: Any) -> None:
         """The market channel expects application-level PING frames."""
@@ -302,6 +306,21 @@ class ClobWsManager:
 
     # ── Inbound events ──────────────────────────────────────
 
+    async def _archive_status(self, status):
+        timestamp = str(int(datetime.now(UTC).timestamp() * 1000))
+        for token in list(self._subscriptions):
+            await self._archive_message(
+                json.dumps(
+                    {
+                        "event_type": "source_status",
+                        "asset_id": token,
+                        "timestamp": timestamp,
+                        "status": status,
+                        "connection_id": self._connection_id,
+                    }
+                )
+            )
+
     async def _archive_message(self, message):
         if not get_settings().observation_archive_enabled:
             return
@@ -309,16 +328,35 @@ class ClobWsManager:
         from app.services.market_data.venue_observations import persist_message
 
         try:
-            if len(message) > 1_000_000 or message in ("PING", "PONG", b"PING", b"PONG"):
+            if message in ("PING", "PONG", b"PING", b"PONG"):
                 return
-            events = json.loads(message)
+            if len(message) > 262_144:
+                raise ValueError("archive frame exceeds bound")
+            # Preserve numeric JSON decimal lexemes without binary-float rounding.
+            events = json.loads(message, parse_float=str)
             events = events if isinstance(events, list) else [events]
-            if len(events) > 1000:
-                raise ValueError("stream batch exceeds bound")
+            if len(events) > 1000 or not all(isinstance(event, dict) for event in events):
+                raise ValueError("invalid or oversized stream batch")
             for event in events:
                 if isinstance(event, dict):
                     await asyncio.to_thread(persist_message, event, received, self._connection_id)
+            if self._archive_gap:
+                for token in list(self._subscriptions):
+                    await asyncio.to_thread(
+                        persist_message,
+                        {
+                            "event_type": "source_status",
+                            "asset_id": token,
+                            "status": "ARCHIVE_RECOVERED_WITH_GAP",
+                            "timestamp": str(int(received.timestamp() * 1000)),
+                            "connection_id": self._connection_id,
+                        },
+                        received,
+                        self._connection_id,
+                    )
+                self._archive_gap = False
         except Exception:
+            self._archive_gap = True
             logger.exception("Public observation archive unavailable; continuity unverified")
 
     def _handle_message(self, message: str | bytes) -> None:
@@ -409,7 +447,8 @@ def get_clob_ws_manager() -> ClobWsManager:
 
 def start_clob_ws_manager() -> None:
     """Start the process-level manager's connection loop."""
-    get_clob_ws_manager().start()
+    manager = get_clob_ws_manager()
+    manager.start()
 
 
 async def stop_clob_ws_manager() -> None:
