@@ -1,8 +1,10 @@
 """Authenticated read-only public observation archive. No client-supplied receipts."""
 
 from datetime import datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.api.routes.auth.auth import get_current_user_from_token
@@ -112,8 +114,17 @@ def snapshot(snapshot_id: str, as_of: datetime | None = None, db: Session = Depe
         raise HTTPException(409, "Observation integrity check failed") from exc
 
 
+class FreezeSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    snapshot_ids: list[Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]] = Field(
+        min_length=1,
+        max_length=100,
+    )
+
+
 @router.post("/datasets")
 def freeze(
+    body: FreezeSelection | None = None,
     token_id: str = Query(pattern=r"^[0-9]{1,120}$"),
     as_of: datetime | None = None,
     limit: int = Query(50, ge=1, le=100),
@@ -125,7 +136,13 @@ def freeze(
     if as_of is not None and as_of.tzinfo is None:
         raise HTTPException(422, "as_of requires a timezone")
     try:
-        result = freeze_dataset(db, token_id, as_of or utc_now(), limit)
+        result = freeze_dataset(
+            db,
+            token_id,
+            as_of or utc_now(),
+            limit,
+            snapshot_ids=body.snapshot_ids if body else None,
+        )
         db.commit()
         return result
     except ValueError as exc:

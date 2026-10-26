@@ -90,3 +90,10 @@ def disable():
 @app.get("/")
 def health():
     return {"status": "test"}
+
+
+@app.post("/__test/add")
+def add():
+    with sessions.begin() as db:
+        seed(db, 99, datetime.now(UTC))
+    return {"added": True}

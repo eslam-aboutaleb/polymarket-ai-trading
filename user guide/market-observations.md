@@ -9,7 +9,9 @@ receipt into an earlier decision.
 
 Choose **Freeze these observations** to create a dataset ID. **Replay frozen
 observations** loads that exact manifest, verifies its payload and receipt hashes,
-and returns the same evidence even after newer captures arrive. A dataset is a
+and returns the same evidence even after newer captures arrive. The browser sends
+explicit inspected snapshot IDs when freezing, so receipts committed between
+inspection and freezing cannot silently enter the selected dataset. A dataset is a
 bounded captured sample, not a claim of complete historical coverage. Empty,
 stale, disconnected or interrupted feeds remain visibly insufficient.
 
@@ -52,7 +54,9 @@ account authorization. No public ingestion API lets callers backdate receipts.
   receipt age, stale status, quality flags and bounded sample count.
 - `POST /api/market-data/datasets?token_id=...&as_of=...&limit=50` freezes
   ordered snapshot references, payload/receipt hashes, normalization version,
-  source contract and explicit rights-verification status.
+  source contract and explicit rights-verification status. An optional JSON body
+  `{"snapshot_ids":["<id>"]}` pins an exact inspected selection; token and cutoff
+  checks still apply to every selected ID.
 - `GET /api/market-data/datasets/{dataset_id}` verifies and replays the manifest.
   Missing or altered evidence fails with 409; it never falls back to current data.
 

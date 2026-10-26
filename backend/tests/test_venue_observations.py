@@ -379,3 +379,31 @@ def test_wire_numeric_depth_keeps_decimal_lexemes(monkeypatch):
     asyncio.run(ClobWsManager()._archive_message(wire))
     value, _ = normalize(received[0])
     assert value["bids"][0] == {"price": "0.400000000000000001", "shares": "25.123456789"}
+
+
+def test_explicit_snapshot_selection_cannot_drift_between_inspection_and_freeze(db):
+    from app.services.market_data.venue_observations import freeze_dataset, replay_dataset
+
+    now = datetime.now(UTC)
+    first = append_event(db, book(), received_at=now, connection_id="one")
+    # A later insert is inside the requested window but was not inspected.
+    append_event(db, book(sequence=2), received_at=now + timedelta(seconds=1), connection_id="two")
+    frozen = freeze_dataset(db, "11", now + timedelta(hours=1), snapshot_ids=[first.id])
+    assert [r["snapshot_id"] for r in replay_dataset(db, frozen["dataset_id"])["observations"]] == [
+        first.id
+    ]
+    with pytest.raises(ValueError, match="unavailable"):
+        freeze_dataset(db, "22", now + timedelta(hours=1), snapshot_ids=[first.id])
+    with pytest.raises(ValueError, match="invalid"):
+        freeze_dataset(db, "11", now + timedelta(hours=1), snapshot_ids=[first.id, first.id])
+
+
+def test_nonstandard_json_numbers_are_not_persisted(db):
+    with pytest.raises(ValueError):
+        append_event(
+            db,
+            book(bids=[{"price": float("nan"), "size": 1}]),
+            received_at=datetime.now(UTC),
+            connection_id="one",
+        )
+    assert db.query(VenueObservation).count() == 0
