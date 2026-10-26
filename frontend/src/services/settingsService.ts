@@ -183,7 +183,9 @@ export interface AdminUpdateUserLLMRequest {
 export interface PaperSummary {
   simulation_mode: boolean;
   paper_balance: number;
-  paper_pnl: number;
+  paper_pnl: number | null;
+  paper_nav?: number | null;
+  quality?: string;
   simulated_trades: number;
 }
 
