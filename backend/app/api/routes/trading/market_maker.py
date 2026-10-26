@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_active_account, require_plan
 from app.api.routes.auth.auth import get_current_user_from_token
+from app.api.routes.markets.microstructure import owned_account as get_research_account
 from app.models.trading.market_maker_config import MarketMakerConfig
 from app.services.trading.market_maker_service import (
     get_market_maker_config_for_user,
@@ -285,3 +286,23 @@ def get_paper_intents(
             for row in rows
         ],
     }
+
+
+@router.get("/configs/{config_id}/book-research")
+def maker_book_research(
+    config_id: int, account=Depends(get_research_account), db: Session = Depends(get_db)
+):
+    from app.api.routes.markets.microstructure import enabled
+    from app.services.market_data.book_research import ResearchQuery
+    from app.services.trading.market_maker_service import get_maker_book_research
+
+    enabled()
+    config = get_market_maker_config_for_user(db, config_id, account.owner_user_id)
+    if config is None or not (
+        config.account_id == account.id or (config.account_id is None and account.is_default)
+    ):
+        raise HTTPException(404, "Maker config not found")
+    try:
+        return get_maker_book_research(db, config, ResearchQuery(condition_id=config.condition_id))
+    except ValueError as exc:
+        raise HTTPException(409, "Maker book evidence inconsistent") from exc

@@ -21,11 +21,11 @@ class Level(Contract):
 
 
 class MarketSpec(Contract):
-    condition_id: str
-    yes_token: str
-    no_token: str
-    rule_hash: str
-    metadata_id: str
+    condition_id: str = Field(min_length=1, max_length=200)
+    yes_token: str = Field(min_length=1, max_length=120)
+    no_token: str = Field(min_length=1, max_length=120)
+    rule_hash: str = Field(min_length=1, max_length=64)
+    metadata_id: str = Field(min_length=1, max_length=64)
     received_at: AwareDatetime
     active: bool
     tick: Decimal = Field(gt=0, le=Decimal("0.1"))
@@ -430,7 +430,12 @@ def complement_summary(yes: BinaryBook, no: BinaryBook) -> dict:
     ):
         result["flags"] = ["TOKEN_PAIR_IDENTITY_MISMATCH"]
         return result
-    if abs(yes.age_seconds - no.age_seconds) > 5:
+    if yes.age_seconds is None or no.age_seconds is None:
+        result["flags"] = ["TOKEN_BOOK_AGE_UNAVAILABLE"]
+        return result
+    with localcontext(ACCOUNTING_CONTEXT):
+        skew = abs(yes.age_seconds - no.age_seconds)
+    if skew > 5:
         result["flags"] = ["ASYNCHRONOUS_TOKEN_BOOKS"]
         return result
     with localcontext(ACCOUNTING_CONTEXT):
@@ -442,3 +447,49 @@ def complement_summary(yes: BinaryBook, no: BinaryBook) -> dict:
         if bid_sum > 1:
             result["flags"].append("COMPLEMENT_BID_INEQUALITY_NO_CONVERSION_PROOF")
     return result
+
+
+def round_trip_cost(spec: MarketSpec, book: BinaryBook, request: WalkRequest) -> dict:
+    """Same-token displayed spread/fee cost; no conversion or actual execution claim."""
+    unavailable = {
+        "status": "abstain",
+        "entry_cost": None,
+        "exit_proceeds": None,
+        "modeled_spread_and_fee_cost": None,
+        "actual_execution": False,
+    }
+    if request.units != "SHARES":
+        return {**unavailable, "reason": "SHARE_REQUEST_REQUIRED"}
+    buy = walk_depth(spec, book, request.model_copy(update={"side": "BUY"}))
+    sell = walk_depth(spec, book, request.model_copy(update={"side": "SELL"}))
+    if buy.status != "modeled" or sell.status != "modeled":
+        return {**unavailable, "reason": "BOTH_SIDES_AND_FEES_REQUIRED"}
+    with localcontext(ACCOUNTING_CONTEXT):
+        common = min(buy.matched_shares, sell.matched_shares)
+        buy = walk_depth(spec, book, request.model_copy(update={"side": "BUY", "amount": common}))
+        sell = walk_depth(spec, book, request.model_copy(update={"side": "SELL", "amount": common}))
+        return {
+            "status": "modeled",
+            "matched_shares": str(common),
+            "requested_shares": str(request.amount),
+            "entry_cost": str(buy.net_cash),
+            "exit_proceeds": str(sell.net_cash),
+            "modeled_spread_and_fee_cost": str(buy.net_cash - sell.net_cash),
+            "partial": common < request.amount,
+            "actual_execution": False,
+        }
+
+
+class QueueAssessment(Contract):
+    status: Literal["unavailable"] = "unavailable"
+    reason: str = "NO_VERIFIED_AGGRESSOR_FLOW_OR_QUEUE_POSITION"
+    estimated_fill_shares: None = None
+    fill_probability: None = None
+    actual_execution: Literal[False] = False
+
+
+class NoQueueEvidencePolicy:
+    """Queue-policy boundary for #34; an order-book touch cannot prove a maker fill."""
+
+    def assess(self, book: BinaryBook) -> QueueAssessment:  # noqa: ARG002
+        return QueueAssessment()

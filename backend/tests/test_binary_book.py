@@ -44,16 +44,14 @@ def snapshot(**changes):
 def delta(**changes):
     return snapshot(
         **{
-            **{
-                "snapshot_id": "delta",
-                "received_at": NOW + timedelta(seconds=1),
-                "source_at": NOW + timedelta(seconds=1),
-                "kind": "delta",
-                "sequence": 2,
-                "bids": [],
-                "asks": [],
-                "changes": [("SELL", Level(price="0.5", shares="0"))],
-            },
+            "snapshot_id": "delta",
+            "received_at": NOW + timedelta(seconds=1),
+            "source_at": NOW + timedelta(seconds=1),
+            "kind": "delta",
+            "sequence": 2,
+            "bids": [],
+            "asks": [],
+            "changes": [("SELL", Level(price="0.5", shares="0"))],
             **changes,
         }
     )
@@ -137,7 +135,7 @@ def test_buy_sell_size_curves_and_fees_are_exact_and_bounded():
     assert estimates[2].vwap == Decimal("0.55")
     assert estimates[2].fee == Decimal("0.11") and estimates[2].net_cash == Decimal("11.11")
     assert estimates[3].partial and estimates[3].displayed_capacity == 30
-    assert all(a.vwap <= b.vwap for a, b in zip(estimates, estimates[1:]))
+    assert all(a.vwap <= b.vwap for a, b in zip(estimates, estimates[1:], strict=False))
     sold = walk_depth(
         market, book, WalkRequest(side="SELL", amount="5", fee_bps="100", fee_version="test")
     )
@@ -188,3 +186,103 @@ def test_complement_inequalities_do_not_net_token_liquidity():
     result = complement_summary(yes, no)
     assert result["ask_sum"] == "0.8" and result["netting_permitted"] is False
     assert result["arbitrage_claim"] is False and result["flags"]
+
+
+@pytest.mark.parametrize("amount", ["1", "1.001", "9.99", "10", "10.01", "29.99", "30", "1000"])
+def test_depth_never_exceeds_displayed_quantity_or_budget(amount):
+    from app.services.market_data.binary_book import WalkRequest, walk_depth
+
+    book = reconstruct(spec(), "11", [snapshot()], NOW)
+    request = WalkRequest(side="BUY", units="USDC", amount=amount, fee_bps="25", fee_version="test")
+    result = walk_depth(spec(), book, request)
+    if result.status == "modeled":
+        assert result.matched_shares <= 30 and result.net_cash <= Decimal(amount)
+        assert all(point.shares > 0 for point in result.curve)
+        assert all(
+            a.cumulative_shares < b.cumulative_shares
+            for a, b in zip(result.curve, result.curve[1:], strict=False)
+        )
+
+
+def test_simultaneous_ambiguous_updates_and_identity_collisions_abstain():
+    events = [
+        snapshot(sequence_contract="unavailable"),
+        snapshot(
+            snapshot_id="other",
+            sequence_contract="unavailable",
+            asks=[Level(price="0.7", shares="5")],
+        ),
+    ]
+    assert reconstruct(spec(), "11", events, NOW).grade == "PARTIAL"
+    with pytest.raises(ValueError, match="IDENTITY_CONFLICT"):
+        reconstruct(spec(), "11", [snapshot(), snapshot(asks=[])], NOW)
+
+
+def test_ambient_decimal_precision_cannot_change_results():
+    from decimal import localcontext
+
+    from app.services.market_data.binary_book import WalkRequest, walk_depth
+
+    baseline = reconstruct(spec(), "11", [snapshot()], NOW)
+    request = WalkRequest(side="BUY", amount="20", fee_bps="100", fee_version="test")
+    with localcontext() as context:
+        context.prec = 4
+        assert reconstruct(spec(), "11", [snapshot()], NOW) == baseline
+        assert walk_depth(spec(), baseline, request).vwap == Decimal("0.55")
+
+
+def test_round_trip_spread_fees_and_queue_boundary():
+    from app.services.market_data.binary_book import (
+        NoQueueEvidencePolicy,
+        WalkRequest,
+        round_trip_cost,
+    )
+
+    book = reconstruct(spec(), "11", [snapshot()], NOW)
+    result = round_trip_cost(
+        spec(), book, WalkRequest(side="BUY", amount="5", fee_bps="100", fee_version="test")
+    )
+    assert Decimal(result["entry_cost"]) == Decimal("2.525")
+    assert Decimal(result["exit_proceeds"]) == Decimal("1.98")
+    assert Decimal(result["modeled_spread_and_fee_cost"]) == Decimal("0.545")
+    assert NoQueueEvidencePolicy().assess(book).fill_probability is None
+
+
+def test_tick_minimum_size_limit_and_fee_sensitivity():
+    from app.services.market_data.binary_book import WalkRequest, walk_depth
+
+    market = spec()
+    book = reconstruct(market, "11", [snapshot()], NOW)
+    request = WalkRequest(side="BUY", amount="20", fee_bps="0", fee_version="test")
+    limited = walk_depth(market, book, request.model_copy(update={"limit_price": Decimal("0.55")}))
+    assert limited.matched_shares == 10 and limited.partial
+    assert (
+        walk_depth(
+            market, book, request.model_copy(update={"limit_price": Decimal("0.555")})
+        ).reason
+        == "LIMIT_OFF_TICK"
+    )
+    assert (
+        walk_depth(market, book, request.model_copy(update={"amount": Decimal("0.999")})).reason
+        == "BELOW_MINIMUM_ORDER_SIZE"
+    )
+    assert (
+        walk_depth(market, book, request.model_copy(update={"fee_bps": Decimal("100")})).net_cash
+        > walk_depth(market, book, request).net_cash
+    )
+
+
+@pytest.mark.parametrize(
+    "changes,reason",
+    [
+        ({"source_at": None}, "SOURCE_CLOCK_UNKNOWN_OR_FUTURE"),
+        ({"source_at": NOW + timedelta(seconds=1)}, "SOURCE_CLOCK_UNKNOWN_OR_FUTURE"),
+        ({"asks": [Level(price="0.505", shares="1")]}, "OFF_TICK_LEVEL"),
+        ({"checksum": "incomplete"}, "CHECKSUM_UNVERIFIABLE"),
+        ({"rule_hash": "changed"}, "TOKEN_CONDITION_OR_RULE_MISMATCH"),
+    ],
+)
+def test_unusable_source_fields_reject_costs(changes, reason):
+    book = reconstruct(spec(), "11", [snapshot(**changes)], NOW)
+    assert book.grade == "PARTIAL" and reason in book.reasons
+    assert book.asks == []

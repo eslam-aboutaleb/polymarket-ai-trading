@@ -14,6 +14,7 @@ from app.models.market_data.venue_observation import (
 from app.services.market_data.replay_capture import aware, digest
 
 SOURCE = "polymarket-clob-ws"
+REST_SOURCE = "polymarket-native-rest"
 VERSION = "venue-observation-v1"
 
 
@@ -70,14 +71,16 @@ def ensure_transaction(db):
         connection.exec_driver_sql("BEGIN")
 
 
-def append_event(db, raw, *, received_at, connection_id):
+def append_event(db, raw, *, received_at, connection_id, source=SOURCE):
     """Caller owns transaction. Duplicate identity preserves first committed receipt."""
+    if source not in (SOURCE, REST_SOURCE):
+        raise ValueError("unsupported capture source")
     ensure_transaction(db)
     received_at = aware(received_at)
     token = str(raw.get("asset_id") or raw.get("token_id") or "")
     payload = json.dumps(raw, sort_keys=True, allow_nan=False)
     content = digest(raw)
-    identity = digest([SOURCE, token, content])
+    identity = digest([source, token, content])
     existing = db.get(VenueObservation, identity)
     if existing:
         return existing
@@ -113,7 +116,7 @@ def append_event(db, raw, *, received_at, connection_id):
         flags.append("LATE_SOURCE_EVENT")
     row = VenueObservation(
         id=identity,
-        source=SOURCE,
+        source=source,
         connection_id=connection_id,
         token_id=token,
         condition_id=raw.get("market"),
@@ -143,9 +146,9 @@ def serialize(row):
     raw = json.loads(row.payload_json)
     normalized, _ = normalize(raw)
     if (
-        row.source != SOURCE
+        row.source not in (SOURCE, REST_SOURCE)
         or digest(raw) != row.content_hash
-        or digest([SOURCE, row.token_id, row.content_hash]) != row.id
+        or digest([row.source, row.token_id, row.content_hash]) != row.id
         or normalized != json.loads(row.normalized_json)
     ):
         raise ValueError("observation integrity mismatch")

@@ -735,3 +735,18 @@ def get_running_maker_ids() -> list[int]:
 async def trigger_single_sync(config_id: int) -> dict[str, Any]:
     """Execute a single sync cycle (for manual trigger from API)."""
     return await _sync_market_maker(config_id)
+
+
+def get_maker_book_research(db, config, query):
+    """Read-side diagnostic only. Never called from quote placement or cancellation."""
+    from app.services.market_data.book_research import load_analysis
+
+    if query.condition_id.lower() != config.condition_id.lower():
+        raise ValueError("maker condition identity mismatch")
+    result, _ = load_analysis(db, query)
+    if result.get("spec") and (
+        result["spec"]["yes_token"] != config.token_id_yes
+        or result["spec"]["no_token"] != config.token_id_no
+    ):
+        raise ValueError("maker token identity mismatch")
+    return result

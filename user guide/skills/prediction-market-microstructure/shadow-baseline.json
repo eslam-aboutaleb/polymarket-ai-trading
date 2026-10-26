@@ -1,0 +1,12 @@
+{
+  "classification": "synthetic_shadow_fixture",
+  "fixture": "asks supplied in order 0.60 x 20, 0.50 x 10; bid 0.40 x 10",
+  "hypothesis_frozen_before_evaluation": "A side-aware sorted depth walk must not treat the first supplied level as best or exceed displayed size",
+  "existing_maker_read_baseline": {"first_ask": "0.60", "midpoint": "0.50", "size_specific_vwap": null},
+  "binary_book_v1": {"best_ask": "0.50", "midpoint": "0.45", "buy_20_vwap": "0.55", "buy_20_gross": "11.00", "buy_20_cash_at_100bps": "11.1100", "buy_40_matched_shares": "30.00"},
+  "observed_execution_sample_count": 0,
+  "live_fill_error": null,
+  "profitability_claim": false,
+  "queue_or_measured_impact_claim": false,
+  "scope": "Read-side correctness comparison only. No production fill data supplied, so execution calibration remains unavailable."
+}
