@@ -1,46 +1,124 @@
-# Point-in-time public observations
+# Point-in-time market data (#1)
 
-This first milestone of #1 archives the existing public CLOB WebSocket stream.
-It preserves the REST ReplayCapture and MarketObservation metadata stores.
+Use **Backtesting → Market data quality** to inspect capture availability before
+using historical data. Enter the native token ID and optionally an ISO cutoff
+with a timezone. The panel shows current source status/freshness and observations
+received by the requested cutoff. Source clocks are displayed separately from
+receipt clocks in API results; an old source timestamp never permits a late
+receipt into an earlier decision.
 
-Apply `alembic upgrade head` in the configured backend environment; enable
-`OBSERVATION_ARCHIVE_ENABLED=true` (default off). Capture follows the existing
-price-stream subscriptions. Unsubscribed tokens have no promised coverage.
+Choose **Freeze these observations** to create a dataset ID. **Replay frozen
+observations** loads that exact manifest, verifies its payload and receipt hashes,
+and returns the same evidence even after newer captures arrive. A dataset is a
+bounded captured sample, not a claim of complete historical coverage. Empty,
+stale, disconnected or interrupted feeds remain visibly insufficient.
 
-Authenticated `GET /api/market-data/observations?token_id=...&as_of=...&limit=100`
-returns a bounded page in descending receipt order. Cutoffs require timezones.
-Late-arriving events cannot enter earlier queries merely because their source
-timestamp is old. Responses retain raw JSON, content hashes, stable IDs, exact
-Decimal normalization, source and receipt clocks, connection identity and quality
-flags. Identical payloads keep their first committed receipt. Changed payloads,
-including conflicting sequences, remain separate rows rather than overwrites.
+## Operator setup
 
-Reconnects, numeric sequence gaps/conflicts, late events, unknown/future source
-clocks and missing depth are flagged. Sequence comparison is diagnostic, not proof
-of provider semantics. Receipt age exposes freshness. All responses explicitly
-report insufficient evidence for executable reconstructed books. Snapshots and
-ticks cannot establish queue position, aggressor semantics or replenishment.
-#18 owns verified reconstruction; no observation becomes an assumed fill.
+1. Apply `alembic upgrade head` from `backend/` with the normal configured
+   environment (`PYTHONPATH=.:../services/shared` when running the CLI directly).
+2. Enable `OBSERVATION_ARCHIVE_ENABLED=true`. It defaults off and introduces no
+   order execution or credential access.
+3. Set `OBSERVATION_ARCHIVE_TOKENS=11,22` using actual native token IDs. At most 50
+   comma-separated numeric IDs are accepted. These are pinned subscriptions in
+   the existing CLOB manager, so capture continues without an open UI. Run the
+   existing worker/all process role for collection; web-only processes do not
+   start background services. UI subscriptions may additionally request tokens.
+4. Monitor the panel/API and archive-error logs. A disconnected source writes a
+   status receipt when storage is available. Recovery from a write failure records
+   an explicit gap. A database outage cannot record its own receipt; logs and
+   aging last-received timestamps expose that failure until recovery.
 
-Messages over 1 MB, batches over 1,000 events and normalized sides over 1,000 levels
-are bounded. Database persistence uses its own transaction off the event loop.
-Failures are logged without inventing receipts or stopping existing price ticks.
-There is no client ingestion endpoint to backdate receipts and no private account
-data, signing or trading credential access in this public archive.
+Storage is additive: `venue_observations`, `observation_datasets` and
+`observation_dataset_members`. Token/receipt, token/kind/receipt and
+condition/receipt indexes support bounded reads. No financial history is rewritten.
+The REST `ReplayCapture` and canonical `MarketObservation` stores remain intact:
+those existing paths capture trader first-seen signals, paired venue metadata,
+rule identities and public evidence. This archive adds raw market-channel events,
+not a second market-data client or an alternate execution path.
 
-Rollback: disable the flag first. The migration downgrade drops only
-`venue_observations`; export evidence before dropping it. No automatic retention
-purge can silently invalidate exported replay fixtures. Limit subscriptions and
-monitor storage and archive-error logs until measured retention is implemented.
+## API and provenance
 
-Tests: `tests/test_venue_observations.py` covers exact values, deduplication,
-source clocks, gaps/reconnects and WebSocket-envelope-to-authenticated-HTTP as-of
-behavior. `tests/integration/test_venue_observations_postgres.py` covers concurrent
-receipts and upgrade/downgrade preservation and is included in CI.
+All endpoints require the existing authenticated browser session. Records contain
+public source data only; private saved analyses/replay runs retain their existing
+account authorization. No public ingestion API lets callers backdate receipts.
 
-## Remaining #1 milestones
+- `GET /api/market-data/observations?token_id=...&as_of=...&limit=50` returns
+  receipt-ordered observations, with `next_before` for stable cursor pagination.
+  Pass that ID as `before` with the same cutoff/token for the next page.
+- `GET /api/market-data/observations/{snapshot_id}?as_of=...` retrieves one
+  hash-verified snapshot; a snapshot unavailable at that cutoff returns 404.
+- `GET /api/market-data/quality?token_id=...` reports current source state,
+  receipt age, stale status, quality flags and bounded sample count.
+- `POST /api/market-data/datasets?token_id=...&as_of=...&limit=50` freezes
+  ordered snapshot references, payload/receipt hashes, normalization version,
+  source contract and explicit rights-verification status.
+- `GET /api/market-data/datasets/{dataset_id}` verifies and replays the manifest.
+  Missing or altered evidence fails with 409; it never falls back to current data.
 
-Keep #1 open after this PR. Continuous collection independent of UI subscriptions,
-frozen multi-source dataset manifests, research-evidence rights metadata,
-production retention/partitions and the quality UI remain separate increments.
-Raw stream storage does not claim those capabilities or #18 book reconstruction.
+Canonical event JSON and Decimal strings preserve source precision. JSON decimal
+number lexemes are retained as strings rather than rounded through binary floats;
+the checksum identifies that versioned canonical payload, not raw wire whitespace. Duplicate payloads retain
+the first committed receipt. Changed payloads, conflicting sequences, late events,
+connection changes, gaps, missing depth and unknown/future source clocks remain
+separate evidence or explicit flags. Sequence comparisons are diagnostics, not a
+claim about undocumented provider ordering. Crossed books are flagged. No missing
+price or size is replaced by a fabricated zero.
+
+Frames are capped at 256 KiB, batches at 1,000 events, and API pages at 100
+observations. Oversized/invalid frames log a capture failure and mark a recovery
+gap rather than silently claiming continuous coverage.
+
+API results remain `INSUFFICIENT_DATA` for **continuous executable reconstruction**.
+An intact captured book is usable source evidence, but it cannot establish queue
+position, aggressor attribution or liquidity replenishment. Those are #18/#34
+responsibilities. Rights metadata records an operator verification requirement;
+public endpoint access does not itself grant redistribution or commercial rights.
+#54 owns expanded provider contracts. No unlicensed substitute feed is introduced.
+
+## Retention and rollback
+
+Retention is explicit and bounded, and cannot remove observations pinned by a
+frozen dataset. From `backend/`, first review a dry run:
+
+```bash
+PYTHONPATH=.:../services/shared .venv/bin/python scripts/prune_observations.py --before 2026-01-01T00:00:00+00:00 --limit 1000
+# Repeat with --apply only when that retention cutoff is intended.
+```
+
+Unpinned observations older than the cutoff are eligible for deletion. Preserve
+or freeze evidence required for research before applying retention. Foreign keys
+protect dataset membership; indexed bounded batches avoid whole-table rewrites.
+Partitioning is a future measured scaling choice, not a prerequisite for the
+current bounded capture contract.
+
+Disable the archive flag before rollback. Export evidence first: downgrading this
+migration removes its three archive tables, while prior/live/financial tables
+remain. If another pending PR adds an earlier migration, rebase/rechain this
+migration and verify a single Alembic head before merging.
+
+## Acceptance evidence and benchmark
+
+| #1 acceptance | Verification |
+| --- | --- |
+| Book/sequence/Decimal round-trip | `test_decimal_roundtrip_first_receipt_and_duplicates`; browser checks preserve `0.400000000000000001`. |
+| Out-of-order and duplicate events never overwrite | Gap/reconnect/conflicting-sequence regression, ten duplicate deliveries and concurrent PostgreSQL first-receipt test. |
+| Missing depth returns insufficient data | Tick/missing/invalid/crossed-depth fixtures; API and browser show `INSUFFICIENT_DATA`. |
+| As-of hides later observations | WebSocket → real SQL → HTTP regression; late-backfill cutoff regression; snapshot cutoff and cursor-boundary checks. Existing native trader-capture tests also preserve first-seen boundaries. |
+| Source errors/freshness visible | Persisted disconnect/recovery status, archive-write-gap regression and two browser scenarios covering source failure/missing data/disabled archive. |
+| Replay reproducible from snapshot IDs | Frozen manifest equality after newer receipts, direct snapshot retrieval, tamper rejection and pinned-retention regression; browser freeze/replay. |
+| Migrations/ingestion concurrency | PostgreSQL simultaneous inserts/freezes, repeated bootstrap upgrade, downgrade preserving unrelated data, and re-upgrade. |
+
+The deterministic data-availability benchmark compares the previous transient
+price-tick path (no durable event replay) with the archive: ten identical deliveries
+retain exactly one observation; one later backfill adds one observation to the
+later window and zero to the earlier window; frozen replay remains identical after
+that addition and retention. These are fixture correctness results, not measured
+customer profitability, historical provider coverage or production throughput.
+
+Tests live in `backend/tests/test_venue_observations.py`,
+`backend/tests/integration/test_venue_observations_postgres.py` and
+`frontend/e2e/observations/quality.spec.ts`. Run `npm run test:observations` from
+`frontend/` for real HTTP/SQL/UI regressions. Controlled source receipts replace
+external providers; no live money path is exercised. CI runs these alongside the
+existing metadata, trader capture, authentication and trading-safety regressions.

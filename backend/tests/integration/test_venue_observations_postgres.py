@@ -15,7 +15,12 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session
 
 from app.models.market_data.venue_observation import VenueObservation
-from app.services.market_data.venue_observations import append_event
+from app.services.market_data.venue_observations import (
+    append_event,
+    freeze_dataset,
+    prune_unpinned,
+    replay_dataset,
+)
 
 
 def test_concurrent_receipts_and_migration_preserve_existing_tables():
@@ -65,6 +70,22 @@ def test_concurrent_receipts_and_migration_preserve_existing_tables():
         assert identities[0] == identities[1]
         with Session(engine) as db:
             assert db.query(VenueObservation).count() == 1
+        barrier = Barrier(2)
+
+        def freeze(_):
+            with Session(engine) as db:
+                barrier.wait(timeout=15)
+                result = freeze_dataset(db, "11", moment)
+                db.commit()
+                return result
+
+        with ThreadPoolExecutor(2) as executor:
+            manifests = list(executor.map(freeze, range(2)))
+        assert manifests[0] == manifests[1]
+        with Session(engine) as db:
+            assert len(replay_dataset(db, manifests[0]["dataset_id"])["observations"]) == 1
+            assert prune_unpinned(db, datetime.now(UTC)) == 0
+            db.commit()
         with engine.begin() as connection:
             with Operations.context(MigrationContext.configure(connection)):
                 migration.downgrade()

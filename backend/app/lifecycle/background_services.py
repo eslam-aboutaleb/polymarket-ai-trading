@@ -96,6 +96,14 @@ async def start_background_services(
     from app.services.market_data.clob_ws_manager import start_clob_ws_manager
 
     start_clob_ws_manager()
+    from app.config import get_settings
+    from app.services.market_data.clob_ws_manager import get_clob_ws_manager
+
+    archive_settings = get_settings()
+    if archive_settings.observation_archive_enabled and archive_settings.observation_archive_tokens:
+        await get_clob_ws_manager().subscribe(
+            archive_settings.observation_archive_tokens.split(",")
+        )
 
     leaderboard_task = asyncio.create_task(refresh_leaderboard_background(db=None, interval=300))
     background_tasks.append(leaderboard_task)

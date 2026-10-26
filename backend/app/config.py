@@ -35,6 +35,18 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
 
     observation_archive_enabled: bool = False
+    observation_archive_tokens: str = ""
+
+    @field_validator("observation_archive_tokens")
+    @classmethod
+    def validate_archive_tokens(cls, value):
+        tokens = value.split(",") if value else []
+        if len(tokens) > 50 or any(
+            not t.isascii() or not t.isdigit() or len(t) > 120 for t in tokens
+        ):
+            raise ValueError("archive tokens must be at most 50 comma-separated numeric token IDs")
+        return value
+
     native_capture_enabled: bool = False
     follower_replay_enabled: bool = False
 
