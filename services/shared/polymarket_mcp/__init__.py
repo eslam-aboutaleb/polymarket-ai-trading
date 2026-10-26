@@ -354,6 +354,18 @@ class ResearchMCPClient:
                 return candidate
         return ""
 
+    async def binary_book_research(self, condition_id: str, **assumptions) -> dict[str, Any]:
+        """Uncached structured read-only tool for Analysis/Research/orchestrator callers."""
+        result = await self._call_tool("binary_book", {"condition_id": condition_id, **assumptions})
+        if not isinstance(result, dict) or result.get("version") != "binary-book-v1":
+            return {
+                "version": "binary-book-v1",
+                "status": "abstain",
+                "reason": "BOOK_TOOL_UNAVAILABLE",
+                "research_only": True,
+            }
+        return result
+
     async def gather_market_research(
         self,
         condition_id: str,
