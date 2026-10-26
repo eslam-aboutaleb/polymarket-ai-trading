@@ -37,6 +37,9 @@ def test_identical_native_events_book_identical_economics_without_signing(db, st
     forbidden = AssertionError("paper accessed private execution")
     with (
         patch("py_clob_client.client.ClobClient.post_order", side_effect=forbidden),
+        patch("py_clob_client_v2.client.ClobClient.post_order", side_effect=forbidden),
+        patch("py_clob_client_v2.client.ClobClient.create_order", side_effect=forbidden),
+        patch("app.services.trading.execution.live.place_live_order", side_effect=forbidden),
         patch("py_clob_client.client.ClobClient.create_order", side_effect=forbidden),
         patch.object(copy_trade_service, "load_wallet_credentials", side_effect=forbidden),
     ):

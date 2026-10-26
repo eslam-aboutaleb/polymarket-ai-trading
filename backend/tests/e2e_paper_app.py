@@ -74,6 +74,10 @@ from py_clob_client.client import ClobClient  # noqa: E402
 
 ClobClient.post_order = forbidden
 ClobClient.create_order = forbidden
+from py_clob_client_v2.client import ClobClient as V2ClobClient  # noqa: E402
+
+V2ClobClient.post_order = forbidden
+V2ClobClient.create_order = forbidden
 
 
 @app.post("/__test/reset")

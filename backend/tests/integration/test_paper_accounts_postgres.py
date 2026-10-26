@@ -158,11 +158,55 @@ with Session(engine) as db:
 
 def test_migration_upgrade_bootstrap_and_downgrade_preserve_legacy(sessions):
     factory, _, _ = sessions
-    path = Path(__file__).parents[2] / "migrations/versions/20261023_0033_paper_accounts.py"
+    path = Path(__file__).parents[2] / "migrations/versions/20261026_0034_paper_accounts.py"
     spec = importlib.util.spec_from_file_location("paper_revision", path)
     revision = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(revision)
     engine = factory.kw["bind"]
+    from app.models.trading.live_order import LiveOrder
+
+    with factory() as db:
+        legacy = UserTrade(
+            user_id=1,
+            account_id=1,
+            market_id="legacy",
+            token_id="11",
+            action="buy",
+            amount=5,
+            price=0.5,
+            status="simulated",
+            pnl=1.25,
+        )
+        pending = UserTrade(
+            user_id=1,
+            account_id=1,
+            market_id="live",
+            token_id="11",
+            action="buy",
+            amount=2,
+            price=0.5,
+            status="pending",
+        )
+        db.add_all([legacy, pending])
+        db.flush()
+        db.add(
+            LiveOrder(
+                user_id=1,
+                account_id=1,
+                trade_id=pending.id,
+                idempotency_key="preserved-live",
+                fingerprint="f" * 64,
+                strategy="manual",
+                token_id="11",
+                side="BUY",
+                price=0.5,
+                shares=4,
+                notional=2,
+                reserved=2,
+                state="prepared",
+            )
+        )
+        db.commit()
     with engine.begin() as connection:
         # Bootstrap metadata may already contain all new tables.
         with Operations.context(MigrationContext.configure(connection)):
@@ -170,6 +214,13 @@ def test_migration_upgrade_bootstrap_and_downgrade_preserve_legacy(sessions):
             revision.downgrade()
         assert "paper_accounts" not in inspect(connection).get_table_names()
         assert connection.execute(text("SELECT count(*) FROM users")).scalar() == 1
+        assert connection.execute(text("SELECT count(*) FROM user_trades")).scalar() == 2
+        assert (
+            connection.execute(
+                text("SELECT reserved FROM live_orders WHERE idempotency_key='preserved-live'")
+            ).scalar()
+            == 2
+        )
         with Operations.context(MigrationContext.configure(connection)):
             revision.upgrade()
             revision.upgrade()

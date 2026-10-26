@@ -104,7 +104,7 @@ invented from these observations.
 ## Operator rollout, audit and rollback
 
 1. Back up the database, then run `alembic upgrade head` from `backend/`. Revision
-   `20261023_0033_paper_accounts` adds four tables without rewriting financial history.
+   `20261026_0034_paper_accounts` adds four tables without rewriting financial history.
 2. Set `PAPER_JOURNAL_V2_ENABLED=true` to enable modeled fills and NAV snapshots.
    Enable `NATIVE_CAPTURE_ENABLED=true` for bounded public refresh. Defaults are off.
    While the journal flag is off, new paper fills are paused and no replacement
@@ -121,7 +121,7 @@ invented from these observations.
    held markets per account/hourly pass and ten seconds per market.
 5. Roll back by disabling the flag first. This preserves journal evidence and
    stops new economic mutations from strategy adapters and the snapshot worker.
-   Database downgrade to `20261023_0032_native_replay_capture` **drops the four new
+   Database downgrade to `20261024_0033_live_orders` **drops the four new
    paper tables**; export/back them up before downgrading. Legacy tables remain.
 
 A bounded metadata reprocessor defaults to dry-run (from `backend/`):
