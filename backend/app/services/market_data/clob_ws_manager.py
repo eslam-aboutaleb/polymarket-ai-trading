@@ -122,6 +122,8 @@ class ClobWsManager:
     ):
         self._connection_id = str(uuid4())
         self._archive_gap = False
+        self._resnapshot_tasks: set[asyncio.Task] = set()
+        self._resnapshot_attempts: dict[str, float] = {}
         self._url = url
         self._max_subscriptions = max_subscriptions
         # token_id → refcount (multiple SSE clients may share a token)
@@ -155,6 +157,11 @@ class ClobWsManager:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        for pending in list(self._resnapshot_tasks):
+            pending.cancel()
+        if self._resnapshot_tasks:
+            await asyncio.gather(*self._resnapshot_tasks, return_exceptions=True)
+        self._resnapshot_tasks.clear()
         self._ws = None
         self._is_connected = False
         logger.info("CLOB WS manager stopped")
@@ -340,6 +347,9 @@ class ClobWsManager:
             for event in events:
                 if isinstance(event, dict):
                     await asyncio.to_thread(persist_message, event, received, self._connection_id)
+                    from app.services.market_data.book_resnapshot import schedule_resnapshot
+
+                    schedule_resnapshot(self, event)
             if self._archive_gap:
                 for token in list(self._subscriptions):
                     await asyncio.to_thread(

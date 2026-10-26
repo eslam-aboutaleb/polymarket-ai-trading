@@ -25,11 +25,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from polymarket_settings import TASK_TIERS, ModelTier
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_plan_quota
 from app.api.routes.auth.auth import get_current_user_from_token
-from app.config import AIBackend
+from app.config import AIBackend, get_settings
 from app.grpc_clients.analysis_client import AnalysisClient
 from app.services.intelligence.llm_gateway import get_llm_gateway
 from app.services.intelligence.prompt_version import current_prompt_version
@@ -177,6 +178,43 @@ async def _orchestration_sse_stream(
 # ── Routes ───────────────────────────────────────────────────
 
 
+def _with_book_evidence(db, payload):
+    """Only server-captured evidence can populate this optional read-side context."""
+    import re
+
+    from app.services.market_data.book_research import ResearchQuery, load_analysis
+
+    result = {key: value for key, value in payload.items() if key != "captured_microstructure"}
+    condition = str(payload.get("condition_id") or "")
+    if not get_settings().binary_book_research_enabled or not re.fullmatch(
+        r"0x[a-fA-F0-9]{64}", condition
+    ):
+        return result
+    try:
+        evidence, _ = load_analysis(db, ResearchQuery(condition_id=condition))
+        result["captured_microstructure"] = {
+            "version": evidence["version"],
+            "as_of": evidence["as_of"],
+            "reason": evidence["reason"],
+            "metadata_id": evidence.get("metadata_id"),
+            "rule_hash": evidence.get("rule_hash"),
+            "research_only": True,
+            "books": {
+                key: {
+                    field: book[field]
+                    for field in ("grade", "reasons", "book_hash", "age_seconds", "expires_at")
+                }
+                for key, book in evidence["books"].items()
+            },
+        }
+    except (ValueError, SQLAlchemyError):
+        result["captured_microstructure"] = {
+            "status": "abstain",
+            "reason": "BOOK_EVIDENCE_UNAVAILABLE",
+        }
+    return result
+
+
 @router.post(
     "",
     response_model=OrchestrateResponse,
@@ -200,7 +238,7 @@ async def orchestrate(
     try:
         result = await client.orchestrate(
             intent=request.intent,
-            payload=request.payload,
+            payload=_with_book_evidence(db, request.payload),
             steps=request.steps,
             user_id=str(user_id or ""),
             llm_config=llm_config,
@@ -239,7 +277,7 @@ async def orchestrate_stream(
     return StreamingResponse(
         _orchestration_sse_stream(
             intent=request.intent,
-            payload=request.payload,
+            payload=_with_book_evidence(db, request.payload),
             steps=request.steps,
             user_id=str(user_id or ""),
             llm_config=llm_config,
