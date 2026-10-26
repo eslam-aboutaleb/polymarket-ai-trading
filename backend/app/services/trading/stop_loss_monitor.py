@@ -29,7 +29,6 @@ from app.services.trading.copy_trade_service import (
     _get_poly_proxy_wallet_address,
 )
 from app.services.trading.execution.async_io import run_blocking_execution
-from app.services.trading.trade_recorder import record_user_trade
 from app.services.users.price_alert_service import (
     STOP_LOSS_EVENT,
     TAKE_PROFIT_EVENT,
