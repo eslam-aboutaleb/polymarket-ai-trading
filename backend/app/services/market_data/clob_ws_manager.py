@@ -26,6 +26,7 @@ import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from app.config import get_settings
 
@@ -119,6 +120,7 @@ class ClobWsManager:
         url: str = POLYMARKET_CLOB_WS_URL,
         max_subscriptions: int = _MAX_SUBSCRIPTIONS,
     ):
+        self._connection_id = str(uuid4())
         self._url = url
         self._max_subscriptions = max_subscriptions
         # token_id → refcount (multiple SSE clients may share a token)
@@ -264,6 +266,7 @@ class ClobWsManager:
             close_timeout=5,
             additional_headers={"User-Agent": "polymarket-ai/1.0"},
         ) as ws:
+            self._connection_id = str(uuid4())
             self._ws = ws
             self._is_connected = True
             logger.info("CLOB WS connected to %s", self._url)
@@ -274,6 +277,7 @@ class ClobWsManager:
                 if token_ids:
                     await self._send(ws, {"assets_ids": token_ids, "type": "market"})
                 async for message in ws:
+                    await self._archive_message(message)
                     self._handle_message(message)
             finally:
                 heartbeat.cancel()
@@ -298,6 +302,25 @@ class ClobWsManager:
 
     # ── Inbound events ──────────────────────────────────────
 
+    async def _archive_message(self, message):
+        if not get_settings().observation_archive_enabled:
+            return
+        received = datetime.now(UTC)
+        from app.services.market_data.venue_observations import persist_message
+
+        try:
+            if len(message) > 1_000_000 or message in ("PING", "PONG", b"PING", b"PONG"):
+                return
+            events = json.loads(message)
+            events = events if isinstance(events, list) else [events]
+            if len(events) > 1000:
+                raise ValueError("stream batch exceeds bound")
+            for event in events:
+                if isinstance(event, dict):
+                    await asyncio.to_thread(persist_message, event, received, self._connection_id)
+        except Exception:
+            logger.exception("Public observation archive unavailable; continuity unverified")
+
     def _handle_message(self, message: str | bytes) -> None:
         if isinstance(message, bytes):
             message = message.decode("utf-8", "replace")
@@ -306,6 +329,11 @@ class ClobWsManager:
         try:
             data = json.loads(message)
         except json.JSONDecodeError:
+            return
+        if isinstance(data, list):
+            for event in data:
+                if isinstance(event, dict):
+                    self._handle_message(json.dumps(event))
             return
         if not isinstance(data, dict):
             return

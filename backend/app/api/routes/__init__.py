@@ -39,7 +39,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
     from app.api.routes.analysis import analysis, calibration, experiments, orchestration
     from app.api.routes.auth import accounts, auth, credentials
     from app.api.routes.billing import billing
-    from app.api.routes.markets import binance_signals, markets, news, venues, whales
+    from app.api.routes.markets import binance_signals, markets, news, observations, venues, whales
     from app.api.routes.platform import (
         collaboration,
         debug,
@@ -75,6 +75,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         settings_routes,
         trades,
         markets,
+        observations,
     ):
         app.include_router(module.router)
 
