@@ -75,7 +75,7 @@ def test_concurrent_receipts_and_migration_preserve_existing_tables():
         def freeze(_):
             with Session(engine) as db:
                 barrier.wait(timeout=15)
-                result = freeze_dataset(db, "11", moment)
+                result = freeze_dataset(db, "11", moment, snapshot_ids=[identities[0]])
                 db.commit()
                 return result
 

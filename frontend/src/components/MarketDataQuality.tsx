@@ -65,6 +65,7 @@ export default function MarketDataQuality() {
       });
       const result = await apiClient.post<{ dataset_id: string }>(
         `/api/market-data/datasets?${params}`,
+        { snapshot_ids: rows.map((row) => row.snapshot_id) },
       );
       setDataset(result.dataset_id);
       setReplayId(result.dataset_id);

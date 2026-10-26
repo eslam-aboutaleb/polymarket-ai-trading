@@ -53,3 +53,24 @@ test("missing evidence and disabled source do not appear as successful history",
   await expect(panel.getByRole("alert")).toContainText("Observation archive disabled");
   await expect(panel.getByRole("table")).toHaveCount(0);
 });
+
+test("freeze pins the inspected IDs even if another receipt arrives before the cutoff", async ({
+  page,
+  request,
+}) => {
+  const panel = page.getByRole("region", { name: "Market data quality" });
+  await panel.getByLabel("Token ID", { exact: true }).fill("11");
+  await panel
+    .getByLabel("As of (ISO timestamp with timezone)", { exact: true })
+    .fill("2050-01-01T00:00:00+00:00");
+  await panel.getByRole("button", { name: "Inspect observations" }).click();
+  await expect(panel.getByRole("row")).toHaveCount(5);
+  await request.post("http://127.0.0.1:8002/__test/add");
+  await panel.getByRole("button", { name: "Freeze these observations" }).click();
+  await expect(panel.getByText("Frozen dataset:", { exact: false })).toContainText(
+    "4 observations",
+  );
+  await panel.getByRole("button", { name: "Replay frozen observations" }).click();
+  await expect(panel.getByRole("row")).toHaveCount(5);
+  await expect(panel.getByRole("cell", { name: "99", exact: true })).toHaveCount(0);
+});

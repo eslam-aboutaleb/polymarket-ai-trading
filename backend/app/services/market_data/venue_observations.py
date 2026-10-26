@@ -75,6 +75,7 @@ def append_event(db, raw, *, received_at, connection_id):
     ensure_transaction(db)
     received_at = aware(received_at)
     token = str(raw.get("asset_id") or raw.get("token_id") or "")
+    payload = json.dumps(raw, sort_keys=True, allow_nan=False)
     content = digest(raw)
     identity = digest([SOURCE, token, content])
     existing = db.get(VenueObservation, identity)
@@ -122,7 +123,7 @@ def append_event(db, raw, *, received_at, connection_id):
         received_at=received_at,
         stored_at=datetime.now(UTC),
         content_hash=content,
-        payload_json=json.dumps(raw, sort_keys=True),
+        payload_json=payload,
         normalized_json=json.dumps(normalized, sort_keys=True),
         quality_json=json.dumps(flags),
     )
@@ -217,9 +218,25 @@ def persist_message(raw, received_at, connection_id):
                     )
 
 
-def freeze_dataset(db, token_id, as_of, limit=100):
+def freeze_dataset(db, token_id, as_of, limit=100, snapshot_ids=None):
     ensure_transaction(db)
-    rows = list(reversed(history(db, token_id, as_of, limit)))
+    if snapshot_ids is None:
+        rows = list(reversed(history(db, token_id, as_of, limit)))
+    else:
+        if not 1 <= len(snapshot_ids) <= 100 or len(set(snapshot_ids)) != len(snapshot_ids):
+            raise ValueError("invalid snapshot selection")
+        rows = (
+            db.query(VenueObservation)
+            .filter(
+                VenueObservation.id.in_(snapshot_ids),
+                VenueObservation.token_id == token_id,
+                VenueObservation.received_at <= aware(as_of),
+            )
+            .order_by(VenueObservation.received_at, VenueObservation.id)
+            .all()
+        )
+        if len(rows) != len(snapshot_ids):
+            raise ValueError("selected snapshots unavailable at cutoff")
     manifest = {
         "version": VERSION,
         "token_id": token_id,
@@ -227,7 +244,8 @@ def freeze_dataset(db, token_id, as_of, limit=100):
         "quality": "INSUFFICIENT_DATA",
         "rights_scope": "public endpoint; reuse permissions require operator verification",
         "source_contract": "polymarket-clob-market-channel",
-        "truncated": len(rows) == limit,
+        "selection": "explicit_ids" if snapshot_ids is not None else "receipt_window",
+        "truncated": len(rows) == limit if snapshot_ids is None else False,
         "observations": [
             {
                 "snapshot_id": row.id,
