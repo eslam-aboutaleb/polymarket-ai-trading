@@ -67,7 +67,7 @@ def commit(db, operation):
         return result
     except ValueError as exc:
         db.rollback()
-        raise HTTPException(409, str(exc)) from exc
+        raise HTTPException(409, "Paper operation conflicts with account state or intent") from exc
 
 
 @router.get("/account")
