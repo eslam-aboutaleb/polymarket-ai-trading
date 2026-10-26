@@ -17,7 +17,7 @@
  *
  * @module components/EquityCurvePanel
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CartesianGrid,
   Line,
@@ -29,6 +29,12 @@ import {
   YAxis,
 } from "recharts";
 import { portfolioService, EquitySnapshotPoint, EquitySummary } from "../services/portfolioService";
+import PaperAccountPanel from "./PaperAccountPanel";
+import {
+  onActiveAccountChange,
+  getActiveAccountSelection,
+  accountService,
+} from "../services/accountService";
 import { settingsService } from "../services/settingsService";
 import { getApiErrorMessage } from "../utils/apiError";
 import { Banner, Skeleton } from "./ui";
@@ -91,6 +97,8 @@ interface EquityPoint extends EquitySnapshotPoint {
 }
 
 export default function EquityCurvePanel() {
+  const generation = useRef(0);
+  const [accountVersion, setAccountVersion] = useState(0);
   const [period, setPeriod] = useState<Period>("7d");
   const [points, setPoints] = useState<EquityPoint[]>([]);
   const [summary, setSummary] = useState<EquitySummary | null>(null);
@@ -105,6 +113,7 @@ export default function EquityCurvePanel() {
   const mode: Mode = modeOverride ?? settingsMode ?? "live";
 
   const fetchEquity = useCallback(async () => {
+    const request = ++generation.current;
     setLoading(true);
     setError(null);
     const fetchWindow = PERIOD_WINDOWS[period];
@@ -113,10 +122,16 @@ export default function EquityCurvePanel() {
     // settings failure is not fatal — the live series is the safe default.
     let accountMode: Mode = modeOverride ?? "live";
     try {
-      const settings = await settingsService.getUserSettings();
+      const selected = getActiveAccountSelection();
+      const settings =
+        selected?.kind === "sub"
+          ? await accountService.getAccountSettings(selected.id)
+          : await settingsService.getUserSettings();
       accountMode = modeOverride ?? (settings.simulation_mode ? "paper" : "live");
+      if (request !== generation.current) return;
       setSettingsError(null);
     } catch (err) {
+      if (request !== generation.current) return;
       setSettingsError(getApiErrorMessage(err, "Failed to load settings"));
       accountMode = modeOverride ?? "live";
     }
@@ -132,6 +147,7 @@ export default function EquityCurvePanel() {
         }),
         portfolioService.getEquitySummary(period, isPaper),
       ]);
+      if (request !== generation.current) return;
       setSettingsMode(accountMode);
       // Oldest first: the writer appends, but ordering on the client keeps the
       // chart correct even if the API ever returns an unordered page.
@@ -141,25 +157,35 @@ export default function EquityCurvePanel() {
       setPoints(sorted.map((point) => ({ ...point, label: hourLabel(point.captured_at) })));
       setSummary(summaryResp);
     } catch (err) {
-      setError(getApiErrorMessage(err));
+      if (request === generation.current) setError(getApiErrorMessage(err));
     } finally {
-      setLoading(false);
+      if (request === generation.current) setLoading(false);
     }
   }, [period, modeOverride]);
 
+  useEffect(
+    () =>
+      onActiveAccountChange(() => {
+        generation.current++;
+        setPoints([]);
+        setSummary(null);
+        setModeOverride(null);
+        setSettingsMode(null);
+        setAccountVersion((version) => version + 1);
+      }),
+    [],
+  );
+
   useEffect(() => {
     void fetchEquity();
-  }, [fetchEquity]);
+  }, [fetchEquity, accountVersion]);
 
   /** One account per series, decided before the request is built. */
   const series = points.filter((point) =>
     mode === "paper" ? Boolean(point.is_paper) : !point.is_paper,
   );
 
-  const chartData = useMemo(
-    () => series.map((point) => ({ label: point.label, bankroll: point.bankroll })),
-    [series],
-  );
+  const chartData = useMemo(() => series.map((point) => ({ ...point })), [series]);
 
   /**
    * Break-even reference: the bankroll the period opened at. A zero (or
@@ -167,10 +193,10 @@ export default function EquityCurvePanel() {
    */
   const breakEven = useMemo(() => {
     const open = series.length > 0 ? series[0].bankroll : (summary?.start ?? 0);
-    return open > 0 ? open : null;
+    return open !== null && open > 0 ? open : null;
   }, [series, summary]);
 
-  const latest = series.length > 0 ? series[series.length - 1].bankroll : 0;
+  const latest = series.length > 0 ? series[series.length - 1].bankroll : null;
 
   const toggleMode = () => setModeOverride(mode === "paper" ? "live" : "paper");
 
@@ -180,7 +206,7 @@ export default function EquityCurvePanel() {
         <div>
           <h2 className="text-xl font-bold text-white">Equity Curve</h2>
           <p className="text-soft text-sm mt-1">
-            Hourly portfolio equity — USDC balance plus unrealized PnL
+            Hourly account equity — paper NAV uses cash plus marked token shares
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -192,7 +218,7 @@ export default function EquityCurvePanel() {
             }`}
             title={
               mode === "paper"
-                ? "Showing the paper series (paper balance, not real equity)"
+                ? "Showing modeled paper NAV, separate from wallet equity"
                 : "Showing the live series (real wallet equity)"
             }
           >
@@ -224,25 +250,42 @@ export default function EquityCurvePanel() {
         </Banner>
       )}
 
+      {mode === "paper" && <PaperAccountPanel key={accountVersion} onSnapshot={fetchEquity} />}
+      {mode === "paper" && (
+        <p role="status" className="text-soft text-sm">
+          {series.some((point) => point.quality === "legacy_unverified")
+            ? "Legacy history is unverified and excluded from NAV."
+            : series.length
+              ? "Journal-backed modeled accounting"
+              : "No verified paper NAV history yet"}
+          . Missing or stale marks appear as chart gaps, never zero or a carried balance.
+        </p>
+      )}
       {/* Stat cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard
-          title="Bankroll"
-          value={usd(latest)}
+          title={mode === "paper" ? "Latest hourly NAV" : "Bankroll"}
+          value={latest === null ? "Unknown" : usd(latest)}
           subtitle={
             mode === "paper"
-              ? "Paper account — this is the paper balance, not real equity"
+              ? "Modeled cash + token shares at indicative exit bids"
               : "USDC balance + unrealized PnL"
           }
         />
         <StatCard
           title="Period change"
-          value={summary ? signedUsd(summary.delta) : "—"}
-          subtitle={summary ? `${signedPct(summary.delta_pct)} over the period` : "—"}
+          value={summary?.delta != null ? signedUsd(summary.delta) : "—"}
+          subtitle={
+            summary?.delta_pct != null
+              ? `${signedPct(summary.delta_pct)} over the period`
+              : "Unavailable with gaps or cash flows"
+          }
         />
         <StatCard
           title="Max drawdown"
-          value={summary ? `${summary.max_drawdown_pct.toFixed(2)}%` : "—"}
+          value={
+            summary?.max_drawdown_pct != null ? `${summary.max_drawdown_pct.toFixed(2)}%` : "—"
+          }
           subtitle="Worst peak-to-trough fall"
         />
         <StatCard
@@ -271,6 +314,11 @@ export default function EquityCurvePanel() {
                   }
                 />
                 <Tooltip
+                  labelFormatter={(label, payload) => {
+                    const point = payload?.[0]?.payload as EquitySnapshotPoint | undefined;
+                    const mark = Object.values(point?.mark_provenance ?? {})[0]?.source_at;
+                    return `${label} · ${point?.quality ?? "live"} · cash $${point?.usdc_balance ?? "unknown"} · fees $${point?.fees ?? "unknown"} · mark as of ${mark ?? "unavailable"}`;
+                  }}
                   formatter={(value: unknown) => [
                     typeof value === "number" ? usd(value) : "—",
                     "Bankroll",
@@ -292,6 +340,7 @@ export default function EquityCurvePanel() {
                 <Line
                   type="monotone"
                   dataKey="bankroll"
+                  connectNulls={false}
                   stroke="#38bdf8"
                   strokeWidth={2}
                   dot={false}

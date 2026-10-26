@@ -85,23 +85,33 @@ export interface PriceRefreshResponse {
 export interface EquitySnapshotPoint {
   captured_at: string;
   bucket_hour?: string;
-  usdc_balance: number;
-  unrealized_pnl: number;
-  bankroll: number;
-  total_invested?: number;
-  total_current_value?: number;
-  positions_count?: number;
+  usdc_balance: number | null;
+  unrealized_pnl: number | null;
+  bankroll: number | null;
+  total_invested?: number | null;
+  total_current_value?: number | null;
+  positions_count?: number | null;
   is_paper?: boolean;
+  quality?: string;
+  account_id?: number;
+  model_version?: string;
+  funding?: number | null;
+  fees?: number | null;
+  reserved_cash?: number | null;
+  available_cash?: number | null;
+  mark_provenance?: Record<string, { source_at?: string; received_at?: string; quality?: string }>;
 }
 
 export interface EquitySummary {
   period: string;
-  start: number;
-  end: number;
-  delta: number;
-  delta_pct: number;
-  max_drawdown_pct: number;
+  start: number | null;
+  end: number | null;
+  delta: number | null;
+  delta_pct: number | null;
+  max_drawdown_pct: number | null;
   points: number;
+  quality?: string;
+  net_cash_flows?: number | null;
 }
 
 export interface RiskReportPosition {
