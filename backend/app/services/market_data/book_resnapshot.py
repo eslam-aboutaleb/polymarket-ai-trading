@@ -54,11 +54,9 @@ async def _resnapshot(condition):
     with SessionLocal() as db:
         try:
             async with asyncio.timeout(25), httpx.AsyncClient() as client:
-                result = await capture_market_books(db, condition, PublicVenueCapture(client))
+                await capture_market_books(db, condition, PublicVenueCapture(client))
             db.commit()
-            logger.info(
-                "Read-only book resnapshot condition=%s status=%s", condition, result["status"]
-            )
+            logger.info("Read-only book resnapshot completed")
         except asyncio.CancelledError:
             db.rollback()
             raise
@@ -71,4 +69,4 @@ async def _resnapshot(condition):
                 db.commit()
             except Exception:
                 db.rollback()
-            logger.exception("Read-only book resnapshot unavailable condition=%s", condition)
+            logger.warning("Read-only book resnapshot unavailable")
