@@ -140,7 +140,12 @@ class PublicVenueCapture:
         token_ids = source.get("clobTokenIds")
         outcomes = json.loads(outcomes) if isinstance(outcomes, str) else outcomes
         token_ids = json.loads(token_ids) if isinstance(token_ids, str) else token_ids
-        context = build_market_context(condition_id, clob, utc_now())
+        from app.services.market_data.binary_identity import canonical_binary_metadata
+
+        mapped_clob, mapped_gamma = canonical_binary_metadata(clob, source)
+        context = build_market_context(condition_id, mapped_clob, utc_now())
+        outcomes = mapped_gamma["outcomes"]
+        outcomes = json.loads(outcomes) if isinstance(outcomes, str) else outcomes
         if (
             not isinstance(outcomes, list)
             or not isinstance(token_ids, list)

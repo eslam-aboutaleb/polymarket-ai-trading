@@ -65,7 +65,9 @@ def checksum(raw):
 
 def market_spec(metadata, query):
     raw = metadata["raw"]
-    clob, gamma = raw["clob"], raw["gamma"]
+    from app.services.market_data.binary_identity import canonical_binary_metadata
+
+    clob, gamma = canonical_binary_metadata(raw["clob"], raw["gamma"])
     from app.services.intelligence.market_context import build_market_context
 
     captured_at = datetime.fromisoformat(metadata["received_at"])
