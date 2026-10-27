@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import path from "node:path";
 
 const cid = "0x" + "ab".repeat(32);
-const assets = path.resolve("../.github/images/user-guide");
+const assets = path.resolve("../user guide/images");
 
 // Render the real React app and API against the existing disposable fixture app.
 // Stub only session/navigation services that are unrelated to these workflows.
