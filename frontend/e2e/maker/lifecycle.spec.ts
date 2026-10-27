@@ -28,6 +28,7 @@ test("100 stationary syncs remain resting; attributed partial fill, retry and ca
   await expect(page.getByText("PARTIAL", { exact: true })).toBeVisible();
   await expect(page.getByText(/reserved cash \$2.02/)).toBeVisible();
   await expect(page.getByText(/modeled_low_confidence/)).toBeVisible();
+  await expect(page.getByText(/Source as of 2026-10-01/)).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("maker-lifecycle.png"), fullPage: true });
   const stopped = await request.post(`${backend}/api/market-maker/configs/1/stop`);
   expect(stopped.ok()).toBeTruthy();

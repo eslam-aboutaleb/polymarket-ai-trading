@@ -483,6 +483,12 @@ def report(db, config, account):
         .all()
     )
     values = []
+    receipts = {
+        receipt.id: receipt
+        for receipt in db.query(VenueObservation)
+        .filter(VenueObservation.id.in_([row.source_snapshot_id for row in rows]))
+        .all()
+    }
     with localcontext(ACCOUNTING_CONTEXT):
         for row in rows:
             order = MakerOrder.model_validate_json(row.payload_json)
@@ -494,6 +500,15 @@ def report(db, config, account):
             values.append(
                 {
                     **order.model_dump(mode="json"),
+                    "source_as_of": aware(receipts[row.source_snapshot_id].event_at).isoformat()
+                    if row.source_snapshot_id in receipts
+                    and receipts[row.source_snapshot_id].event_at
+                    else None,
+                    "source_available_at": aware(
+                        receipts[row.source_snapshot_id].received_at
+                    ).isoformat()
+                    if row.source_snapshot_id in receipts
+                    else None,
                     "created_at": aware(row.created_at).isoformat(),
                     "updated_at": aware(row.updated_at).isoformat(),
                     "notional_usdc": str(order.shares * order.limit_price),
