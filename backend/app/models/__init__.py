@@ -116,3 +116,18 @@ __all__ = [
     "Subscription",
     "BillingWebhookEvent",
 ]
+
+from app.models.trading.paper_maker_order import (
+    PaperMakerCursor,
+    PaperMakerEvidence,
+    PaperMakerFill,
+    PaperMakerLegacy,
+    PaperMakerMark,
+    PaperMakerOrder,
+)
+
+__all__ += ["PaperMakerCursor", "PaperMakerEvidence", "PaperMakerFill", "PaperMakerOrder"]
+
+__all__ += ["PaperMakerMark"]
+
+__all__ += ["PaperMakerLegacy"]

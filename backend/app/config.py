@@ -1,9 +1,10 @@
 """Configuration settings for the Polymarket API"""
 
+from decimal import Decimal
 from enum import StrEnum
 from functools import lru_cache
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -49,6 +50,10 @@ class Settings(BaseSettings):
             raise ValueError("archive tokens must be at most 50 comma-separated numeric token IDs")
         return value
 
+    paper_maker_fill_model_v2: bool = False
+    paper_maker_latency_ms: int = Field(default=0, ge=0, le=60000)
+    paper_maker_expiry_seconds: int = Field(default=300, ge=1, le=3600)
+    paper_maker_queue_ahead: Decimal | None = Field(default=None, ge=0, le=1000000000)
     native_capture_enabled: bool = False
     follower_replay_enabled: bool = False
 

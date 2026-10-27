@@ -1,0 +1,18 @@
+{
+  "version": "maker-shadow-v1",
+  "classification": "synthetic_fixture_only",
+  "sync_cycles": 100,
+  "desired_bid_shares": "10",
+  "limit_price": "0.40",
+  "counterfactual_old_generation_as_fill_notional_usdc": "400",
+  "lifecycle_executed_notional_without_flow_usdc": "0",
+  "unique_active_quote_ids": 1,
+  "partial_fixture_queue_ahead": "3",
+  "partial_fixture_attributed_trade_volume": "8",
+  "partial_fixture_filled_shares": "5",
+  "partial_fixture_fee_bps": "100",
+  "partial_fixture_cash_after_usdc": "997.98",
+  "partial_fixture_reserved_remaining_usdc": "2.02",
+  "observed_exchange_fill_sample_count": 0,
+  "profitability_claim": false
+}
