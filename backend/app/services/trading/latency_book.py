@@ -84,7 +84,7 @@ def _authorize(raw, metadata, token_id, cash, fee, received_at, as_of, max_sprea
         return ExecutableBookEvidence(**base, status=status, reason=reason)
 
     try:
-        spec = market_spec(metadata, ResearchQuery(condition_id=cid))
+        spec = market_spec(metadata, ResearchQuery(condition_id=cid), allow_up_down=True)
         if not isinstance(raw, dict):
             return reject("MALFORMED_BOOK_BODY")
         if token_id not in (spec.yes_token, spec.no_token):
@@ -201,6 +201,8 @@ class EvidenceError(ValueError):
 
 
 class LiveVenue(PublicVenueCapture):
+    allow_up_down = True
+
     async def get(self, url, params=None):
         async with self.client.stream(
             "GET", url, params=params, timeout=1, follow_redirects=False

@@ -102,6 +102,8 @@ def append_capture(
 class PublicVenueCapture:
     """Uses native public URLs only, with no credentials or user-provided URLs."""
 
+    allow_up_down = False  # Preserve the frozen research/capture contract.
+
     def __init__(self, client: httpx.AsyncClient):
         self.client = client
 
@@ -142,7 +144,9 @@ class PublicVenueCapture:
         token_ids = json.loads(token_ids) if isinstance(token_ids, str) else token_ids
         from app.services.market_data.binary_identity import canonical_binary_metadata
 
-        mapped_clob, mapped_gamma = canonical_binary_metadata(clob, source)
+        mapped_clob, mapped_gamma = (
+            canonical_binary_metadata(clob, source) if self.allow_up_down else (clob, source)
+        )
         context = build_market_context(condition_id, mapped_clob, utc_now())
         outcomes = mapped_gamma["outcomes"]
         outcomes = json.loads(outcomes) if isinstance(outcomes, str) else outcomes
