@@ -60,6 +60,8 @@ def test_concurrent_fill_crash_and_migration(sessions, monkeypatch):
         asyncio.run(seed())
         runtime.sync(db, config, QUOTES, NOW)
         db.commit()
+    fractional_shares = Decimal("5.123456789012345678")
+    fractional_cash = Decimal(1000) - fractional_shares * Decimal("0.404")
     barrier = Barrier(2)
 
     def fill(_):
@@ -68,7 +70,11 @@ def test_concurrent_fill_crash_and_migration(sessions, monkeypatch):
             with paper.transaction(db):
                 state = paper.account_state(db, 1, 1)
                 runtime.consume(
-                    db, state, paper.restore(db, state), [flow()], NOW + timedelta(seconds=3)
+                    db,
+                    state,
+                    paper.restore(db, state),
+                    [flow(shares=Decimal("8.123456789012345678"))],
+                    NOW + timedelta(seconds=3),
                 )
             db.commit()
 
@@ -76,8 +82,8 @@ def test_concurrent_fill_crash_and_migration(sessions, monkeypatch):
         list(pool.map(fill, [1, 2]))
     with factory() as db:
         assert db.query(PaperMakerFill).count() == 1
-        assert db.query(PaperMakerOrder).one().cumulative_filled == 5
-        assert paper.restore(db, db.get(PaperAccount, 1)).cash == Decimal("997.98")
+        assert db.query(PaperMakerOrder).one().cumulative_filled == fractional_shares
+        assert paper.restore(db, db.get(PaperAccount, 1)).cash == fractional_cash
     script = """
 import os
 from datetime import timedelta
@@ -111,7 +117,7 @@ with Session(engine) as db, paper.transaction(db):
     assert result.returncode == 7, result.stderr.decode()[-1000:]
     with factory() as db:
         assert db.query(PaperMakerFill).count() == 1
-        assert paper.restore(db, db.get(PaperAccount, 1)).cash == Decimal("997.98")
+        assert paper.restore(db, db.get(PaperAccount, 1)).cash == fractional_cash
     race = Barrier(2)
 
     def cancel_or_fill(action):
@@ -139,9 +145,9 @@ with Session(engine) as db, paper.transaction(db):
     with factory() as db:
         ledger = paper.restore(db, db.get(PaperAccount, 1))
         preserved_cash = ledger.cash
-        assert preserved_cash in {Decimal("997.98"), Decimal("995.96")}
+        assert preserved_cash in {fractional_cash, Decimal("995.96")}
         assert ledger.reserved_cash == 0
-        assert ledger.positions["11"].shares in {Decimal(5), Decimal(10)}
+        assert ledger.positions["11"].shares in {fractional_shares, Decimal(10)}
         assert db.query(PaperMakerFill).count() in {1, 2}
     path = Path(__file__).parents[2] / "migrations/versions/20261027_0036_maker_lifecycle.py"
     spec = importlib.util.spec_from_file_location("maker_migration", path)

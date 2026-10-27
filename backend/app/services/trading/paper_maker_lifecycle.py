@@ -131,7 +131,15 @@ def replay_flow(state: ReplayState, events: list[FlowEvent], as_of, max_delay_se
         reordered = last is not None and event.available_at <= last
         last = max(last, event.available_at) if last else event.available_at
         budget = event.shares
-        for order in sorted(orders.values(), key=lambda o: (o.active_from, o.id)):
+        for order in sorted(
+            orders.values(),
+            key=lambda o: (
+                o.token_id,
+                -o.limit_price if o.side == "BUY" else o.limit_price,
+                o.active_from,
+                o.id,
+            ),
+        ):
             if order.state in TERMINAL or order.state == "UNKNOWN_DATA":
                 continue
             if (order.token_id, order.condition_id) != (event.token_id, event.condition_id):
