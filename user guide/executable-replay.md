@@ -96,8 +96,8 @@ exact Decimal in the authoritative report.
 
 ## Operator setup and rollback
 
-This change depends on #97's paper-account migration and the already merged native
-archive/book work. Apply `20261027_0037_executable_replay`, then explicitly enable
+This change depends on #97's paper-account migration, #101's maker lifecycle
+migration, and the native archive/book work. Apply `20261027_0037_executable_replay`, then explicitly enable
 `EXECUTABLE_REPLAY_ENABLED=true` (default false). Capturing new native evidence also
 requires `NATIVE_CAPTURE_ENABLED` and `OBSERVATION_ARCHIVE_ENABLED`; existing archive
 capture/subscription controls still apply. No TradingView feed is used. Operators
@@ -111,9 +111,8 @@ silently deleting referenced evidence.
 
 Turn the replay flag off to disable the API. Export private runs before downgrading
 0037: downgrade drops its two research tables, preserving legacy backtests, paper
-accounts and public datasets. #101 is a sibling PR on #97 with its own migration;
-if it merges first, rechain this migration and verify one Alembic head before
-merging. Existing risk controls and the server-owned live-trading release barrier
+accounts and public datasets. Migration 0037 follows maker lifecycle migration
+0036; apply #97, then #101, then this change. The combined graph has one head. Existing risk controls and the server-owned live-trading release barrier
 remain authoritative.
 
 The synchronous model is bounded to one year, eight trials, 250 events, 100 signals,
