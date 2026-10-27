@@ -89,7 +89,7 @@ export default function PaperMakerIntents({ configId }: { configId: number }) {
       )}
       {summary?.realized_pnl_usdc !== undefined && (
         <p>
-          Realized P&amp;L ${summary.realized_pnl_usdc} · fees ${summary.fees_usdc}. Unrealized
+          Realized P&amp;L (latest 100 orders) ${summary.realized_pnl_usdc} · fees ${summary.fees_usdc}. Unrealized
           P&amp;L uses shared account NAV and fresh marks.
         </p>
       )}
