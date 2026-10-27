@@ -49,6 +49,7 @@ async def maker_reset():
             token_id_yes="11",
             token_id_no="22",
             market_title="Lifecycle fixture",
+            enabled=True,
         )
         db.add(config)
         paper.configure_account(db, 1, 1, funding=1000, fee_bps=100, acknowledge_legacy=True)
