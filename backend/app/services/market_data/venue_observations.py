@@ -306,6 +306,23 @@ def prune_unpinned(db, before, limit=1000):
         .filter(ObservationDatasetMember.observation_id == VenueObservation.id)
         .exists()
     )
+    # Resting/fill audit references also pin their depth and rule receipts.
+    from sqlalchemy import inspect, or_
+
+    from app.models.trading.paper_maker_order import PaperMakerOrder
+
+    if inspect(db.connection()).has_table("paper_maker_orders"):
+        maker_pinned = (
+            db.query(PaperMakerOrder.id)
+            .filter(
+                or_(
+                    PaperMakerOrder.source_snapshot_id == VenueObservation.id,
+                    PaperMakerOrder.metadata_snapshot_id == VenueObservation.id,
+                )
+            )
+            .exists()
+        )
+        pinned = or_(pinned, maker_pinned)
     rows = (
         db.query(VenueObservation)
         .filter(

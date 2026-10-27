@@ -370,7 +370,7 @@ export default function MarketMaking() {
                   <p className="text-white font-semibold">{cfg.current_open_orders}</p>
                 </div>
                 <div>
-                  <span className="text-soft">Total Placed</span>
+                  <span className="text-soft">Historical placed counter</span>
                   <p className="text-white font-semibold">{cfg.total_orders_placed}</p>
                 </div>
                 <div>
@@ -378,7 +378,7 @@ export default function MarketMaking() {
                   <p className="text-white font-semibold">{cfg.total_orders_cancelled}</p>
                 </div>
                 <div>
-                  <span className="text-soft">Volume (USDC)</span>
+                  <span className="text-soft">Historical volume (paper unverified)</span>
                   <p className="text-white font-semibold">${cfg.total_volume_usdc.toFixed(2)}</p>
                 </div>
                 <div>

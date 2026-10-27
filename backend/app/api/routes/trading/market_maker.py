@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_active_account, require_plan
+from app.api.deps import require_plan
 from app.api.routes.auth.auth import get_current_user_from_token
 from app.api.routes.markets.microstructure import owned_account as get_research_account
 from app.models.trading.market_maker_config import MarketMakerConfig
@@ -252,7 +252,7 @@ async def get_market_maker_metrics(
 
 @router.get("/configs/{config_id}/paper-intents")
 def get_paper_intents(
-    config_id: int, db: Session = Depends(get_db), account=Depends(get_active_account)
+    config_id: int, db: Session = Depends(get_db), account=Depends(get_research_account)
 ):
     """Read quote definitions in the active account; definitions never prove fills."""
     import json
@@ -264,6 +264,12 @@ def get_paper_intents(
         config.account_id == account.id or (config.account_id is None and account.is_default)
     ):
         raise HTTPException(404, "Maker config not found")
+    from app.config import get_settings
+
+    if get_settings().paper_maker_fill_model_v2:
+        from app.services.trading.paper_maker_runtime import report
+
+        return report(db, config, account)
     rows = (
         db.query(PaperMakerIntent)
         .filter_by(config_id=config_id, user_id=account.owner_user_id)
