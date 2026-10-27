@@ -568,6 +568,8 @@ class MigrationBackfillTest(unittest.TestCase):
         with self.engine.connect() as conn:
             # This archive did not exist at the pre-account revision. Remove
             # it before rewinding its required account FK into a legacy schema.
+            conn.execute(text("DROP TABLE IF EXISTS executable_signal_sources"))
+            conn.execute(text("DROP TABLE IF EXISTS executable_replay_runs"))
             conn.execute(text("DROP TABLE IF EXISTS book_research_runs"))
             conn.execute(text("DROP TABLE IF EXISTS follower_experiment_runs"))
             conn.execute(text("DROP TABLE IF EXISTS paper_maker_intents"))

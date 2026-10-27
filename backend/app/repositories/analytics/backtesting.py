@@ -10,10 +10,13 @@ class BacktestRepository:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def historical_trades(self, wallet: str, start_date: str, end_date: str) -> list[UserTrade]:
+    def historical_trades(
+        self, wallet: str, start_date: str, end_date: str, *, user_id: int
+    ) -> list[UserTrade]:
         return (
             self.db.query(UserTrade)
             .filter(
+                UserTrade.user_id == user_id,
                 UserTrade.copied_from_wallet == wallet,
                 UserTrade.executed_at >= start_date,
                 UserTrade.executed_at <= end_date,

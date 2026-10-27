@@ -581,9 +581,10 @@ class RunCopyTradeBacktestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(entry["side"], "buy")
         self.assertEqual(entry["size"], 100.0)
         self.assertEqual(entry["price"], 0.5)
-        self.assertEqual(entry["pnl"], 10.0)
-        self.assertEqual(result["metrics"]["total_trades"], 2)
-        self.assertAlmostEqual(result["metrics"]["total_pnl"], 5.0)
+        self.assertIsNone(entry["pnl"])
+        self.assertEqual(result["metrics"]["total_trades"], 0)
+        self.assertEqual(result["indicator_values"]["net_pnl_quality"], "unavailable")
+        self.assertIsNone(result["metrics"]["sharpe_ratio"])
         db.close.assert_called_once()
 
     async def test_position_size_capped_at_max(self):
@@ -596,7 +597,7 @@ class RunCopyTradeBacktestTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(result["trade_log"][0]["size"], 100.0)
 
-    async def test_daily_loss_limit_skips_subsequent_trades(self):
+    async def test_leader_loss_cannot_trigger_follower_loss_limit(self):
         base = datetime(2024, 6, 15, 12, 0, 0)
         trades = [
             _trade(base, amount=100.0, price=0.5, pnl=-60.0),
@@ -607,10 +608,11 @@ class RunCopyTradeBacktestTests(unittest.IsolatedAsyncioTestCase):
             result = await run_copy_trade_backtest(
                 1, {"followed_wallet": "0xwallet", "daily_loss_limit": 50}
             )
-        # First trade breaches the 50 USDC daily loss limit; the
-        # second trade on the same day is skipped.
-        self.assertEqual(len(result["trade_log"]), 1)
-        self.assertEqual(result["trade_log"][0]["pnl"], -60.0)
+        self.assertEqual(len(result["trade_log"]), 2)
+        self.assertTrue(all(row["pnl"] is None for row in result["trade_log"]))
+        self.assertEqual(
+            result["indicator_values"]["daily_loss_limit"], "unavailable_without_follower_ledger"
+        )
 
     async def test_daily_loss_resets_on_new_day(self):
         day1 = datetime(2024, 6, 15, 12, 0, 0)
