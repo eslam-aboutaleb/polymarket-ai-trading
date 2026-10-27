@@ -1,0 +1,130 @@
+{
+  "definition": {
+    "version": "executable-replay-v1",
+    "start_at": "2026-10-01T00:00:00Z",
+    "train_end": "2026-10-01T00:00:02Z",
+    "validation_end": "2026-10-01T00:00:05Z",
+    "end_at": "2026-10-01T00:00:08Z",
+    "fill_policy": "ioc-next-receipt-conservative-depth-v1",
+    "funding": "1000",
+    "sample_seconds": 1,
+    "annualization_periods": null,
+    "trials": [
+      {
+        "id": "base",
+        "strategy_version": "fixture-v1",
+        "strategy": "follower_signals",
+        "fast_period": 3,
+        "slow_period": 10,
+        "order_notional": "10",
+        "fee_bps": "0",
+        "settlement_fee_bps": "0",
+        "fee_version": "explicit-fixture",
+        "slippage_bps": "0",
+        "decision_latency_ms": 0,
+        "expiry_seconds": 60,
+        "max_book_age_seconds": 60,
+        "lot_size": "0.01"
+      }
+    ],
+    "declared_complete_family": false,
+    "hypothesis": "Frozen follower units, no leader profits",
+    "tape": {
+      "version": "executable-tape-v1",
+      "specs": [
+        {
+          "condition_id": "condition",
+          "yes_token": "yes",
+          "no_token": "no",
+          "rule_hash": "rules",
+          "metadata_id": "meta",
+          "received_at": "2026-10-01T00:00:00Z",
+          "active": true,
+          "tick": "0.01",
+          "minimum_shares": "1",
+          "lot": "0.01",
+          "supported": true
+        }
+      ],
+      "events": [
+        {
+          "snapshot_id": "first",
+          "token_id": "yes",
+          "condition_id": "condition",
+          "rule_hash": "rules",
+          "received_at": "2026-10-01T00:00:01Z",
+          "source_at": "2026-10-01T00:00:01Z",
+          "connection_id": "connection",
+          "kind": "snapshot",
+          "sequence": null,
+          "sequence_contract": "unavailable",
+          "checksum": "unavailable",
+          "bids": [
+            {
+              "price": "0.39",
+              "shares": "100"
+            }
+          ],
+          "asks": [
+            {
+              "price": "0.40",
+              "shares": "100"
+            }
+          ],
+          "changes": []
+        },
+        {
+          "snapshot_id": "close",
+          "token_id": "yes",
+          "condition_id": "condition",
+          "rule_hash": "rules",
+          "received_at": "2026-10-01T00:00:04Z",
+          "source_at": "2026-10-01T00:00:04Z",
+          "connection_id": "connection",
+          "kind": "snapshot",
+          "sequence": null,
+          "sequence_contract": "unavailable",
+          "checksum": "unavailable",
+          "bids": [
+            {
+              "price": "0.45",
+              "shares": "100"
+            }
+          ],
+          "asks": [
+            {
+              "price": "0.46",
+              "shares": "100"
+            }
+          ],
+          "changes": []
+        }
+      ],
+      "signals": [
+        {
+          "id": "entry",
+          "condition_id": "condition",
+          "token_id": "yes",
+          "side": "BUY",
+          "available_at": "2026-10-01T00:00:00Z",
+          "source_at": "2026-10-01T00:00:00Z",
+          "amount": "10",
+          "units": "SHARES",
+          "limit_price": null
+        },
+        {
+          "id": "exit",
+          "condition_id": "condition",
+          "token_id": "yes",
+          "side": "SELL",
+          "available_at": "2026-10-01T00:00:03Z",
+          "source_at": "2026-10-01T00:00:03Z",
+          "amount": "10",
+          "units": "SHARES",
+          "limit_price": null
+        }
+      ],
+      "settlements": []
+    }
+  }
+}

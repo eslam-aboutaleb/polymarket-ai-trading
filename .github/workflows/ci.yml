@@ -161,7 +161,7 @@ jobs:
         env:
           PYTHONPATH: .:../services/shared
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: uv run --frozen pytest --no-cov tests/integration/test_native_capture_postgres.py tests/integration/test_venue_observations_postgres.py tests/integration/test_book_research_postgres.py tests/integration/test_paper_accounts_postgres.py tests/integration/test_maker_lifecycle_postgres.py
+        run: uv run --frozen pytest --no-cov tests/integration/test_native_capture_postgres.py tests/integration/test_venue_observations_postgres.py tests/integration/test_book_research_postgres.py tests/integration/test_paper_accounts_postgres.py tests/integration/test_maker_lifecycle_postgres.py tests/integration/test_executable_replay_postgres.py
       - name: Seed disposable admin test wallet
         env:
           PYTHONPATH: ${{ github.workspace }}/backend:${{ github.workspace }}/services/shared
@@ -188,6 +188,10 @@ jobs:
       - name: Point-in-time archive browser E2E
         working-directory: frontend
         run: npm run test:observations
+      - name: Executable replay browser E2E
+        working-directory: frontend
+        run: npm run test:executable
+
       - name: Binary book reconstruction browser E2E
         working-directory: frontend
         run: npm run test:book

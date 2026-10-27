@@ -219,72 +219,55 @@ def _failed_history_run(
 
 
 async def run_copy_trade_backtest(
-    user_id: int,  # noqa: ARG001 - common strategy runner signature
+    user_id: int,
     params: dict[str, Any],
 ) -> dict[str, Any]:
-    """Backtest a copy-trade strategy.
-
-    Replays historical trades from a followed trader and simulates
-    copying them with the given sizing parameters.
-
-    Parameters:
-        - followed_wallet: the trader wallet to simulate copying
-        - start_date / end_date: date range
-        - max_position_size: max USDC per position
-        - daily_loss_limit: max daily loss before stopping
-    """
+    """Historical signal inspection only: leader outcomes are not follower profit."""
     db = SessionLocal()
     try:
-        followed_wallet = params.get("followed_wallet", "")
-        max_pos_size = float(params.get("max_position_size", 100))
-        daily_loss_limit = float(params.get("daily_loss_limit", 50))
-
-        # Fetch historical trades from this wallet
         trades = BacktestRepository(db).historical_trades(
-            followed_wallet,
+            params.get("followed_wallet", ""),
             params.get("start_date", "2024-01-01"),
             params.get("end_date", "2025-12-31"),
+            user_id=user_id,
         )
-
-        trade_log: list[dict[str, Any]] = []
-        daily_loss = 0.0
-        current_day = None
-
-        for trade in trades:
-            trade_day = trade.executed_at.date() if trade.executed_at else None
-            if trade_day != current_day:
-                daily_loss = 0.0
-                current_day = trade_day
-
-            # Skip if daily loss limit breached
-            if daily_loss >= daily_loss_limit:
-                continue
-
-            # Simulate the copy trade
-            size = min(float(trade.amount or 0), max_pos_size)
-            price = float(trade.price or 0)
-            if size <= 0 or price <= 0:
-                continue
-
-            # Simulate a simple PnL based on the actual trade outcome
-            pnl = float(trade.pnl or 0)
-            if pnl < 0:
-                daily_loss += abs(pnl)
-
-            trade_log.append(
-                {
-                    "timestamp": trade.executed_at.isoformat() if trade.executed_at else "",
-                    "market_id": trade.market_id or "",
-                    "side": trade.action or "",
-                    "size": size,
-                    "price": price,
-                    "pnl": pnl,
-                }
-            )
-
+        trade_log = [
+            {
+                "timestamp": trade.executed_at.isoformat() if trade.executed_at else "",
+                "market_id": trade.market_id or "",
+                "side": trade.action or "",
+                "size": min(float(trade.amount or 0), float(params.get("max_position_size", 100))),
+                "price": float(trade.price or 0),
+                "pnl": None,
+                "execution_status": "unavailable_missing_executable_evidence",
+            }
+            for trade in trades
+            if float(trade.amount or 0) > 0 and float(trade.price or 0) > 0
+        ]
+        metrics = _calculate_metrics([])
+        # The required legacy total_pnl numeric field is a compatibility placeholder.
+        # New clients must use net_pnl_quality before displaying any outcome.
+        for key in (
+            "win_rate",
+            "max_drawdown",
+            "profit_factor",
+            "avg_trade_pnl",
+            "max_consecutive_losses",
+            "total_volume",
+        ):
+            metrics[key] = None
         return {
             "trade_log": trade_log,
-            "metrics": _calculate_metrics(trade_log),
+            "metrics": metrics,
+            "indicator_values": {
+                "history_quality": "historical_signals_only",
+                "net_pnl_quality": "unavailable",
+                "signal_count": len(trade_log),
+                "execution_assumption": (
+                    "No follower fills reconstructed; use frozen executable replay"
+                ),
+                "daily_loss_limit": "unavailable_without_follower_ledger",
+            },
         }
     finally:
         db.close()

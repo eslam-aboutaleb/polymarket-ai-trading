@@ -2,11 +2,12 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.routes.auth.auth import get_current_user_from_token
+from app.api.routes.markets.microstructure import owned_account
 from app.models.analytics.backtest_run import BacktestRun
 from app.services.analytics.backtesting_service import (
     create_and_run_backtest,
@@ -68,6 +69,10 @@ class BacktestListResponse(BaseModel):
 # ── Helpers ──
 
 
+def _executable(run):
+    return isinstance(run.parameters, dict) and bool(run.parameters.get("executable_replay_id"))
+
+
 def _to_response(run: BacktestRun) -> BacktestRunResponse:
     return BacktestRunResponse(
         id=run.id,
@@ -101,12 +106,17 @@ def _to_response(run: BacktestRun) -> BacktestRunResponse:
 
 @router.get("/runs", response_model=BacktestListResponse)
 async def list_backtest_runs(
+    request: Request,
+    db: Session = Depends(get_db),
     limit: int = 20,
     current_user: dict = Depends(get_current_user_from_token),
 ):
     """List recent backtest runs."""
     user_id = current_user.get("user_id")
     runs = get_backtest_runs(user_id, limit=min(limit, 100))
+    if any(_executable(r) for r in runs):
+        account = owned_account(request.headers.get("X-Account-Id"), current_user, db)
+        runs = [r for r in runs if not _executable(r) or r.account_id == account.id]
     return BacktestListResponse(
         runs=[_to_response(r) for r in runs],
         total=len(runs),
@@ -116,6 +126,8 @@ async def list_backtest_runs(
 @router.get("/runs/{run_id}", response_model=BacktestRunResponse)
 async def get_backtest_run_endpoint(
     run_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user_from_token),
 ):
     """Get a specific backtest run with full details."""
@@ -123,6 +135,10 @@ async def get_backtest_run_endpoint(
     run = get_backtest_run(run_id, user_id)
     if not run:
         raise HTTPException(status_code=404, detail="Backtest run not found")
+    if _executable(run):
+        account = owned_account(request.headers.get("X-Account-Id"), current_user, db)
+        if run.account_id != account.id:
+            raise HTTPException(404, "Backtest run not found")
     return _to_response(run)
 
 
@@ -160,6 +176,13 @@ async def delete_backtest_run(
 ):
     """Delete a backtest run."""
     user_id = current_user.get("user_id")
+    run = (
+        db.query(BacktestRun)
+        .filter(BacktestRun.id == run_id, BacktestRun.user_id == user_id)
+        .first()
+    )
+    if run and _executable(run):
+        raise HTTPException(409, "Frozen executable audit cannot be deleted")
     if not delete_backtest_run_service(db, run_id, user_id):
         raise HTTPException(status_code=404, detail="Backtest run not found")
     return {"status": "deleted", "id": run_id}
