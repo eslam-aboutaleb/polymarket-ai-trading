@@ -353,6 +353,8 @@ scoring, continuous collection, or legacy paper-runner/NAV migration.
 
 ### Live execution setup
 
+Latency execution validation, reason codes and rollback: [operator guide](docs/latency-execution-safety.md).
+
 Real CLOB v2 execution is available for manual orders/cash-out, copy trading,
 market making, latency arbitrage, inverse reversals and conditional exits.
 Simulation and historical replay remain separate and cannot authorize live orders.
@@ -362,7 +364,8 @@ Simulation and historical replay remain separate and cannot authorize live order
 2. Configure the trading key in Settings. Choose the actual EOA, Polymarket proxy,
    Safe or deposit wallet type; contract wallets require the funding address.
 3. Set risk budgets and initial capital. `LIVE_TRADING_ENABLED`, the strategy
-   flags and `LATENCY_ARB_LIVE` default to true. Both Compose web and worker
+   flags default to true except `LIVE_LATENCY_ARB_ENABLED` and `LATENCY_ARB_LIVE`,
+   which default to false pending explicit operator validation. Both Compose web and worker
    services receive these flags; operators can set them to false to disable live
    features. Choose paper/simulation mode when using virtual funds.
 4. An administrator activates global execution with `POST /api/v1/risk/activate`

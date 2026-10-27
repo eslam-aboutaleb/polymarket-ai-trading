@@ -11,6 +11,7 @@ from app.api.routes.auth.auth import get_current_user_from_token
 from app.services.trading.latency_arb_service import (
     get_config,
     get_engine_status,
+    get_execution_outcome,
     get_latest_opportunities,
     get_or_create_config,
     get_trade_page,
@@ -88,6 +89,7 @@ class OpportunitiesResponse(BaseModel):
     engine: EngineStatusResponse
     latency: LatencyStatsResponse
     opportunities: list[OpportunityResponse]
+    execution_outcome: dict | None = None
 
 
 class TradeResponse(BaseModel):
@@ -226,6 +228,7 @@ async def get_latency_arb_opportunities(
     opportunities = get_latest_opportunities()
     now = datetime.now()
     return OpportunitiesResponse(
+        execution_outcome=get_execution_outcome(int(current_user["user_id"])),
         engine=get_engine_status(),
         latency=latency_stats(),
         opportunities=[_opportunity_to_response(opportunity, now) for opportunity in opportunities],

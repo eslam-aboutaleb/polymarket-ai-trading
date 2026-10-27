@@ -8,6 +8,7 @@ fills: unverified P&L must never replenish live spending authority.
 
 import hashlib
 import json
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import func, select, update
@@ -193,9 +194,21 @@ def place_live_order(
     order_type: str = "GTC",
     post_only: bool = False,
     account_id: int | None = None,
+    execution_deadline: datetime | None = None,
+    execution_evidence: dict | None = None,
 ) -> dict:
     """size is shares for both sides; all persisted money amounts are notional."""
+
+    def check_quote_deadline():
+        if strategy == "latency_arb" and (
+            execution_deadline is None
+            or execution_deadline.tzinfo is None
+            or utc_now() >= execution_deadline
+        ):
+            raise LiveTradingBlocked("EXECUTABLE_QUOTE_EXPIRED_OR_MISSING")
+
     require_enabled(strategy)
+    check_quote_deadline()
     price_d, shares = _decimal(price, "price"), _decimal(size, "size")
     if price_d >= 1 or side not in ("BUY", "SELL") or not token_id:
         raise ValueError("Invalid live order")
@@ -304,10 +317,25 @@ def place_live_order(
             ).all()
             if sum((row.shares for row in pending), Decimal(0)) + shares > available:
                 raise LiveTradingBlocked("SELL_INVENTORY_ALREADY_RESERVED")
+        check_quote_deadline()
+        authorized_shares = shares
+        quote_options = {}
+        if strategy == "latency_arb" and execution_evidence:
+            quote_options = {
+                "expected_tick": Decimal(execution_evidence["tick_size"]),
+                "expected_neg_risk": execution_evidence["neg_risk"],
+                "execution_deadline": execution_deadline,
+            }
         signed, order_hash, shares, notional = clob_transport.prepare(
-            client, token_id, side, price_d, shares
+            client, token_id, side, price_d, shares, **quote_options
         )
-        if shares <= 0 or notional <= 0 or notional > required and side == "BUY":
+        if (
+            shares <= 0
+            or shares > authorized_shares
+            or notional <= 0
+            or notional > required
+            and side == "BUY"
+        ):
             raise ValueError("Signed order amounts exceed the authorized order")
         trade = UserTrade(
             user_id=user_id,
@@ -324,6 +352,9 @@ def place_live_order(
             source_trade_history_id=source_trade_history_id,
             expected_price=float(price_d),
             expected_size=float(notional),
+            calculation_details=json.dumps({"executable_book": execution_evidence})
+            if execution_evidence
+            else None,
         )
         db.add(trade)
         db.flush()  # Recording is mandatory before the money path.
@@ -382,6 +413,7 @@ def place_live_order(
                     account_id=account_id,
                     exclude_order_id=row.id,
                 )
+            check_quote_deadline()
             if strategy == "copy" and not settings.copy_trading_enabled:
                 raise LiveTradingBlocked("COPY_TRADING_DISABLED")
         except LiveTradingBlocked as exc:

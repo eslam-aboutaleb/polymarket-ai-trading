@@ -61,7 +61,7 @@ def gateway(tmp_path, monkeypatch):
     monkeypatch.setattr(clob_transport, "build_client", lambda *_: client)
     monkeypatch.setattr(clob_transport, "balance", lambda *_: Decimal(1000))
 
-    def prepare(_client, token, side, price, shares):
+    def prepare(_client, token, side, price, shares, **options):
         identity = "0x" + str(
             db.scalar(select(LiveOrder.id).order_by(LiveOrder.id.desc())) or 0
         ).zfill(64)
@@ -94,6 +94,8 @@ def place(db, **changes):
         "idempotency_key": "source:1",
     }
     args.update(changes)
+    if args.get("strategy") == "latency_arb" and "execution_deadline" not in args:
+        args["execution_deadline"] = utc_now() + timedelta(seconds=1)
     return live.place_live_order(db, **args)
 
 
@@ -545,3 +547,34 @@ def test_reconciliation_failures_do_not_starve_orders_after_first_batch(gateway)
     db.refresh(rows[-1])
     assert rows[-1].state == "CANCELLED" and rows[-1].reserved == 0
     assert client.get_order.call_args_list[100].args == (final_hash,)
+
+
+def test_latency_requires_deadline_before_credentials_or_signing(gateway, monkeypatch):
+    db, _, _, submit = gateway
+    prepare = MagicMock(side_effect=AssertionError("must not sign"))
+    monkeypatch.setattr(clob_transport, "prepare", prepare)
+    for deadline in [None, utc_now() - timedelta(seconds=1)]:
+        with pytest.raises(LiveTradingBlocked, match="EXECUTABLE_QUOTE_EXPIRED_OR_MISSING"):
+            place(db, strategy="latency_arb", execution_deadline=deadline)
+    prepare.assert_not_called()
+    submit.assert_not_called()
+    assert db.scalar(select(LiveOrder.id)) is None
+
+
+def test_latency_expiring_during_preparation_is_never_posted(gateway, monkeypatch):
+    db, _, _, submit = gateway
+    instant = utc_now()
+    original = clob_transport.prepare
+    clock = [instant]
+    monkeypatch.setattr(live, "utc_now", lambda: clock[0])
+
+    def delayed(*args):
+        result = original(*args)
+        clock[0] += timedelta(seconds=2)
+        return result
+
+    monkeypatch.setattr(clob_transport, "prepare", delayed)
+    result = place(db, strategy="latency_arb", execution_deadline=instant + timedelta(seconds=1))
+    assert result["status"] == "rejected"
+    assert db.scalar(select(LiveOrder)).state == "REJECTED"
+    submit.assert_not_called()
