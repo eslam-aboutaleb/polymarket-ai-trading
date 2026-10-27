@@ -174,6 +174,7 @@ def test_config_cap_and_shadow_report_do_not_count_quotes_as_execution(maker):
     result = runtime.report(db, config, db.get(Account, 1))
     assert Decimal(result["quoted_notional_usdc"]) == 4
     assert Decimal(result["executed_notional_usdc"]) == 0
+    assert result["intents"][0]["source_as_of"] == NOW.isoformat()
     assert result["legacy_excluded_from_decision_grade"]
 
 

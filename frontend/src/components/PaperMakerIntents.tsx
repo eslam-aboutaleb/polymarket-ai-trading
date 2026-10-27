@@ -18,6 +18,8 @@ type Intent = {
   active_from?: string;
   expires_at?: string;
   source_snapshot_id?: string;
+  source_as_of?: string | null;
+  source_available_at?: string | null;
   policy?: string;
   confidence?: string;
   queue_ahead?: string | null;
@@ -111,6 +113,9 @@ export default function PaperMakerIntents({ configId }: { configId: number }) {
                   <br />
                   {intent.policy} · {intent.confidence} · queue ahead{" "}
                   {intent.queue_ahead ?? "unknown"}
+                  <br />
+                  Source as of {intent.source_as_of ?? "unknown"} · available{" "}
+                  {intent.source_available_at ?? "unknown"}
                   <br />
                   Source {intent.source_snapshot_id}
                 </>
