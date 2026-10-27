@@ -1,6 +1,7 @@
 """Real SQL/API freeze, costed execution, owner boundary and integrity checks."""
 
 import json
+from decimal import Decimal
 
 import pytest
 from book_research_fixtures import research_db as _research_db
@@ -229,3 +230,64 @@ def test_legacy_cache_cannot_bypass_frozen_account_boundary(client, monkeypatch)
     assert http.get("/api/backtesting/runs", headers={"X-Account-Id": "2"}).json()["runs"] == []
     assert http.delete(f"/api/backtesting/runs/{identity}").status_code == 409
     assert db.query(BacktestRun).count() == 1
+
+
+def test_native_follower_reconstructs_cash_and_never_reuses_leader_profit(research_db):
+    from datetime import timedelta
+
+    from book_research_fixtures import CID, NOW
+
+    from app.models.market_data.venue_observation import VenueObservation
+    from app.services.market_data.replay_capture import append_capture
+
+    db = research_db
+    wallet, identity = "0x" + "11" * 20, "b" * 64
+    first_seen = NOW - timedelta(seconds=1)
+    capture = append_capture(
+        db,
+        kind="signal",
+        source_key=identity,
+        stable_id=identity,
+        observed_at=first_seen,
+        source_at=first_seen,
+        wallet=wallet,
+        condition_id=CID,
+        token_id="11",
+        rule_hash="native-market-fingerprint",
+        raw={
+            "signal": {
+                "event_id": identity,
+                "token_id": "11",
+                "side": "BUY",
+                "first_seen_at": first_seen.isoformat(),
+                "source_at": first_seen.isoformat(),
+            },
+            "venue": {
+                "asset": "11",
+                "conditionId": CID,
+                "side": "BUY",
+                "proxyWallet": wallet,
+                "type": "TRADE",
+                "pnl": 999999,
+            },
+        },
+    )
+    row = archive.freeze(
+        db,
+        db.get(Account, 1),
+        definition(start_at=NOW - timedelta(seconds=2)),
+        [r.id for r in db.query(VenueObservation).all()],
+        wallet,
+    )
+    archive.execute(db, db.get(Account, 1), row)
+    result = json.loads(row.result_json)
+    assert result["source_evidence"]["signal_evidence"] == "native_first_receipt_captured"
+    assert result["holdout"]["trade_count"] == 1
+    assert Decimal(result["holdout"]["net_pnl"]) == Decimal("-2.666")
+    assert result["holdout"]["outcomes"][0]["shares"] == "18.33"
+    assert Decimal(result["holdout"]["valuation"]["cash"]) == Decimal("990.002")
+    assert db.query(ExecutableReplayRun).count() == 1
+    archive.verify(row, db)
+    capture.payload_json = "{}"
+    with pytest.raises(ValueError, match="INTEGRITY"):
+        archive.verify(row, db)
