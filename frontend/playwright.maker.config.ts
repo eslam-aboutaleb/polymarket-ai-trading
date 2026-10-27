@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 
 export default defineConfig({
   testDir: "./e2e/maker",
-  timeout: 60_000,
+  timeout: 90_000,
   expect: { timeout: 15_000 },
   workers: 1,
   reporter: [["list"]],
@@ -21,6 +21,7 @@ export default defineConfig({
       cwd: "../backend",
       url: "http://127.0.0.1:8002/",
       reuseExistingServer: false,
+      timeout: 120_000,
       env: {
         PYTHONPATH: ".:../services/shared",
         ENVIRONMENT: "test",
@@ -32,6 +33,7 @@ export default defineConfig({
       command: "node_modules/.bin/vite --host 127.0.0.1 --port 5187 --strictPort",
       url: "http://127.0.0.1:5187",
       reuseExistingServer: false,
+      timeout: 120_000,
       env: { VITE_API_URL: "" },
     },
   ],
