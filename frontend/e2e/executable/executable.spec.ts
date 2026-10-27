@@ -47,4 +47,12 @@ test("native captured depth freeze, modeled ledger, immutable repeat and account
     { headers: { "X-Account-Id": "2" } },
   );
   expect(foreign.status()).toBe(403);
+  recipe.definition.trials[0].fee_bps = "1000";
+  await panel.getByLabel("Replay recipe JSON").fill(JSON.stringify(recipe));
+  await panel.getByRole("button", { name: "Freeze recipe", exact: true }).click();
+  await expect(panel.getByRole("button", { name: "Evaluate frozen recipe" })).toBeEnabled();
+  await panel.getByRole("button", { name: "Evaluate frozen recipe" }).click();
+  await expect(panel.locator("dd").nth(0)).toHaveText("-0.35");
+  await expect(panel.locator("dd").nth(1)).toHaveText("0.50");
+  await expect(panel.locator("dd").nth(2)).toHaveText("0.85");
 });
