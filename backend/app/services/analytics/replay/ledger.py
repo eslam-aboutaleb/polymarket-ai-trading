@@ -224,11 +224,18 @@ class PaperLedger:
         self._record(event_id, payload)
 
     @atomic
-    def settle(self, event_id: str, token: str, payout_per_share: Decimal) -> None:
+    def settle(
+        self, event_id: str, token: str, payout_per_share: Decimal, fee_bps: Decimal = ZERO
+    ) -> None:
         payload = ("SETTLED", token, payout_per_share)
+        if fee_bps:
+            payload += (fee_bps,)
         if self._seen(event_id, payload):
             return
         positive(payout_per_share, "payout", zero=True)
+        positive(fee_bps, "settlement fee", zero=True)
+        if fee_bps > 10000:
+            raise ValueError("settlement fee exceeds proceeds")
         if (
             payout_per_share > 1
             or token in self.settled_tokens
@@ -237,8 +244,10 @@ class PaperLedger:
             raise ValueError("token already settled or has open orders")
         position = self.positions.get(token, Position())
         payout = position.shares * payout_per_share
-        self.cash += payout
-        self.realized_pnl += payout - position.cost_basis
+        fee = payout * fee_bps / 10000
+        self.cash += payout - fee
+        self.fees += fee
+        self.realized_pnl += payout - fee - position.cost_basis
         self.positions[token] = Position()
         self.settled_tokens.add(token)
         self._record(event_id, payload)
