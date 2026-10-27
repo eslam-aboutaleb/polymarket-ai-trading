@@ -22,7 +22,13 @@ def maker(research_db, monkeypatch):
         monkeypatch.setattr(get_settings(), key, True)
     monkeypatch.setattr(get_settings(), "paper_maker_queue_ahead", Decimal("3"))
     config = MarketMakerConfig(
-        id=1, user_id=1, account_id=1, condition_id=CID, token_id_yes="11", token_id_no="22"
+        id=1,
+        user_id=1,
+        account_id=1,
+        enabled=True,
+        condition_id=CID,
+        token_id_yes="11",
+        token_id_no="22",
     )
     db.add(config)
     paper.configure_account(db, 1, 1, fee_bps=100, funding=1000, acknowledge_legacy=True)
@@ -237,7 +243,13 @@ def test_depth_and_rule_receipts_are_pinned_against_retention(maker):
 def test_account_print_budget_shared_across_configurations(maker):
     db, config = maker
     second = MarketMakerConfig(
-        id=2, user_id=1, account_id=1, condition_id=CID, token_id_yes="11", token_id_no="22"
+        id=2,
+        user_id=1,
+        account_id=1,
+        enabled=True,
+        condition_id=CID,
+        token_id_yes="11",
+        token_id_no="22",
     )
     db.add(second)
     db.flush()
@@ -355,5 +367,21 @@ def test_edit_or_disable_after_restart_does_not_leave_old_reservations(maker):
     upsert_market_maker_config(
         db, 1, {"condition_id": CID, "enabled": False, "band_order_size": 20}
     )
+    assert db.query(PaperMakerOrder).one().state == "CANCELLED"
+    assert paper.restore(db, db.get(PaperAccount, 1)).reserved_cash == 0
+
+
+def test_sync_rechecks_disabled_config_under_account_lock(maker):
+    from sqlalchemy.orm import Session
+
+    db, config = maker
+    runtime.sync(db, config, QUOTES, NOW)
+    db.commit()
+    assert config.enabled
+    with Session(db.get_bind()) as external:
+        external.get(MarketMakerConfig, config.id).enabled = False
+        external.commit()
+    result = runtime.sync(db, config, QUOTES, NOW + timedelta(seconds=1))
+    assert result["reasons"] == ["CONFIG_DISABLED"]
     assert db.query(PaperMakerOrder).one().state == "CANCELLED"
     assert paper.restore(db, db.get(PaperAccount, 1)).reserved_cash == 0

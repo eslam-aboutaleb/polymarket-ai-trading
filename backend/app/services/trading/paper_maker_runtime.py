@@ -232,9 +232,23 @@ def sync(db, config, expected, moment=None):
     with accounting.transaction(db), localcontext(ACCOUNTING_CONTEXT):
         state = accounting.account_state(db, config.user_id, config.account_id)
         # Lock order is always account -> maker config, matching all writers.
-        db.query(MarketMakerConfig).filter_by(
-            id=config.id, user_id=state.user_id
-        ).with_for_update().one()
+        config = (
+            db.query(MarketMakerConfig)
+            .filter_by(id=config.id, user_id=state.user_id)
+            .populate_existing()
+            .with_for_update()
+            .one()
+        )
+        if not config.enabled:
+            cancel_config(db, config, moment)
+            return {
+                "intent_count": 0,
+                "intents_created": 0,
+                "intents_withdrawn": 0,
+                "policy": VERSION,
+                "fill_status": "disabled_unfilled",
+                "reasons": ["CONFIG_DISABLED"],
+            }
         ledger = accounting.restore(db, state)
         classify_legacy(db, state)
         if accounting.legacy_blocked(state):

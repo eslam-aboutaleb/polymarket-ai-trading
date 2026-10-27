@@ -43,7 +43,13 @@ def test_concurrent_fill_crash_and_migration(sessions, monkeypatch):
     with factory() as db:
         db.get(PaperAccount, 1).fee_bps = 100
         config = MarketMakerConfig(
-            id=1, user_id=1, account_id=1, condition_id=CID, token_id_yes="11", token_id_no="22"
+            id=1,
+            user_id=1,
+            account_id=1,
+            enabled=True,
+            condition_id=CID,
+            token_id_yes="11",
+            token_id_no="22",
         )
         db.add(config)
 
