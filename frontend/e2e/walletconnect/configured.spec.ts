@@ -57,7 +57,7 @@ test("configured wallet login documentation screenshot", async ({ page }) => {
   await expect(page.getByText(/WalletConnect disabled: set/)).toHaveCount(0);
   if (process.env.UPDATE_WALLET_SCREENSHOT === "1") {
     await page.screenshot({
-      path: new URL("../../../.github/images/user-guide/app-login.png", import.meta.url).pathname,
+      path: new URL("../../../user guide/images/app-login.png", import.meta.url).pathname,
       animations: "disabled",
     });
   }
