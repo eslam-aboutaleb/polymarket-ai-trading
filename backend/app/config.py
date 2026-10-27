@@ -119,13 +119,13 @@ class Settings(BaseSettings):
     prompts_path: str = "prompts/prompts.json"
 
     # Trading
-    # Live features are available by default. Paper/simulation select execution mode;
+    # Latency live features default off. Paper/simulation select execution mode;
     # real orders still require the durable gateway, activation and risk budgets.
     live_trading_enabled: bool = True
     live_market_making_enabled: bool = True
     live_copy_trading_enabled: bool = True
     live_inverse_trading_enabled: bool = True
-    live_latency_arb_enabled: bool = True
+    live_latency_arb_enabled: bool = False
     execution_mode: str = "approval"  # auto or approval
     max_position_size: float = 1000.0  # Max USDC per trade
     stop_loss_check_interval_seconds: int = 10
@@ -215,7 +215,7 @@ class Settings(BaseSettings):
     # simulated fills for users with simulation_mode=true and
     # only submits real FOK orders when LATENCY_ARB_LIVE=true
     # AND the user's simulation_mode is false.
-    latency_arb_live: bool = True
+    latency_arb_live: bool = False
     # Minimum |P_model − p_market| gap to consider a candidate.
     latency_arb_edge_threshold: float = 0.03
     # Max notional per trade (USDC).
@@ -233,7 +233,7 @@ class Settings(BaseSettings):
     # Allow trading the final seconds of a window.
     latency_arb_late_entry: bool = False
     latency_arb_late_entry_seconds: int = 10
-    # Execution gates: minimum best bid/ask depth (shares) and
+    # Legacy minimum-depth setting (live uses the validated ask-share curve) and
     # maximum quoted spread (fraction) — a wider spread is a
     # hard abort.
     latency_arb_min_depth: float = 25.0

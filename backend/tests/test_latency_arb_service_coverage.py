@@ -34,6 +34,8 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from latency_book_fixtures import ready
+
 import app.services.trading.latency_arb_service as latency_arb_service
 from app.models.trading.latency_arb_config import LatencyArbConfig
 from app.models.users.user import User
@@ -41,7 +43,6 @@ from app.models.users.user_settings import UserSettings
 from app.services.market_data.crypto_markets_service import CryptoMarket
 from app.services.trading.latency_arb_service import (
     Opportunity,
-    _book_gates,
     _calculation_details,
     _circuit_breaker_state,
     _default_config,
@@ -55,7 +56,6 @@ from app.services.trading.latency_arb_service import (
     _execute_live,
     _execute_opportunity,
     _execute_paper,
-    _fetch_book,
     _fetch_opportunities,
     _log_latency_distribution,
     _parse_calculation_details,
@@ -79,6 +79,7 @@ from app.services.trading.latency_arb_service import (
 def _engine_settings(**overrides):
     base = {
         "latency_arb_live": False,
+        "live_latency_arb_enabled": True,
         "latency_arb_edge_threshold": 0.03,
         "latency_arb_max_notional": 50.0,
         "latency_arb_max_latency_ms": 1500,
@@ -593,95 +594,7 @@ class CircuitBreakerTests(unittest.TestCase):
 # ── CLOB book fetch and gates ─────────────────────────────
 
 
-class FetchBookTests(unittest.IsolatedAsyncioTestCase):
-    async def test_fetch_book_returns_dict(self):
-        response = _response(200, {"bids": [[0.5, 1.0]], "asks": [[0.51, 1.0]]})
-        with (
-            patch("httpx.AsyncClient", return_value=_httpx_client(response)),
-            patch(
-                "app.services.market_data.polymarket_service.POLYMARKET_CLOB_API",
-                "https://clob.example",
-            ),
-        ):
-            book = await _fetch_book("token-1")
-        self.assertEqual(book, {"bids": [[0.5, 1.0]], "asks": [[0.51, 1.0]]})
-
-    async def test_fetch_book_non_dict_json_returns_none(self):
-        response = _response(200, [1, 2, 3])
-        with (
-            patch("httpx.AsyncClient", return_value=_httpx_client(response)),
-            patch(
-                "app.services.market_data.polymarket_service.POLYMARKET_CLOB_API",
-                "https://clob.example",
-            ),
-        ):
-            self.assertIsNone(await _fetch_book("token-1"))
-
-    async def test_fetch_book_non_200_returns_none(self):
-        response = _response(404, {})
-        with (
-            patch("httpx.AsyncClient", return_value=_httpx_client(response)),
-            patch(
-                "app.services.market_data.polymarket_service.POLYMARKET_CLOB_API",
-                "https://clob.example",
-            ),
-        ):
-            self.assertIsNone(await _fetch_book("token-1"))
-
-    async def test_fetch_book_error_returns_none(self):
-        client = MagicMock(name="async_client")
-        client.get = AsyncMock(side_effect=RuntimeError("timeout"))
-        client.__aenter__ = AsyncMock(return_value=client)
-        client.__aexit__ = AsyncMock(return_value=False)
-        with (
-            patch("httpx.AsyncClient", return_value=client),
-            patch(
-                "app.services.market_data.polymarket_service.POLYMARKET_CLOB_API",
-                "https://clob.example",
-            ),
-            self.assertLogs(level="DEBUG"),
-        ):
-            self.assertIsNone(await _fetch_book("token-1"))
-
-
-class BookGatesTests(unittest.TestCase):
-    def test_empty_book_fails_both_gates(self):
-        self.assertEqual(_book_gates({}, 50.0), (False, False))
-
-    def test_bids_only_fails_both_gates(self):
-        self.assertEqual(_book_gates({"bids": [[0.5, 100.0]]}, 50.0), (False, False))
-
-    def test_asks_only_fails_both_gates(self):
-        self.assertEqual(_book_gates({"asks": [[0.5, 100.0]]}, 50.0), (False, False))
-
-    def test_insufficient_depth(self):
-        book = {"bids": [[0.499, 10.0]], "asks": [[0.501, 1000.0]]}
-        depth_ok, spread_ok = _book_gates(book, 50.0)
-        self.assertFalse(depth_ok)
-        self.assertTrue(spread_ok)
-
-    def test_spread_too_wide(self):
-        book = {"bids": [[0.40, 1000.0]], "asks": [[0.60, 1000.0]]}
-        depth_ok, spread_ok = _book_gates(book, 50.0)
-        self.assertTrue(depth_ok)
-        self.assertFalse(spread_ok)
-
-    def test_gates_pass(self):
-        book = {"bids": [[0.499, 1000.0]], "asks": [[0.501, 1000.0]]}
-        self.assertEqual(_book_gates(book, 50.0), (True, True))
-
-    def test_zero_midpoint_fails_spread(self):
-        book = {"bids": [[0.0, 1000.0]], "asks": [[0.0, 1000.0]]}
-        depth_ok, spread_ok = _book_gates(book, 50.0)
-        self.assertTrue(depth_ok)
-        self.assertFalse(spread_ok)
-
-    def test_malformed_levels_ignored(self):
-        book = {
-            "bids": [["bad"], [0.499, 1000.0], "nope", [0.49]],
-            "asks": [[0.501, 1000.0], None],
-        }
-        self.assertEqual(_book_gates(book, 50.0), (True, True))
+# Native executable-book contract coverage lives in test_latency_book.py.
 
 
 class PlaceFokOrderTests(unittest.IsolatedAsyncioTestCase):
@@ -792,7 +705,15 @@ class ExecuteLiveTests(unittest.IsolatedAsyncioTestCase):
             "app.services.trading.execution.live.place_live_order", return_value=response
         ) as gateway:
             result = await _execute_live(
-                _session(), _user(), _user_settings(), _opportunity(), "token-1", 0.5, 50, 100
+                _session(),
+                _user(),
+                _user_settings(),
+                _opportunity(),
+                "token-1",
+                0.5,
+                50,
+                100,
+                evidence=ready("token-1", _opportunity().market.condition_id),
             )
         self.assertEqual(result["trade_id"], 7)
         self.assertEqual(gateway.call_args.kwargs["size"], 100.0)
@@ -803,7 +724,15 @@ class ExecuteLiveTests(unittest.IsolatedAsyncioTestCase):
         response = {"success": False, "status": "unknown", "order_hash": "ambiguous"}
         with patch("app.services.trading.execution.live.place_live_order", return_value=response):
             result = await _execute_live(
-                _session(), _user(), _user_settings(), _opportunity(), "token-1", 0.5, 50, 100
+                _session(),
+                _user(),
+                _user_settings(),
+                _opportunity(),
+                "token-1",
+                0.5,
+                50,
+                100,
+                evidence=ready("token-1", _opportunity().market.condition_id),
             )
         self.assertEqual(result["status"], "unknown")
         self.assertEqual(result["order_hash"], "ambiguous")
@@ -816,7 +745,15 @@ class ExecuteLiveTests(unittest.IsolatedAsyncioTestCase):
             side_effect=LiveTradingBlocked("LIVE_DAILY_BUDGET_EXCEEDED"),
         ):
             result = await _execute_live(
-                _session(), _user(), _user_settings(), _opportunity(), "token-1", 0.5, 50, 100
+                _session(),
+                _user(),
+                _user_settings(),
+                _opportunity(),
+                "token-1",
+                0.5,
+                50,
+                100,
+                evidence=ready("token-1", _opportunity().market.condition_id),
             )
         self.assertEqual(result, {"status": "rejected", "reason": "LIVE_DAILY_BUDGET_EXCEEDED"})
 
@@ -847,6 +784,7 @@ class ExecuteOpportunityTests(unittest.IsolatedAsyncioTestCase):
         now = now or datetime.now(UTC)
         db = db or _session()
         patches = [
+            patch.object(latency_arb_service.binance_ws_service, "is_connected", return_value=True),
             patch.object(latency_arb_service, "get_settings", lambda: settings_ns),
             patch.object(latency_arb_service, "SessionLocal", return_value=db),
             patch.object(
@@ -870,7 +808,11 @@ class ExecuteOpportunityTests(unittest.IsolatedAsyncioTestCase):
                     }
                 ),
             ),
-            patch.object(latency_arb_service, "_fetch_book", AsyncMock(return_value=None)),
+            patch.object(
+                latency_arb_service,
+                "_fetch_book",
+                AsyncMock(return_value=ready("token-up-1", opportunity.market.condition_id)),
+            ),
             patch.object(
                 latency_arb_service,
                 "_execute_paper",
@@ -1002,6 +944,81 @@ class ExecuteOpportunityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "rejected")
         self.assertEqual(result["reason"], "market data incomplete")
 
+    async def test_disconnected_feed_cannot_reuse_a_recent_price(self):
+        live = AsyncMock()
+        result = await self._execute(
+            settings_ns=_engine_settings(latency_arb_live=True),
+            user_settings=_user_settings(simulation_mode=False),
+            extra_patches=[
+                patch.object(
+                    latency_arb_service.binance_ws_service, "is_connected", return_value=False
+                ),
+                patch.object(latency_arb_service, "_execute_live", live),
+            ],
+        )
+        self.assertEqual(result["reason"], "FEED_DISCONNECTED")
+        live.assert_not_awaited()
+
+    async def test_public_fetch_time_counts_against_latency_budget(self):
+        opportunity = _opportunity(detected_at=datetime.now(UTC) - timedelta(seconds=2))
+        live = AsyncMock()
+        result = await self._execute(
+            opportunity=opportunity,
+            now=opportunity.detected_at,
+            settings_ns=_engine_settings(latency_arb_live=True),
+            user_settings=_user_settings(simulation_mode=False),
+            extra_patches=[patch.object(latency_arb_service, "_execute_live", live)],
+        )
+        self.assertEqual(result["reason"], "LATENCY_BUDGET_EXCEEDED")
+        live.assert_not_awaited()
+
+    async def test_expired_plan_never_reaches_live_runner(self):
+        quote = ready("token-up-1", _opportunity().market.condition_id)
+        quote = quote.model_copy(update={"expires_at": datetime.now(UTC) - timedelta(seconds=1)})
+        live = AsyncMock()
+        result = await self._execute(
+            settings_ns=_engine_settings(latency_arb_live=True),
+            user_settings=_user_settings(simulation_mode=False),
+            extra_patches=[
+                patch.object(latency_arb_service, "_fetch_book", AsyncMock(return_value=quote)),
+                patch.object(latency_arb_service, "_execute_live", live),
+            ],
+        )
+        self.assertEqual(result["reason"], "STALE_BOOK")
+        live.assert_not_awaited()
+
+    async def test_valid_market_token_for_opposite_outcome_never_executes(self):
+        quote = ready("token-up-1", _opportunity().market.condition_id)
+        quote = quote.model_copy(update={"outcome": "NO"})
+        live = AsyncMock()
+        result = await self._execute(
+            settings_ns=_engine_settings(latency_arb_live=True),
+            user_settings=_user_settings(simulation_mode=False),
+            extra_patches=[
+                patch.object(latency_arb_service, "_fetch_book", AsyncMock(return_value=quote)),
+                patch.object(latency_arb_service, "_execute_live", live),
+            ],
+        )
+        self.assertEqual(result["reason"], "TOKEN_OUTCOME_MISMATCH")
+        live.assert_not_awaited()
+
+    async def test_down_side_accepts_its_validated_no_token(self):
+        opportunity = _opportunity(side="down")
+        quote = ready("token-down-1", opportunity.market.condition_id)
+        quote = quote.model_copy(update={"outcome": "NO"})
+        live = AsyncMock(return_value={"status": "submitted"})
+        result = await self._execute(
+            opportunity=opportunity,
+            settings_ns=_engine_settings(latency_arb_live=True),
+            user_settings=_user_settings(simulation_mode=False),
+            extra_patches=[
+                patch.object(latency_arb_service, "_fetch_book", AsyncMock(return_value=quote)),
+                patch.object(latency_arb_service, "_execute_live", live),
+            ],
+        )
+        self.assertEqual(result["status"], "submitted")
+        self.assertEqual(live.await_args.args[4], "token-down-1")
+
     async def test_live_book_depth_rejects(self):
         book = {"bids": [[0.499, 10.0]], "asks": [[0.501, 1000.0]]}
         result = await self._execute(
@@ -1012,7 +1029,7 @@ class ExecuteOpportunityTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assertEqual(result["status"], "rejected")
-        self.assertEqual(result["reason"], "insufficient depth")
+        self.assertEqual(result["reason"], "BOOK_EVIDENCE_UNAVAILABLE")
 
     async def test_live_book_spread_aborts(self):
         book = {"bids": [[0.40, 1000.0]], "asks": [[0.60, 1000.0]]}
@@ -1023,10 +1040,10 @@ class ExecuteOpportunityTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(latency_arb_service, "_fetch_book", AsyncMock(return_value=book)),
             ],
         )
-        self.assertEqual(result["status"], "aborted")
-        self.assertEqual(result["reason"], "spread too wide")
+        self.assertEqual(result["status"], "rejected")
+        self.assertEqual(result["reason"], "BOOK_EVIDENCE_UNAVAILABLE")
 
-    async def test_live_book_fetch_failure_skips_gates(self):
+    async def test_live_book_fetch_failure_rejects_without_execution(self):
         live = AsyncMock(return_value={"status": "submitted"})
         result = await self._execute(
             settings_ns=_engine_settings(latency_arb_live=True),
@@ -1036,8 +1053,9 @@ class ExecuteOpportunityTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(latency_arb_service, "_execute_live", live),
             ],
         )
-        self.assertEqual(result["status"], "submitted")
-        live.assert_awaited_once()
+        self.assertEqual(result["status"], "rejected")
+        self.assertEqual(result["reason"], "BOOK_EVIDENCE_UNAVAILABLE")
+        live.assert_not_awaited()
 
     async def test_paper_path_executes_and_records_latency(self):
         paper = AsyncMock(return_value={"status": "simulated", "trade_id": 1})

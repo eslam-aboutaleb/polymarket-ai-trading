@@ -371,6 +371,7 @@ class WsListenTests(BinanceServiceTestCase):
         )
         self.assertEqual(bs.get_last_price("BTCUSDT"), 100.8)
         self.assertEqual(bs.get_last_price("ETHUSDT"), 2000.0)
+        self.assertFalse(bs.is_connected())
 
     async def test_listen_breaks_when_stop_set_between_messages(self):
         stop_event = asyncio.Event()

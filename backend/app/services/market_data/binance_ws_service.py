@@ -38,6 +38,7 @@ from typing import Any
 import websockets
 
 logger = logging.getLogger(__name__)
+_connected = False
 
 # Combined-streams endpoint: /stream?streams=a/b/c multiplexes several
 # streams over one socket (the /ws endpoint accepts a single stream).
@@ -167,6 +168,8 @@ def handle_message(raw: str | bytes) -> SymbolState | None:
 
 async def _ws_listen(stop_event: asyncio.Event) -> None:
     """Subscribe to the combined kline stream, reconnecting with backoff."""
+    global _connected
+    _connected = False
     url = combined_streams_url()
     backoff = 1.0
     while not stop_event.is_set():
@@ -179,6 +182,7 @@ async def _ws_listen(stop_event: asyncio.Event) -> None:
                 additional_headers={"User-Agent": "polymarket-ai/1.0"},
             ) as ws:
                 logger.info("Connected to Binance combined stream: %s", url)
+                _connected = True
                 backoff = 1.0
                 async for message in ws:
                     if stop_event.is_set():
@@ -188,6 +192,8 @@ async def _ws_listen(stop_event: asyncio.Event) -> None:
             raise
         except Exception as exc:
             logger.warning("Binance WS connection failed: %s", exc)
+        finally:
+            _connected = False
         if stop_event.is_set():
             break
         await asyncio.sleep(backoff)
@@ -195,6 +201,11 @@ async def _ws_listen(stop_event: asyncio.Event) -> None:
 
 
 # ── Public accessors ──────────────────────────────────────────────
+
+
+def is_connected() -> bool:
+    """False during startup, reconnect backoff, cancellation and disconnect."""
+    return _connected
 
 
 def get_symbol_state(symbol: str) -> dict[str, Any] | None:

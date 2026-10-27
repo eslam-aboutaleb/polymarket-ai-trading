@@ -20,17 +20,14 @@ For each active window the engine computes
     P(Up)       = Φ(distance / (σ · √t_remaining))  (Bachelier / log-normal)
     edge        = |P_model − p_market|
 
-A candidate requires ``edge ≥ 3%`` (configurable), best bid/ask depth
-≥ the minimum size and a spread ≤ 2% (hard abort above, mirroring the
+A candidate requires ``edge ≥ 3%`` (configurable), executable ask-side
+share depth and a spread ≤ 2% (hard abort above, mirroring the
 sell-side slippage guard).
 
-**Paper results are ESTIMATES, not executions.** Simulated fills come
-from plan 08's depth-aware slippage simulator and are bounded by
-``SLIPPAGE_SIM_MIN``/``SLIPPAGE_SIM_MAX``; paper PnL must be read as an
-estimate with configurable bounds, never as a forecast of live results.
-**Model risk is bounded** by the conservative σ (never below realized,
-inflated 2× the market-implied level before any edge is trusted) and by
-the 3% probability gap, which absorbs residual Bachelier tail error.
+Paper fills use captured native evidence and the shared paper journal. They are
+modeled, never exchange-confirmed. Live BUY plans use the shared binary-book
+adapter, known zero fees, executable ask depth and an expiring FOK limit. Missing
+or invalid evidence abstains. Both live latency flags default off.
 
 Risk gates (all must pass before an order):
 
@@ -490,7 +487,7 @@ def get_engine_status() -> dict[str, Any]:
     settings = get_settings()
     return {
         "running": _running,
-        "live_mode": bool(settings.latency_arb_live),
+        "live_mode": bool(settings.latency_arb_live and settings.live_latency_arb_enabled),
         "last_cycle_at": (
             datetime.fromtimestamp(_opportunities_at, tz=UTC).isoformat()
             if _opportunities_at
@@ -656,60 +653,48 @@ def _circuit_breaker_state(
 # ────────────── Execution ──────────────
 
 
-async def _fetch_book(token_id: str) -> dict[str, Any] | None:
-    """Fetch the public CLOB order book for a token (live mode only).
+async def _fetch_book(condition_id, token_id, cash, max_spread):
+    from app.services.trading.latency_book import fetch_executable_book
 
-    Paper mode never calls this — it makes zero CLOB calls.
-    """
-    import httpx
+    return await fetch_executable_book(condition_id, token_id, cash, max_spread)
 
-    from app.services.market_data.polymarket_service import POLYMARKET_CLOB_API
 
+_execution_outcome_cache = get_cache("latency_arb_outcomes")
+
+
+def _record_execution_outcome(user_id, opportunity, result):
+    from app.utils.metrics import counter
+
+    event = {
+        "condition_id": opportunity.market.condition_id,
+        "token_id": (
+            opportunity.market.up_token_id
+            if opportunity.side == "up"
+            else opportunity.market.down_token_id
+        ),
+        "status": result.get("status", "rejected"),
+        "reason": result.get("reason", "EXECUTION_RESULT"),
+        "at": datetime.now(UTC).isoformat(),
+        "source": "polymarket-clob-rest-v1/binary-book-v1",
+    }
+    if result.get("evidence"):
+        event["evidence"] = result["evidence"]
+    logger.info("latency_execution_outcome %s", json.dumps(event))
+    # Bounded, controlled reason codes only; no provider exception text or secrets.
+    reason = event["reason"]
+    if isinstance(reason, str) and reason.isupper() and reason.replace("_", "").isalnum():
+        counter(f"latency_book_{reason.lower()}_total").inc()
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(
-                f"{POLYMARKET_CLOB_API}/book",
-                params={"token_id": token_id},
-            )
-    except Exception as exc:
-        logger.debug("Book fetch failed for %s: %s", token_id[:16], exc)
+        _execution_outcome_cache.set(f"outcome:{user_id}", event, ttl_seconds=3600)
+    except Exception:
+        logger.warning("Latency outcome cache unavailable")
+
+
+def get_execution_outcome(user_id):
+    try:
+        return _execution_outcome_cache.get(f"outcome:{user_id}")
+    except Exception:
         return None
-    if response.status_code != 200:
-        return None
-    book = response.json()
-    return book if isinstance(book, dict) else None
-
-
-def _book_gates(
-    book: dict[str, Any],
-    size: float,
-) -> tuple[bool, bool]:
-    """Depth and spread gates for a candidate.
-
-    Returns (depth_ok, spread_ok): depth_ok is False when the best
-    bid/ask levels cannot absorb the order; spread_ok is False when
-    the quoted spread exceeds the hard abort threshold (2% default).
-    """
-    settings = get_settings()
-    bids = [
-        (float(level[0]), float(level[1]))
-        for level in book.get("bids") or []
-        if isinstance(level, (list, tuple)) and len(level) >= 2
-    ]
-    asks = [
-        (float(level[0]), float(level[1]))
-        for level in book.get("asks") or []
-        if isinstance(level, (list, tuple)) and len(level) >= 2
-    ]
-    if not bids or not asks:
-        return False, False
-    best_bid = max(bids, key=lambda level: level[0])
-    best_ask = min(asks, key=lambda level: level[0])
-    depth_ok = best_bid[1] >= size and best_ask[1] >= size
-    midpoint = (best_bid[0] + best_ask[0]) / 2.0
-    spread = (best_ask[0] - best_bid[0]) / midpoint if midpoint > 0.0 else 1.0
-    spread_ok = spread <= settings.latency_arb_max_spread
-    return depth_ok, spread_ok
 
 
 async def _place_fok_order(
@@ -820,20 +805,31 @@ async def _execute_live(
     settings: UserSettings,  # noqa: ARG001 - shared runner signature
     opportunity: Opportunity,
     token_id: str,
-    reference_price: float,
+    reference_price: float,  # noqa: ARG001 - Gamma is indicative only
     size: float,
     feed_to_order_ms: float,  # noqa: ARG001 - shared runner signature
+    *,
+    evidence=None,
 ) -> dict[str, Any]:
     """Submit a real FOK order through durable execution and shared risk budgets."""
-    from decimal import ROUND_DOWN, Decimal
-
     from app.services.trading.execution.live import place_live_order
+    from app.services.trading.latency_book import ExecutableBookEvidence
     from app.services.trading.live_trading_policy import LiveTradingBlocked
 
-    shares = (Decimal(str(size)) / Decimal(str(reference_price))).quantize(
-        Decimal("0.01"),
-        rounding=ROUND_DOWN,
-    )
+    if (
+        not isinstance(evidence, ExecutableBookEvidence)
+        or evidence.status != "READY"
+        or opportunity.side not in ("up", "down")
+        or evidence.token_id != token_id
+        or evidence.outcome != ("YES" if opportunity.side == "up" else "NO")
+        or evidence.condition_id != opportunity.market.condition_id
+        or evidence.expires_at is None
+        or datetime.now(UTC) >= evidence.expires_at
+        or evidence.shares <= 0
+        or evidence.worst_case_cash > Decimal(str(size))
+    ):
+        return {"status": "rejected", "reason": "EXECUTABLE_EVIDENCE_REQUIRED"}
+    shares = evidence.shares
     # One economic order per opportunity/window/token survives restarts.
     identity = f"latency:{opportunity.symbol}:{opportunity.window_start_epoch}:{token_id}"
     try:
@@ -843,8 +839,10 @@ async def _execute_live(
             user_id=user.id,
             token_id=token_id,
             side="BUY",
-            price=reference_price,
-            size=float(shares),
+            price=evidence.limit_price,
+            size=shares,
+            execution_deadline=evidence.expires_at,
+            execution_evidence=evidence.model_dump(mode="json"),
             idempotency_key=identity,
             strategy="latency_arb",
             market_id=opportunity.market.condition_id,
@@ -852,7 +850,11 @@ async def _execute_live(
         )
     except (LiveTradingBlocked, ValueError) as exc:
         return {"status": "rejected", "reason": str(exc)}
-    return {**result, "size": size}
+    return {
+        **result,
+        "size": float(evidence.worst_case_cash),
+        "evidence": evidence.model_dump(mode="json"),
+    }
 
 
 async def _execute_opportunity(
@@ -869,7 +871,10 @@ async def _execute_opportunity(
 
     # Mode gate: live mode requires LATENCY_ARB_LIVE AND
     # non-simulation user settings.
-    if not simulation and not engine_settings.latency_arb_live:
+    if not simulation and not (
+        engine_settings.latency_arb_live
+        and getattr(engine_settings, "live_latency_arb_enabled", False)
+    ):
         return {"status": "skipped", "reason": "live mode disabled"}
 
     # Latency budget: abort when the feed→order path is too slow.
@@ -931,20 +936,50 @@ async def _execute_opportunity(
     reference_price = (
         opportunity.market.up_price if opportunity.side == "up" else opportunity.market.down_price
     )
-    if not token_id or reference_price <= 0.0:
+    if opportunity.side not in ("up", "down") or not token_id or reference_price <= 0.0:
         return {"status": "rejected", "reason": "market data incomplete"}
 
-    # Depth & spread gates. Live mode reads the public CLOB book;
-    # paper mode makes ZERO CLOB calls and skips them (the paper
-    # fill simulator bounds slippage instead).
+    evidence = None
     if not simulation:
-        book = await _fetch_book(token_id)
-        if book is not None:
-            depth_ok, spread_ok = _book_gates(book, size)
-            if not depth_ok:
-                return {"status": "rejected", "reason": "insufficient depth"}
-            if not spread_ok:
-                return {"status": "aborted", "reason": "spread too wide"}
+        from app.services.trading.latency_book import ExecutableBookEvidence
+
+        if not binance_ws_service.is_connected():
+            return {"status": "rejected", "reason": "FEED_DISCONNECTED"}
+        evidence = await _fetch_book(
+            opportunity.market.condition_id, token_id, size, engine_settings.latency_arb_max_spread
+        )
+        if not isinstance(evidence, ExecutableBookEvidence):
+            return {"status": "rejected", "reason": "BOOK_EVIDENCE_UNAVAILABLE"}
+        if evidence.status != "READY":
+            return {
+                "status": "rejected",
+                "reason": evidence.reason,
+                "evidence": evidence.model_dump(mode="json"),
+            }
+        if evidence.outcome != ("YES" if opportunity.side == "up" else "NO"):
+            return {"status": "rejected", "reason": "TOKEN_OUTCOME_MISMATCH"}
+        # Include awaited metadata/fee/book requests in the feed-to-submit budget.
+        completed_at = datetime.now(UTC)
+        if evidence.expires_at is None or completed_at >= evidence.expires_at:
+            return {"status": "rejected", "reason": "STALE_BOOK"}
+        if not binance_ws_service.is_connected():
+            return {"status": "rejected", "reason": "FEED_DISCONNECTED"}
+        if (
+            opportunity.feed_lag_ms is None
+            or not math.isfinite(opportunity.feed_lag_ms)
+            or opportunity.feed_lag_ms < 0
+            or completed_at < opportunity.detected_at
+        ):
+            return {"status": "rejected", "reason": "FEED_FRESHNESS_UNKNOWN"}
+        feed_to_order_ms = (
+            feed_lag + (completed_at - opportunity.detected_at).total_seconds() * 1000
+        )
+        if feed_to_order_ms > engine_settings.latency_arb_max_latency_ms:
+            return {"status": "aborted", "reason": "LATENCY_BUDGET_EXCEEDED"}
+        deadline = opportunity.detected_at + timedelta(
+            milliseconds=engine_settings.latency_arb_max_latency_ms - feed_lag
+        )
+        evidence = evidence.model_copy(update={"expires_at": min(evidence.expires_at, deadline)})
 
     if simulation:
         result = await _execute_paper(
@@ -966,6 +1001,7 @@ async def _execute_opportunity(
             reference_price,
             size,
             feed_to_order_ms,
+            evidence=evidence,
         )
 
     _record_latency_sample(feed_lag, feed_to_order_ms)
@@ -1102,6 +1138,7 @@ async def _execute_for_users(
                 ]:
                     continue
                 result = await _execute_opportunity(db, config, settings, user, opportunity, now)
+                _record_execution_outcome(settings.user_id, opportunity, result)
                 if result.get("status") in ("simulated", "submitted"):
                     executed += 1
                     if bool(config.alert_on_opportunity):

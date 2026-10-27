@@ -29,6 +29,8 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from latency_book_fixtures import ready
+
 import app.services.trading.latency_arb_service as latency_arb_service
 from app.config import Settings
 from app.models.trading.user_trade import UserTrade
@@ -293,6 +295,7 @@ class LatencyArbPaperModeTests(unittest.IsolatedAsyncioTestCase):
                 _settings(False),
                 SimpleNamespace(
                     symbol="BTC",
+                    side="up",
                     window_start_epoch=100,
                     market=SimpleNamespace(condition_id="market"),
                 ),
@@ -300,6 +303,7 @@ class LatencyArbPaperModeTests(unittest.IsolatedAsyncioTestCase):
                 0.5,
                 10,
                 50,
+                evidence=ready("token-up", "market", 10),
             )
         self.assertEqual(result["status"], "submitted")
         self.assertEqual(gateway.call_args.kwargs["order_type"], "FOK")
