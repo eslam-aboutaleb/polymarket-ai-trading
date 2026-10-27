@@ -26,6 +26,7 @@ import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from app.config import get_settings
 
@@ -119,6 +120,10 @@ class ClobWsManager:
         url: str = POLYMARKET_CLOB_WS_URL,
         max_subscriptions: int = _MAX_SUBSCRIPTIONS,
     ):
+        self._connection_id = str(uuid4())
+        self._archive_gap = False
+        self._resnapshot_tasks: set[asyncio.Task] = set()
+        self._resnapshot_attempts: dict[str, float] = {}
         self._url = url
         self._max_subscriptions = max_subscriptions
         # token_id → refcount (multiple SSE clients may share a token)
@@ -152,6 +157,11 @@ class ClobWsManager:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        for pending in list(self._resnapshot_tasks):
+            pending.cancel()
+        if self._resnapshot_tasks:
+            await asyncio.gather(*self._resnapshot_tasks, return_exceptions=True)
+        self._resnapshot_tasks.clear()
         self._ws = None
         self._is_connected = False
         logger.info("CLOB WS manager stopped")
@@ -249,6 +259,7 @@ class ClobWsManager:
                 raise
             except Exception as exc:
                 logger.warning("CLOB WS session ended: %s", exc)
+                await self._archive_status("SOURCE_DISCONNECTED")
             if self._stop_event.is_set():
                 break
             await asyncio.sleep(delay)
@@ -264,9 +275,11 @@ class ClobWsManager:
             close_timeout=5,
             additional_headers={"User-Agent": "polymarket-ai/1.0"},
         ) as ws:
+            self._connection_id = str(uuid4())
             self._ws = ws
             self._is_connected = True
             logger.info("CLOB WS connected to %s", self._url)
+            await self._archive_status("SOURCE_CONNECTED")
             heartbeat = asyncio.create_task(self._heartbeat(ws))
             try:
                 async with self._lock:
@@ -274,6 +287,7 @@ class ClobWsManager:
                 if token_ids:
                     await self._send(ws, {"assets_ids": token_ids, "type": "market"})
                 async for message in ws:
+                    await self._archive_message(message)
                     self._handle_message(message)
             finally:
                 heartbeat.cancel()
@@ -281,6 +295,7 @@ class ClobWsManager:
                     await heartbeat
                 self._ws = None
                 self._is_connected = False
+                await self._archive_status("SOURCE_DISCONNECTED")
 
     async def _heartbeat(self, ws: Any) -> None:
         """The market channel expects application-level PING frames."""
@@ -298,6 +313,62 @@ class ClobWsManager:
 
     # ── Inbound events ──────────────────────────────────────
 
+    async def _archive_status(self, status):
+        timestamp = str(int(datetime.now(UTC).timestamp() * 1000))
+        for token in list(self._subscriptions):
+            await self._archive_message(
+                json.dumps(
+                    {
+                        "event_type": "source_status",
+                        "asset_id": token,
+                        "timestamp": timestamp,
+                        "status": status,
+                        "connection_id": self._connection_id,
+                    }
+                )
+            )
+
+    async def _archive_message(self, message):
+        if not get_settings().observation_archive_enabled:
+            return
+        received = datetime.now(UTC)
+        from app.services.market_data.venue_observations import persist_message
+
+        try:
+            if message in ("PING", "PONG", b"PING", b"PONG"):
+                return
+            if len(message) > 262_144:
+                raise ValueError("archive frame exceeds bound")
+            # Preserve numeric JSON decimal lexemes without binary-float rounding.
+            events = json.loads(message, parse_float=str)
+            events = events if isinstance(events, list) else [events]
+            if len(events) > 1000 or not all(isinstance(event, dict) for event in events):
+                raise ValueError("invalid or oversized stream batch")
+            for event in events:
+                if isinstance(event, dict):
+                    await asyncio.to_thread(persist_message, event, received, self._connection_id)
+                    from app.services.market_data.book_resnapshot import schedule_resnapshot
+
+                    schedule_resnapshot(self, event)
+            if self._archive_gap:
+                for token in list(self._subscriptions):
+                    await asyncio.to_thread(
+                        persist_message,
+                        {
+                            "event_type": "source_status",
+                            "asset_id": token,
+                            "status": "ARCHIVE_RECOVERED_WITH_GAP",
+                            "timestamp": str(int(received.timestamp() * 1000)),
+                            "connection_id": self._connection_id,
+                        },
+                        received,
+                        self._connection_id,
+                    )
+                self._archive_gap = False
+        except Exception:
+            self._archive_gap = True
+            logger.exception("Public observation archive unavailable; continuity unverified")
+
     def _handle_message(self, message: str | bytes) -> None:
         if isinstance(message, bytes):
             message = message.decode("utf-8", "replace")
@@ -306,6 +377,11 @@ class ClobWsManager:
         try:
             data = json.loads(message)
         except json.JSONDecodeError:
+            return
+        if isinstance(data, list):
+            for event in data:
+                if isinstance(event, dict):
+                    self._handle_message(json.dumps(event))
             return
         if not isinstance(data, dict):
             return
@@ -381,7 +457,8 @@ def get_clob_ws_manager() -> ClobWsManager:
 
 def start_clob_ws_manager() -> None:
     """Start the process-level manager's connection loop."""
-    get_clob_ws_manager().start()
+    manager = get_clob_ws_manager()
+    manager.start()
 
 
 async def stop_clob_ws_manager() -> None:

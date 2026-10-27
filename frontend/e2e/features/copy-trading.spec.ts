@@ -7,7 +7,7 @@ import { test, expect } from "../fixtures/base";
 test.describe("Copy Trading — authenticated", () => {
   test.beforeEach(async ({ adminPage: page }) => {
     await page.goto("/copy-trading");
-    await expect(page.getByRole("heading", { name: "Copy Trading" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Copy Trading", exact: true })).toBeVisible();
     // Other workspace tests can leave the persisted watchlist tab selected.
     await page.getByRole("main").getByRole("button", { name: "Copy Trading", exact: true }).click();
   });
@@ -26,7 +26,7 @@ test.describe("Copy Trading — authenticated", () => {
       await evaluate.click();
       // Evaluation is server-backed; the section must render a verdict or a
       // graceful error, and never crash the page.
-      await expect(page.getByRole("heading", { name: "Copy Trading" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Copy Trading", exact: true })).toBeVisible();
     }
   });
 });

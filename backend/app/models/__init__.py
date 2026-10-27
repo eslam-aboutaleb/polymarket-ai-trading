@@ -6,6 +6,7 @@ Model definitions live under their bounded-context packages.
 
 from app.models.analytics.assessment import Assessment
 from app.models.analytics.backtest_run import BacktestRun
+from app.models.analytics.book_research_run import BookResearchRun
 from app.models.analytics.follower_experiment import FollowerExperimentRun
 from app.models.analytics.portfolio_snapshot import PortfolioSnapshot
 from app.models.base import Base
@@ -16,6 +17,11 @@ from app.models.market_data.market import Market
 from app.models.market_data.market_observation import MarketObservation
 from app.models.market_data.replay_capture import ReplayCapture
 from app.models.market_data.venue_market import VenueMarket
+from app.models.market_data.venue_observation import (
+    ObservationDataset,
+    ObservationDatasetMember,
+    VenueObservation,
+)
 from app.models.market_data.whale_config import WhaleConfig
 from app.models.market_data.whale_event import WhaleEvent
 from app.models.market_data.winner import Winner
@@ -57,6 +63,9 @@ __all__ = [
     "Base",
     "LiveOrder",
     "MarketObservation",
+    "VenueObservation",
+    "ObservationDataset",
+    "ObservationDatasetMember",
     "ReplayCapture",
     "TradingControlState",
     "EmergencyHaltOperation",
@@ -86,6 +95,7 @@ __all__ = [
     "PaperOrderRecord",
     "PaperNavPoint",
     "BacktestRun",
+    "BookResearchRun",
     "FollowerExperimentRun",
     "TakeProfitOrder",
     "RedemptionAttempt",
