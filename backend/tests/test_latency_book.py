@@ -64,7 +64,18 @@ def test_invalid_books_never_authorize(changes):
 
 @pytest.mark.parametrize(
     "fee",
-    [None, {}, {"base_fee": None}, {"base_fee": True}, {"base_fee": "1000"}, {"base_fee": "-1"}],
+    [
+        None,
+        {},
+        {"base_fee": None},
+        {"base_fee": True},
+        {"base_fee": "1000"},
+        {"base_fee": "-1"},
+        {"base_fee": "bad"},
+        {"base_fee": "NaN"},
+        {"base_fee": "sNaN"},
+        {"base_fee": "Infinity"},
+    ],
 )
 def test_unknown_fees_abstain(fee):
     raw, meta, now = snapshot()
@@ -168,3 +179,9 @@ def test_malformed_book_body_returns_auditable_reason(body):
     _, meta, now = snapshot()
     q = latency_book.authorize(body, meta, "11", 50, {"base_fee": 0}, now, now, 0.02)
     assert q.status == "INVALID_BOOK" and q.received_at == now
+
+
+@pytest.mark.parametrize("condition,token", [(None, "11"), (CID, True), (CID, []), ("wrong", "11")])
+def test_untyped_identity_is_a_rejection_not_a_cycle_exception(condition, token):
+    q = asyncio.run(latency_book.fetch_executable_book(condition, token, 50, 0.02))
+    assert q.status == "INVALID_BOOK" and q.reason == "INVALID_MARKET_IDENTITY"

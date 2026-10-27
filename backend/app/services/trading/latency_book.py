@@ -56,8 +56,8 @@ def unavailable(condition_id, token_id, reason, status="INVALID_BOOK"):
     return ExecutableBookEvidence(
         status=status,
         reason=reason,
-        condition_id=condition_id,
-        token_id=token_id,
+        condition_id=str(condition_id or ""),
+        token_id=str(token_id or ""),
         received_at=utc_now(),
     )
 
@@ -116,6 +116,8 @@ def _authorize(raw, metadata, token_id, cash, fee, received_at, as_of, max_sprea
             "connection_id": "latency-rest",
         }
         event = book_event(value, spec)
+        if event is not None and event.kind == "disconnect":
+            return reject("MALFORMED_BOOK_LEVELS")
         book = reconstruct(spec, token_id, [event] if event else [], as_of, 1)
         if book.grade != "VERIFIED_BOOK":
             return reject(
@@ -125,12 +127,15 @@ def _authorize(raw, metadata, token_id, cash, fee, received_at, as_of, max_sprea
         bid, ask = book.bids[0].price, book.asks[0].price
         if (ask - bid) / ((ask + bid) / 2) > Decimal(str(max_spread)):
             return reject("SPREAD_TOO_WIDE")
-        if (
-            not isinstance(fee, dict)
-            or not isinstance(fee.get("base_fee"), (str, int, float, Decimal))
-            or isinstance(fee.get("base_fee"), bool)
-            or Decimal(str(fee.get("base_fee"))) != 0
-        ):
+        fee_value = fee.get("base_fee") if isinstance(fee, dict) else None
+        try:
+            fee_decimal = Decimal(str(fee_value))
+            known_zero_fee = (
+                not isinstance(fee_value, bool) and fee_decimal.is_finite() and fee_decimal == 0
+            )
+        except (ValueError, ArithmeticError):
+            known_zero_fee = False
+        if not known_zero_fee:
             return reject("VENUE_FEE_MODEL_UNKNOWN", "UNKNOWN_COST")
         budget = Decimal(str(cash))
         if not budget.is_finite() or budget <= 0:
@@ -214,8 +219,11 @@ class LiveVenue(PublicVenueCapture):
 
 
 async def fetch_executable_book(condition_id, token_id, cash, max_spread):
-    if not re.fullmatch(r"0x[0-9a-f]{64}", condition_id) or not re.fullmatch(
-        r"[0-9]{1,120}", token_id
+    if (
+        not isinstance(condition_id, str)
+        or not isinstance(token_id, str)
+        or not re.fullmatch(r"0x[0-9a-f]{64}", condition_id)
+        or not re.fullmatch(r"[0-9]{1,120}", token_id)
     ):
         return unavailable(condition_id, token_id, "INVALID_MARKET_IDENTITY")
     try:
