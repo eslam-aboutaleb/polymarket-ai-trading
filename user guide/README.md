@@ -510,7 +510,7 @@ npx playwright test --config playwright.user-guide.config.ts
 Ports 8002 and 5187 must be free. The config starts/stops its own backend and Vite
 servers. On supported Linux hosts, use `npx playwright install --with-deps chromium`
 if browser libraries are missing. The capture scripts write PNGs under
-`images/`; inspect them with the instructions before committing
+`user guide/images/`; inspect them with the instructions before committing
 a refresh. Normal regression CI does not rewrite these documentation assets.
 
 </details>

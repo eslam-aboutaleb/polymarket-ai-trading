@@ -49,7 +49,7 @@ test("real project ID initializes a WalletConnect pairing QR", async ({ page }) 
   expect(await page.evaluate(() => (window as any).__walletCspViolations)).toEqual([]);
   if (process.env.UPDATE_WALLET_SCREENSHOT === "1") {
     await page.screenshot({
-      path: new URL("../../../.github/images/user-guide/app-walletconnect-qr.png", import.meta.url)
+      path: new URL("../../../user guide/images/app-walletconnect-qr.png", import.meta.url)
         .pathname,
       animations: "disabled",
     });
