@@ -7,6 +7,7 @@ Model definitions live under their bounded-context packages.
 from app.models.analytics.assessment import Assessment
 from app.models.analytics.backtest_run import BacktestRun
 from app.models.analytics.book_research_run import BookResearchRun
+from app.models.analytics.executable_replay import ExecutableReplayRun, ExecutableSignalSource
 from app.models.analytics.follower_experiment import FollowerExperimentRun
 from app.models.analytics.portfolio_snapshot import PortfolioSnapshot
 from app.models.base import Base
@@ -132,6 +133,5 @@ __all__ += ["PaperMakerMark"]
 
 __all__ += ["PaperMakerLegacy"]
 
-from app.models.analytics.executable_replay import ExecutableReplayRun, ExecutableSignalSource
 
 __all__ += ["ExecutableReplayRun", "ExecutableSignalSource"]

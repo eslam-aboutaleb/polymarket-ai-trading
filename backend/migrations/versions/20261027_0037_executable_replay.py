@@ -3,7 +3,7 @@
 from alembic import op
 
 revision = "20261027_0037_executable_replay"
-down_revision = "20261026_0034_paper_accounts"
+down_revision = "20261027_0036_maker_lifecycle"
 branch_labels = None
 depends_on = None
 
