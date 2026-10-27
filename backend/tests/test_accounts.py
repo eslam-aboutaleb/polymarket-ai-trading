@@ -572,6 +572,12 @@ class MigrationBackfillTest(unittest.TestCase):
             conn.execute(text("DROP TABLE IF EXISTS follower_experiment_runs"))
             conn.execute(text("DROP TABLE IF EXISTS paper_maker_intents"))
             for future_table in (
+                "paper_maker_legacy",
+                "paper_maker_marks",
+                "paper_maker_fills",
+                "paper_maker_evidence",
+                "paper_maker_cursors",
+                "paper_maker_orders",
                 "paper_nav_points",
                 "paper_order_records",
                 "paper_journal_events",

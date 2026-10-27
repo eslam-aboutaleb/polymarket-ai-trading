@@ -21,6 +21,7 @@ from typing import Any
 from py_clob_client.clob_types import OpenOrderParams
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models.trading.market_maker_config import MarketMakerConfig
 from app.repositories.trading.bots import TradingBotRepository
 from app.services.market_data.polymarket_service import POLYMARKET_CLOB_API
@@ -74,6 +75,14 @@ def upsert_market_maker_config(
     is_new = config is None
     if is_new:
         config = MarketMakerConfig(user_id=user_id)
+    elif get_settings().paper_maker_fill_model_v2 and any(
+        getattr(config, field, None) != value for field, value in values.items()
+    ):
+        from app.models.trading.paper_maker_order import PaperMakerOrder
+        from app.services.trading.paper_maker_runtime import cancel_config
+
+        if db.query(PaperMakerOrder.id).filter_by(config_id=config.id).first():
+            cancel_config(db, config)
     for field, value in values.items():
         setattr(config, field, value)
     if is_new:
@@ -90,6 +99,14 @@ def set_market_maker_config_state(
     status: str | None = None,
 ) -> MarketMakerConfig:
     """Persist an enable/disable state change for a validated config."""
+    if not enabled and get_settings().paper_maker_fill_model_v2:
+        from app.models.trading.paper_maker_order import PaperMakerOrder
+        from app.services.trading.paper_maker_runtime import cancel_config
+
+        # Release durable paper reservations even after a worker restart, when
+        # no in-process task exists to run the loop's cleanup handler.
+        if db.query(PaperMakerOrder.id).filter_by(config_id=config.id).first():
+            cancel_config(db, config)
     config.enabled = enabled
     if status is not None:
         config.status = status
@@ -464,6 +481,8 @@ async def _sync_market_maker(config_id: int) -> dict[str, Any]:
         if simulation_mode:
             book = await _fetch_order_book(config.token_id_yes)
             if book is None:
+                if get_settings().paper_maker_fill_model_v2:
+                    return await _sync_market_maker_paper(db, config, 0, [], {})
                 config.last_error = "Could not fetch order book"
                 db.commit()
                 return {"error": "no book"}
@@ -481,8 +500,8 @@ async def _sync_market_maker(config_id: int) -> dict[str, Any]:
         else:
             expected = _compute_bands_orders(midpoint, config)
 
-        # Paper mode: simulate fills against book depth and record
-        # simulated trades — no CLOB calls are made at all.
+        # Paper quote generation never establishes a fill. The lifecycle path
+        # consumes archived evidence and uses only the shared modeled journal.
         if simulation_mode:
             return await _sync_market_maker_paper(db, config, midpoint, expected, book)
 
@@ -562,8 +581,14 @@ async def _sync_market_maker_paper(
     """Capture desired paper quotes. Missing flow/queue data never proves a fill."""
     from app.services.trading.paper_maker_intents import sync_intents
 
-    result = sync_intents(db, config, expected)
-    config.current_open_orders = 0  # Intents are neither venue nor simulated resting orders.
+    if get_settings().paper_maker_fill_model_v2:
+        from app.services.trading.paper_maker_runtime import sync
+
+        result = sync(db, config, expected)
+    else:
+        result = sync_intents(db, config, expected)
+    if not get_settings().paper_maker_fill_model_v2:
+        config.current_open_orders = 0  # Definitions do not reserve capital.
     config.last_sync_at = utc_now()
     config.last_error = None
     config.status = "running"
@@ -664,6 +689,12 @@ def _cleanup_maker_quotes(config_id: int) -> None:
         db = SessionLocal()
         config = TradingBotRepository(db).get_market_maker_config(config_id)
         if config is not None:
+            if get_settings().paper_maker_fill_model_v2:
+                from app.models.trading.paper_maker_order import PaperMakerOrder
+                from app.services.trading.paper_maker_runtime import cancel_config
+
+                if db.query(PaperMakerOrder.id).filter_by(config_id=config.id).first():
+                    cancel_config(db, config)
             # A switch to simulation does not erase real orders already resting.
             _, unresolved = _cancel_owned_maker_quotes(db, config)
             config.current_open_orders = unresolved
