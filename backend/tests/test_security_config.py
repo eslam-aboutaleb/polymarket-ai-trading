@@ -21,7 +21,7 @@ def test_environment_can_enable_and_disable_live_features(monkeypatch, enabled):
     assert all(getattr(settings, name) is enabled for name in flags)
 
 
-def test_live_features_default_enabled_and_allow_explicit_operator_disable(monkeypatch):
+def test_live_defaults_keep_latency_disabled_and_allow_operator_disable(monkeypatch):
     flags = (
         "live_trading_enabled",
         "live_market_making_enabled",
@@ -34,7 +34,10 @@ def test_live_features_default_enabled_and_allow_explicit_operator_disable(monke
         monkeypatch.delenv(name.upper(), raising=False)
     config = {"_env_file": None, "jwt_secret_key": "a" * 32, "environment": "test"}
     defaults = Settings(**config)
-    assert all(getattr(defaults, name) is True for name in flags)
+    assert all(
+        getattr(defaults, name) is (name not in {"live_latency_arb_enabled", "latency_arb_live"})
+        for name in flags
+    )
     disabled = Settings(**config, **dict.fromkeys(flags, False))
     assert all(getattr(disabled, name) is False for name in flags)
 

@@ -86,6 +86,12 @@ export default function LatencyArb() {
   const [tradingKeyPrompt, setTradingKeyPrompt] = useState(false);
 
   // ── Board state ─────────────────────────────────────
+  const [executionOutcome, setExecutionOutcome] = useState<{
+    status: string;
+    reason: string;
+    at: string;
+    source: string;
+  } | null>(null);
   const [opportunities, setOpportunities] = useState<LatencyArbOpportunity[]>([]);
   const [engine, setEngine] = useState<{
     running: boolean;
@@ -123,6 +129,7 @@ export default function LatencyArb() {
     try {
       const result = await latencyArbService.getOpportunities();
       setOpportunities(result.opportunities);
+      setExecutionOutcome(result.execution_outcome ?? null);
       setEngine(result.engine);
       setLatency(result.latency);
       setError(null);
@@ -307,8 +314,8 @@ export default function LatencyArb() {
                   <th className="pb-2 pr-4 text-right">
                     Market P
                     <InfoTooltip term="Market P">
-                      The price Polymarket is showing right now for that outcome — what the crowd
-                      currently believes the probability is.
+                      Gamma’s indicative probability for that outcome. Live order limits come from
+                      validated CLOB ask depth; this probability is not an executable quote.
                     </InfoTooltip>
                   </th>
                   <th className="pb-2 pr-4 text-right">
@@ -380,6 +387,14 @@ export default function LatencyArb() {
               </tbody>
             </table>
           </div>
+        )}
+        {executionOutcome && (
+          <p role="status" className="text-sm text-amber-400">
+            Last execution: {executionOutcome.status} — {executionOutcome.reason}
+            <span className="block text-xs text-soft">
+              {executionOutcome.at} · {executionOutcome.source}
+            </span>
+          </p>
         )}
         {engine?.last_cycle_at && (
           <p className="text-xs text-soft">Last engine cycle: {age(engine.last_cycle_at)}</p>
