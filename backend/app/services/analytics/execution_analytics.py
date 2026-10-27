@@ -41,6 +41,7 @@ R-multiple expectancy smoothly onto (0, 100): 50 is break-even,
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from dataclasses import dataclass, field
@@ -293,6 +294,8 @@ def get_strategy_stats(
 
     by_strategy: dict[str, _Accumulator] = {}
     for row in rows:
+        if (row.status or "").lower() == "simulated":
+            continue
         strategy = row.strategy_source or "unknown"
         stats = by_strategy.setdefault(strategy, _new_stats(strategy))
         _absorb(stats, row)
@@ -404,6 +407,7 @@ def get_execution_summary(
         "totals": totals.to_dict(),
         "data_quality": {
             "legacy_trades": legacy,
+            "paper_trades_excluded": sum((r.status or "").lower() == "simulated" for r in cohort),
             "missing_expected_price": missing_expected,
             "missing_fee": totals.missing_fee,
         },
@@ -463,7 +467,22 @@ def get_trade_details(
 
 
 def _trade_to_dict(row: UserTrade) -> dict[str, Any]:
+    try:
+        details = json.loads(row.calculation_details or "{}")
+    except (ValueError, TypeError):
+        details = {}
+    if not isinstance(details, dict):
+        details = {}
+    paper = (row.status or "").lower() == "simulated"
     return {
+        "model_version": details.get("model_version", "legacy_unverified") if paper else None,
+        "execution_quality": (
+            "modeled_not_exchange_confirmed"
+            if details.get("paper_journal_order_id")
+            else "legacy_unverified"
+        )
+        if paper
+        else "live_order_record",
         "id": row.id,
         "market_id": row.market_id,
         "token_id": row.token_id,

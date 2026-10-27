@@ -388,3 +388,19 @@ def _account_for_key(db: Session, auth: AuthContext) -> Account | None:
             )
         return account
     return get_personal_account_read_only(db, auth.user_id)
+
+
+def get_strict_account(
+    x_account_id: str | None = Header(default=None, alias=ACCOUNT_HEADER),
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+) -> Account:
+    """Financial operations never silently replace an invalid account with personal."""
+    from app.services.analytics.paper_equity import owner
+
+    if x_account_id is not None and (not x_account_id.isdecimal() or int(x_account_id) <= 0):
+        raise HTTPException(400, "Invalid account header")
+    try:
+        return owner(db, current_user["user_id"], int(x_account_id) if x_account_id else None)
+    except AccountAccessDenied as exc:
+        raise HTTPException(403, "Account unavailable") from exc

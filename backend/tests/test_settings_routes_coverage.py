@@ -20,8 +20,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
+from app.api.deps import get_strict_account
 from app.api.routes.auth.auth import get_current_user_from_token
 from app.main import app
+from app.models import Account
 from app.models.users.user import User
 from app.models.users.user_settings import UserSettings
 from app.utils.database import get_db
@@ -672,6 +674,9 @@ class PaperSummaryTests(SettingsRouteTestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_returns_service_summary(self):
+        app.dependency_overrides[get_strict_account] = lambda: Account(
+            id=9, owner_user_id=1, kind="sub", name="Selected"
+        )
         service_summary = {
             "simulation_mode": True,
             "paper_balance": 500.0,
@@ -684,7 +689,7 @@ class PaperSummaryTests(SettingsRouteTestCase):
         ) as mock_summary:
             response = self.client.get("/api/settings/paper-summary")
         self.assertEqual(response.status_code, 200)
-        mock_summary.assert_called_once_with(self.db, 1)
+        mock_summary.assert_called_once_with(self.db, 1, 9)
         data = response.json()
         self.assertTrue(data["simulation_mode"])
         self.assertEqual(data["paper_balance"], 500.0)

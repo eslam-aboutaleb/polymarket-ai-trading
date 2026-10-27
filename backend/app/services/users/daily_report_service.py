@@ -16,7 +16,7 @@ prompt:
   marker is removed again if assembly fails so an operator-triggered re-run can
   still retry the same day.
 * **Paper mode** — users with ``simulation_mode`` are reported against their
-  ``paper_balance`` (and simulated trades only) and labelled "Paper".
+  journal NAV and labelled "Paper"; unavailable or cash-flow-affected observations abstain.
 * **Start value** — soft dependency on plan 05: the first hourly
   ``PortfolioSnapshot`` of the UTC day when that model has landed, otherwise
   derived from today's realized P&L and labelled as derived in the header.
@@ -43,7 +43,6 @@ from app.repositories.trading.daily_report_repository import TradingReportReposi
 from app.repositories.users.settings import UserSettingsRepository
 from app.repositories.users.user_repository import UserRepository
 from app.security.credential_store import CredentialStoreError, load_wallet_credentials
-from app.services.analytics.simulation import get_paper_summary
 from app.services.market_data.polymarket_service import get_polymarket_service
 from app.services.users.alert_service import dispatch as alert_dispatch
 from app.services.users.email_service import is_smtp_configured, send_daily_digest_email
@@ -467,6 +466,68 @@ def _format_events_text(events: list[str], catalysts: list[str]) -> str:
     return "\n".join(lines)
 
 
+class PaperDigestUnavailable(ValueError):
+    """A paper digest cannot turn unknown NAV or cash flows into returns."""
+
+
+def _paper_digest_values(db, user_id, now, day_start):
+    from app.models import PaperAccount, PaperNavPoint
+    from app.services.analytics import paper_accounting as accounting
+    from app.services.users.account_service import get_personal_account_read_only
+
+    account = get_personal_account_read_only(db, user_id)
+    state = (
+        db.get(PaperAccount, account.id)
+        if account and get_settings().paper_journal_v2_enabled
+        else None
+    )
+    if state is None:
+        raise PaperDigestUnavailable("paper_nav_unavailable")
+    value = accounting.value_account(db, state, now)
+    if value["nav"] is None:
+        raise PaperDigestUnavailable("paper_nav_unavailable")
+    first = (
+        db.query(PaperNavPoint)
+        .filter(
+            PaperNavPoint.account_id == account.id,
+            PaperNavPoint.user_id == user_id,
+            PaperNavPoint.captured_at >= day_start,
+            PaperNavPoint.captured_at <= now,
+        )
+        .order_by(PaperNavPoint.captured_at)
+        .first()
+    )
+    opening = json.loads(first.valuation_json) if first else None
+    if not opening or opening["nav"] is None:
+        raise PaperDigestUnavailable("paper_opening_nav_unavailable")
+    if (
+        opening.get("cash_flow_count", 0) != value["cash_flow_count"]
+        or opening["funding"] != value["funding"]
+    ):
+        raise PaperDigestUnavailable("paper_cash_flows_require_review")
+    before = accounting.restore(db, state, day_start - timedelta(microseconds=1))
+    current = accounting.restore(db, state, now)
+    _, conditions = accounting.position_rule_versions(db, state, now)
+    positions = [
+        {
+            "asset_id": token,
+            "condition_id": conditions[token],
+            "size": float(position["shares"]),
+            "avgPrice": float(position["cost_basis"]) / float(position["shares"]),
+            "curPrice": float(value["mark_provenance"][token]["price"]),
+            "pnl": float(position["shares"]) * float(value["mark_provenance"][token]["price"])
+            - float(position["cost_basis"]),
+        }
+        for token, position in value["positions"].items()
+    ]
+    return (
+        float(value["nav"]),
+        float(opening["nav"]),
+        float(current.realized_pnl - before.realized_pnl),
+        positions,
+    )
+
+
 async def _assemble_digest_data(
     db: Session,
     user: User,
@@ -477,26 +538,28 @@ async def _assemble_digest_data(
 ) -> dict[str, Any]:
     """Everything the digest needs; every source degrades to empty on error."""
     if paper:
-        paper_summary = get_paper_summary(db, user.id)
-        current_value = _to_float(paper_summary.get("paper_balance"))
-        positions = await _fetch_positions(user.wallet_address, private_key=None, clob_creds=None)
-        # The paper branch never caps its list, so its length is the count.
+        current_value, start_value, realized_pnl_today, positions = _paper_digest_values(
+            db, user.id, now, day_start
+        )
         position_count = len(positions)
+        start_derived = False
+        # This workflow owns its marker transaction; release financial read locks
+        # before optional provider/LLM delivery work. No paper economics are written.
+        db.commit()
     else:
         private_key, clob_creds = _load_credentials(user.wallet_address)
         current_value, positions, position_count = await _fetch_portfolio(
             user.wallet_address, private_key=private_key, clob_creds=clob_creds
         )
-
-    realized_pnl_today = _realized_pnl_today(db, user.id, day_start, paper=paper)
-    start_value, start_derived = _resolve_start_value(
-        db,
-        user.id,
-        day_start,
-        paper=paper,
-        current_value=current_value,
-        realized_pnl_today=realized_pnl_today,
-    )
+        realized_pnl_today = _realized_pnl_today(db, user.id, day_start, paper=False)
+        start_value, start_derived = _resolve_start_value(
+            db,
+            user.id,
+            day_start,
+            paper=False,
+            current_value=current_value,
+            realized_pnl_today=realized_pnl_today,
+        )
     market_ids = _market_ids(positions)
     events = _events_last_24h(db, user.id, market_ids, now - timedelta(hours=EVENTS_WINDOW_HOURS))
     catalysts = await _fetch_catalysts(positions)
@@ -705,12 +768,19 @@ async def generate_digest_for_user(
         article = await _render_digest(data, settings_row)
     except Exception as exc:
         # Remove the marker so an operator-triggered re-run can retry.
-        logger.error("Daily digest assembly failed for user %s: %s", user.id, exc)
+        if isinstance(exc, PaperDigestUnavailable):
+            logger.info("Daily paper digest skipped user=%s reason=%s", user.id, exc)
+        else:
+            logger.error("Daily digest assembly failed for user %s: %s", user.id, exc)
         with contextlib.suppress(Exception):
             db.rollback()
             db.delete(marker)
             db.commit()
-        return {"status": "failed", "reason": "assembly_failed"}
+        return (
+            {"status": "skipped", "reason": str(exc)}
+            if isinstance(exc, PaperDigestUnavailable)
+            else {"status": "failed", "reason": "assembly_failed"}
+        )
 
     delivery = await _deliver(db, user, marker, data=data, article=article, send_email=send_email)
     _metric_inc("digests_sent")

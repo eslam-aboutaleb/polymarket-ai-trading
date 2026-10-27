@@ -34,6 +34,7 @@ _ROLES = frozenset(role.value for role in ProcessRole)
 class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
 
+    paper_journal_v2_enabled: bool = False
     binary_book_research_enabled: bool = False
     observation_archive_enabled: bool = False
     observation_archive_tokens: str = ""

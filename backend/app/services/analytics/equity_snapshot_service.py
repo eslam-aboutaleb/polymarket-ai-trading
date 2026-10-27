@@ -32,9 +32,8 @@ or an overlapping worker (the advisory lock fails open on database
 errors) refreshes the series instead of corrupting it.
 
 **Paper split.** A user with ``simulation_mode`` on gets
-``is_paper=True`` and ``bankroll = paper_balance``; the wallet-derived
-columns stay zero because they describe the real wallet, not the paper
-account. The two series are never mixed.
+account-scoped journal NAV. Missing marks are null; old baseline-only
+points remain legacy_unverified. Paper and live series are never mixed.
 """
 
 import asyncio
@@ -43,15 +42,19 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import get_settings
+from app.models import Account, AccountSettings, PaperAccount, PaperNavPoint
 from app.models.analytics.portfolio_snapshot import PortfolioSnapshot
 from app.models.users.user import User
 from app.models.users.user_settings import UserSettings
 from app.repositories.analytics.portfolio import PortfolioAnalyticsRepository
 from app.security.credential_store import CredentialStoreError, load_wallet_credentials
+from app.services.analytics import paper_equity
 from app.services.market_data.polymarket_service import get_polymarket_service
+from app.services.market_data.replay_capture import aware
 from app.services.trading import kelly_service
 from app.utils.database import SessionLocal
 from app.utils.scheduler_lock import (
@@ -245,21 +248,57 @@ def _user_settings(db: Session, user_id: int) -> UserSettings | None:
 # --------------------------------------------------------------------------
 
 
-async def capture_user_snapshot(db: Session, user: User) -> PortfolioSnapshot | None:
+async def capture_user_snapshot(
+    db: Session, user: User
+) -> PortfolioSnapshot | PaperNavPoint | None:
     """Sample one user's equity and append it to the series.
 
     Returns the new row, or ``None`` when nothing was written: the current
     hour already has a row, either wallet fetch is unusable, or the user is
-    in paper mode (see :func:`_append_paper_snapshot`).
+    paper accounting is disabled, or the hour has already been sampled.
     """
     bucket = truncate_to_hour(utc_now())
+    paper_points = []
+    if get_settings().paper_journal_v2_enabled:
+        from app.services.analytics.paper_accounting import (
+            account_state,
+            capture_nav,
+            open_conditions,
+            settle_captured,
+        )
+
+        accounts = db.query(Account).filter_by(owner_user_id=user.id).all()
+        for account in accounts:
+            settings = (
+                _user_settings(db, user.id)
+                if account.is_default
+                else db.query(AccountSettings).filter_by(account_id=account.id).first()
+            )
+            if settings and settings.simulation_mode:
+                previous = (
+                    db.query(PaperNavPoint)
+                    .filter_by(account_id=account.id, bucket_hour=bucket)
+                    .first()
+                )
+                if previous is not None:
+                    continue
+                from app.services.analytics.paper_evidence import refresh_evidence
+
+                prior = db.get(PaperAccount, account.id)
+                if prior:
+                    for condition in open_conditions(db, prior):
+                        await refresh_evidence(db, condition)
+                state = account_state(db, user.id, account.id)
+                # Capture failures remain unknown instead of carrying forward a balance.
+                settle_captured(db, user.id, account.id)
+                paper_points.append(capture_nav(db, state))
+        db.commit()
+    settings_row = _user_settings(db, user.id)
+    if settings_row is not None and bool(settings_row.simulation_mode):
+        return paper_points[-1] if paper_points else None
     existing = PortfolioAnalyticsRepository(db).get_snapshot(user.id, bucket)
     if existing is not None:
         return None
-
-    settings_row = _user_settings(db, user.id)
-    if settings_row is not None and bool(settings_row.simulation_mode):
-        return _append_paper_snapshot(db, user, bucket, settings_row)
 
     private_key, clob_creds = _load_credentials(user.wallet_address)
 
@@ -316,43 +355,6 @@ async def capture_user_snapshot(db: Session, user: User) -> PortfolioSnapshot | 
         bucket.isoformat(),
         bankroll,
         totals["positions_count"],
-    )
-    return snapshot
-
-
-def _append_paper_snapshot(
-    db: Session,
-    user: User,
-    bucket: datetime,
-    settings_row: UserSettings,
-) -> PortfolioSnapshot:
-    """Write the paper account's equity point.
-
-    Paper equity is ``UserSettings.paper_balance``. The wallet columns stay
-    zero and ``is_paper`` is set, so the paper series is unmistakably a
-    different account from the live one.
-    """
-    paper_balance = round(_to_float(settings_row.paper_balance), 4)
-    snapshot = PortfolioSnapshot(
-        user_id=user.id,
-        bucket_hour=bucket,
-        captured_at=utc_now(),
-        usdc_balance=0.0,
-        unrealized_pnl=0.0,
-        bankroll=paper_balance,
-        total_invested=0.0,
-        total_current_value=0.0,
-        positions_count=0,
-        is_paper=True,
-    )
-    db.add(snapshot)
-    db.commit()
-    db.refresh(snapshot)
-    logger.info(
-        "Equity snapshot (paper) user=%d bucket=%s bankroll=%.2f",
-        user.id,
-        bucket.isoformat(),
-        paper_balance,
     )
     return snapshot
 
@@ -502,6 +504,12 @@ def get_equity_snapshot_metrics() -> dict[str, Any]:
 
 def serialize_snapshot(snapshot: PortfolioSnapshot) -> dict[str, Any]:
     """Wire shape of one equity point (``EquitySnapshotPoint``)."""
+    if isinstance(snapshot, dict):
+        return snapshot
+    if isinstance(snapshot, PaperNavPoint):
+        return paper_equity.serialize(snapshot)
+    if snapshot.is_paper:
+        return paper_equity.legacy(snapshot)
     return {
         "captured_at": snapshot.captured_at.isoformat() if snapshot.captured_at else None,
         "bucket_hour": snapshot.bucket_hour.isoformat() if snapshot.bucket_hour else None,
@@ -523,6 +531,7 @@ def get_snapshots(
     end: datetime | None = None,
     limit: int = DEFAULT_SNAPSHOT_LIMIT,
     is_paper: bool | None = None,
+    account_id: int | None = None,
 ) -> list[PortfolioSnapshot]:
     """Equity points for one user, oldest first.
 
@@ -535,12 +544,29 @@ def get_snapshots(
     Leaving it unset mixes two bankrolls on one series, so the read path
     that feeds the chart always passes the mode explicitly.
     """
+    start = aware(start) if start is not None else None
+    end = aware(end) if end is not None else None
     limit = max(1, min(int(limit or DEFAULT_SNAPSHOT_LIMIT), MAX_SNAPSHOT_LIMIT))
-    # Take the newest ``limit`` rows, then re-order ascending so the chart
-    # receives a forward-running series.
-    rows = PortfolioAnalyticsRepository(db).list_snapshots(
-        user_id, is_paper=is_paper, start=start, end=end, limit=limit
+    if account_id is None:
+        from app.services.users.account_service import get_personal_account_read_only
+
+        if get_personal_account_read_only(db, user_id) is None:
+            return []
+    account = paper_equity.owner(db, user_id, account_id)
+    if is_paper:
+        return paper_equity.history(db, user_id, account.id, start=start, end=end, limit=limit)
+    query = db.query(PortfolioSnapshot).filter(
+        PortfolioSnapshot.user_id == user_id,
+        PortfolioSnapshot.is_paper.is_(False),
+        or_(PortfolioSnapshot.account_id == account.id, PortfolioSnapshot.account_id.is_(None))
+        if account.is_default
+        else PortfolioSnapshot.account_id == account.id,
     )
+    if start is not None:
+        query = query.filter(PortfolioSnapshot.bucket_hour >= start)
+    if end is not None:
+        query = query.filter(PortfolioSnapshot.bucket_hour < end)
+    rows = query.order_by(PortfolioSnapshot.bucket_hour.desc()).limit(limit).all()
     rows.reverse()
     return rows
 
@@ -552,6 +578,7 @@ def summarize_snapshots(
     *,
     now: datetime | None = None,
     is_paper: bool | None = None,
+    account_id: int | None = None,
 ) -> dict[str, Any]:
     """Period-change metrics over one user's equity series.
 
@@ -568,8 +595,18 @@ def summarize_snapshots(
     moment = now or utc_now()
     window = period_window(period)
     start = None if window is None else (moment - window)
-    rows = get_snapshots(db, user_id, start=start, limit=MAX_SNAPSHOT_LIMIT, is_paper=is_paper)
+    rows = get_snapshots(
+        db,
+        user_id,
+        start=start,
+        end=moment + timedelta(microseconds=1),
+        limit=MAX_SNAPSHOT_LIMIT,
+        is_paper=is_paper,
+        account_id=account_id,
+    )
 
+    if is_paper:
+        return paper_equity.summary(rows, period or DEFAULT_PERIOD)
     if not rows:
         return {
             "period": (period or DEFAULT_PERIOD),

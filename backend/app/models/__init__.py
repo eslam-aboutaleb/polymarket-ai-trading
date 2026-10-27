@@ -38,6 +38,12 @@ from app.models.trading.inverse_bot_position import InverseBotPosition
 from app.models.trading.latency_arb_config import LatencyArbConfig
 from app.models.trading.live_order import LiveOrder
 from app.models.trading.market_maker_config import MarketMakerConfig
+from app.models.trading.paper_account import (
+    PaperAccount,
+    PaperJournalEvent,
+    PaperNavPoint,
+    PaperOrderRecord,
+)
 from app.models.trading.paper_maker_intent import PaperMakerIntent
 from app.models.trading.redemption_attempt import RedemptionAttempt
 from app.models.trading.stop_loss import StopLossOrder
@@ -84,6 +90,10 @@ __all__ = [
     "AdminAuditLog",
     "MarketMakerConfig",
     "PaperMakerIntent",
+    "PaperAccount",
+    "PaperJournalEvent",
+    "PaperOrderRecord",
+    "PaperNavPoint",
     "BacktestRun",
     "BookResearchRun",
     "FollowerExperimentRun",

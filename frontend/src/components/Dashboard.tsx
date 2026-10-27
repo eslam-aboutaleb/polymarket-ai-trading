@@ -70,6 +70,7 @@ function DashboardContent() {
   const [riskOpsMessage, setRiskOpsMessage] = useState<string | null>(null);
   const [emergencyStopOpen, setEmergencyStopOpen] = useState(false);
   const [arbitrageRows, setArbitrageRows] = useState<ArbitrageOpportunity[]>([]);
+  const paperGeneration = useRef(0);
   const [paperSummary, setPaperSummary] = useState<PaperSummary | null>(null);
   const [feedEventTypeFilter, setFeedEventTypeFilter] = useState<"all" | "opened" | "closed">(
     "all",
@@ -92,6 +93,7 @@ function DashboardContent() {
   );
 
   const fetchData = useCallback(async () => {
+    const paperRequest = ++paperGeneration.current;
     setLoading(true);
     setError(null);
 
@@ -113,7 +115,7 @@ function DashboardContent() {
         setMarkets(marketsResult.value.markets || []);
       }
 
-      if (paperResult.status === "fulfilled") {
+      if (paperResult.status === "fulfilled" && paperRequest === paperGeneration.current) {
         setPaperSummary(paperResult.value);
       }
     } catch (err: unknown) {
@@ -128,6 +130,28 @@ function DashboardContent() {
       fetchData();
     }
   }, [walletAddress, isAuthenticated, fetchData]);
+
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      const request = ++paperGeneration.current;
+      setPaperSummary(null);
+      void getPaperSummary()
+        .then((value) => {
+          if (active && request === paperGeneration.current) setPaperSummary(value);
+        })
+        .catch(() => {
+          /* Unknown paper P&L stays unknown. */
+        });
+    };
+    window.addEventListener("polymarket:paper-account-updated", refresh);
+    window.addEventListener("polymarket:active-account-changed", refresh);
+    return () => {
+      active = false;
+      window.removeEventListener("polymarket:paper-account-updated", refresh);
+      window.removeEventListener("polymarket:active-account-changed", refresh);
+    };
+  }, []);
 
   // Token ids of the open positions — the price stream subscription set.
   const positionTokenIds = useMemo(
@@ -771,10 +795,10 @@ function DashboardContent() {
                 (paperSummary.paper_pnl ?? 0) >= 0 ? "status-good" : "status-bad"
               }`}
             >
-              {formatPnL(paperSummary.paper_pnl ?? 0)}
+              {paperSummary.paper_pnl == null ? "Unknown" : formatPnL(paperSummary.paper_pnl)}
             </p>
             <p className="text-muted text-sm mt-2">
-              Paper balance: {formatUSD(paperSummary.paper_balance ?? 0)} ·{" "}
+              Initial paper funding: {formatUSD(paperSummary.paper_balance ?? 0)} ·{" "}
               {paperSummary.simulated_trades ?? 0} simulated trades
             </p>
           </div>

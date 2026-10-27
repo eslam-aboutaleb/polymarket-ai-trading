@@ -18,6 +18,7 @@ from sqlalchemy.pool import StaticPool
 from app.api.routes.auth.auth import get_current_user_from_token
 from app.api.routes.portfolio.portfolio import _equity_window, _parse_moment
 from app.main import app
+from app.models import Account, Base
 from app.models.analytics.portfolio_snapshot import PortfolioSnapshot
 from app.models.users.user import User
 from app.services.analytics import equity_snapshot_service as svc
@@ -36,12 +37,17 @@ class EquityRouteTestBase(unittest.TestCase):
             connect_args={"check_same_thread": False},
             poolclass=StaticPool,
         )
-        User.__table__.create(self.engine)
-        PortfolioSnapshot.__table__.create(self.engine)
+        Base.metadata.create_all(self.engine)
         self.session_factory = sessionmaker(
             bind=self.engine, class_=Session, expire_on_commit=False
         )
         self.db = self.session_factory()
+        self.db.add(User(id=1, wallet_address=WALLET))
+        self.db.flush()
+        self.db.add(
+            Account(id=1, owner_user_id=1, name="Personal", kind="personal", is_default=True)
+        )
+        self.db.commit()
 
         app.dependency_overrides[get_current_user_from_token] = lambda: {
             "user_id": 1,
@@ -233,22 +239,23 @@ class EquitySnapshotsRouteTests(EquityRouteTestBase):
         resp = self.client.get("/api/portfolio/equity/snapshots", params={"is_paper": "true"})
 
         data = resp.json()
-        self.assertEqual([row["bankroll"] for row in data], [1000.0])
+        self.assertEqual([row["bankroll"] for row in data], [None])
+        self.assertEqual(data[0]["quality"], "legacy_unverified")
         self.assertTrue(data[0]["is_paper"])
 
-    def test_is_paper_omitted_returns_both_accounts(self):
-        """The unfiltered escape hatch stays available for callers that pair it."""
+    def test_is_paper_omitted_defaults_to_live_account(self):
+        """An omitted mode must never combine paper and live capital."""
         self._seed(
             self._snapshot(bankroll=1000.0, is_paper=True),
             self._snapshot(bankroll=100.0, age_hours=1),
         )
         resp = self.client.get("/api/portfolio/equity/snapshots")
 
-        self.assertEqual(len(resp.json()), 2)
+        self.assertEqual(len(resp.json()), 1)
 
     def test_paper_rows_are_returned_with_the_flag(self):
         self._seed(self._snapshot(bankroll=1000.0, is_paper=True))
-        resp = self.client.get("/api/portfolio/equity/snapshots")
+        resp = self.client.get("/api/portfolio/equity/snapshots?is_paper=true")
         data = resp.json()
         self.assertEqual(len(data), 1)
         self.assertTrue(data[0]["is_paper"])
@@ -287,6 +294,8 @@ class EquitySummaryRouteTests(EquityRouteTestBase):
             resp.json(),
             {
                 "period": "24h",
+                "quality": "live",
+                "net_cash_flows": None,
                 "start": 0.0,
                 "end": 0.0,
                 "delta": 0.0,
@@ -356,9 +365,9 @@ class EquitySummaryRouteTests(EquityRouteTestBase):
 
         data = resp.json()
         self.assertEqual(data["points"], 2)
-        self.assertEqual(data["start"], 500.0)
-        self.assertEqual(data["end"], 600.0)
-        self.assertEqual(data["delta"], 100.0)
+        self.assertIsNone(data["start"])
+        self.assertIsNone(data["end"])
+        self.assertIsNone(data["delta"])
 
     def test_is_paper_true_with_only_live_history_is_zeros_not_an_error(self):
         self._seed(self._snapshot(bankroll=100.0, age_hours=2))

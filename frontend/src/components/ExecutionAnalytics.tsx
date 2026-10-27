@@ -181,6 +181,10 @@ export default function ExecutionAnalytics() {
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
+      <p className="text-soft text-sm">
+        Paper results are modeled and excluded from live performance metrics. Review paper cash,
+        positions, fees and NAV on the dashboard.
+      </p>
       {/* Header */}
       <div
         className="flex flex-wrap items-center justify-between gap-3"
@@ -189,7 +193,7 @@ export default function ExecutionAnalytics() {
         <div>
           <h2 className="text-xl font-bold text-white">Execution Analytics</h2>
           <p className="text-soft text-sm mt-1">
-            Slippage, fee drag, fill rate and Edge Score per strategy
+            Live-order slippage, fee drag, fill rate and Edge Score per strategy
           </p>
         </div>
         <div className="flex items-center gap-2">

@@ -21,6 +21,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.config import get_settings
+from app.models import Account, User
 from app.models.base import Base
 from app.models.trading.user_trade import UserTrade
 from app.models.users.user_settings import UserSettings
@@ -191,8 +192,14 @@ class PaperSummaryTests(unittest.TestCase):
 
     def setUp(self):
         self.engine = create_engine("sqlite://", future=True)
-        Base.metadata.create_all(self.engine, tables=[UserSettings.__table__, UserTrade.__table__])
+        Base.metadata.create_all(self.engine)
         self.db = sessionmaker(bind=self.engine, future=True)()
+        self.db.add(User(id=1, wallet_address="0x" + "11" * 20))
+        self.db.flush()
+        self.db.add(
+            Account(id=1, owner_user_id=1, name="Personal", kind="personal", is_default=True)
+        )
+        self.db.commit()
         self.addCleanup(self.engine.dispose)
         self.addCleanup(self.db.close)
 
@@ -229,7 +236,8 @@ class PaperSummaryTests(unittest.TestCase):
         summary = get_paper_summary(self.db, 1)
         self.assertFalse(summary["simulation_mode"])
         self.assertEqual(summary["paper_balance"], 1000.0)
-        self.assertEqual(summary["paper_pnl"], 0.0)
+        self.assertIsNone(summary["paper_pnl"])
+        self.assertEqual(summary["quality"], "legacy_unverified")
         self.assertEqual(summary["simulated_trades"], 0)
 
     def test_summary_reports_balance_mode_and_pnl(self):
@@ -242,9 +250,10 @@ class PaperSummaryTests(unittest.TestCase):
 
         self.assertTrue(summary["simulation_mode"])
         self.assertEqual(summary["paper_balance"], 2500.0)
-        # Only the simulated trade's PnL counts.
-        self.assertEqual(summary["paper_pnl"], 20.0)
-        self.assertEqual(summary["simulated_trades"], 2)
+        # Old simulated rows are retained as unverified evidence, not cash.
+        self.assertIsNone(summary["paper_pnl"])
+        self.assertEqual(summary["simulated_trades"], 0)
+        self.assertEqual(summary["legacy_simulated_trades"], 2)
 
     def test_average_entry_price_is_volume_weighted(self):
         self._trade("buy", 0.5, 100.0)  # 200 shares
