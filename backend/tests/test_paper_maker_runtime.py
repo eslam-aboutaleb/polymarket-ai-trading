@@ -388,3 +388,37 @@ def test_sync_rechecks_disabled_config_under_account_lock(maker):
     assert result["reasons"] == ["CONFIG_DISABLED"]
     assert db.query(PaperMakerOrder).one().state == "CANCELLED"
     assert paper.restore(db, db.get(PaperAccount, 1)).reserved_cash == 0
+
+
+def test_shared_account_latency_and_lot_policy_cannot_be_bypassed(maker):
+    db, config = maker
+    paper.configure_account(db, 1, 1, policy={"latency_ms": 5000, "lot_size": "0.1"})
+    runtime.sync(db, config, [{**QUOTES[0], "size": "4.01"}], NOW)
+    row = db.query(PaperMakerOrder).one()
+    assert row.shares == Decimal(10)
+    state = db.get(PaperAccount, 1)
+    assert not runtime.consume(
+        db, state, paper.restore(db, state), [flow()], NOW + timedelta(seconds=3)
+    )
+
+
+def test_marketable_quotes_are_not_mislabeled_resting(maker):
+    db, config = maker
+    result = runtime.sync(db, config, [{**QUOTES[0], "price": "0.50"}], NOW)
+    assert result["reasons"] == ["MARKETABLE_QUOTE_CANNOT_REST"]
+    assert db.query(PaperMakerOrder).count() == 0
+    assert paper.restore(db, db.get(PaperAccount, 1)).reserved_cash == 0
+
+
+def test_zero_age_account_policy_cancels_before_consuming_flow(maker, monkeypatch):
+    db, config = maker
+    runtime.sync(db, config, QUOTES, NOW)
+    paper.configure_account(db, 1, 1, policy={"max_book_age_seconds": 0})
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("stale book reached fill consumption")
+
+    monkeypatch.setattr(runtime, "_consume_archive", forbidden)
+    runtime.sync(db, config, QUOTES, NOW + timedelta(seconds=1))
+    assert db.query(PaperMakerOrder).one().state == "CANCELLED"
+    assert paper.restore(db, db.get(PaperAccount, 1)).reserved_cash == 0

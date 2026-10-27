@@ -251,6 +251,8 @@ def sync(db, config, expected, moment=None):
                 "fill_status": "disabled_unfilled",
                 "reasons": ["CONFIG_DISABLED"],
             }
+        policy = accounting.PaperPolicy.model_validate_json(state.policy_json)
+        latency_ms = max(settings.paper_maker_latency_ms, policy.latency_ms)
         ledger = accounting.restore(db, state)
         classify_legacy(db, state)
         if accounting.legacy_blocked(state):
@@ -258,7 +260,13 @@ def sync(db, config, expected, moment=None):
         if accounting.settlement_issues(db, state, ledger, moment):
             raise ValueError("settlement reconciliation required")
         analysis, _ = load_analysis(
-            db, ResearchQuery(condition_id=config.condition_id, as_of=moment)
+            db,
+            ResearchQuery(
+                condition_id=config.condition_id,
+                as_of=moment,
+                lot=policy.lot_size,
+                max_age_seconds=max(1, min(300, policy.max_book_age_seconds)),
+            ),
         )
         spec = MarketSpec.model_validate(analysis["spec"]) if analysis.get("spec") else None
         if spec and (spec.yes_token != config.token_id_yes or spec.no_token != config.token_id_no):
@@ -267,7 +275,12 @@ def sync(db, config, expected, moment=None):
             spec
             and spec.active
             and spec.supported
-            and all(value["grade"] == "VERIFIED_BOOK" for value in analysis["books"].values())
+            and all(
+                value["grade"] == "VERIFIED_BOOK"
+                and value.get("age_seconds") is not None
+                and Decimal(str(value["age_seconds"])) <= policy.max_book_age_seconds
+                for value in analysis["books"].values()
+            )
         ):
             _consume_archive(db, state, ledger, moment)
         else:
@@ -296,9 +309,18 @@ def sync(db, config, expected, moment=None):
             book = BinaryBook.model_validate(
                 analysis["books"]["YES" if quote["token_id"] == spec.yes_token else "NO"]
             )
-            if book.grade != "VERIFIED_BOOK":
+            if (
+                book.grade != "VERIFIED_BOOK"
+                or book.age_seconds is None
+                or book.age_seconds > policy.max_book_age_seconds
+            ):
                 metrics[f"book_{book.grade.lower()}"] += 1
                 reasons.append("STALE_OR_INSUFFICIENT_BOOK")
+                continue
+            if (quote["side"] == "BUY" and price >= book.asks[0].price) or (
+                quote["side"] == "SELL" and price <= book.bids[0].price
+            ):
+                reasons.append("MARKETABLE_QUOTE_CANNOT_REST")
                 continue
             # Generated floats are definitions: reject off-tick values, never
             # silently change an explicitly quoted price.
@@ -324,7 +346,7 @@ def sync(db, config, expected, moment=None):
             order = MakerOrder.model_validate_json(row.payload_json)
             if row.quote_key not in desired or order.state == "UNKNOWN_DATA":
                 effective = order.cancel_effective_at or (
-                    moment + timedelta(milliseconds=settings.paper_maker_latency_ms)
+                    moment + timedelta(milliseconds=latency_ms)
                 )
                 if order.state == "UNKNOWN_DATA":
                     effective = moment  # gaps never retain modeled eligibility
@@ -352,8 +374,9 @@ def sync(db, config, expected, moment=None):
             if key in active_keys:
                 continue
             deployed = sum(
-                Decimal(row.shares - row.cumulative_filled) * Decimal(row.limit_price)
+                (quote_state.shares - quote_state.cumulative_filled) * quote_state.limit_price
                 for row in _rows(db, state)
+                for quote_state in [MakerOrder.model_validate_json(row.payload_json)]
                 if row.config_id == config.id and row.state not in TERMINAL
             )
             if deployed + price * shares > Decimal(str(config.max_collateral)):
@@ -373,10 +396,10 @@ def sync(db, config, expected, moment=None):
                 side=quote["side"],
                 limit_price=price,
                 shares=shares,
-                active_from=moment + timedelta(milliseconds=settings.paper_maker_latency_ms),
+                active_from=moment + timedelta(milliseconds=latency_ms),
                 expires_at=moment
                 + timedelta(
-                    milliseconds=settings.paper_maker_latency_ms,
+                    milliseconds=latency_ms,
                     seconds=settings.paper_maker_expiry_seconds,
                 ),
                 source_snapshot_id=next(

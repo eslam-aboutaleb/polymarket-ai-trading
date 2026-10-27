@@ -175,3 +175,21 @@ def test_partial_then_cancel_keeps_quantity_and_no_later_fill():
     assert not later.fills
     assert later.state.orders[0].cumulative_filled == Decimal(5)
     assert later.state.orders[0].state == "CANCELLED"
+
+
+def test_more_competitive_price_precedes_older_lower_priority_quote():
+    result = run(
+        orders=[
+            order(id="older-low", limit_price=Decimal("0.40"), queue_ahead=Decimal(0)),
+            order(
+                id="newer-high",
+                limit_price=Decimal("0.45"),
+                active_from=NOW + timedelta(seconds=1),
+                queue_ahead=Decimal(0),
+            ),
+        ],
+        events=[event(price=Decimal("0.40"), shares=Decimal(5))],
+    )
+    assert len(result.fills) == 1
+    assert result.fills[0].order_id == "newer-high"
+    assert result.fills[0].shares == 5

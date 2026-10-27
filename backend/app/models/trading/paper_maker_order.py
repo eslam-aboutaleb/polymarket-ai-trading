@@ -26,9 +26,9 @@ class PaperMakerOrder(Base):
     metadata_snapshot_id = Column(String(64), ForeignKey("venue_observations.id"), nullable=False)
     payload_json = Column(Text, nullable=False)
     state = Column(String(40), nullable=False)
-    shares = Column(Numeric(28, 8), nullable=False)
-    limit_price = Column(Numeric(28, 8), nullable=False)
-    cumulative_filled = Column(Numeric(28, 8), nullable=False, default=0)
+    shares = Column(Numeric(38, 18), nullable=False)
+    limit_price = Column(Numeric(38, 18), nullable=False)
+    cumulative_filled = Column(Numeric(38, 18), nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 

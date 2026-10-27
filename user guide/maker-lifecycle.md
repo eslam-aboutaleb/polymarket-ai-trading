@@ -15,7 +15,9 @@ changes neither cash nor shares. Cancellation releases the remainder.
 
 ## What produces a fill
 
-A generated band creates a resting quote, not a trade. An unchanged market over
+A generated band creates a resting quote, not a trade. Quotes crossing the captured opposite top are rejected rather than mislabeled as
+resting. Eligible own quotes consume flow in deterministic price/time/ID order.
+An unchanged market over
 100 syncs produces zero fills and retains each active quote ID. Repricing creates
 new IDs and requests cancellation of the old quote. Configured cancellation latency
 keeps reservations until cancellation is effective; flow before that boundary can
@@ -73,7 +75,8 @@ also uses `NATIVE_CAPTURE_ENABLED` and configured archive token subscriptions.
 Configure explicit account fees/funding and acknowledge exclusion of legacy history
 through **Paper account controls**. Optional bounded settings are
 `PAPER_MAKER_LATENCY_MS` (default 0), `PAPER_MAKER_EXPIRY_SECONDS` (default 300),
-and `PAPER_MAKER_QUEUE_AHEAD` (default unknown). Explicit zero queue is an
+and `PAPER_MAKER_QUEUE_AHEAD` (default unknown). Maker eligibility uses the stricter
+of maker and shared-account latency; account lot and book-freshness limits apply. Explicit zero queue is an
 assumption, not an observed position in the exchange queue.
 
 For rollback, stop configs first so reservations are released, verify the shared
