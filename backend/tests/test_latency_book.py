@@ -135,8 +135,14 @@ def test_native_provider_bad_body_rejects(body):
     assert q.status != "READY"
 
 
-def test_fetch_provider_shapes_through_shared_adapter():
+@pytest.mark.parametrize("up_down", [False, True])
+def test_fetch_provider_shapes_through_shared_adapter(up_down):
     raw, meta, _ = snapshot()
+
+    if up_down:
+        meta["raw"]["clob"]["tokens"][0]["outcome"] = "Up"
+        meta["raw"]["clob"]["tokens"][1]["outcome"] = "Down"
+        meta["raw"]["gamma"]["outcomes"] = ["Up", "Down"]
 
     def handler(request):
         if request.url.path.endswith("/book"):
@@ -185,3 +191,15 @@ def test_malformed_book_body_returns_auditable_reason(body):
 def test_untyped_identity_is_a_rejection_not_a_cycle_exception(condition, token):
     q = asyncio.run(latency_book.fetch_executable_book(condition, token, 50, 0.02))
     assert q.status == "INVALID_BOOK" and q.reason == "INVALID_MARKET_IDENTITY"
+
+
+def test_existing_research_outcome_contract_is_not_reinterpreted():
+    from app.services.market_data.book_research import ResearchQuery, market_spec
+
+    _, meta, _ = snapshot()
+    meta["raw"]["clob"]["tokens"][0]["outcome"] = "Up"
+    meta["raw"]["clob"]["tokens"][1]["outcome"] = "Down"
+    meta["raw"]["gamma"]["outcomes"] = ["Up", "Down"]
+    with pytest.raises(ValueError):
+        market_spec(meta, ResearchQuery(condition_id=CID))
+    assert market_spec(meta, ResearchQuery(condition_id=CID), allow_up_down=True).yes_token == "11"
