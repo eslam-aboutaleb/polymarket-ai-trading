@@ -198,6 +198,9 @@ jobs:
       - name: Maker lifecycle browser E2E
         working-directory: frontend
         run: npm run test:maker
+      - name: Latency execution evidence safety E2E
+        working-directory: frontend
+        run: npm run test:latency
       - name: Run full Playwright E2E (public, auth, features)
         working-directory: frontend
         run: npm run test:e2e -- --project=public --project=auth --project=features --reporter=list,junit

@@ -66,6 +66,7 @@ export interface LatencyArbEngineStatus {
 }
 
 export interface LatencyArbOpportunitiesResponse {
+  execution_outcome?: { status: string; reason: string; at: string; source: string } | null;
   engine: LatencyArbEngineStatus;
   latency: LatencyArbLatencyStats;
   opportunities: LatencyArbOpportunity[];

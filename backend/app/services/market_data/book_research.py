@@ -63,9 +63,13 @@ def checksum(raw):
         return "incomplete"
 
 
-def market_spec(metadata, query):
+def market_spec(metadata, query, *, allow_up_down=False):
     raw = metadata["raw"]
+    from app.services.market_data.binary_identity import canonical_binary_metadata
+
     clob, gamma = raw["clob"], raw["gamma"]
+    if allow_up_down:
+        clob, gamma = canonical_binary_metadata(clob, gamma)
     from app.services.intelligence.market_context import build_market_context
 
     captured_at = datetime.fromisoformat(metadata["received_at"])

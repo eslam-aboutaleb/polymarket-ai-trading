@@ -44,19 +44,35 @@ def balance(client, token_id: str | None = None) -> Decimal:
     return value
 
 
-def prepare(client, token_id: str, side: str, price: Decimal, shares: Decimal):
+def prepare(
+    client,
+    token_id: str,
+    side: str,
+    price: Decimal,
+    shares: Decimal,
+    *,
+    expected_tick: Decimal | None = None,
+    expected_neg_risk: bool | None = None,
+    execution_deadline: datetime | None = None,
+):
     from py_clob_client_v2 import OrderArgs, PartialCreateOrderOptions
     from py_clob_client_v2.config import get_contract_config
     from py_clob_client_v2.order_utils.exchange_order_builder_v2 import ExchangeOrderBuilderV2
 
     tick = client.get_tick_size(token_id)
     tick_d = Decimal(tick)
+    if expected_tick is not None and tick_d != expected_tick:
+        raise ValueError("VENUE_TICK_CHANGED")
     price = (price / tick_d).to_integral_value(
         rounding=ROUND_DOWN if side == "BUY" else ROUND_UP,
     ) * tick_d
     if not 0 < price < 1:
         raise ValueError("No valid tick within the authorized price limit")
     neg_risk = client.get_neg_risk(token_id)
+    if expected_neg_risk is not None and neg_risk is not expected_neg_risk:
+        raise ValueError("VENUE_RISK_RULE_CHANGED")
+    if execution_deadline is not None and datetime.now(UTC) >= execution_deadline:
+        raise ValueError("EXECUTABLE_QUOTE_EXPIRED_OR_MISSING")
     signed = client.create_order(
         OrderArgs(token_id=token_id, side=side, price=float(price), size=float(shares)),
         PartialCreateOrderOptions(tick_size=tick, neg_risk=neg_risk, version=2),
