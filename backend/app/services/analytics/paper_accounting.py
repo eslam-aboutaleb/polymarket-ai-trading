@@ -136,7 +136,7 @@ def restore(db: Session, state: PaperAccount, as_of=None) -> PaperLedger:
             "reserve": (2, 3, 4),
             "fill": (1, 2),
             "cancel": (),
-            "settle": (1,),
+            "settle": (1, 2) if len(args) > 2 else (1,),
             "cash_flow": (0,),
         }[event["method"]]
         for index in fields:

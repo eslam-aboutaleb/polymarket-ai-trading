@@ -13,11 +13,11 @@ import {
   backtestingService,
   BacktestRun,
   CreateBacktestRequest,
-  StrategyInfo,
 } from "../services/backtestingService";
 import { getApiErrorMessage } from "../utils/apiError";
 import { Banner, ConfirmModal, Skeleton } from "./ui";
 import MarketDataQuality from "./MarketDataQuality";
+import ExecutableReplayPanel from "./ExecutableReplayPanel";
 import BookResearchPanel from "./BookResearchPanel";
 
 type FormState = CreateBacktestRequest;
@@ -54,7 +54,6 @@ const defaultForm: FormState = {
 
 export default function Backtesting() {
   const [runs, setRuns] = useState<BacktestRun[]>([]);
-  const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<FormState>({ ...defaultForm });
@@ -65,12 +64,11 @@ export default function Backtesting() {
 
   const fetchData = useCallback(async () => {
     try {
-      const [runsResp, strats] = await Promise.all([
+      const [runsResp] = await Promise.all([
         backtestingService.listBacktestRuns(50),
         backtestingService.listStrategies(),
       ]);
       setRuns(runsResp.runs);
-      setStrategies(strats.strategies);
     } catch (e) {
       setError(getApiErrorMessage(e, "Failed to load backtesting data"));
     } finally {
@@ -165,6 +163,7 @@ export default function Backtesting() {
 
       <MarketDataQuality />
       <BookResearchPanel />
+      <ExecutableReplayPanel />
 
       {/* Create Form */}
       {showForm && (
@@ -500,7 +499,9 @@ export default function Backtesting() {
                   {selectedRun.strategy_type === "indicator" ? "Gross Indicative P&L" : "Total PnL"}
                 </span>
                 <p className={`font-bold text-lg ${pnlColor(selectedRun.total_pnl)}`}>
-                  ${selectedRun.total_pnl.toFixed(2)}
+                  {selectedRun.indicator_values?.net_pnl_quality === "unavailable"
+                    ? "Unavailable"
+                    : `$${selectedRun.total_pnl.toFixed(2)}`}
                 </p>
               </div>
               <div>
@@ -596,7 +597,7 @@ export default function Backtesting() {
                             Number(trade.pnl),
                           )}`}
                         >
-                          ${Number(trade.pnl).toFixed(2)}
+                          {trade.pnl == null ? "—" : `$${Number(trade.pnl).toFixed(2)}`}
                         </td>
                       </tr>
                     ))}
@@ -636,7 +637,9 @@ export default function Backtesting() {
                 </div>
                 <div className="flex items-center gap-3">
                   <span className={`text-sm font-bold ${pnlColor(run.total_pnl)}`}>
-                    ${run.total_pnl.toFixed(2)}
+                    {run.indicator_values?.net_pnl_quality === "unavailable"
+                      ? "Unavailable"
+                      : `$${run.total_pnl.toFixed(2)}`}
                   </span>
                   <span className={`text-xs px-2 py-0.5 rounded-full ${statusBadge(run.status)}`}>
                     {run.status}

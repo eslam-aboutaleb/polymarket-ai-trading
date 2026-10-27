@@ -19,7 +19,8 @@
     "test:paper": "playwright test --config playwright.paper.config.ts",
     "test:observations": "playwright test --config playwright.observations.config.ts",
     "test:book": "playwright test --config playwright.book.config.ts",
-    "test:maker": "playwright test --config playwright.maker.config.ts"
+    "test:maker": "playwright test --config playwright.maker.config.ts",
+    "test:executable": "playwright test --config playwright.executable.config.ts"
   },
   "dependencies": {
     "@walletconnect/ethereum-provider": "^2.23.7",

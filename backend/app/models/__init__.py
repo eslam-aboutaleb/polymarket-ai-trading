@@ -131,3 +131,7 @@ __all__ += ["PaperMakerCursor", "PaperMakerEvidence", "PaperMakerFill", "PaperMa
 __all__ += ["PaperMakerMark"]
 
 __all__ += ["PaperMakerLegacy"]
+
+from app.models.analytics.executable_replay import ExecutableReplayRun, ExecutableSignalSource
+
+__all__ += ["ExecutableReplayRun", "ExecutableSignalSource"]

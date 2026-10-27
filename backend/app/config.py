@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
 
     paper_journal_v2_enabled: bool = False
+    executable_replay_enabled: bool = False
     binary_book_research_enabled: bool = False
     observation_archive_enabled: bool = False
     observation_archive_tokens: str = ""
