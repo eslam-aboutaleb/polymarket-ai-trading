@@ -218,10 +218,12 @@ def test_reprice_cancel_latency_keeps_reservation_until_effective_boundary(maker
     runtime.sync(db, config, [{**QUOTES[0], "price": "0.39"}], NOW + timedelta(seconds=1))
     old = db.get(PaperMakerOrder, first_id)
     assert old.state == "CANCEL_REQUESTED"
+    races_before = runtime.metrics["cancel_race_fills"]
     state = db.get(PaperAccount, 1)
     ledger = paper.restore(db, state)
     runtime.consume(db, state, ledger, [flow()], NOW + timedelta(seconds=3))
     assert old.cumulative_filled == 5
+    assert runtime.metrics["cancel_race_fills"] == races_before + 1
     runtime.consume(db, state, ledger, [], NOW + timedelta(seconds=6))
     assert old.state == "CANCELLED"
     assert f"maker-reserve:{first_id}" not in ledger.orders
