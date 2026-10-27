@@ -16,7 +16,9 @@
     "test:research": "playwright test --config playwright.research.config.ts",
     "test:e2e:ui": "playwright test --ui",
     "test:walletconnect": "playwright test --config playwright.walletconnect.config.ts",
-    "test:paper": "playwright test --config playwright.paper.config.ts"
+    "test:paper": "playwright test --config playwright.paper.config.ts",
+    "test:observations": "playwright test --config playwright.observations.config.ts",
+    "test:book": "playwright test --config playwright.book.config.ts"
   },
   "dependencies": {
     "@walletconnect/ethereum-provider": "^2.23.7",

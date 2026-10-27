@@ -565,7 +565,99 @@ def _tool_binance_pnl_leaderboard(args: dict[str, Any]):
     )
 
 
+async def binary_book_research(args: dict[str, Any]) -> dict[str, Any]:
+    """Bounded GET-only bridge; unavailable evidence never becomes an empty success."""
+    import re
+    from decimal import Decimal, InvalidOperation
+
+    unavailable = {
+        "version": "binary-book-v1",
+        "status": "abstain",
+        "reason": "BOOK_TOOL_UNAVAILABLE",
+        "research_only": True,
+    }
+    condition = str(args.get("condition_id") or "").lower()
+    if not re.fullmatch(r"0x[0-9a-f]{64}", condition):
+        return {**unavailable, "reason": "INVALID_CONDITION_ID"}
+    try:
+        shares = Decimal(str(args.get("shares", "10")))
+        if not shares.is_finite() or not 0 < shares <= 1_000_000_000:
+            return {**unavailable, "reason": "INVALID_SIZE"}
+        params = {
+            "condition_id": condition,
+            "shares": str(shares),
+            "outcome": str(args.get("outcome", "YES")),
+            "side": str(args.get("side", "BUY")),
+        }
+        for key in ("as_of", "fee_bps", "fee_version"):
+            if args.get(key) is not None:
+                params[key] = str(args[key])
+        headers = {"Accept": "application/json"}
+        if VENUE_API_TOKEN:
+            headers["Authorization"] = f"Bearer {VENUE_API_TOKEN}"
+        async with (
+            httpx.AsyncClient(timeout=10) as client,
+            client.stream(
+                "GET",
+                f"{VENUE_API_BASE}/api/microstructure/book",
+                params=params,
+                headers=headers,
+                follow_redirects=False,
+            ) as response,
+        ):
+            if response.status_code != 200:
+                return {**unavailable, "reason": "BOOK_BACKEND_DISABLED_OR_UNAVAILABLE"}
+            data = bytearray()
+            async for chunk in response.aiter_bytes():
+                if len(data) + len(chunk) > 524288:
+                    return {**unavailable, "reason": "BOOK_RESPONSE_TOO_LARGE"}
+                data.extend(chunk)
+        payload = json.loads(data)
+        if not isinstance(payload, dict) or payload.get("version") != "binary-book-v1":
+            return {**unavailable, "reason": "INVALID_BOOK_RESPONSE"}
+        # Raw levels and untrusted source prose are not needed in an agent result.
+        for book in payload.get("books", {}).values():
+            book.pop("bids", None)
+            book.pop("asks", None)
+        for estimate in payload.get("estimates", []):
+            estimate.pop("curve", None)
+        return payload
+    except (ValueError, TypeError, InvalidOperation, httpx.HTTPError, TimeoutError):
+        return unavailable
+
+
+BOOK_TOOL_SCHEMA = {
+    "name": "binary_book",
+    "read_only": True,
+    "version": "binary-book-v1",
+    "description": (
+        "Captured binary book integrity and counterfactual depth costs; "
+        "no order action or fill probability."
+    ),
+    "input_schema": {
+        "type": "object",
+        "required": ["condition_id"],
+        "properties": {
+            "condition_id": {"type": "string", "pattern": "^0x[a-fA-F0-9]{64}$"},
+            "shares": {"type": "string"},
+            "as_of": {"type": "string"},
+            "fee_bps": {"type": "string"},
+            "fee_version": {"type": "string"},
+            "side": {"enum": ["BUY", "SELL"]},
+            "outcome": {"enum": ["YES", "NO"]},
+        },
+        "additionalProperties": False,
+    },
+}
+
+
+def _tool_binary_book(args):
+    return _run_async(binary_book_research(args))
+
+
 TOOLS: dict[str, Any] = {
+    "binary_book": _tool_binary_book,
+    "describe_book_research": lambda _: BOOK_TOOL_SCHEMA,
     "web_search": _tool_web_search,
     "x_indexed_web_search": _tool_x_indexed_web_search,
     # Compatibility alias: the pre-rename name resolves to the same handler,
