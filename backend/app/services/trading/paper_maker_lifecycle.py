@@ -22,6 +22,7 @@ class MakerOrder(Contract):
     id: str = Field(min_length=1, max_length=200)
     token_id: str = Field(min_length=1, max_length=200)
     condition_id: str = Field(min_length=1, max_length=200)
+    rule_hash: str = "unverified"
     side: Literal["BUY", "SELL"]
     limit_price: Decimal = Field(gt=0, lt=1, decimal_places=18)
     shares: Decimal = Field(gt=0, le=1_000_000_000, decimal_places=18)
