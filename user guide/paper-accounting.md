@@ -121,7 +121,7 @@ invented from these observations.
    held markets per account/hourly pass and ten seconds per market.
 5. Roll back by disabling the flag first. This preserves journal evidence and
    stops new economic mutations from strategy adapters and the snapshot worker.
-   Database downgrade to `20261024_0033_live_orders` **drops the four new
+   Database downgrade to `20261027_0035_book_research` **drops the four new
    paper tables**; export/back them up before downgrading. Legacy tables remain.
 
 A bounded metadata reprocessor defaults to dry-run (from `backend/`):
