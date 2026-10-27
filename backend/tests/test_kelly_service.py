@@ -20,11 +20,14 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from paper_account_fixtures import evidence
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (register models on Base.metadata)
+from app.config import get_settings
+from app.models import Account
 from app.models.analytics.assessment import Assessment
 from app.models.base import Base
 from app.models.market_data.winner import Winner
@@ -33,6 +36,7 @@ from app.models.trading.trade_history import TradeHistory
 from app.models.trading.user_trade import UserTrade
 from app.models.users.user import User
 from app.models.users.user_settings import UserSettings
+from app.services.analytics import paper_accounting
 from app.services.trading import copy_trade_service, kelly_service
 from app.utils.time import utc_now
 
@@ -438,6 +442,18 @@ class KellyCopyTradeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         self.db.commit()
+        self.db.add(
+            Account(
+                id=USER_ID, owner_user_id=USER_ID, name="Personal", kind="personal", is_default=True
+            )
+        )
+        self.db.commit()
+        flag = patch.object(get_settings(), "paper_journal_v2_enabled", True)
+        flag.start()
+        self.addCleanup(flag.stop)
+        paper_accounting.configure_account(self.db, USER_ID, fee_bps=0)
+        evidence(self.db, [utc_now()], bid="0.49", ask="0.50", depth="1000")
+        self.db.commit()
 
     async def asyncTearDown(self):
         self.db.close()
@@ -458,7 +474,7 @@ class KellyCopyTradeIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 USER_ID,
                 TRADER_WALLET,
                 MARKET_ID,
-                "0xtoken",
+                "11",
                 "BUY",
                 0.5,
                 100.0,
@@ -533,7 +549,7 @@ class KellyCopyTradeIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 USER_ID,
                 TRADER_WALLET,
                 MARKET_ID,
-                "0xtoken",
+                "11",
                 "BUY",
                 0.5,
                 100.0,
@@ -578,7 +594,7 @@ class KellyCopyTradeIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 USER_ID,
                 TRADER_WALLET,
                 MARKET_ID,
-                "0xtoken",
+                "11",
                 "BUY",
                 0.5,
                 100.0,

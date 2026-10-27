@@ -571,6 +571,13 @@ class MigrationBackfillTest(unittest.TestCase):
             conn.execute(text("DROP TABLE IF EXISTS book_research_runs"))
             conn.execute(text("DROP TABLE IF EXISTS follower_experiment_runs"))
             conn.execute(text("DROP TABLE IF EXISTS paper_maker_intents"))
+            for future_table in (
+                "paper_nav_points",
+                "paper_order_records",
+                "paper_journal_events",
+                "paper_accounts",
+            ):
+                conn.execute(text(f"DROP TABLE IF EXISTS {future_table}"))
             conn.execute(text("DROP TABLE IF EXISTS account_settings"))
             conn.execute(text("DROP TABLE IF EXISTS accounts"))
             for table in self._tables_with_user_id(conn):

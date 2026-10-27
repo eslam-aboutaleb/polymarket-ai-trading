@@ -13,8 +13,10 @@ from py_clob_client.clob_types import BookParams
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_strict_account
 from app.api.routes.auth.auth import get_current_user_from_token
 from app.config import get_settings
+from app.models import Account
 from app.security.credential_store import CredentialStoreError, load_wallet_credentials
 from app.services.analytics import equity_snapshot_service
 from app.services.analytics.portfolio_queries import list_redemption_history
@@ -586,25 +588,43 @@ class EquitySnapshotResponse(BaseModel):
 
     captured_at: datetime | None = None
     bucket_hour: datetime | None = None
-    usdc_balance: float = 0.0
-    unrealized_pnl: float = 0.0
-    bankroll: float = 0.0
-    total_invested: float = 0.0
-    total_current_value: float = 0.0
-    positions_count: int = 0
+    usdc_balance: float | None = None
+    unrealized_pnl: float | None = None
+    bankroll: float | None = None
+    total_invested: float | None = None
+    total_current_value: float | None = None
+    positions_count: int | None = 0
     is_paper: bool = False
+    account_id: int | None = None
+    quality: str = "live"
+    model_version: str | None = None
+    policy: dict = {}
+    available_cash: float | None = None
+    reserved_cash: float | None = None
+    fees: float | None = None
+    realized_pnl: float | None = None
+    funding: float | None = None
+    cash_flow_count: int = 0
+    net_pnl: float | None = None
+    mark_provenance: dict = {}
+    settlement_issues: dict[str, str] = {}
+    missing_marks: list[str] = []
+    legacy_data_excluded: bool = False
+    legacy_reported_balance: float | None = None
 
 
 class EquitySummaryResponse(BaseModel):
     """Period-change metrics over one user's equity series."""
 
     period: str = "7d"
-    start: float = 0.0
-    end: float = 0.0
-    delta: float = 0.0
-    delta_pct: float = 0.0
-    max_drawdown_pct: float = 0.0
+    start: float | None = None
+    end: float | None = None
+    delta: float | None = None
+    delta_pct: float | None = None
+    max_drawdown_pct: float | None = None
     points: int = 0
+    quality: str = "live"
+    net_cash_flows: float | None = None
 
 
 def _parse_moment(raw: str | None) -> datetime | None:
@@ -656,6 +676,7 @@ async def get_equity_snapshots(
     is_paper: bool | None = Query(None),
     current_user: dict = Depends(get_current_user_from_token),
     db: Session = Depends(get_db),
+    account: Account = Depends(get_strict_account),
 ):
     """Equity curve points for the authenticated user, oldest first.
 
@@ -672,6 +693,7 @@ async def get_equity_snapshots(
         end=end,
         limit=limit,
         is_paper=is_paper,
+        account_id=account.id,
     )
     return [equity_snapshot_service.serialize_snapshot(row) for row in rows]
 
@@ -682,6 +704,7 @@ async def get_equity_summary(
     is_paper: bool | None = Query(None),
     current_user: dict = Depends(get_current_user_from_token),
     db: Session = Depends(get_db),
+    account: Account = Depends(get_strict_account),
 ):
     """Period-change metrics: start/end bankroll, delta, max drawdown.
 
@@ -695,5 +718,6 @@ async def get_equity_summary(
         current_user["user_id"],
         period,
         is_paper=is_paper,
+        account_id=account.id,
     )
     return EquitySummaryResponse(**summary)

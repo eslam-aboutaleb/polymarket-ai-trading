@@ -82,7 +82,7 @@ class PaperLedger:
     settled_tokens: set[str] = field(default_factory=set)
 
     def __post_init__(self):
-        positive(self.funding, "funding")
+        positive(self.funding, "funding", zero=True)
         self.cash = self.funding
 
     @property
@@ -241,6 +241,19 @@ class PaperLedger:
         self.realized_pnl += payout - position.cost_basis
         self.positions[token] = Position()
         self.settled_tokens.add(token)
+        self._record(event_id, payload)
+
+    @atomic
+    def cash_flow(self, event_id: str, amount: Decimal) -> None:
+        """Explicit modeled funding/withdrawal, never investment profit."""
+        positive(abs(amount), "cash flow")
+        payload = ("CASH_FLOW", amount)
+        if self._seen(event_id, payload):
+            return
+        if self.available_cash + amount < 0:
+            raise ValueError("withdrawal exceeds available paper cash")
+        self.cash += amount
+        self.funding += amount
         self._record(event_id, payload)
 
     @accounting

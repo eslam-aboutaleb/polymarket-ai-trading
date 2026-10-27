@@ -763,29 +763,10 @@ class ExecutePaperTests(unittest.IsolatedAsyncioTestCase):
             patch.object(latency_arb_service, "simulate_fill", MagicMock(return_value=fill)),
         ):
             result = await _execute_paper(db, settings, opportunity, "token-up-1", 0.5, 50.0, 100.0)
-        self.assertEqual(result["status"], "simulated")
-        self.assertEqual(result["fill_price"], 0.51)
-        self.assertEqual(result["slippage_bps"], 100.0)
-        self.assertEqual(result["size"], 50.0)
-        trade = db.add.call_args.args[0]
-        self.assertEqual(trade.user_id, 7)
-        self.assertEqual(trade.market_id, "cond-btc-5m")
-        self.assertEqual(trade.token_id, "token-up-1")
-        self.assertEqual(trade.action, "buy")
-        self.assertEqual(trade.amount, 50.0)
-        self.assertEqual(trade.price, 0.51)
-        self.assertEqual(trade.status, "simulated")
-        self.assertEqual(trade.expected_price, 0.5)
-        self.assertEqual(trade.expected_size, 50.0)
-        self.assertEqual(trade.filled_price, 0.51)
-        self.assertEqual(trade.filled_size, 50.0)
-        self.assertEqual(trade.slippage_bps, 100.0)
-        self.assertEqual(trade.latency_ms, 100.0)
-        self.assertEqual(trade.strategy_source, "latency_arb")
-        self.assertIsNotNone(trade.executed_at)
-        self.assertIn("p_model", trade.calculation_details)
+        self.assertEqual(result["status"], "unfilled")
+        self.assertEqual(result["reason"], "PAPER_JOURNAL_DISABLED")
+        db.add.assert_not_called()
         db.commit.assert_called_once()
-        db.refresh.assert_called_once()
 
     async def test_paper_rejected_when_simulation_unavailable(self):
         db = _session()
@@ -796,8 +777,8 @@ class ExecutePaperTests(unittest.IsolatedAsyncioTestCase):
             patch.object(latency_arb_service, "simulate_fill", None),
         ):
             result = await _execute_paper(db, settings, opportunity, "token-up-1", 0.5, 50.0, 100.0)
-        self.assertEqual(result["status"], "rejected")
-        self.assertEqual(result["reason"], "simulation engine unavailable")
+        self.assertEqual(result["status"], "unfilled")
+        self.assertEqual(result["reason"], "PAPER_JOURNAL_DISABLED")
         db.add.assert_not_called()
 
 
@@ -1408,6 +1389,15 @@ class ParseCalculationDetailsTests(unittest.TestCase):
 
 
 class SettleExpiredTradesTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        flag = patch.object(
+            latency_arb_service,
+            "get_settings",
+            return_value=SimpleNamespace(paper_journal_v2_enabled=True),
+        )
+        flag.start()
+        self.addCleanup(flag.stop)
+
     def _trade(self, details, price=0.5, amount=100.0):
         return SimpleNamespace(
             calculation_details=json.dumps(details),
@@ -1444,10 +1434,10 @@ class SettleExpiredTradesTests(unittest.IsolatedAsyncioTestCase):
         }
         trade = self._trade(details)
         settled, db = await self._settle([trade])
-        self.assertEqual(settled, 1)
+        self.assertEqual(settled, 0)
         # 100 * (1 - 0.5) / 0.5 = 100.0
-        self.assertAlmostEqual(trade.pnl, 100.0)
-        db.commit.assert_called_once()
+        self.assertIsNone(trade.pnl)
+        db.commit.assert_not_called()
 
     async def test_settles_losing_up_trade(self):
         now = datetime.now(UTC)
@@ -1459,8 +1449,8 @@ class SettleExpiredTradesTests(unittest.IsolatedAsyncioTestCase):
         }
         trade = self._trade(details)
         settled, db = await self._settle([trade], close_price=66900.0)
-        self.assertEqual(settled, 1)
-        self.assertAlmostEqual(trade.pnl, -100.0)
+        self.assertEqual(settled, 0)
+        self.assertIsNone(trade.pnl)
 
     async def test_settles_winning_down_trade(self):
         now = datetime.now(UTC)
@@ -1472,8 +1462,8 @@ class SettleExpiredTradesTests(unittest.IsolatedAsyncioTestCase):
         }
         trade = self._trade(details)
         settled, _ = await self._settle([trade], close_price=66900.0)
-        self.assertEqual(settled, 1)
-        self.assertAlmostEqual(trade.pnl, 100.0)
+        self.assertEqual(settled, 0)
+        self.assertIsNone(trade.pnl)
 
     async def test_skips_unexpired_window(self):
         now = datetime.now(UTC)

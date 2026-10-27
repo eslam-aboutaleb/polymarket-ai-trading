@@ -112,13 +112,8 @@ class StopLossAttributionTest(_AttributionTestBase):
 
         asyncio.run(_execute_stop_loss_simulated(self.db, order, 0.35))
 
-        rows = self._trades(strategy_source="stop_loss")
-        self.assertEqual(len(rows), 1)
-        row = rows[0]
-        self.assertEqual(row.status, "simulated")
-        self.assertEqual(row.action, "sell")
-        self.assertIsNotNone(row.expected_price)
-        self.assertIsNotNone(row.expected_size)
+        self.assertEqual(self._trades(strategy_source="stop_loss"), [])
+        self.assertEqual(order.status, "active")
 
 
 class TakeProfitAttributionTest(_AttributionTestBase):
@@ -132,9 +127,8 @@ class TakeProfitAttributionTest(_AttributionTestBase):
 
         asyncio.run(_execute_take_profit_simulated(self.db, order, 0.95))
 
-        rows = self._trades(strategy_source="take_profit")
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0].status, "simulated")
+        self.assertEqual(self._trades(strategy_source="take_profit"), [])
+        self.assertEqual(order.status, "active")
 
 
 class InverseBotAttributionTest(_AttributionTestBase):
@@ -273,8 +267,8 @@ class InverseBotAttributionTest(_AttributionTestBase):
         self.db.commit()
 
         rows = self._trades(strategy_source="inverse")
-        self.assertEqual(len(rows), 2)
-        self.assertEqual({r.status for r in rows}, {"simulated"})
+        self.assertEqual(rows, [])
+        self.assertEqual(execution["status"], "unfilled")
 
 
 class StrategyBreakdownTest(_AttributionTestBase):
@@ -335,21 +329,15 @@ class StrategyBreakdownTest(_AttributionTestBase):
         payload = get_strategy_breakdown(self.db, USER_ID, window_days=30)
 
         strategies = payload["strategies"]
-        self.assertEqual([s["strategy"] for s in strategies], ["copy", "inverse"])
+        self.assertEqual([s["strategy"] for s in strategies], ["copy"])
         # Best net P&L first.
-        self.assertGreaterEqual(
-            strategies[0]["net_realized_pnl"], strategies[1]["net_realized_pnl"]
-        )
         copy = strategies[0]
         self.assertEqual(copy["closed_trades"], 1)
         self.assertEqual(copy["wins"], 1)
         self.assertEqual(copy["win_rate"], 1.0)
         self.assertEqual(copy["gross_realized_pnl"], 5.0)
-        inverse = strategies[1]
-        self.assertEqual(inverse["losses"], 1)
-        self.assertEqual(inverse["net_realized_pnl"], -20.0)
         self.assertEqual(payload["data_quality"]["unattributed_trades"], 1)
-        self.assertEqual(payload["data_quality"]["strategies"], 2)
+        self.assertEqual(payload["data_quality"]["strategies"], 1)
 
     def test_excludes_other_users(self):
         self.db.add(User(id=999999, wallet_address="0xother"))

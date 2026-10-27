@@ -276,34 +276,11 @@ class LatencyArbPaperModeTests(unittest.IsolatedAsyncioTestCase):
         fetch_book.assert_not_awaited()
         place_fok_order.assert_not_awaited()
 
-        # The edge was detected and a simulated fill recorded.
-        trades = _added_objects(db, UserTrade)
-        self.assertEqual(len(trades), 1)
-        trade = trades[0]
-        self.assertEqual(trade.status, "simulated")
-        self.assertEqual(trade.strategy_source, "latency_arb")
-        self.assertEqual(trade.user_id, 7)
-        self.assertEqual(trade.market_id, "cond-btc-5m")
-        self.assertEqual(trade.token_id, "token-up-1")
-        self.assertEqual(trade.action, "buy")
-        # Expected price/size recorded for plan 03 analytics.
-        self.assertEqual(trade.expected_price, 0.5)
-        self.assertEqual(trade.expected_size, 50.0)
-        self.assertEqual(trade.amount, 50.0)
-        # The simulated fill sits within the plan 08 slippage
-        # bounds (0.3%–3% away from the 0.50 reference).
-        self.assertGreaterEqual(trade.price, 0.5015)
-        self.assertLessEqual(trade.price, 0.515)
-        self.assertIsNotNone(trade.filled_price)
-        self.assertIsNotNone(trade.slippage_bps)
-        self.assertGreaterEqual(trade.slippage_bps, 30.0)
-        self.assertLessEqual(trade.slippage_bps, 300.0)
-        self.assertIsNotNone(trade.latency_ms)
-        self.assertIsNotNone(trade.executed_at)
-        self.assertIn("p_model", trade.calculation_details)
+        # Without the opt-in journal/native evidence, a signal is not a fill.
+        # Positive journal-backed execution is covered by test_paper_runners.
+        self.assertEqual(_added_objects(db, UserTrade), [])
         db.commit.assert_called_once()
-        # The opportunity alert fired for the paper fill.
-        dispatch_alert.assert_called_once()
+        dispatch_alert.assert_not_called()
 
     async def test_live_mode_delegates_to_durable_fok_gateway(self):
         with patch(

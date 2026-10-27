@@ -1475,13 +1475,12 @@ class ExecuteCopyTradeTests(CopyTradeServiceTestCase):
         result = await copy_trade_service.execute_copy_trade(
             self.db, 1, TRADER_WALLET, MARKET_ID, TOKEN_ID, "BUY", 0.5, 100.0
         )
-        self.assertTrue(result["executed"])
+        self.assertFalse(result["executed"])
         self.assertTrue(result["simulated"])
-        self.assertEqual(result["status"], "simulated")
-        simulated = self.db.added[0]
-        self.assertEqual(simulated.status, "simulated")
-        # A simulated submission is not a realized win.
-        self.assertEqual(self.db.first_results[UserSettings].consecutive_wins, 0)
+        self.assertEqual(result["status"], "unfilled")
+        self.assertEqual(result["reason"], "PAPER_JOURNAL_DISABLED")
+        self.assertEqual(self.db.added, [])
+        self.assertEqual(self.db.first_results[UserSettings].consecutive_wins or 0, 0)
 
     async def test_stable_source_identity_is_delegated_to_durable_gateway(self):
         self._patch_credentials(stored={"private_key": "0xpk"})

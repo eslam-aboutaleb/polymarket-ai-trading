@@ -186,6 +186,23 @@ async def _evaluate_user_positions(db: Session, user_id: int):
     if not entries:
         return
 
+    from app.services.analytics.paper_accounting import settings_for_account
+
+    live_entries = []
+    for row in entries:
+        row_settings = (
+            settings_for_account(db, user_id, row.account_id)
+            if row.account_id is not None
+            else settings
+        )
+        if row_settings and getattr(row_settings, "simulation_mode", False):
+            await _evaluate_paper_entry(db, user, row_settings, row)
+        else:
+            live_entries.append(row)
+    entries = live_entries
+    if not entries:
+        return
+
     # Per-user simulation flag: paper mode is decided by the
     # OWNING user's settings, never by a global switch.
     simulation_mode = bool(getattr(settings, "simulation_mode", False))
@@ -241,6 +258,30 @@ async def _evaluate_user_positions(db: Session, user_id: int):
             _inflight_keys.discard(lock_key)
 
 
+async def _evaluate_paper_entry(db, user, settings, row):
+    from app.services.analytics.paper_accounting import paper_positions
+
+    if not settings.inverse_bot_enabled:
+        return
+    key = f"paper:{user.id}:{row.account_id}:{row.condition_id}"
+    if key in _inflight_keys:
+        return
+    _inflight_keys.add(key)
+    try:
+        positions = paper_positions(db, user.id, row.account_id)
+        await evaluate_inverse_position_row(
+            db=db,
+            user=user,
+            settings=settings,
+            row=row,
+            stored_creds={},
+            positions_by_token={p["asset_id"]: p for p in positions},
+            force=False,
+        )
+    finally:
+        _inflight_keys.discard(key)
+
+
 async def manual_evaluate_inverse_position(
     db: Session,
     user_id: int,
@@ -257,18 +298,26 @@ async def manual_evaluate_inverse_position(
     if not row:
         return {"success": False, "detail": "Inverse bot position not found"}
 
-    try:
-        stored = load_wallet_credentials(user.wallet_address)
-    except CredentialStoreError as exc:
-        return {"success": False, "detail": f"Credential store unavailable: {exc}"}
-    service = get_polymarket_service()
-    positions = []
-    if stored:
-        positions = await service.get_positions(
-            user.wallet_address,
-            private_key=stored.get("private_key"),
-            clob_creds=stored.get("clob_creds"),
-        )
+    from app.services.analytics.paper_accounting import paper_positions, settings_for_account
+
+    if row.account_id is not None:
+        settings = settings_for_account(db, user_id, row.account_id)
+    if settings and getattr(settings, "simulation_mode", False):
+        stored = {}
+        positions = paper_positions(db, user_id, row.account_id)
+    else:
+        try:
+            stored = load_wallet_credentials(user.wallet_address)
+        except CredentialStoreError as exc:
+            return {"success": False, "detail": f"Credential store unavailable: {exc}"}
+        service = get_polymarket_service()
+        positions = []
+        if stored:
+            positions = await service.get_positions(
+                user.wallet_address,
+                private_key=stored.get("private_key"),
+                clob_creds=stored.get("clob_creds"),
+            )
     positions_by_token = {p.get("asset_id"): p for p in positions if p.get("asset_id")}
     result = await evaluate_inverse_position_row(
         db=db,
@@ -435,7 +484,11 @@ async def evaluate_inverse_position_row(
     # ran unchanged — only the order submission is replaced by
     # depth-aware simulated fills.
     if getattr(settings, "simulation_mode", False):
+        from app.services.analytics.paper_evidence import refresh_evidence
+
+        await refresh_evidence(db, row.condition_id)
         execution = _simulate_reversal(
+            db=db,
             row=row,
             settings=settings,
             from_size=size,
@@ -462,6 +515,7 @@ async def evaluate_inverse_position_row(
 
     action = InverseBotAction(
         inverse_bot_position_id=row.id,
+        account_id=getattr(row, "account_id", None),
         user_id=user.id,
         condition_id=row.condition_id,
         from_token_id=row.token_id,
@@ -878,74 +932,92 @@ def _simulate_reversal(
     row: InverseBotPosition,
     settings: UserSettings,
     from_size: float,
-    from_price: float,
+    from_price: float,  # noqa: ARG001 - a signal price is not fill evidence
     to_token_id: str,
-    to_outcome: str,  # noqa: ARG001 - retained for callers and action context
-    to_price: float,
+    to_outcome: str,  # noqa: ARG001 - retained strategy signature
+    to_price: float,  # noqa: ARG001 - a signal price is not fill evidence
+    db: Session | None = None,
 ) -> dict[str, Any]:
-    """Paper mode: simulate both legs of the reversal.
+    """Both legs use journal inventory, native depth and actual modeled proceeds."""
+    from decimal import Decimal
 
-    The AI evaluation and every guardrail above this point ran
-    unchanged; only the order submission is replaced by
-    depth-aware simulated fills. Mirrors ``_execute_reversal``'s
-    return shape so the caller records the action identically,
-    with ``status="simulated"`` and no order hashes.
-    """
-    from app.services.analytics.simulation import simulate_fill
+    from app.services.analytics.paper_accounting import submit_paper_order, transaction
+    from app.services.analytics.paper_evidence import latest
+    from app.services.market_data.replay_capture import digest
 
-    held_market = {"best_bid": from_price, "best_ask": from_price}
-    alt_market = {"best_bid": to_price, "best_ask": to_price}
-
-    sell_fill = simulate_fill(held_market, "SELL", from_size)
-
-    size_mode = _resolve_size_mode(row, settings)
-    if size_mode == InverseBotSizeMode.FIXED_AMOUNT.value:
-        buy_notional = float(
-            row.fixed_amount_override
-            if row.fixed_amount_override and row.fixed_amount_override > 0
-            else settings.inverse_bot_fixed_amount or 50.0
-        )
-    else:
-        buy_notional = max(MIN_BUY_NOTIONAL, (from_size * from_price) * (1.0 - BUY_SLIPPAGE_GUARD))
-
-    if buy_notional < MIN_BUY_NOTIONAL:
-        return {
-            "status": "sell_only",
-            "error": f"Buy notional below minimum (${buy_notional:.4f}) after sell.",
-            "sell_order_hash": None,
-            "buy_order_hash": None,
-            "buy_notional": buy_notional,
-            "simulated": True,
-            "sell_fill_price": sell_fill["fill_price"],
-            "sell_price": from_price,
-            "buy_price": None,
-        }
-
-    buy_fill = simulate_fill(alt_market, "BUY", buy_notional)
-
-    logger.info(
-        "SIMULATION: inverse bot user=%d simulated reversal %s→%s "
-        "(sell @ %.4f, buy @ %.4f, notional=%.2f)",
-        row.user_id,
-        row.token_id[:20],
-        to_token_id[:20],
-        sell_fill["fill_price"],
-        buy_fill["fill_price"],
-        buy_notional,
-    )
-
-    return {
-        "status": "simulated",
-        "error": None,
+    base = {
+        "simulated": True,
+        "paper_journal": True,
         "sell_order_hash": None,
         "buy_order_hash": None,
-        "buy_notional": buy_notional,
-        "simulated": True,
-        "sell_fill_price": sell_fill["fill_price"],
-        "buy_fill_price": buy_fill["fill_price"],
-        "sell_price": from_price,
-        "buy_price": to_price,
+        "buy_notional": 0,
+        "buy_price": None,
+        "sell_price": None,
+        "status": "unfilled",
     }
+    if db is None:
+        return {**base, "error": "PAPER_SESSION_REQUIRED"}
+    from app.config import get_settings
+
+    if not get_settings().paper_journal_v2_enabled:
+        return {**base, "error": "PAPER_JOURNAL_DISABLED"}
+    receipt = latest(db, "book", utc_now(), token_id=row.token_id)
+    key = "inverse:" + digest(
+        [row.id, row.token_id, to_token_id, str(from_size), receipt.id if receipt else None]
+    )
+    with transaction(db):
+        sell = submit_paper_order(
+            db,
+            user_id=row.user_id,
+            account_id=row.account_id,
+            token_id=row.token_id,
+            side="SELL",
+            amount=Decimal(str(from_size)),
+            units="SHARES",
+            strategy="inverse",
+            intent_key=key + ":sell",
+        )
+        if not Decimal(sell["shares"]):
+            return {**base, "error": sell["reason"]}
+        base.update(
+            sell_price=float(sell["fill_price"]),
+            sell_fill_price=float(sell["fill_price"]),
+            status="sell_only",
+        )
+        if sell["status"] != "filled":
+            return {**base, "error": "Partial sell; remaining inventory requires review"}
+        notional = (Decimal(sell["notional_usdc"]) - Decimal(sell["fee_usdc"])) * Decimal(
+            str(1 - BUY_SLIPPAGE_GUARD)
+        )
+        if _resolve_size_mode(row, settings) == InverseBotSizeMode.FIXED_AMOUNT.value:
+            notional = Decimal(
+                str(row.fixed_amount_override or settings.inverse_bot_fixed_amount or 50)
+            )
+        # Service inputs have an explicit eight-decimal USDC boundary.
+        notional = notional.quantize(Decimal("0.00000001"))
+        if notional < Decimal(str(MIN_BUY_NOTIONAL)):
+            return {**base, "error": "Modeled proceeds below buy minimum"}
+        buy = submit_paper_order(
+            db,
+            user_id=row.user_id,
+            account_id=row.account_id,
+            token_id=to_token_id,
+            side="BUY",
+            amount=notional,
+            units="USDC",
+            strategy="inverse",
+            intent_key=key + ":buy",
+        )
+        base.update(
+            buy_notional=float(buy["notional_usdc"]),
+            buy_price=float(buy["fill_price"]) if buy["fill_price"] else None,
+            buy_fill_price=float(buy["fill_price"]) if buy["fill_price"] else None,
+        )
+        return {
+            **base,
+            "status": "simulated" if buy["status"] == "filled" else "sell_only",
+            "error": None if buy["status"] == "filled" else "Buy incomplete: " + buy["reason"],
+        }
 
 
 def _record_reversal_trades(
@@ -972,6 +1044,8 @@ def _record_reversal_trades(
     """
     from app.services.trading.trade_recorder import record_user_trade
 
+    if execution.get("simulated"):
+        return  # submit_paper_order already wrote both attributable rows atomically.
     simulated = bool(execution.get("simulated"))
     sell_hash = execution.get("sell_order_hash")
     buy_hash = execution.get("buy_order_hash")

@@ -906,3 +906,8 @@ that exact name
 
 For portable model gateway configuration, embedding connection overrides and vector
 reindexing requirements, see [LiteLLM gateway integration](docs/litellm-gateway.md).
+
+### Journal-backed paper accounts
+
+See [Paper accounts and NAV](user%20guide/paper-accounting.md) for setup, fill/fee assumptions,
+legacy-history handling, hourly NAV, tests and operator rollout for #27/#35.

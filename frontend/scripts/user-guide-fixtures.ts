@@ -136,6 +136,7 @@ export async function installGuideFixtures(page: Page, anonymous = false) {
         phone: null,
         profile_picture_url: null,
       };
+    else if (path === "/api/paper/account") data = { initialized: false, account_id: 1 };
     else if (path === "/api/settings/paper-summary")
       data = { simulation_mode: true, paper_balance: 1000, paper_pnl: 0, simulated_trades: 0 };
     else if (path === "/api/auth/trading-key")
