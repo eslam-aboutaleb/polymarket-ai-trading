@@ -314,3 +314,46 @@ def test_legacy_backfill_marks_sidecar_without_modifying_original_trade(maker):
     assert runtime.classify_legacy(db, state) == 0
     assert db.query(PaperMakerLegacy).one().quality == "legacy_unverified_fill"
     assert trade.calculation_details == original and trade.price == 0.4 and trade.amount == 10
+
+
+def test_stop_without_inprocess_worker_releases_durable_reservations(maker):
+    from app.services.trading.market_maker_service import set_market_maker_config_state
+
+    db, config = maker
+    runtime.sync(db, config, QUOTES, NOW)
+    db.commit()
+    set_market_maker_config_state(db, config, enabled=False)
+    ledger = paper.restore(db, db.get(PaperAccount, 1))
+    assert ledger.reserved_cash == 0 and ledger.cash == 1000
+    assert db.query(PaperMakerOrder).one().state == "CANCELLED"
+
+
+def test_invalid_or_halted_book_cancels_without_creating_fill(maker, monkeypatch):
+    db, config = maker
+    runtime.sync(db, config, QUOTES, NOW)
+    load = runtime.load_analysis
+
+    def halted(db, query):
+        result, evidence = load(db, query)
+        result["spec"]["active"] = False
+        return result, evidence
+
+    monkeypatch.setattr(runtime, "load_analysis", halted)
+    runtime.sync(db, config, QUOTES, NOW + timedelta(seconds=1))
+    assert db.query(PaperMakerOrder).one().state == "CANCELLED"
+    ledger = paper.restore(db, db.get(PaperAccount, 1))
+    assert ledger.reserved_cash == 0 and ledger.cash == 1000
+    assert not db.query(PaperMakerFill).count()
+
+
+def test_edit_or_disable_after_restart_does_not_leave_old_reservations(maker):
+    from app.services.trading.market_maker_service import upsert_market_maker_config
+
+    db, config = maker
+    runtime.sync(db, config, QUOTES, NOW)
+    db.commit()
+    upsert_market_maker_config(
+        db, 1, {"condition_id": CID, "enabled": False, "band_order_size": 20}
+    )
+    assert db.query(PaperMakerOrder).one().state == "CANCELLED"
+    assert paper.restore(db, db.get(PaperAccount, 1)).reserved_cash == 0

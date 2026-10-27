@@ -96,13 +96,48 @@ with Session(engine) as db, paper.transaction(db):
         "PYTHONPATH": ".:tests:../services/shared",
     }
     result = subprocess.run(  # noqa: S603 - controlled test script
-        [sys.executable, "-c", script], env=env, timeout=120, capture_output=True
+        [sys.executable, "-c", script],
+        env=env,
+        cwd=Path(__file__).parents[2],
+        timeout=120,
+        capture_output=True,
     )  # noqa: S603 - controlled test script
     assert result.returncode == 7, result.stderr.decode()[-1000:]
     with factory() as db:
         assert db.query(PaperMakerFill).count() == 1
         assert paper.restore(db, db.get(PaperAccount, 1)).cash == Decimal("997.98")
-    path = Path("migrations/versions/20261027_0036_maker_lifecycle.py")
+    race = Barrier(2)
+
+    def cancel_or_fill(action):
+        with factory() as db:
+            race.wait(timeout=15)
+            with paper.transaction(db):
+                state = paper.account_state(db, 1, 1)
+                if action == "cancel":
+                    runtime.cancel_config(
+                        db, db.get(MarketMakerConfig, 1), NOW + timedelta(seconds=6)
+                    )
+                else:
+                    event = flow(
+                        id="race-fill",
+                        occurred_at=NOW + timedelta(seconds=4),
+                        available_at=NOW + timedelta(seconds=5),
+                    )
+                    runtime.consume(
+                        db, state, paper.restore(db, state), [event], NOW + timedelta(seconds=6)
+                    )
+            db.commit()
+
+    with ThreadPoolExecutor(2) as pool:
+        list(pool.map(cancel_or_fill, ["cancel", "fill"]))
+    with factory() as db:
+        ledger = paper.restore(db, db.get(PaperAccount, 1))
+        preserved_cash = ledger.cash
+        assert preserved_cash in {Decimal("997.98"), Decimal("995.96")}
+        assert ledger.reserved_cash == 0
+        assert ledger.positions["11"].shares in {Decimal(5), Decimal(10)}
+        assert db.query(PaperMakerFill).count() in {1, 2}
+    path = Path(__file__).parents[2] / "migrations/versions/20261027_0036_maker_lifecycle.py"
     spec = importlib.util.spec_from_file_location("maker_migration", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -116,4 +151,4 @@ with Session(engine) as db, paper.transaction(db):
         module.upgrade()
     with factory() as db:
         assert db.query(User).count() == 1
-        assert paper.restore(db, db.get(PaperAccount, 1)).cash == Decimal("997.98")
+        assert paper.restore(db, db.get(PaperAccount, 1)).cash == preserved_cash

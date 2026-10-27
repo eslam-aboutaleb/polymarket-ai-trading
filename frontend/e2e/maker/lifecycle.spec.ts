@@ -29,7 +29,8 @@ test("100 stationary syncs remain resting; attributed partial fill, retry and ca
   await expect(page.getByText(/reserved cash \$2.02/)).toBeVisible();
   await expect(page.getByText(/modeled_low_confidence/)).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("maker-lifecycle.png"), fullPage: true });
-  await request.post(`${backend}/__test/maker/cancel`);
+  const stopped = await request.post(`${backend}/api/market-maker/configs/1/stop`);
+  expect(stopped.ok()).toBeTruthy();
   await inspect.click();
   await expect(page.getByText("CANCELLED", { exact: true })).toBeVisible();
   const final = await request.get(`${backend}/api/market-maker/configs/1/paper-intents`);

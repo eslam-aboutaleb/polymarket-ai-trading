@@ -75,6 +75,14 @@ def upsert_market_maker_config(
     is_new = config is None
     if is_new:
         config = MarketMakerConfig(user_id=user_id)
+    elif get_settings().paper_maker_fill_model_v2 and any(
+        getattr(config, field, None) != value for field, value in values.items()
+    ):
+        from app.models.trading.paper_maker_order import PaperMakerOrder
+        from app.services.trading.paper_maker_runtime import cancel_config
+
+        if db.query(PaperMakerOrder.id).filter_by(config_id=config.id).first():
+            cancel_config(db, config)
     for field, value in values.items():
         setattr(config, field, value)
     if is_new:
@@ -91,6 +99,14 @@ def set_market_maker_config_state(
     status: str | None = None,
 ) -> MarketMakerConfig:
     """Persist an enable/disable state change for a validated config."""
+    if not enabled and get_settings().paper_maker_fill_model_v2:
+        from app.models.trading.paper_maker_order import PaperMakerOrder
+        from app.services.trading.paper_maker_runtime import cancel_config
+
+        # Release durable paper reservations even after a worker restart, when
+        # no in-process task exists to run the loop's cleanup handler.
+        if db.query(PaperMakerOrder.id).filter_by(config_id=config.id).first():
+            cancel_config(db, config)
     config.enabled = enabled
     if status is not None:
         config.status = status
