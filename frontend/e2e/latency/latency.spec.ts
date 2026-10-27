@@ -5,6 +5,7 @@ for (const [scenario, reason] of [
   ["fees", "VENUE_FEE_MODEL_UNKNOWN"],
   ["stale", "STALE_BOOK"],
   ["disconnect", "FEED_DISCONNECTED"],
+  ["wrong-outcome", "TOKEN_OUTCOME_MISMATCH"],
   ["disabled", "live mode disabled"],
   ["halt", "TRADING_HALTED_OR_RECOVERY_REQUIRED"],
 ]) {

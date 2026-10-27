@@ -58,6 +58,7 @@ app.dependency_overrides[get_db] = database
 def transport(request):
     raw, metadata, now = snapshot(asks=[{"price": ".500", "size": "60"}])
     if request.url.path.endswith("/book"):
+        raw["asset_id"] = request.url.params["token_id"]
         if scenario[0] == "outage":
             return httpx.Response(503)
         if scenario[0] == "stale":
@@ -157,7 +158,9 @@ async def attempt(case: str):
 
     opportunity = _opportunity()
     opportunity.market.condition_id = CID
-    opportunity.market.token_ids = {"up": "11", "down": "22"}
+    opportunity.market.token_ids = (
+        {"up": "22", "down": "11"} if case == "wrong-outcome" else {"up": "11", "down": "22"}
+    )
     opportunity.market.prices = {"up": 0.99, "down": 0.01}  # Deliberately unusable Gamma quote.
     last_opportunity[0] = opportunity
     runner._store_opportunities([opportunity])

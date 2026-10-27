@@ -16,7 +16,9 @@ The edge board's Gamma probability is indicative; it cannot authorize an order.
 
 The shared `binary-book-v1` adapter consumes native object levels (`price`, `size`)
 and paired CLOB/Gamma metadata. Both providers must agree on condition and token
-identity, explicitly active/open/accepting status and outcome mapping. Explicit
+identity, explicitly active/open/accepting status and outcome mapping. The
+validated token outcome must also match the intended trade side; swapped Up/Down
+IDs abstain even when both tokens belong to the same condition. Explicit
 paired Up/Down labels map to the binary YES/NO axes in the live adapter; raw
 receipts and existing frozen research interpretation remain unchanged.
 Tuple fixtures, guessed positional mappings and Gamma execution-price fallbacks

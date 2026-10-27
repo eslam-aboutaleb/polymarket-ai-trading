@@ -819,7 +819,9 @@ async def _execute_live(
     if (
         not isinstance(evidence, ExecutableBookEvidence)
         or evidence.status != "READY"
+        or opportunity.side not in ("up", "down")
         or evidence.token_id != token_id
+        or evidence.outcome != ("YES" if opportunity.side == "up" else "NO")
         or evidence.condition_id != opportunity.market.condition_id
         or evidence.expires_at is None
         or datetime.now(UTC) >= evidence.expires_at
@@ -934,7 +936,7 @@ async def _execute_opportunity(
     reference_price = (
         opportunity.market.up_price if opportunity.side == "up" else opportunity.market.down_price
     )
-    if not token_id or reference_price <= 0.0:
+    if opportunity.side not in ("up", "down") or not token_id or reference_price <= 0.0:
         return {"status": "rejected", "reason": "market data incomplete"}
 
     evidence = None
@@ -954,6 +956,8 @@ async def _execute_opportunity(
                 "reason": evidence.reason,
                 "evidence": evidence.model_dump(mode="json"),
             }
+        if evidence.outcome != ("YES" if opportunity.side == "up" else "NO"):
+            return {"status": "rejected", "reason": "TOKEN_OUTCOME_MISMATCH"}
         # Include awaited metadata/fee/book requests in the feed-to-submit budget.
         completed_at = datetime.now(UTC)
         if evidence.expires_at is None or completed_at >= evidence.expires_at:
