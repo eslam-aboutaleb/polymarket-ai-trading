@@ -105,6 +105,8 @@ def consume(db, state, ledger, events, moment):
     indexed = {row.id: row for row in rows}
     for fill in result.fills:
         row = indexed[fill.order_id]
+        if row.state == "CANCEL_REQUESTED":
+            metrics["cancel_race_fills"] += 1
         order = next(o for o in result.state.orders if o.id == row.id)
         key = f"maker-fill:{digest([fill.order_id, fill.event_id, 0])}"
         before = ledger.realized_pnl
@@ -295,6 +297,7 @@ def sync(db, config, expected, moment=None):
                 analysis["books"]["YES" if quote["token_id"] == spec.yes_token else "NO"]
             )
             if book.grade != "VERIFIED_BOOK":
+                metrics[f"book_{book.grade.lower()}"] += 1
                 reasons.append("STALE_OR_INSUFFICIENT_BOOK")
                 continue
             # Generated floats are definitions: reject off-tick values, never
