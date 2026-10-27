@@ -34,6 +34,7 @@ class ExecutableBookEvidence(Contract):
     reason: str
     condition_id: str
     token_id: str
+    outcome: Literal["YES", "NO"] | None = None
     source: str = "polymarket-clob-rest-v1/binary-book-v1"
     received_at: AwareDatetime
     source_at: AwareDatetime | None = None
@@ -177,6 +178,7 @@ def _authorize(raw, metadata, token_id, cash, fee, received_at, as_of, max_sprea
         return ExecutableBookEvidence(
             **base,
             status="READY",
+            outcome="YES" if token_id == spec.yes_token else "NO",
             reason="VALIDATED_DISPLAYED_DEPTH",
             source_at=source_at,
             expires_at=min(source_at, received_at) + MAX_AGE,

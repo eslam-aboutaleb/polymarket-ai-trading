@@ -987,6 +987,38 @@ class ExecuteOpportunityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["reason"], "STALE_BOOK")
         live.assert_not_awaited()
 
+    async def test_valid_market_token_for_opposite_outcome_never_executes(self):
+        quote = ready("token-up-1", _opportunity().market.condition_id)
+        quote = quote.model_copy(update={"outcome": "NO"})
+        live = AsyncMock()
+        result = await self._execute(
+            settings_ns=_engine_settings(latency_arb_live=True),
+            user_settings=_user_settings(simulation_mode=False),
+            extra_patches=[
+                patch.object(latency_arb_service, "_fetch_book", AsyncMock(return_value=quote)),
+                patch.object(latency_arb_service, "_execute_live", live),
+            ],
+        )
+        self.assertEqual(result["reason"], "TOKEN_OUTCOME_MISMATCH")
+        live.assert_not_awaited()
+
+    async def test_down_side_accepts_its_validated_no_token(self):
+        opportunity = _opportunity(side="down")
+        quote = ready("token-down-1", opportunity.market.condition_id)
+        quote = quote.model_copy(update={"outcome": "NO"})
+        live = AsyncMock(return_value={"status": "submitted"})
+        result = await self._execute(
+            opportunity=opportunity,
+            settings_ns=_engine_settings(latency_arb_live=True),
+            user_settings=_user_settings(simulation_mode=False),
+            extra_patches=[
+                patch.object(latency_arb_service, "_fetch_book", AsyncMock(return_value=quote)),
+                patch.object(latency_arb_service, "_execute_live", live),
+            ],
+        )
+        self.assertEqual(result["status"], "submitted")
+        self.assertEqual(live.await_args.args[4], "token-down-1")
+
     async def test_live_book_depth_rejects(self):
         book = {"bids": [[0.499, 10.0]], "asks": [[0.501, 1000.0]]}
         result = await self._execute(

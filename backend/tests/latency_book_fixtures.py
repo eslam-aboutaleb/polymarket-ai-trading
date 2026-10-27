@@ -52,6 +52,7 @@ def ready(token="token-1", condition="market-1", cash=50):
     now = datetime.now(UTC)
     return ExecutableBookEvidence(
         status="READY",
+        outcome="YES",
         reason="VALIDATED_DISPLAYED_DEPTH",
         condition_id=condition,
         token_id=token,

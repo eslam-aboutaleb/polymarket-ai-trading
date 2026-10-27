@@ -295,6 +295,7 @@ class LatencyArbPaperModeTests(unittest.IsolatedAsyncioTestCase):
                 _settings(False),
                 SimpleNamespace(
                     symbol="BTC",
+                    side="up",
                     window_start_epoch=100,
                     market=SimpleNamespace(condition_id="market"),
                 ),
