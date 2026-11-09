@@ -135,3 +135,7 @@ __all__ += ["PaperMakerLegacy"]
 
 
 __all__ += ["ExecutableReplayRun", "ExecutableSignalSource"]
+
+from app.models.trading.paper_execution_intent import PaperExecutionIntent  # noqa: F401,E402
+
+__all__ += ["PaperExecutionIntent"]
