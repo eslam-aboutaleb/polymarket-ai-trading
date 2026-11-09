@@ -27,7 +27,7 @@ def run(coroutine):
 
 @pytest.mark.parametrize("strategy", ["copy", "latency", "engine"])
 def test_identical_native_events_book_identical_economics_without_signing(db, strategy):
-    session, _ = db
+    session, clock = db
     settings = session.get(UserSettings, 1)
     settings.copy_trading_enabled = True
     settings.require_ai_approval = False
@@ -60,19 +60,33 @@ def test_identical_native_events_book_identical_economics_without_signing(db, st
             )
             assert result.executed_size == 25
         elif strategy == "latency":
-            result = run(
-                latency_arb_service._execute_paper(
-                    session,
-                    settings,
-                    SimpleNamespace(
-                        market=SimpleNamespace(condition_id="native"), window_start_epoch=1
-                    ),
-                    "11",
-                    0.99,
-                    10,
-                    1,
+            from latency_paper_fixtures import native
+            from paper_account_fixtures import CID
+
+            from app.services.trading import latency_paper
+
+            decision = clock[0]
+            clock[0] += timedelta(milliseconds=1)
+            native(session, clock, ask=".40", bid=".39")
+            with patch.object(latency_paper, "utc_now", lambda: clock[0]):
+                result = run(
+                    latency_arb_service._execute_paper(
+                        session,
+                        settings,
+                        SimpleNamespace(
+                            market=SimpleNamespace(condition_id=CID),
+                            window_start_epoch=1,
+                            detected_at=decision,
+                            feed_lag_ms=0,
+                            p_model=0.9,
+                            side="up",
+                        ),
+                        "11",
+                        0.99,
+                        10,
+                        1,
+                    )
                 )
-            )
             assert result["status"] == "simulated"
         else:
             result = run(

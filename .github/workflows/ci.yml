@@ -161,7 +161,7 @@ jobs:
         env:
           PYTHONPATH: .:../services/shared
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: uv run --frozen pytest --no-cov tests/integration/test_native_capture_postgres.py tests/integration/test_venue_observations_postgres.py tests/integration/test_book_research_postgres.py tests/integration/test_paper_accounts_postgres.py tests/integration/test_maker_lifecycle_postgres.py tests/integration/test_executable_replay_postgres.py
+        run: uv run --frozen pytest --no-cov tests/integration/test_native_capture_postgres.py tests/integration/test_venue_observations_postgres.py tests/integration/test_book_research_postgres.py tests/integration/test_paper_accounts_postgres.py tests/integration/test_maker_lifecycle_postgres.py tests/integration/test_executable_replay_postgres.py tests/integration/test_latency_paper_postgres.py
       - name: Seed disposable admin test wallet
         env:
           PYTHONPATH: ${{ github.workspace }}/backend:${{ github.workspace }}/services/shared
@@ -201,6 +201,10 @@ jobs:
       - name: Latency execution evidence safety E2E
         working-directory: frontend
         run: npm run test:latency
+
+      - name: Test paper latency evidence in browser
+        working-directory: frontend
+        run: npm run test:latency-paper
       - name: Run full Playwright E2E (public, auth, features)
         working-directory: frontend
         run: npm run test:e2e -- --project=public --project=auth --project=features --reporter=list,junit

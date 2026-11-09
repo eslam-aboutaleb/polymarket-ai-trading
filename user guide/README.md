@@ -514,3 +514,5 @@ if browser libraries are missing. The capture scripts write PNGs under
 a refresh. Normal regression CI does not rewrite these documentation assets.
 
 </details>
+
+See [latency paper execution](latency-paper.md) for evidence labels, frozen assumptions, operator setup and recovery.
