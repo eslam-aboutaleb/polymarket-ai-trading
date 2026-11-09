@@ -254,3 +254,45 @@ def test_daily_loss_counts_negative_events_even_after_wins(db, monkeypatch):
     result = run(db, monkeypatch, capture=native)
     assert result["reason"] == "PAPER_LOSS_LIMIT"
     assert session.query(UserTrade).count() == 4
+
+
+def test_pre_delay_source_clock_is_not_execution_evidence(db, monkeypatch):
+    result = run(
+        db,
+        monkeypatch,
+        capture=lambda s, c: native(s, c, source_at=c[0] - timedelta(milliseconds=100)),
+    )
+    assert result["reason"] == "NO_POST_DELAY_BOOK"
+    assert db[0].query(UserTrade).count() == 0
+
+
+def test_ambiguous_same_receipt_clock_cannot_choose_a_favorable_book(db, monkeypatch):
+    def capture(session, clock):
+        native(session, clock)
+        native(session, clock, ask=".60", bid=".59")
+
+    result = run(db, monkeypatch, capture=capture)
+    assert result["reason"] == "AMBIGUOUS_RECEIPT_ORDER"
+    assert db[0].query(UserTrade).count() == 0
+
+
+def test_unknown_fees_cannot_be_retroactively_improved_during_capture(db, monkeypatch):
+    session, _ = db
+    paper.account_state(session, 1, 1).fee_bps = None
+    session.commit()
+
+    def capture(session, clock):
+        native(session, clock)
+        paper.configure_account(session, 1, 1, fee_bps=0)
+        session.commit()
+
+    result = run(db, monkeypatch, capture=capture)
+    assert result["reason"] == "PAPER_ASSUMPTIONS_CHANGED"
+    assert session.query(UserTrade).count() == 0
+
+
+def test_void_market_abstains_without_invented_settlement(db, monkeypatch):
+    result = run(db, monkeypatch, capture=lambda s, c: native(s, c, final="void"))
+    assert result["execution_state"] == "UNVERIFIABLE_DATA"
+    assert Decimal(result["realized_pnl"]) == 0
+    assert db[0].query(UserTrade).count() == 0
