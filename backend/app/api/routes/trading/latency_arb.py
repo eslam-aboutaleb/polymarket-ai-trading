@@ -1,13 +1,15 @@
 """Latency-arbitrage API — config, live edge board and trade log."""
 
+import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_plan
+from app.api.deps import get_strict_account, require_plan
 from app.api.routes.auth.auth import get_current_user_from_token
+from app.models import Account
 from app.services.trading.latency_arb_service import (
     get_config,
     get_engine_status,
@@ -100,6 +102,7 @@ class TradeResponse(BaseModel):
     amount: float
     price: float
     status: str
+    fill_evidence_grade: str = "unverified_legacy"
     order_hash: str | None = None
     expected_price: float | None = None
     expected_size: float | None = None
@@ -251,8 +254,38 @@ async def get_latency_arb_trades(
         db=db,
     )
     return TradesResponse(
-        trades=[TradeResponse.model_validate(row) for row in rows],
+        trades=[_trade_response(row) for row in rows],
         total=total,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get("/paper-intents")
+def paper_intents(
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user_from_token),
+    account: Account = Depends(get_strict_account),
+):
+    from app.services.trading.latency_paper import history
+
+    return history(db, user["user_id"], account.id, limit, offset)
+
+
+def _trade_response(row):
+    response = TradeResponse.model_validate(row)
+    if row.status != "simulated":
+        return response.model_copy(update={"fill_evidence_grade": "live_reported"})
+    try:
+        details = json.loads(row.calculation_details or "{}")
+    except (ValueError, TypeError):
+        details = {}
+    timed = isinstance(details, dict) and bool(details.get("execution_window"))
+    return response.model_copy(
+        update={
+            "fill_evidence_grade": "modeled_native_depth" if timed else "unverified_legacy",
+            "pnl": response.pnl if timed else None,
+        }
     )
