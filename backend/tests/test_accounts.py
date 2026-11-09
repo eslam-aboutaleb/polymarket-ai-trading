@@ -582,6 +582,7 @@ class MigrationBackfillTest(unittest.TestCase):
                 "paper_maker_orders",
                 "paper_nav_points",
                 "paper_order_records",
+                "paper_execution_intents",
                 "paper_journal_events",
                 "paper_accounts",
             ):
