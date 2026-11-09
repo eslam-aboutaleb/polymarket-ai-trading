@@ -1,4 +1,5 @@
 import { test, expect, gotoMarketsBoard } from "../fixtures/base";
+import { publicMarkets } from "../fixtures/public-data";
 
 /**
  * Markets (public): browse, category filter, search, sort, market detail drawer
@@ -7,10 +8,11 @@ import { test, expect, gotoMarketsBoard } from "../fixtures/base";
 
 test.describe("Markets — public browsing", () => {
   test.beforeEach(async ({ page }) => {
+    await publicMarkets(page);
     await gotoMarketsBoard(page, { waitForContent: true });
   });
 
-  test("renders the market board with live Polymarket data", async ({ page }) => {
+  test("renders the market board with recorded Polymarket-shaped data", async ({ page }) => {
     // Category strip from the live categories endpoint.
     for (const category of ["All", "Sports", "Politics", "Crypto"]) {
       await expect(page.getByRole("button", { name: category, exact: true })).toBeVisible();
@@ -27,7 +29,7 @@ test.describe("Markets — public browsing", () => {
     const search = page.getByPlaceholder(/Search markets/);
     await search.fill("bitcoin");
     await expect(page.getByText(/Showing \d+ events \/ \d+ options/)).toBeVisible();
-    await expect(page.getByText(/Bitcoin hit in October/)).toBeVisible();
+    await expect(page.getByText(/Bitcoin price targets/)).toBeVisible();
 
     await page.getByRole("button", { name: "Clear search" }).click();
     await expect(search).toHaveValue("");
