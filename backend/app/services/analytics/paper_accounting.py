@@ -130,19 +130,23 @@ def restore(db: Session, state: PaperAccount, as_of=None) -> PaperLedger:
     if as_of is not None:
         rows = rows.filter(PaperJournalEvent.observed_at <= as_of)
     for row in rows.order_by(PaperJournalEvent.id).yield_per(500):
-        event = json.loads(row.payload_json)
-        args = event["args"]
-        fields = {
-            "reserve": (2, 3, 4),
-            "fill": (1, 2),
-            "cancel": (),
-            "settle": (1, 2) if len(args) > 2 else (1,),
-            "cash_flow": (0,),
-        }[event["method"]]
-        for index in fields:
-            args[index] = Decimal(args[index])
-        getattr(ledger, event["method"])(row.event_id, *args)
+        apply_journal_event(ledger, row)
     return ledger
+
+
+def apply_journal_event(ledger, row):
+    event = json.loads(row.payload_json)
+    args = event["args"]
+    fields = {
+        "reserve": (2, 3, 4),
+        "fill": (1, 2),
+        "cancel": (),
+        "settle": (1, 2) if len(args) > 2 else (1,),
+        "cash_flow": (0,),
+    }[event["method"]]
+    for index in fields:
+        args[index] = Decimal(args[index])
+    getattr(ledger, event["method"])(row.event_id, *args)
 
 
 def book_event(db, state, ledger, event_id, method, *args, observed_at=None):
@@ -265,6 +269,7 @@ def submit_paper_order(
     as_of=None,
     source_identity=None,
     order_type="IOC",
+    execution_window=None,
 ):
     amount = decimal(amount)
     if side.upper() not in {"BUY", "SELL"} or units not in {"USDC", "SHARES"}:
@@ -372,9 +377,40 @@ def submit_paper_order(
                 raise EvidenceUnavailable("MAKER_FLOW_AND_QUEUE_EVIDENCE_REQUIRED")
             if order_type != "IOC":
                 raise EvidenceUnavailable("RESTING_ORDER_MODEL_UNAVAILABLE")
-            if policy.latency_ms:
+            window = None
+            if execution_window is not None:
+                from app.services.analytics.paper_execution import VERSION, ExecutionWindow
+
+                window = ExecutionWindow.model_validate(execution_window)
+                result["execution_window"] = window.model_dump(mode="json")
+                result["strategy_version"] = VERSION
+                window.validate_intent(db, state, key, token_id, amount, moment, policy)
+            elif strategy == "latency_arb":
+                raise EvidenceUnavailable("EXECUTION_TIMING_UNKNOWN_OR_INVALID")
+            if policy.latency_ms and window is None:
                 raise EvidenceUnavailable("NO_POST_LATENCY_EXECUTION_EVIDENCE")
-            evidence = current_book(db, token_id, moment, max_age=policy.max_book_age_seconds)
+            evidence = current_book(
+                db,
+                token_id,
+                window.evidence_as_of if window else moment,
+                max_age=policy.max_book_age_seconds,
+            )
+            if window:
+                window.validate_book(db, evidence)
+                ceiling = (window.model_probability - window.minimum_edge) / (
+                    1 + Decimal(state.fee_bps) / 10000
+                )
+                ceiling = (ceiling / evidence.tick_size).to_integral_value(
+                    rounding=ROUND_DOWN
+                ) * evidence.tick_size
+                if side.upper() != "BUY" or units != "USDC":
+                    raise EvidenceUnavailable("UNSUPPORTED_TIMED_ORDER")
+                if not evidence.book.asks or evidence.book.asks[0].price > ceiling:
+                    raise EvidenceUnavailable("EDGE_NOT_EXECUTABLE_AFTER_COSTS")
+                limit_price = min(limit_price, ceiling) if limit_price else ceiling
+                result["replay_id"] = digest(
+                    [window.model_dump(mode="json"), evidence.capture_id, request_hash]
+                )
             versions, _ = position_rule_versions(db, state)
             if versions.get(token_id) and versions[token_id] != {evidence.rule_hash}:
                 raise EvidenceUnavailable("POSITION_RULE_VERSION_CHANGED")
@@ -415,6 +451,7 @@ def submit_paper_order(
                         consumed[fill["level"]] = consumed.get(fill["level"], Decimal(0)) + Decimal(
                             fill["shares"]
                         )
+            cash_factor = 1 + Decimal(state.fee_bps) / 10000 if window else Decimal(1)
             remaining = amount
             fees_before, pnl_before = ledger.fees, ledger.realized_pnl
             for index, level in enumerate(levels):
@@ -425,7 +462,10 @@ def submit_paper_order(
                     break
                 level_key = f"{side}:{level.price.normalize(ACCOUNTING_CONTEXT)}"
                 capacity = max(Decimal(0), level.shares - consumed.get(level_key, Decimal(0)))
-                quantity = min(remaining / level.price if units == "USDC" else remaining, capacity)
+                quantity = min(
+                    remaining / (level.price * cash_factor) if units == "USDC" else remaining,
+                    capacity,
+                )
                 quantity = min(
                     quantity,
                     ledger.available_cash / (level.price * (1 + Decimal(state.fee_bps) / 10000))
@@ -465,7 +505,7 @@ def submit_paper_order(
                 result["fills"].append(
                     {"level": level_key, "shares": str(quantity), "price": str(level.price)}
                 )
-                remaining -= quantity * level.price if units == "USDC" else quantity
+                remaining -= quantity * level.price * cash_factor if units == "USDC" else quantity
             shares = sum((Decimal(f["shares"]) for f in result["fills"]), Decimal(0))
             notional = sum(
                 (Decimal(f["shares"]) * Decimal(f["price"]) for f in result["fills"]), Decimal(0)
@@ -510,6 +550,9 @@ def submit_paper_order(
                             "requested_units": units,
                             "fee_source": "explicit_account_assumption",
                             "capture_id": evidence.capture_id,
+                            "execution_window": result.get("execution_window"),
+                            "strategy_version": result.get("strategy_version"),
+                            "replay_id": result.get("replay_id"),
                         }
                     ),
                 )

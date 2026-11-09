@@ -1,4 +1,5 @@
 import { test, expect } from "../fixtures/base";
+import { publicLeaderboard } from "../fixtures/public-data";
 
 /**
  * Leaderboard (public): top traders table, periods, table sizes, follow gating.
@@ -6,11 +7,12 @@ import { test, expect } from "../fixtures/base";
 
 test.describe("Leaderboard", () => {
   test.beforeEach(async ({ page }) => {
+    await publicLeaderboard(page);
     await page.goto("/leaderboard");
     await expect(page.getByRole("heading", { name: "Leaderboard" })).toBeVisible();
   });
 
-  test("shows the top traders table with live data", async ({ page }) => {
+  test("shows the top traders table with recorded data", async ({ page }) => {
     await expect(page.getByRole("button", { name: "Top traders" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Forecasting accuracy" })).toBeVisible();
     await expect(page.getByText(/Top \d+ traders on Polymarket/)).toBeVisible();

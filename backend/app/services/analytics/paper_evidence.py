@@ -120,6 +120,9 @@ def _final_payout(db: Session, token_id: str, condition: str, rule_hash: str, as
         or gamma.get("umaResolutionStatus") != "resolved"
     ):
         raise EvidenceUnavailable("SETTLEMENT_NOT_FINAL")
+    from app.services.market_data.binary_identity import canonical_binary_metadata
+
+    clob, gamma = canonical_binary_metadata(clob, gamma)
     outcomes, prices, tokens = (
         gamma.get("outcomes"),
         gamma.get("outcomePrices"),
@@ -172,7 +175,7 @@ def final_payout(*args, **kwargs):
         raise EvidenceUnavailable("INVALID_SETTLEMENT_EVIDENCE") from exc
 
 
-async def refresh_evidence(db, condition_id):
+async def refresh_evidence(db, condition_id, *, allow_up_down=False):
     """Bounded, public-only receipt capture before acquiring an economic account lock."""
     import asyncio
     import logging
@@ -190,7 +193,9 @@ async def refresh_evidence(db, condition_id):
         return False
     try:
         async with asyncio.timeout(10), httpx.AsyncClient(timeout=5) as client:
-            await capture_market(db, condition_id.lower(), PublicVenueCapture(client))
+            venue = PublicVenueCapture(client)
+            venue.allow_up_down = allow_up_down
+            await capture_market(db, condition_id.lower(), venue)
         return True
     except (ValueError, httpx.HTTPError, TimeoutError):
         logging.getLogger(__name__).warning(
