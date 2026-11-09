@@ -677,6 +677,15 @@ def _record_execution_outcome(user_id, opportunity, result):
         "at": datetime.now(UTC).isoformat(),
         "source": "polymarket-clob-rest-v1/binary-book-v1",
     }
+    for field in (
+        "execution_state",
+        "fill_evidence_grade",
+        "exchange_confirmed",
+        "order_id",
+        "account_id",
+    ):
+        if field in result:
+            event[field] = result[field]
     if result.get("evidence"):
         event["evidence"] = result["evidence"]
     logger.info("latency_execution_outcome %s", json.dumps(event))
@@ -773,30 +782,23 @@ async def _execute_paper(
     token_id: str,
     reference_price: float,  # noqa: ARG001 - retained strategy adapter signature
     size: float,
-    feed_to_order_ms: float,  # noqa: ARG001 - retained strategy adapter signature
+    feed_to_order_ms: float,
+    *,
+    account_id: int | None = None,
+    minimum_edge: float = 0,
 ) -> dict[str, Any]:
-    """Book only captured native depth against the persistent paper account."""
-    from app.services.analytics.paper_evidence import refresh_evidence
+    from app.services.trading.latency_paper import execute
 
-    await refresh_evidence(db, opportunity.market.condition_id)
-    from app.services.analytics.paper_accounting import submit_paper_order
-
-    result = submit_paper_order(
+    return await execute(
         db,
-        user_id=settings.user_id,
-        token_id=token_id,
-        side="BUY",
-        amount=Decimal(str(size)),
-        strategy=STRATEGY_SOURCE,
-        intent_key=f"latency:{opportunity.market.condition_id}:{opportunity.window_start_epoch}",
+        settings,
+        opportunity,
+        token_id,
+        size,
+        feed_to_order_ms,
+        account_id=account_id,
+        minimum_edge=minimum_edge,
     )
-    db.commit()
-    return {
-        **result,
-        "fill_status": result["status"],
-        "status": "simulated" if result["status"] in {"filled", "partial"} else "unfilled",
-        "size": float(result["notional_usdc"]),
-    }
 
 
 async def _execute_live(
@@ -990,6 +992,8 @@ async def _execute_opportunity(
             reference_price,
             size,
             feed_to_order_ms,
+            account_id=getattr(config, "account_id", None),
+            minimum_edge=config.edge_threshold,
         )
     else:
         result = await _execute_live(
