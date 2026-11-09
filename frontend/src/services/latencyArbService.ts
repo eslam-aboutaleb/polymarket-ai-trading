@@ -66,7 +66,13 @@ export interface LatencyArbEngineStatus {
 }
 
 export interface LatencyArbOpportunitiesResponse {
-  execution_outcome?: { status: string; reason: string; at: string; source: string } | null;
+  execution_outcome?: {
+    status: string;
+    reason: string;
+    at: string;
+    source: string;
+    execution_state?: string;
+  } | null;
   engine: LatencyArbEngineStatus;
   latency: LatencyArbLatencyStats;
   opportunities: LatencyArbOpportunity[];
@@ -80,6 +86,7 @@ export interface LatencyArbTrade {
   amount: number;
   price: number;
   status: string;
+  fill_evidence_grade?: string;
   order_hash: string | null;
   expected_price: number | null;
   expected_size: number | null;
@@ -120,7 +127,26 @@ export interface LatencyArbTradesQuery {
 
 // ── Service ─────────────────────────────────────────────────
 
+export interface LatencyPaperHistory {
+  total: number;
+  intents: Array<{
+    intent_id: string;
+    intent: { window: { model_probability: string; measured_delay_ms: string } };
+    result: {
+      execution_state: string;
+      reason: string;
+      shares: string;
+      notional_usdc: string;
+      fee_usdc: string;
+      realized_pnl: string;
+    };
+  }>;
+}
+
 export const latencyArbService = {
+  async getPaperIntents(query: LatencyArbTradesQuery = {}): Promise<LatencyPaperHistory> {
+    return apiClient.get<LatencyPaperHistory>("/api/latency-arb/paper-intents", { params: query });
+  },
   async getConfig(): Promise<LatencyArbConfig> {
     return apiClient.get<LatencyArbConfig>("/api/latency-arb/config");
   },

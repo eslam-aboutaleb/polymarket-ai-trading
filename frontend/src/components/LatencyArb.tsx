@@ -23,6 +23,7 @@ import {
   latencyArbService,
 } from "../services/latencyArbService";
 import { useTradingKeyStatus } from "../hooks/useTradingKeyStatus";
+import LatencyPaperHistory from "./LatencyPaperHistory";
 import TradingKeyPrompt from "./TradingKeyPrompt";
 import { Banner, InfoTooltip, useToast } from "./ui";
 
@@ -35,7 +36,7 @@ const SYMBOL_OPTIONS = ["BTC", "ETH", "SOL"];
 const WINDOW_OPTIONS = [5, 15, 60];
 
 const STATUS_LABELS: Record<string, string> = {
-  simulated: "Simulated",
+  simulated: "Estimated",
   pending: "Pending",
   executed: "Executed",
   filled: "Filled",
@@ -87,6 +88,7 @@ export default function LatencyArb() {
 
   // ── Board state ─────────────────────────────────────
   const [executionOutcome, setExecutionOutcome] = useState<{
+    execution_state?: string;
     status: string;
     reason: string;
     at: string;
@@ -390,7 +392,15 @@ export default function LatencyArb() {
         )}
         {executionOutcome && (
           <p role="status" className="text-sm text-amber-400">
-            Last execution: {executionOutcome.status} — {executionOutcome.reason}
+            Last execution:{" "}
+            {executionOutcome.execution_state === "UNVERIFIABLE_DATA"
+              ? "Unverifiable"
+              : executionOutcome.execution_state === "ESTIMATED"
+                ? "Estimated"
+                : executionOutcome.execution_state === "PARTIALLY_FILLED_MODELED"
+                  ? "Partial estimate"
+                  : executionOutcome.status}{" "}
+            — {executionOutcome.reason}
             <span className="block text-xs text-soft">
               {executionOutcome.at} · {executionOutcome.source}
             </span>
@@ -565,6 +575,8 @@ export default function LatencyArb() {
         </div>
       </section>
 
+      <LatencyPaperHistory />
+
       <section className="surface-panel p-5 space-y-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h2 className="text-lg font-semibold">
@@ -619,9 +631,9 @@ export default function LatencyArb() {
                   <th className="pb-2 pr-4">Side</th>
                   <th className="pb-2 pr-4 text-right">Size</th>
                   <th className="pb-2 pr-4 text-right">Expected</th>
-                  <th className="pb-2 pr-4 text-right">Filled</th>
+                  <th className="pb-2 pr-4 text-right">Execution price</th>
                   <th className="pb-2 pr-4 text-right">Slippage</th>
-                  <th className="pb-2 pr-4 text-right">PnL</th>
+                  <th className="pb-2 pr-4 text-right">Reported P&amp;L</th>
                   <th className="pb-2 pr-4">Status</th>
                   <th className="pb-2 text-right">Age</th>
                 </tr>
@@ -662,11 +674,19 @@ export default function LatencyArb() {
                         (trade.pnl != null && trade.pnl < 0 ? "text-red-400" : "text-green-400")
                       }
                     >
-                      {signedUsd(trade.pnl)}
+                      {signedUsd(
+                        trade.status === "simulated" &&
+                          trade.fill_evidence_grade !== "modeled_native_depth"
+                          ? null
+                          : trade.pnl,
+                      )}
                     </td>
                     <td className="py-2.5 pr-4">
                       <span className="text-xs font-semibold px-2 py-0.5 rounded bg-[var(--bg-soft)] text-soft">
-                        {STATUS_LABELS[trade.status] ?? trade.status}
+                        {trade.status === "simulated" &&
+                        trade.fill_evidence_grade !== "modeled_native_depth"
+                          ? "Unverifiable legacy"
+                          : (STATUS_LABELS[trade.status] ?? trade.status)}
                       </span>
                     </td>
                     <td className="py-2.5 text-right text-xs text-soft">
