@@ -16,3 +16,7 @@
 /backend/docker/Dockerfile @eslam-aboutaleb
 /services/**/Dockerfile @eslam-aboutaleb
 /scripts/check-duplication.sh @eslam-aboutaleb
+
+/frontend/Dockerfile* @eslam-aboutaleb
+/services/shared/polymarket_mcp/ @eslam-aboutaleb
+/services/mcps/ @eslam-aboutaleb
