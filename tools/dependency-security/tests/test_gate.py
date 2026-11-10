@@ -372,3 +372,28 @@ class ManagerSelectionTests(unittest.TestCase):
                 audit.inventory_projects(
                     ["frontend/package.json", "frontend/package-lock.json", path]
                 )
+
+
+class RegistryIntegrityTests(unittest.TestCase):
+    def test_plausible_hash_for_another_release_or_origin_is_not_accepted(self):
+        package = {
+            "wheels": [
+                {"url": "https://files.pythonhosted.org/package.whl", "hash": "sha256:" + "a" * 64}
+            ]
+        }
+        metadata = {
+            "urls": [
+                {
+                    "url": "https://files.pythonhosted.org/package.whl",
+                    "digests": {"sha256": "a" * 64},
+                }
+            ]
+        }
+        audit.verify_python_artifacts(package, metadata)
+        wrong = copy.deepcopy(package)
+        wrong["wheels"][0]["hash"] = "sha256:" + "b" * 64
+        with self.assertRaises(ValueError):
+            audit.verify_python_artifacts(wrong, metadata)
+        wrong["wheels"][0]["url"] = "https://evil.invalid/package.whl"
+        with self.assertRaises(ValueError):
+            audit.verify_python_artifacts(wrong, metadata)

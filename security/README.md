@@ -14,12 +14,14 @@ A passing advisory scan is not proof of absence of vulnerabilities, malicious co
 
 - Node: high/critical (and unknown severities) block in runtime **and development**. Lower advisories remain visible. Native `npm audit`, tree and CycloneDX SBOM cover every physical lock entry; explicit includes prevent omit configuration from hiding dev/optional/peer dependencies.
 - Python: **every advisory blocks**, because pip-audit does not supply a dependable severity field. The audit never assumes an unknown severity is low, and unknown-severity findings cannot be excepted. Every universal `uv.lock` registry package/version is scanned, including alternate Python/platform versions and optional provider extras. Dev-only scope is determined from the frozen runtime SBOM; both scopes remain scanned.
-- Source dependencies and arbitrary local/editable plugins are rejected. Only the owning virtual/editable project is excluded from registry scanning; its code remains subject to source review/CodeQL. New project manifests require committed locks. Python artifact hashes, npm SRI and registry origins are validated before scanning.
+- Source dependencies and arbitrary local/editable plugins are rejected. Only the owning virtual/editable project is excluded from registry scanning; its code remains subject to source review/CodeQL. New project manifests require committed locks. Python artifact URLs/hashes are matched to the official named-version PyPI release; npm SRI and registry origins are validated before scanning.
 - `uv 0.13.5` exports frozen CycloneDX graphs; `pip-audit 2.10.0` has its own committed tool lock. Application packages are not installed or executed by the advisory scanner. Signature verification installs the frontend with lifecycle scripts disabled. CI duplication tooling is now in the audited frontend lock instead of a floating `npx` installation.
 - The CLI service now has a lockfile. Service Dockerfiles consume frozen exports with hashes, and backend container commands do not reinstall development groups or re-resolve dependencies at startup.
 - Job artifacts retain audit JSON, inventories, original lock hashes, full/runtime SBOMs, native signature results, toolchain versions and effective main rules. The job summary reports blocked, allowed-with-expiry, informational, new/regressed and resolved baseline entries. Artifacts contain no production credentials; scanner/provider error bodies are not logged.
 
-Run locally from the repository root with Node 20 and npm 11.9.0:
+The requested Node 20 baseline was reproduced before remediation. Build, browser, container and security jobs now use Node 24.22.1: the current optional Coinbase/Solana graph includes packages requiring Node >=22.12.0, which npm silently omits on Node 20. The actual SDK-schema regression must run against installed packages, not skip an absent connector. The frontend engine floor is now Node 22.12.0.
+
+Run locally from the repository root with Node 24.22.1 and npm 11.9.0:
 
 ```sh
 uv sync --project tools/dependency-security --frozen
