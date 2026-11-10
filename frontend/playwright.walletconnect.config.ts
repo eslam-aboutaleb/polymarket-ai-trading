@@ -18,7 +18,7 @@ export default defineConfig({
   projects: [
     {
       name: "configured",
-      testMatch: live ? "live.spec.ts" : "configured.spec.ts",
+      testMatch: live ? "live.spec.ts" : ["configured.spec.ts", "dependency.spec.ts"],
       use: { baseURL: "http://127.0.0.1:5190" },
     },
     ...(!live

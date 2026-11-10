@@ -11,14 +11,14 @@ MAX_DUPLICATION="${MAX_DUPLICATION:-3}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-if ! command -v npx >/dev/null 2>&1; then
-  echo "npx not found — skipping duplication check (install Node.js to enable it)." >&2
-  exit 0
+if [ ! -x "$REPO_ROOT/frontend/node_modules/.bin/jscpd" ]; then
+  echo "Install the locked frontend development dependencies before running jscpd." >&2
+  exit 1
 fi
 
 REPORT="$(mktemp -d)/jscpd-report.json"
 
-npx --yes jscpd@4 \
+"$REPO_ROOT/frontend/node_modules/.bin/jscpd" \
   --min-lines 5 \
   --min-tokens 50 \
   --reporters json \
@@ -28,8 +28,8 @@ npx --yes jscpd@4 \
   >/dev/null 2>&1 || true
 
 if [ ! -f "$REPORT" ]; then
-  echo "jscpd produced no report; skipping duplication check." >&2
-  exit 0
+  echo "jscpd produced no report; duplication check failed." >&2
+  exit 1
 fi
 
 PERCENT="$(python3 - "$REPORT" <<'PY'
