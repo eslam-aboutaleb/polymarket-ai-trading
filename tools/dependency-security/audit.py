@@ -10,7 +10,9 @@ import shutil
 import subprocess
 import sys
 import tomllib
+import urllib.request
 from pathlib import Path
+from urllib.parse import quote
 
 from policy import enforce
 
@@ -101,6 +103,32 @@ def python_packages(lock, config):
             raise ValueError("Python package lacks artifact integrity")
         packages.add((package["name"], package["version"]))
     return packages
+
+
+def verify_python_artifacts(package, metadata):
+    official = {item["url"]: item["digests"]["sha256"] for item in metadata["urls"]}
+    artifacts = package.get("wheels", []) + ([package["sdist"]] if package.get("sdist") else [])
+    for artifact in artifacts:
+        if not artifact["url"].startswith("https://files.pythonhosted.org/"):
+            raise ValueError("Unreviewed Python artifact origin")
+        if official.get(artifact["url"]) != artifact["hash"].removeprefix("sha256:"):
+            raise ValueError("Python artifact differs from its named PyPI release")
+
+
+def registry_integrity(lock, cache):
+    records = []
+    for package in lock["package"]:
+        if "registry" not in package["source"]:
+            continue
+        key = package["name"], package["version"]
+        if key not in cache:
+            name, version = (quote(value, safe="") for value in key)
+            url = f"https://pypi.org/pypi/{name}/{version}/json"
+            with urllib.request.urlopen(url, timeout=30) as response:  # noqa: S310 - fixed HTTPS registry
+                cache[key] = json.load(response)
+        verify_python_artifacts(package, cache[key])
+        records.append({"package": key[0], "version": key[1], "registry_sha256_verified": True})
+    return records
 
 
 def bind_npm_ranges(report, lock):
@@ -218,6 +246,7 @@ def main():
     tracked = run(["git", "ls-files", "-z"], ROOT).split("\0")
     nodes, projects = inventory_projects(tracked)
     findings, inventory = [], []
+    registry_cache = {}
     for project in nodes:
         lock_path = ROOT / project / "package-lock.json"
         raw = lock_path.read_bytes()
@@ -263,6 +292,8 @@ def main():
         directory.mkdir(parents=True, exist_ok=True)
         config = tomllib.loads((ROOT / project / "pyproject.toml").read_text())
         packages = python_packages(lock, config)
+        integrity = registry_integrity(lock, registry_cache)
+        (directory / "registry-integrity.json").write_text(json.dumps(integrity, indent=2))
         run(["uv", "lock", "--project", project, "--check"], ROOT)
         for label, extra in (("all", ["--all-groups"]), ("runtime", ["--no-dev"])):
             data = load_json(
