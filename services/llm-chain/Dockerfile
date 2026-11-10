@@ -8,10 +8,10 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install UV for fast package management
-RUN pip install uv
+RUN pip install --no-cache-dir uv==0.13.5
 
 # Copy project files
-COPY services/llm-chain/pyproject.toml services/llm-chain/README.md ./
+COPY services/llm-chain/pyproject.toml services/llm-chain/uv.lock services/llm-chain/README.md ./
 COPY services/llm-chain/src/ src/
 COPY services/mcps/research/ services/mcps/research/
 # Shared packages used by both AI services (polymarket_mcp and
@@ -20,7 +20,8 @@ COPY services/mcps/research/ services/mcps/research/
 COPY services/shared/ shared/
 
 # Install dependencies
-RUN uv pip install --system -e .
+RUN uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt \
+    && uv pip sync --system --require-hashes /tmp/requirements.txt
 
 # Copy and compile proto files
 COPY services/proto/ proto/

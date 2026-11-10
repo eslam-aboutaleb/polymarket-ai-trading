@@ -42,9 +42,9 @@ jobs:
       - name: Install backend dependencies
         run: uv sync --project backend --frozen
       - name: Ruff check
-        run: uv run --project backend --frozen ruff check --config ruff.toml backend services
+        run: uv run --project backend --frozen ruff check --config ruff.toml backend services tools
       - name: Ruff format
-        run: uv run --project backend --frozen ruff format --check --config ruff.toml backend services
+        run: uv run --project backend --frozen ruff format --check --config ruff.toml backend services tools
       - name: Backend/service protocol compatibility
         run: uv run --project backend --frozen pytest --no-cov services/tests
       - name: Install locked LLM service dependencies (keyless)
@@ -53,6 +53,12 @@ jobs:
         env:
           PYTHONPATH: services/shared:services/llm-chain
         run: uv run --project services/llm-chain --frozen pytest services/tests/test_gateway.py -q
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "20"
+          package-manager-cache: false
+      - name: Install locked duplication tooling without lifecycle scripts
+        run: npm ci --prefix frontend --ignore-scripts
       - name: Duplication check (jscpd, < 3%)
         run: ./scripts/check-duplication.sh
 
@@ -233,6 +239,56 @@ jobs:
       languages: '["python", "javascript-typescript", "actions"]'
       dependency-severity: high
 
+  dependency-security:
+    name: Dependency security
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "20"
+          package-manager-cache: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.11"
+          version: "0.13.5"
+      - name: Pin native audit toolchain
+        run: |
+          npm install --global npm@11.9.0 --ignore-scripts
+          uv sync --project tools/dependency-security --frozen
+      - name: Security gate negative controls
+        run: python -m unittest discover -s tools/dependency-security/tests -v
+      - name: Audit full locked Node and Python graphs
+        run: |
+          mkdir -p security-artifacts
+          node --version > security-artifacts/toolchain.txt
+          npm --version >> security-artifacts/toolchain.txt
+          uv --version >> security-artifacts/toolchain.txt
+          uv run --project tools/dependency-security --frozen python tools/dependency-security/audit.py
+      - name: Verify registry signatures and integrity without lifecycle scripts
+        run: |
+          npm ci --prefix frontend --ignore-scripts --include=dev --include=optional --registry=https://registry.npmjs.org/
+          npm audit signatures --prefix frontend --include=dev --include=optional --registry=https://registry.npmjs.org/ --json > security-artifacts/frontend/signatures.json
+      - name: Verify effective required checks and policy ownership
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python tools/dependency-security/protection.py
+      - name: Upload audit evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dependency-security-${{ github.run_id }}-${{ github.run_attempt }}
+          path: security-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -251,13 +307,6 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install dependencies
         run: npm ci
-      - name: Audit dependencies
-        # Non-blocking: 27 high-severity transitive advisories (ws via
-        # ethers/viem/@solana, pulled in by the wallet deps) are unfixed.
-        # Tracked in .kilo/plans/context-shared.md; flip to blocking once
-        # the transitive fixes land without breaking package.json.
-        continue-on-error: true
-        run: npm audit --audit-level=high
       - name: Type-check and build
         env:
           # Vite embeds this public identifier into its browser bundle at build time.
@@ -281,6 +330,7 @@ jobs:
         e2e,
         workflow-lint,
         security,
+        dependency-security,
       ]
     runs-on: ubuntu-latest
     timeout-minutes: 5
