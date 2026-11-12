@@ -1818,6 +1818,7 @@ dependencies = [
     { name = "langchain-litellm" },
     { name = "langchain-openai" },
     { name = "litellm" },
+    { name = "llm-gateway-sdk", extra = ["settings"] },
     { name = "newsapi-python" },
     { name = "openai" },
     { name = "pydantic" },
@@ -1877,6 +1878,7 @@ requires-dist = [
     { name = "langchain-litellm", specifier = ">=0.8,<0.9" },
     { name = "langchain-openai", specifier = ">=0.1.0" },
     { name = "litellm", specifier = ">=1.103.9,<1.104" },
+    { name = "llm-gateway-sdk", extras = ["settings"], git = "https://github.com/eslam-aboutaleb/llm-gateway-sdk.git?rev=v0.1.0" },
     { name = "newsapi-python", specifier = ">=0.2.7" },
     { name = "openai", specifier = ">=1.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
@@ -1890,6 +1892,20 @@ provides-extras = ["anthropic", "google", "groq", "all-providers"]
 dev = [
     { name = "pytest", specifier = ">=9" },
     { name = "ruff", specifier = ">=0.6.9" },
+]
+
+[[package]]
+name = "llm-gateway-sdk"
+version = "0.1.0"
+source = { git = "https://github.com/eslam-aboutaleb/llm-gateway-sdk.git?rev=v0.1.0#ebaa064813f7c1b83f5efefdd22a9fc87af5db19" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+settings = [
+    { name = "pydantic-settings" },
 ]
 
 [[package]]

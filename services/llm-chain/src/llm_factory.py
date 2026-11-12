@@ -1,11 +1,9 @@
 """
-LLM Factory - Provider-agnostic LLM initialization.
-Supports OpenAI, Anthropic, Google, Groq, and Ollama.
-Implements Factory pattern for per-request provider selection.
+LLM initialization through the authenticated LiteLLM gateway.
+Provider preferences select model aliases; every transport uses the gateway.
 """
 
 from dataclasses import dataclass
-from typing import Any
 
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -43,7 +41,6 @@ def create_llm(
         ValueError: If provider is not supported or API key is missing
     """
     settings = get_settings()
-    provider = settings.llm_provider
 
     common_kwargs = {
         "temperature": settings.llm_temperature,
@@ -54,19 +51,7 @@ def create_llm(
     if callbacks:
         common_kwargs["callbacks"] = callbacks
 
-    if provider == LLMProvider.LITELLM:
-        return create_chat(settings, common_kwargs)
-    if provider == LLMProvider.OPENAI:
-        return _create_openai_llm(settings, common_kwargs)
-    if provider == LLMProvider.ANTHROPIC:
-        return _create_anthropic_llm(settings, common_kwargs)
-    if provider == LLMProvider.GOOGLE:
-        return _create_google_llm(settings, common_kwargs)
-    if provider == LLMProvider.GROQ:
-        return _create_groq_llm(settings, common_kwargs)
-    if provider == LLMProvider.OLLAMA:
-        return _create_ollama_llm(settings, common_kwargs)
-    raise ValueError(f"Unsupported LLM provider: {provider}")
+    return create_chat(settings, common_kwargs)
 
 
 def create_llm_for_request(
@@ -104,7 +89,7 @@ def create_llm_for_request(
     max_tokens = settings.llm_max_tokens
 
     if request_config:
-        if request_config.temperature is not None and request_config.temperature > 0:
+        if request_config.temperature is not None and request_config.temperature >= 0:
             temperature = request_config.temperature
         if request_config.max_tokens is not None and request_config.max_tokens > 0:
             max_tokens = request_config.max_tokens
@@ -139,19 +124,9 @@ def create_llm_for_request(
     if request_config and request_config.reasoning_effort:
         reasoning_effort = request_config.reasoning_effort
 
-    if provider == LLMProvider.LITELLM:
-        return create_chat(settings, common_kwargs, model_override)
-    if provider == LLMProvider.OPENAI:
-        return _create_openai_llm(settings, common_kwargs, model_override, reasoning_effort)
-    if provider == LLMProvider.ANTHROPIC:
-        return _create_anthropic_llm(settings, common_kwargs, model_override)
-    if provider == LLMProvider.GOOGLE:
-        return _create_google_llm(settings, common_kwargs, model_override)
-    if provider == LLMProvider.GROQ:
-        return _create_groq_llm(settings, common_kwargs, model_override)
-    if provider == LLMProvider.OLLAMA:
-        return _create_ollama_llm(settings, common_kwargs, model_override)
-    raise ValueError(f"Unsupported LLM provider: {provider}")
+    if reasoning_effort:
+        common_kwargs["model_kwargs"] = {"reasoning_effort": reasoning_effort}
+    return create_chat(settings, common_kwargs, model_override)
 
 
 def create_llm_for_task(
@@ -196,7 +171,7 @@ def create_llm_for_task(
         model_override = provider_models[0] if provider_models else None
     temperature = (
         llm_override.temperature
-        if llm_override and llm_override.temperature is not None and llm_override.temperature > 0
+        if llm_override and llm_override.temperature is not None and llm_override.temperature >= 0
         else tier_temperature
     )
     max_tokens = (
@@ -207,7 +182,7 @@ def create_llm_for_task(
     reasoning_effort = (
         llm_override.reasoning_effort
         if llm_override and llm_override.reasoning_effort
-        else tier_reasoning
+        else (None if provider == LLMProvider.LITELLM else tier_reasoning)
     )
 
     common_kwargs = {
@@ -218,116 +193,17 @@ def create_llm_for_task(
     if callbacks:
         common_kwargs["callbacks"] = callbacks
 
-    if provider == LLMProvider.LITELLM:
-        return create_chat(settings, common_kwargs, model_override)
-    if provider == LLMProvider.OPENAI:
-        return _create_openai_llm(settings, common_kwargs, model_override, reasoning_effort)
-    if provider == LLMProvider.ANTHROPIC:
-        return _create_anthropic_llm(settings, common_kwargs, model_override)
-    if provider == LLMProvider.GOOGLE:
-        return _create_google_llm(settings, common_kwargs, model_override)
-    if provider == LLMProvider.GROQ:
-        return _create_groq_llm(settings, common_kwargs, model_override)
-    if provider == LLMProvider.OLLAMA:
-        return _create_ollama_llm(settings, common_kwargs, model_override)
-    raise ValueError(f"Unsupported LLM provider: {provider}")
-
-
-def _create_openai_llm(
-    settings,
-    kwargs,
-    model_override: str | None = None,
-    reasoning_effort: str | None = None,
-) -> BaseChatModel:
-    """Create OpenAI ChatGPT instance."""
-    if not settings.openai_api_key:
-        raise ValueError("OPENAI_API_KEY is required for OpenAI provider")
-
-    from langchain_openai import ChatOpenAI
-
-    model = model_override or settings.llm_model
     if reasoning_effort:
-        kwargs = {**kwargs, "model_kwargs": {"reasoning_effort": reasoning_effort}}
-
-    return ChatOpenAI(model=model, api_key=settings.openai_api_key, **kwargs)
-
-
-def _create_anthropic_llm(settings, kwargs, model_override: str | None = None) -> BaseChatModel:
-    """Create Anthropic Claude instance."""
-    if not settings.anthropic_api_key:
-        raise ValueError("ANTHROPIC_API_KEY is required for Anthropic provider")
-
-    try:
-        from langchain_anthropic import ChatAnthropic
-    except ImportError:
-        raise ImportError(
-            "langchain-anthropic not installed. Install with: pip install langchain-anthropic"
-        ) from None
-
-    model = model_override or settings.llm_model
-
-    return ChatAnthropic(model=model, api_key=settings.anthropic_api_key, **kwargs)
-
-
-def _create_google_llm(settings, kwargs, model_override: str | None = None) -> BaseChatModel:
-    """Create Google Gemini instance."""
-    if not settings.google_api_key:
-        raise ValueError("GOOGLE_API_KEY is required for Google provider")
-
-    try:
-        from langchain_google_genai import ChatGoogleGenerativeAI
-    except ImportError:
-        raise ImportError(
-            "langchain-google-genai not installed. Install with: pip install langchain-google-genai"
-        ) from None
-
-    model = model_override or settings.llm_model
-
-    return ChatGoogleGenerativeAI(model=model, google_api_key=settings.google_api_key, **kwargs)
-
-
-def _create_groq_llm(settings, kwargs, model_override: str | None = None) -> BaseChatModel:
-    """Create Groq instance (fast inference)."""
-    if not settings.groq_api_key:
-        raise ValueError("GROQ_API_KEY is required for Groq provider")
-
-    try:
-        from langchain_groq import ChatGroq
-    except ImportError:
-        raise ImportError(
-            "langchain-groq not installed. Install with: pip install langchain-groq"
-        ) from None
-
-    model = model_override or settings.llm_model
-
-    return ChatGroq(model=model, api_key=settings.groq_api_key, **kwargs)
-
-
-def _create_ollama_llm(settings, kwargs, model_override: str | None = None) -> BaseChatModel:
-    """Create Ollama instance (local models)."""
-    try:
-        from langchain_community.chat_models import ChatOllama
-    except ImportError:
-        raise ImportError(
-            "langchain-community not installed. Install with: pip install langchain-community"
-        ) from None
-
-    # Ollama doesn't use max_tokens the same way
-    kwargs.pop("max_tokens", None)
-
-    model = model_override or settings.llm_model
-
-    return ChatOllama(model=model, base_url=settings.ollama_base_url, **kwargs)
+        common_kwargs["model_kwargs"] = {"reasoning_effort": reasoning_effort}
+    return create_chat(settings, common_kwargs, model_override)
 
 
 def get_provider_info() -> dict:
     """Get information about the configured LLM provider."""
     settings = get_settings()
     return {
-        "provider": settings.llm_provider.value,
-        "model": (settings.gateway_model or settings.llm_model)
-        if settings.llm_provider == LLMProvider.LITELLM
-        else settings.llm_model,
+        "provider": LLMProvider.LITELLM.value,
+        "model": settings.gateway_model or settings.llm_model,
         "temperature": settings.llm_temperature,
         "max_tokens": settings.llm_max_tokens,
     }
@@ -373,51 +249,19 @@ def parse_llm_config_from_proto(llm_config) -> LLMRequestConfig | None:
     )
 
 
-def get_available_providers() -> dict[str, dict[str, Any]]:
-    """
-    Get all available LLM providers and their configuration status.
-
-    Returns:
-        Dictionary of provider info with availability status
-    """
+def get_available_providers() -> dict[str, dict]:
+    """Advertise the authenticated gateway; upstream providers live behind it."""
     settings = get_settings()
-
     return {
         LLMProvider.LITELLM.value: {
             "name": "LiteLLM",
-            "configured": bool(settings.gateway_model),
-            "models": [settings.gateway_model] if settings.gateway_model else [],
-            "description": "Configured gateway or native LiteLLM provider",
-        },
-        LLMProvider.OPENAI.value: {
-            "name": "OpenAI",
-            "configured": bool(settings.openai_api_key),
-            "models": MODEL_CATALOG.get(LLMProvider.OPENAI, []),
-            "description": "OpenAI GPT models (GPT-4, GPT-4o, etc.)",
-        },
-        LLMProvider.ANTHROPIC.value: {
-            "name": "Anthropic",
-            "configured": bool(settings.anthropic_api_key),
-            "models": MODEL_CATALOG.get(LLMProvider.ANTHROPIC, []),
-            "description": "Anthropic Claude models",
-        },
-        LLMProvider.GOOGLE.value: {
-            "name": "Google",
-            "configured": bool(settings.google_api_key),
-            "models": MODEL_CATALOG.get(LLMProvider.GOOGLE, []),
-            "description": "Google Gemini models",
-        },
-        LLMProvider.GROQ.value: {
-            "name": "Groq",
-            "configured": bool(settings.groq_api_key),
-            "models": MODEL_CATALOG.get(LLMProvider.GROQ, []),
-            "description": "Groq fast inference (Llama, Mixtral)",
-        },
-        LLMProvider.OLLAMA.value: {
-            "name": "Ollama",
-            "configured": True,  # Ollama doesn't need API key, just needs to be running
-            "base_url": settings.ollama_base_url,
-            "models": MODEL_CATALOG.get(LLMProvider.OLLAMA, []),
-            "description": "Local Ollama models",
-        },
+            "configured": bool(
+                settings.gateway_base
+                and settings.gateway_key
+                and settings.gateway_base.get_secret_value()
+                and settings.gateway_key.get_secret_value()
+            ),
+            "models": [settings.gateway_model or settings.llm_model],
+            "description": "Authenticated LiteLLM gateway",
+        }
     }

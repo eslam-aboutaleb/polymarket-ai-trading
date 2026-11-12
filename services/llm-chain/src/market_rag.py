@@ -50,22 +50,6 @@ from src.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-_OpenAIEmbeddings = None
-
-
-def _ensure_imports():
-    """Lazy-import embeddings to avoid startup cost if RAG is disabled."""
-    global _OpenAIEmbeddings
-    if _OpenAIEmbeddings is None:
-        try:
-            from langchain_openai import OpenAIEmbeddings as _OAI
-
-            _OpenAIEmbeddings = _OAI
-        except ImportError:
-            logger.warning("langchain-openai not installed — RAG features disabled")
-            return False
-    return True
-
 
 class MarketRAGService:
     """
@@ -99,13 +83,6 @@ class MarketRAGService:
         """Initialize a local SQLite vector store without a network service."""
         if self._initialized:
             return True
-        if (
-            not self.settings.embedding_model
-            and self.settings.llm_provider.value != "litellm"
-            and not _ensure_imports()
-        ):
-            return False
-
         try:
             persist_dir = self.settings.chroma_persist_dir
             Path(persist_dir).mkdir(parents=True, exist_ok=True)
@@ -123,7 +100,7 @@ class MarketRAGService:
                     "CREATE TABLE IF NOT EXISTS vector_config ("
                     "id INTEGER PRIMARY KEY CHECK(id=1), identity TEXT, dimensions INTEGER)"
                 )
-            self._embedding_fn = create_embeddings(self.settings, _OpenAIEmbeddings)
+            self._embedding_fn = create_embeddings(self.settings)
             self._initialized = True
             logger.info(
                 "SQLite RAG store initialized: collection=%s, persist=%s",

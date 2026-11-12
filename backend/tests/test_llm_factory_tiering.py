@@ -32,21 +32,20 @@ def llm_factory():
 
 @pytest.fixture()
 def settings() -> SharedLLMSettings:
-    return SharedLLMSettings(_env_file=None)
+    return SharedLLMSettings(_env_file=None, llm_provider=LLMProvider.OPENAI)
 
 
 def _record(llm_factory, monkeypatch, settings, provider: LLMProvider) -> dict:
     calls: dict = {}
 
-    def fake_create(settings, kwargs, model_override=None, reasoning_effort=None):
+    def fake_create(settings, kwargs, model_override=None):
         calls["settings"] = settings
         calls["kwargs"] = kwargs
         calls["model"] = model_override
-        calls["reasoning"] = reasoning_effort
+        calls["reasoning"] = kwargs.get("model_kwargs", {}).get("reasoning_effort")
         return f"{provider.value}-llm"
 
-    attr = f"_create_{provider.value}_llm"
-    monkeypatch.setattr(llm_factory, attr, fake_create)
+    monkeypatch.setattr(llm_factory, "create_chat", fake_create)
     monkeypatch.setattr(llm_factory, "get_settings", lambda: settings)
     return calls
 
@@ -115,3 +114,16 @@ def test_request_override_uses_the_provider_catalog(llm_factory, monkeypatch, se
     llm_factory.create_llm_for_request(llm_factory.LLMRequestConfig(provider=LLMProvider.GROQ))
 
     assert calls["model"] == "llama-3.3-70b-versatile"
+
+
+@pytest.mark.parametrize("provider", list(LLMProvider))
+def test_provider_overrides_always_use_gateway(llm_factory, monkeypatch, settings, provider):
+    calls = _record(llm_factory, monkeypatch, settings, provider)
+    request = llm_factory.LLMRequestConfig(provider=provider, model="gateway-alias", temperature=0)
+    for create in (
+        lambda: llm_factory.create_llm_for_request(request),
+        lambda: llm_factory.create_llm_for_task("market_assessment", llm_override=request),
+    ):
+        create()
+        assert calls["model"] == "gateway-alias"
+        assert calls["kwargs"]["temperature"] == 0
