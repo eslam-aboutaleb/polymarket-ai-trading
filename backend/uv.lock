@@ -1767,6 +1767,20 @@ wheels = [
 ]
 
 [[package]]
+name = "llm-gateway-sdk"
+version = "0.1.0"
+source = { git = "https://github.com/eslam-aboutaleb/llm-gateway-sdk.git?rev=v0.1.0#ebaa064813f7c1b83f5efefdd22a9fc87af5db19" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+settings = [
+    { name = "pydantic-settings" },
+]
+
+[[package]]
 name = "mako"
 version = "1.4.2"
 source = { registry = "https://pypi.org/simple" }
@@ -2306,6 +2320,7 @@ dependencies = [
     { name = "langchain" },
     { name = "langchain-community" },
     { name = "langchain-openai" },
+    { name = "llm-gateway-sdk", extra = ["settings"] },
     { name = "openai" },
     { name = "psycopg2-binary" },
     { name = "py-clob-client" },
@@ -2343,6 +2358,7 @@ requires-dist = [
     { name = "langchain", specifier = ">=0.1.0" },
     { name = "langchain-community", specifier = ">=0.0.20" },
     { name = "langchain-openai", specifier = ">=0.1.0" },
+    { name = "llm-gateway-sdk", extras = ["settings"], git = "https://github.com/eslam-aboutaleb/llm-gateway-sdk.git?rev=v0.1.0" },
     { name = "openai", specifier = ">=1.0.0" },
     { name = "psycopg2-binary", specifier = ">=2.9.0" },
     { name = "py-clob-client", specifier = ">=0.1.0" },

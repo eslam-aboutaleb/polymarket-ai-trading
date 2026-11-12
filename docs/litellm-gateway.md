@@ -1,55 +1,48 @@
-# Portable model gateway configuration
+# LiteLLM gateway configuration
 
-The `llm-chain` service supports `LLM_PROVIDER=litellm` through its existing
-chat factories and the shared `polymarket_settings` adapter. Legacy providers
-remain available. No browser receives a virtual key. The separate `cli-agent`
-service continues to serve explicit GitHub Models selections; choose `litellm`
-or leave the provider preference unset to use the configured LLM service.
+All chat and embedding requests from `llm-chain` and `cli-agent` use the same
+LiteLLM gateway. Provider preferences still select models, but cannot select a
+direct provider connection. Missing gateway credentials cause an error; native
+OpenAI, GitHub, Anthropic, Google, Groq and Ollama credentials are never a fallback.
 
-Configure the service environment (or your secret manager):
+Configure the root `.env` for Docker Compose, or the service environment:
 
 ```dotenv
 LLM_PROVIDER=litellm
 LITELLM_API_BASE=https://gateway.example/v1
 LITELLM_API_KEY=<virtual-key>
-LITELLM_MODEL=openai/<chat-alias>
-LITELLM_EMBEDDING_MODEL=openai/<embedding-alias>
-LITELLM_EMBEDDING_DIMENSIONS=1536
+LITELLM_MODEL=<chat-alias>
+LITELLM_EMBEDDING_MODEL=<embedding-alias>
+# Optional, when supported by the embedding model:
+# LITELLM_EMBEDDING_DIMENSIONS=1536
 ```
 
-`openai/` is LiteLLM's protocol selector for OpenAI-compatible gateways. LiteLLM
-removes the prefix before sending the model alias. Use native identifiers such
-as `anthropic/<model>` for direct providers instead. The application contains no
-gateway address, alias mapping, credential, or provider routing heuristic.
+Both credentials are required. Model aliases must exist on the gateway; plain
+aliases work because the adapter explicitly selects the OpenAI-compatible
+protocol. `LITELLM_MODEL` falls back to `LLM_MODEL`, and the embedding model falls
+back to `RAG_EMBEDDING_MODEL`. Legacy embedding endpoint/key overrides are ignored:
+embeddings always use `LITELLM_API_BASE` and `LITELLM_API_KEY`.
 
-| Setting | Behavior |
-| --- | --- |
-| `LITELLM_API_BASE`, `LITELLM_API_KEY` | Optional shared connection. When absent or empty, omitted from SDK arguments so provider-native authentication and endpoint lookup remain available. |
-| `LITELLM_MODEL` | Chat default; falls back to legacy `LLM_MODEL`. |
-| `LITELLM_EMBEDDING_MODEL` | Independent embedding default; falls back to legacy `RAG_EMBEDDING_MODEL`. Setting it enables LiteLLM embeddings even when chat uses a legacy provider. |
-| `LITELLM_EMBEDDING_API_KEY` | Unset inherits the shared key. A supplied key overrides it; empty defers to native authentication. |
-| `LITELLM_EMBEDDING_API_BASE` | Unset inherits the shared endpoint. Explicitly empty cancels inheritance and uses the provider's default/native endpoint. |
-| `LITELLM_EMBEDDING_DIMENSIONS` | Optional positive dimension count, including for custom aliases; overrides legacy `RAG_EMBEDDING_DIMENSIONS`. Unset leaves dimensions to the provider. |
+Explicit request models take precedence over configured task-tier models, then
+`LITELLM_MODEL`, then `LLM_MODEL`. Tier aliases require `LLM_TIERING_ENABLED=true`.
+Provider-specific requests can select the existing provider catalog's models;
+those model names must also be available on the gateway. Sampling, reasoning and
+token limits follow the task/request configuration. Streaming, callbacks,
+structured output and tools use the same authenticated chat adapter.
 
-All three chat factories use the same adapter, including sync/async invocation,
-streaming, callbacks, structured output and tool binding. Explicit request models
-win over configured task-tier models, which win over `LITELLM_MODEL`, then
-`LLM_MODEL`. Task-tier model overrides apply only when `LLM_TIERING_ENABLED=true`.
-OpenAI-specific tier defaults and automatic reasoning-effort parameters are not
-sent to custom gateway aliases. Sampling and token limits still follow the
-existing tier configuration. Configure aliases accepted by your gateway for any
-explicit request or tier override; the gateway enforces its allowed model list.
+Docker Compose interpolates the root `.env` into both AI services. For a service
+started outside Docker, export these variables or populate that service's `.env`.
+Keep credentials out of frontend variables, request payloads and tracked files.
+The root and local LLM-service `.env` files are ignored by Git.
 
-The Compose files forward optional gateway variables without substituting empty
-strings. This preserves the difference between unset and empty embedding
-overrides. Do not populate every optional variable with `""` in a secret manager.
-Keep keys in the LLM service environment and out of `VITE_*`, frontend files,
-request payloads, images and committed environment files. Endpoint validation
-allows HTTP(S) private/local providers and keeps default TLS verification;
-userinfo, query strings, fragments, invalid ports and unsupported protocols are
-rejected. Credentials are masked or excluded in settings/client representations,
-serialization and validation errors. Provider failures cross the adapter as
-sanitized errors, without provider response bodies or request headers.
+The repository has GitHub Actions secrets named `LITELLM_API_BASE` and
+`LITELLM_API_KEY`. GitHub only returns secret metadata, never stored values.
+Populate local `.env` values from the original secret source. The manual real
+user experience workflow references these secrets directly inside GitHub Actions.
+
+Endpoint validation permits HTTP(S) and rejects embedded credentials, query
+strings and fragments. TLS verification stays enabled. Credential representations
+and provider failure messages are redacted.
 
 ## Vector compatibility and migration
 
@@ -82,9 +75,8 @@ Disabled RAG still avoids embedding and query-expansion calls.
 
 Ordinary CI is keyless. It runs configuration/security/schema tests with the
 backend dependencies and adapter tests against the locked LLM-service dependencies.
-No pull-request job references production gateway secrets. Repository secrets are
-stored only after successful authenticated gateway and application verification;
-adding secrets does not automatically inject them into workflows.
+No pull-request job references production gateway secrets. The manual real user experience workflow uses the repository gateway secrets;
+ordinary pull-request jobs use synthetic credentials and mocked transports.
 
 An explicit local live check uses synthetic text, a temporary SQLite directory,
 chat, streaming, tool calls, embeddings and ingestion/retrieval:

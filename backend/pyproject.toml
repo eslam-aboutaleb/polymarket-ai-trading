@@ -29,6 +29,7 @@ dependencies = [
     "grpcio>=1.60.0",
     "grpcio-tools>=1.60.0",
     "py-clob-client-v2==1.2.1",
+    "llm-gateway-sdk[settings] @ git+https://github.com/eslam-aboutaleb/llm-gateway-sdk.git@v0.1.0",
 ]
 
 [dependency-groups]

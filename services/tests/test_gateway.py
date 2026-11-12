@@ -1,6 +1,7 @@
 """Keyless configuration, dependency boundary, and opt-in synthetic live checks."""
 
 import asyncio
+import importlib
 import json
 import os
 import sqlite3
@@ -19,27 +20,33 @@ from src.config import Settings  # noqa: E402
 
 @pytest.fixture
 def settings(monkeypatch):
-    for name in os.environ:
+    # LiteLLM loads dotenv on first import; clear test overrides afterwards.
+    if importlib.util.find_spec("litellm") is not None:
+        importlib.import_module("litellm")
+    for name in list(os.environ):
         if name.startswith(("LITELLM_", "LLM_", "RAG_EMBEDDING_")):
             monkeypatch.delenv(name)
-    return Settings(_env_file=None)
-
-
-def test_connection_inheritance_and_explicit_empty_endpoint(settings):
-    assert connection_options(settings) == {}
-    assert connection_options(settings, embedding=True) == {}
-    settings = Settings(
-        _env_file=None, gateway_base="https://gateway.example/v1", gateway_key="synthetic-shared"
+    return Settings(
+        _env_file=None, gateway_base="https://gateway.example/v1", gateway_key="synthetic-secret"
     )
-    assert connection_options(settings, embedding=True) == connection_options(settings)
+
+
+def test_embedding_connection_cannot_bypass_gateway(settings):
     overridden = settings.model_copy(
         update={
-            "embedding_base": settings.gateway_base.__class__(""),
-            "embedding_key": settings.gateway_key.__class__("synthetic-independent"),
+            "embedding_base": SecretStr("https://other.example/v1"),
+            "embedding_key": SecretStr("other-secret"),
         }
     )
-    assert connection_options(overridden, embedding=True) == {"api_key": "synthetic-independent"}
-    assert connection_options(settings)["api_base"] == "https://gateway.example/v1"
+    assert connection_options(overridden, embedding=True) == connection_options(settings)
+
+
+@pytest.mark.parametrize("field", ["gateway_base", "gateway_key"])
+@pytest.mark.parametrize("value", [None, SecretStr("")])
+def test_missing_gateway_cannot_use_native_authentication(settings, field, value):
+    configured = settings.model_copy(update={field: value})
+    with pytest.raises(ValueError, match="LITELLM_API_BASE and LITELLM_API_KEY"):
+        connection_options(configured)
 
 
 @pytest.mark.parametrize(
@@ -76,7 +83,7 @@ def test_invalid_endpoints_and_errors_are_private(settings, endpoint, field):
     ],
 )
 def test_private_endpoints_are_supported(settings, endpoint):
-    configured = Settings(_env_file=None, gateway_base=endpoint)
+    configured = settings.model_copy(update={"gateway_base": SecretStr(endpoint)})
     assert connection_options(configured)["api_base"] == endpoint
 
 
@@ -151,18 +158,18 @@ def test_real_factories_and_tools_without_network(settings, monkeypatch):
     assert "synthetic-secret" not in str(embeddings.model_dump())
 
 
-def test_native_resolution_and_independent_embeddings(settings):
+def test_native_provider_preferences_still_use_gateway(settings):
     pytest.importorskip("langchain_litellm")
     from polymarket_settings.gateway import create_chat
 
-    configured = Settings(_env_file=None, gateway_model="anthropic/native-model")
-    client = create_chat(configured, {})
-    assert client.api_base is None
-    assert client.api_key is None
-    configured.embedding_model = "openai/custom-embedding"
-    embeddings = create_embeddings(configured)
-    assert embeddings.api_key is None
-    assert embeddings.api_base is None
+    settings.llm_provider = "openai"
+    settings.gateway_model = "custom-chat"
+    client = create_chat(settings, {})
+    assert client.api_base == "https://gateway.example/v1"
+    assert client.model_kwargs["custom_llm_provider"] == "openai"
+    embeddings = create_embeddings(settings)
+    assert embeddings.api_base == client.api_base
+    assert embeddings.api_key == client.api_key
 
 
 def test_provider_failures_do_not_reach_logs(settings, monkeypatch, caplog):
@@ -204,7 +211,7 @@ def test_rag_rejects_changed_models_dimensions_and_unversioned_indexes(
 
     settings.chroma_persist_dir = str(tmp_path)
     monkeypatch.setattr(market_rag, "get_settings", lambda: settings)
-    monkeypatch.setattr(market_rag, "_OpenAIEmbeddings", FakeEmbeddings)
+    monkeypatch.setattr(market_rag, "create_embeddings", lambda _: FakeEmbeddings())
     store = market_rag.MarketRAGService()
     market = {"condition_id": "synthetic", "question": "Synthetic rates question"}
     assert store.index_markets([market], force=True) == 1
@@ -272,10 +279,8 @@ def test_live_gateway_factories_and_rag(tmp_path, monkeypatch):
             chunk async for chunk in llm_factory.create_llm(streaming=True).astream("Say OK.")
         ]
         assert any(chunk.content for chunk in chunks)
-        assert (
-            len(await create_embeddings(configured).aembed_query("Synthetic check."))
-            == configured.embedding_dimensions
-        )
+        vector = await create_embeddings(configured).aembed_query("Synthetic check.")
+        assert len(vector) == (configured.embedding_dimensions or len(vector)) > 0
 
     asyncio.run(verify_async())
 
@@ -291,21 +296,15 @@ def test_invalid_dependency_configuration_does_not_leak_key(settings):
     assert "synthetic-secret" not in str(caught.value)
 
 
-def test_environment_embedding_override_distinguishes_unset_from_empty(settings, monkeypatch):
+def test_environment_embedding_overrides_cannot_bypass_gateway(settings, monkeypatch):
     monkeypatch.setenv("LITELLM_API_BASE", "http://localhost:4000/v1")
     monkeypatch.setenv("LITELLM_API_KEY", "synthetic-shared")
-    monkeypatch.setenv("LITELLM_EMBEDDING_API_BASE", "")
-    configured = Settings(_env_file=None)
-    assert connection_options(configured, embedding=True) == {"api_key": "synthetic-shared"}
-    monkeypatch.delenv("LITELLM_EMBEDDING_API_BASE")
-    configured = Settings(_env_file=None)
-    assert connection_options(configured, embedding=True)["api_base"] == "http://localhost:4000/v1"
-    monkeypatch.setenv("LITELLM_EMBEDDING_API_BASE", "http://127.0.0.1:5000/v1")
+    monkeypatch.setenv("LITELLM_EMBEDDING_API_BASE", "http://other.example/v1")
     monkeypatch.setenv("LITELLM_EMBEDDING_API_KEY", "synthetic-independent")
     configured = Settings(_env_file=None)
     assert connection_options(configured, embedding=True) == {
-        "api_base": "http://127.0.0.1:5000/v1",
-        "api_key": "synthetic-independent",
+        "api_base": "http://localhost:4000/v1",
+        "api_key": "synthetic-shared",
     }
 
 
@@ -346,7 +345,7 @@ def test_tool_call_reaches_sdk_transport_without_network(settings):
             },
         )
 
-    configured = Settings(_env_file=None, gateway_model="openai/custom-chat")
+    configured = settings.model_copy(update={"gateway_model": "openai/custom-chat"})
     tool = {
         "type": "function",
         "function": {
@@ -380,7 +379,7 @@ def test_concurrent_ingestion_cannot_mix_embedding_spaces(settings, tmp_path, mo
             return [[1.0, 0.0] for _ in documents]
 
     settings.chroma_persist_dir = str(tmp_path)
-    monkeypatch.setattr(market_rag, "_OpenAIEmbeddings", ConcurrentEmbeddings)
+    monkeypatch.setattr(market_rag, "create_embeddings", lambda _: ConcurrentEmbeddings())
     monkeypatch.setattr(market_rag, "get_settings", lambda: settings)
     first = market_rag.MarketRAGService()
     second_settings = settings.model_copy(
@@ -399,3 +398,14 @@ def test_concurrent_ingestion_cannot_mix_embedding_spaces(settings, tmp_path, mo
         ]
         assert sorted(future.result(timeout=20) for future in futures) == [0, 1]
     assert first.get_collection_size() == 1
+
+
+def test_compose_empty_embedding_dimensions_are_unset(settings, monkeypatch):
+    monkeypatch.setenv("LITELLM_EMBEDDING_DIMENSIONS", "")
+    assert Settings(_env_file=None).embedding_dimensions is None
+
+
+def test_shared_env_file_can_contain_other_service_settings(settings, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("UNRELATED_SERVICE_SETTING=test\nLITELLM_MODEL=general-fast\n")
+    assert Settings(_env_file=env_file).gateway_model == "general-fast"
