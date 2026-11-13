@@ -48,10 +48,7 @@ class SourceTests(unittest.TestCase):
             json.dumps(self.records, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
         self.archive = self.archive_bytes(files)
-        constraint = (
-            "hatchling @ https://files.pythonhosted.org/hatchling-1.26.3-py3-none-any.whl"
-            "#sha256=" + "b" * 64
-        )
+        constraint = {"requirement": "hatchling==1.26.3", "hashes": ["sha256:" + "b" * 64]}
         self.entry = {
             "name": "example-sdk",
             "version": "1.0.0",
