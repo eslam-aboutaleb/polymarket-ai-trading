@@ -38,20 +38,24 @@ services:
       - "50061:50051"
     environment:
       # LLM Configuration
-      LITELLM_API_BASE:
-      LITELLM_API_KEY:
-      LITELLM_MODEL:
-      LITELLM_EMBEDDING_MODEL:
-      LITELLM_EMBEDDING_API_KEY:
-      LITELLM_EMBEDDING_API_BASE:
-      LITELLM_EMBEDDING_DIMENSIONS:
+      LITELLM_API_BASE: ${LITELLM_API_BASE:-}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-}
+      LITELLM_MODEL: ${LITELLM_MODEL:-}
+      LITELLM_EMBEDDING_MODEL: ${LITELLM_EMBEDDING_MODEL:-}
+      LITELLM_EMBEDDING_API_KEY: ${LITELLM_EMBEDDING_API_KEY:-}
+      LITELLM_EMBEDDING_API_BASE: ${LITELLM_EMBEDDING_API_BASE:-}
+      LITELLM_EMBEDDING_DIMENSIONS: ${LITELLM_EMBEDDING_DIMENSIONS:-}
       RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-text-embedding-3-small}
-      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_PROVIDER: ${LLM_PROVIDER:-litellm}
       LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
       LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.3}
       LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-4096}
       # Per-task model tiering (see polymarket_settings)
       LLM_TIERING_ENABLED: ${LLM_TIERING_ENABLED:-true}
+      LLM_TIER_CHEAP_MODEL: ${LLM_TIER_CHEAP_MODEL:-}
+      LLM_TIER_STANDARD_MODEL: ${LLM_TIER_STANDARD_MODEL:-}
+      LLM_TIER_STRONG_MODEL: ${LLM_TIER_STRONG_MODEL:-}
+      LLM_TIER_WRITER_MODEL: ${LLM_TIER_WRITER_MODEL:-}
       LLM_STRONG_REASONING_EFFORT: ${LLM_STRONG_REASONING_EFFORT:-medium}
       # Provider API Keys (only the selected provider's key is used)
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -83,7 +87,7 @@ services:
       timeout: 10s
       retries: 3
 
-  # CLI Agent Service - GitHub Copilot CLI backend
+  # CLI Agent Service - LiteLLM gateway backend
   cli-agent:
     build:
       context: .
@@ -91,13 +95,23 @@ services:
     ports:
       - "50052:50052"
     environment:
+      LITELLM_API_BASE: ${LITELLM_API_BASE:-}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-}
+      LITELLM_MODEL: ${LITELLM_MODEL:-}
+      LLM_PROVIDER: litellm
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.3}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-4096}
+      LLM_TIERING_ENABLED: ${LLM_TIERING_ENABLED:-true}
+      LLM_TIER_CHEAP_MODEL: ${LLM_TIER_CHEAP_MODEL:-}
+      LLM_TIER_STANDARD_MODEL: ${LLM_TIER_STANDARD_MODEL:-}
+      LLM_TIER_STRONG_MODEL: ${LLM_TIER_STRONG_MODEL:-}
+      LLM_TIER_WRITER_MODEL: ${LLM_TIER_WRITER_MODEL:-}
       GRPC_PORT: 50052
       PROMPTS_PATH: /app/prompts/prompts.json
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      # GitHub Models API (uses GITHUB_TOKEN for auth)
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GITHUB_MODEL: ${GITHUB_MODEL:-gpt-4o-mini}
-      # Fallback: OpenAI API (if no GITHUB_TOKEN)
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       # Research MCP: Binance Skills enrichment gate (shared with llm-chain)
       BINANCE_SKILLS_ENABLED: ${BINANCE_SKILLS_ENABLED:-true}
@@ -128,16 +142,36 @@ services:
       ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:-}
       CREDENTIAL_CACHE_TTL_SECONDS: ${CREDENTIAL_CACHE_TTL_SECONDS:-3600}
       REQUIRE_REDIS_FOR_CREDENTIALS: ${REQUIRE_REDIS_FOR_CREDENTIALS:-true}
+      REQUIRE_REDIS_FOR_CHALLENGES: ${REQUIRE_REDIS_FOR_CHALLENGES:-true}
+      API_KEY_HASH_SECRET: ${API_KEY_HASH_SECRET:-}
       ENVIRONMENT: ${ENVIRONMENT:-development}
+      ROLE: ${ROLE:-all}
       LIVE_TRADING_ENABLED: ${LIVE_TRADING_ENABLED:-true}
       LIVE_COPY_TRADING_ENABLED: ${LIVE_COPY_TRADING_ENABLED:-true}
       LIVE_MARKET_MAKING_ENABLED: ${LIVE_MARKET_MAKING_ENABLED:-true}
-      LIVE_LATENCY_ARB_ENABLED: ${LIVE_LATENCY_ARB_ENABLED:-false}
-      LATENCY_ARB_LIVE: ${LATENCY_ARB_LIVE:-false}
+      LIVE_LATENCY_ARB_ENABLED: ${LIVE_LATENCY_ARB_ENABLED:-true}
+      LATENCY_ARB_LIVE: ${LATENCY_ARB_LIVE:-true}
+      LATENCY_ARB_LATE_ENTRY: ${LATENCY_ARB_LATE_ENTRY:-true}
       LIVE_INVERSE_TRADING_ENABLED: ${LIVE_INVERSE_TRADING_ENABLED:-true}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}
-      DEBUG_ENDPOINTS_ENABLED: ${DEBUG_ENDPOINTS_ENABLED:-false}
+      ACCOUNTS_ENABLED: ${ACCOUNTS_ENABLED:-true}
+      VENUE_KALSHI_ENABLED: ${VENUE_KALSHI_ENABLED:-true}
+      VENUE_MANIFOLD_ENABLED: ${VENUE_MANIFOLD_ENABLED:-true}
+      VENUE_PREDICTIT_ENABLED: ${VENUE_PREDICTIT_ENABLED:-true}
+      PAPER_JOURNAL_V2_ENABLED: ${PAPER_JOURNAL_V2_ENABLED:-true}
+      PAPER_MAKER_FILL_MODEL_V2: ${PAPER_MAKER_FILL_MODEL_V2:-true}
+      NATIVE_CAPTURE_ENABLED: ${NATIVE_CAPTURE_ENABLED:-true}
+      OBSERVATION_ARCHIVE_ENABLED: ${OBSERVATION_ARCHIVE_ENABLED:-true}
+      BINARY_BOOK_RESEARCH_ENABLED: ${BINARY_BOOK_RESEARCH_ENABLED:-true}
+      EXECUTABLE_REPLAY_ENABLED: ${EXECUTABLE_REPLAY_ENABLED:-true}
+      FOLLOWER_REPLAY_ENABLED: ${FOLLOWER_REPLAY_ENABLED:-true}
+      PRICE_ALERT_LLM_ENABLED: ${PRICE_ALERT_LLM_ENABLED:-true}
+      DAILY_DIGEST_ENABLED_DEFAULT: ${DAILY_DIGEST_ENABLED_DEFAULT:-true}
+      BINANCE_SKILLS_ENABLED: ${BINANCE_SKILLS_ENABLED:-true}
+      RESEARCH_MCP_BATCH_ENABLED: ${RESEARCH_MCP_BATCH_ENABLED:-true}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000,http://localhost:5174}
+      DEBUG_ENDPOINTS_ENABLED: ${DEBUG_ENDPOINTS_ENABLED:-true}
       DEBUG_LOG_HASH_SALT: ${DEBUG_LOG_HASH_SALT:-}
+      WS_ALLOW_QUERY_KEY: ${WS_ALLOW_QUERY_KEY:-true}
       POLYMARKET_PRIVATE_KEY: ${POLYMARKET_PRIVATE_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       PROMPTS_PATH: /app/prompts/prompts.json
@@ -163,13 +197,15 @@ services:
         condition: service_started
     volumes:
       - ./backend:/app
+      # Isolate Linux container dependencies from the host Python environment.
+      - backend_venv:/app/.venv
       - ./prompts:/app/prompts:ro
       - ./services/shared:/app/shared:ro
     command: >
       sh -c "uv run alembic upgrade head &&
              uv run python3 -m grpc_tools.protoc -Iproto --python_out=app/grpc_clients --grpc_python_out=app/grpc_clients proto/analysis.proto &&
              sed -i 's/^import analysis_pb2/from app.grpc_clients import analysis_pb2/' app/grpc_clients/analysis_pb2_grpc.py &&
-              uv run uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload"
+              uv run uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload --reload-dir /app/app --reload-dir /app/shared"
 
   frontend:
     build:
@@ -188,8 +224,10 @@ services:
              npm run dev -- --host 0.0.0.0"
     environment:
       VITE_API_URL: http://localhost:8002
+      VITE_WALLETCONNECT_PROJECT_ID: ${VITE_WALLETCONNECT_PROJECT_ID:-6138cf3a90efc995c6dab7853a83a4e2}
 
 volumes:
   postgres_data:
   redis_data:
   llm_chain_chroma:
+  backend_venv:

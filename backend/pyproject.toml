@@ -14,21 +14,22 @@ dependencies = [
     "pydantic>=2.0.0",
     "pydantic-settings>=2.14.2",
     "langchain>=0.1.0",
-    "langchain-openai>=0.1.0",
+    "langchain-openai>=1.1.14",
     "langchain-community>=0.0.20",
     "openai>=1.0.0",
     "httpx>=0.25.0",
-    "python-dotenv>=1.0.0",
+    "python-dotenv>=1.2.2",
     "alembic>=1.12.0",
     "eth-keys>=0.5.0",
     "eth-utils>=2.0.0",
     "eth-account>=0.10.0",
-    "web3>=6.0.0",
+    "web3>=7.15.0",
     "redis>=5.0.0",
     "slowapi>=0.1.9",
     "grpcio>=1.60.0",
     "grpcio-tools>=1.60.0",
     "py-clob-client-v2==1.2.1",
+    "llm-gateway-sdk[settings] @ git+https://github.com/eslam-aboutaleb/llm-gateway-sdk.git@v0.1.0",
 ]
 
 [dependency-groups]
@@ -37,7 +38,7 @@ dependencies = [
 # (see .pre-commit-config.yaml). Declaring them here keeps the
 # lockfile the single source of truth for the pinned versions.
 dev = [
-    "pytest>=9.0",
+    "pytest>=9.0.3",
     "pytest-cov>=7.0",
     "pytest-randomly>=5.0",
     "ruff>=0.6.9",
