@@ -24,13 +24,16 @@ def test_local_env_file_does_not_copy_production_credentials(runner, tmp_path, m
     monkeypatch.setenv("JWT_SECRET_KEY", "parent-auth-secret")
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "OPENAI_API_KEY=test-openai\nTAVILY_API_KEY=test-tavily\nNEWSAPI_API_KEY=test-news\n"
+        "LITELLM_API_BASE=https://gateway.example/v1\nLITELLM_API_KEY=test-gateway\n"
+        "TAVILY_API_KEY=test-tavily\nNEWSAPI_API_KEY=test-news\n"
         "POLYMARKET_PRIVATE_KEY=production-wallet\nGITHUB_TOKEN=production-github\n"
         "JWT_SECRET_KEY=production-jwt\nDATABASE_URL=postgresql:///production\n"
     )
     first = runner.child_environment(env_file, "test_schema", tmp_path)
     second = runner.child_environment(env_file, "test_schema", tmp_path)
-    assert first["OPENAI_API_KEY"] == "test-openai"
+    assert first["LITELLM_API_KEY"] == "test-gateway"
+    assert first["LITELLM_API_BASE"] == "https://gateway.example/v1"
+    assert "OPENAI_API_KEY" not in first
     assert first["TAVILY_API_KEY"] == "test-tavily"
     assert first["NEWSAPI_API_KEY"] == "test-news"
     assert "POLYMARKET_PRIVATE_KEY" not in first
@@ -47,7 +50,7 @@ def test_missing_provider_key_cannot_silently_skip_live_tests(runner, tmp_path, 
     for name in runner.PROVIDER_KEYS:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("UX_TEST_DATABASE_URL", "postgresql:///test")
-    with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+    with pytest.raises(ValueError, match="LITELLM_API_BASE"):
         runner.child_environment(None, "test_schema", tmp_path)
 
 

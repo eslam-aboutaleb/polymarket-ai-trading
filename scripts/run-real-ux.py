@@ -25,7 +25,7 @@ from dotenv import dotenv_values
 from sqlalchemy import create_engine, text
 
 ROOT = Path(__file__).resolve().parents[1]
-PROVIDER_KEYS = ("OPENAI_API_KEY", "TAVILY_API_KEY", "NEWSAPI_API_KEY")
+PROVIDER_KEYS = ("LITELLM_API_BASE", "LITELLM_API_KEY", "TAVILY_API_KEY", "NEWSAPI_API_KEY")
 ADMIN_WALLET = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
 
 
@@ -37,6 +37,7 @@ def child_environment(env_file: Path | None, schema: str, runtime: Path) -> dict
     for key in (
         "POLYMARKET_PRIVATE_KEY",
         "GITHUB_TOKEN",
+        "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
         "GOOGLE_API_KEY",
         "GROQ_API_KEY",
@@ -68,7 +69,7 @@ def child_environment(env_file: Path | None, schema: str, runtime: Path) -> dict
         E2E_BASE_URL="http://localhost:5174",
         CORS_ALLOWED_ORIGINS="http://localhost:5174,http://localhost:5173,http://localhost:3000",
         DEFAULT_AI_BACKEND="llm_chain",
-        LLM_PROVIDER="openai",
+        LLM_PROVIDER="litellm",
         LLM_MODEL="gpt-4o-mini",
         LLM_TIERING_ENABLED="false",
         LLM_MAX_TOKENS="1536",
@@ -131,7 +132,9 @@ def stop_process(process: subprocess.Popen | None) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--env-file", type=Path, help="Read only the three provider keys from this file"
+        "--env-file",
+        type=Path,
+        help="Read only the gateway and research provider credentials from this file",
     )
     args = parser.parse_args()
     schema = "real_ux_" + uuid4().hex
