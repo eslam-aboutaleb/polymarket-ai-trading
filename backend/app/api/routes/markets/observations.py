@@ -161,3 +161,36 @@ def replay(dataset_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Dataset unavailable") from exc
     except ValueError as exc:
         raise HTTPException(409, "Dataset integrity check failed") from exc
+
+
+@router.get("/provider-contract")
+def provider_contract():
+    from app.services.market_data.provider_contract import POLYMARKET_CLOB_PRICES_CONTRACT
+
+    return {
+        "contract": POLYMARKET_CLOB_PRICES_CONTRACT.model_dump(),
+        "canary_enabled": get_settings().historical_feed_canary_enabled,
+    }
+
+
+@router.post("/provider-canary")
+async def provider_canary(
+    token_id: str = Query(pattern=r"^[0-9]{1,120}$"),
+    lookback_hours: int = Query(24, ge=1, le=168),
+    db: Session = Depends(get_db),
+):
+    from app.services.market_data.provider_contract import (
+        record_provider_probe,
+        run_provider_contract_canary,
+    )
+
+    report = await run_provider_contract_canary(
+        token_id,
+        enabled=get_settings().historical_feed_canary_enabled,
+        lookback_hours=lookback_hours,
+    )
+    if report.canary_status == "disabled":
+        raise HTTPException(503, "Historical feed canary disabled")
+    report.capture_id = record_provider_probe(db, token_id, report)
+    db.commit()
+    return report.model_dump()
