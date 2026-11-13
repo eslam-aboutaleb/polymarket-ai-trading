@@ -320,7 +320,7 @@ jobs:
       - name: Verify installed SDK in the built image without credentials
         run: >-
           docker run --rm polymarket-ci:${{ matrix.service }}
-          python -c "import llm_gateway_sdk; assert llm_gateway_sdk.__version__ == '0.1.0'"
+          /app/.venv/bin/python -c "import llm_gateway_sdk; assert llm_gateway_sdk.__version__ == '0.1.0'"
 
   frontend:
     runs-on: ubuntu-latest
