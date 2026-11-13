@@ -395,7 +395,7 @@ from the Reown dashboard. For GitHub Actions, add a repository Actions secret wi
 that exact name
 
 
-For portable model gateway configuration, embedding connection overrides and vector
+For required LiteLLM gateway credentials, model aliases and vector
 reindexing requirements, see [LiteLLM gateway integration](docs/litellm-gateway.md).
 
 ### Journal-backed paper accounts

@@ -1,7 +1,6 @@
 """
 GitHub Copilot CLI Agent wrapper.
-Uses GitHub Models API (OpenAI-compatible) for AI analysis.
-Falls back to OpenAI API if GITHUB_TOKEN is not available.
+Uses the authenticated LiteLLM gateway for all AI analysis.
 """
 
 import asyncio
@@ -16,9 +15,11 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from llm_gateway_sdk import GatewayAPIStatusError, GatewayTimeoutError
 from polymarket_mcp import no_indexed_matches_text
 from polymarket_mcp.research_contract import RESEARCH_SYSTEM_PROMPT, structured_research_prompt
 from polymarket_settings import TASK_TIERS, ModelTier, resolve_tier_config
+from polymarket_settings.gateway import connection_options
 from src.config import get_settings
 from src.mcp_client import ResearchMCPClient
 
@@ -69,35 +70,19 @@ class PromptManager:
 
 
 class CopilotCLIAgent:
-    """
-    AI Analysis Agent using GitHub Models API.
-    Uses the OpenAI-compatible endpoint at models.inference.ai.azure.com
-    with GITHUB_TOKEN for authentication.
-    """
+    """AI analysis agent using the LiteLLM OpenAI-compatible gateway."""
 
     def __init__(self):
         self.settings = get_settings()
         self.prompts = PromptManager()
 
-        # Determine API endpoint and key
-        if self.settings.github_token:
-            self.api_base = self.settings.github_models_endpoint
-            self.api_key = self.settings.github_token
-            self.model = self.settings.github_model
-            self.strong_model = self.settings.github_strong_model
-            logger.info(f"Using GitHub Models API with model: {self.model}")
-        elif self.settings.openai_api_key:
-            self.api_base = "https://api.openai.com/v1"
-            self.api_key = self.settings.openai_api_key
-            self.model = "gpt-4o-mini"
-            self.strong_model = "gpt-4o"
-            logger.info("Falling back to OpenAI API (no GITHUB_TOKEN)")
-        else:
-            self.api_base = None
-            self.api_key = None
-            self.model = None
-            self.strong_model = None
-            logger.warning("No GITHUB_TOKEN or OPENAI_API_KEY set - agent will return errors")
+        options = connection_options(self.settings)
+        self.api_base = options["api_base"]
+        self.api_key = options["api_key"]
+        self.model = self.settings.gateway_model or self.settings.llm_model
+        self._gateway_settings = self.settings.to_gateway_settings(
+            default_model_fallback=self.settings.llm_model
+        )
 
         self._client = httpx.AsyncClient(timeout=self.settings.copilot_timeout)
         self.research_mcp = ResearchMCPClient()
@@ -116,23 +101,25 @@ class CopilotCLIAgent:
         tier_model, temperature, max_tokens, reasoning_effort = resolve_tier_config(
             task, self.settings
         )
+        reasoning_effort = None  # Gateway aliases declare their own reasoning capabilities.
         if model:
             return LLMConfig(model, temperature, max_tokens, reasoning_effort)
 
-        # The GitHub Models endpoint only serves the models this service is
-        # configured for, so the tier's model stays the configured one.
-        if TASK_TIERS.get(task, ModelTier.STANDARD) is ModelTier.STRONG:
-            model = self.strong_model or self.model or tier_model
-        else:
-            model = self.model or tier_model
+        tier = TASK_TIERS.get(task, ModelTier.STANDARD)
+        configured_tier = (
+            getattr(self.settings, f"llm_tier_{tier.value}_model", "")
+            if self.settings.llm_tiering_enabled
+            else ""
+        )
+        model = configured_tier or self.model or tier_model
         return LLMConfig(model, temperature, max_tokens, reasoning_effort)
 
     def _default_llm_config(self) -> LLMConfig:
         """Service-default sampling parameters (no tier resolution)."""
         return LLMConfig(
             model=self.model,
-            temperature=self.settings.github_model_temperature,
-            max_tokens=self.settings.github_model_max_tokens,
+            temperature=self.settings.llm_temperature,
+            max_tokens=self.settings.llm_max_tokens,
         )
 
     async def _call_llm(
@@ -142,10 +129,10 @@ class CopilotCLIAgent:
         llm: LLMConfig | None = None,
     ) -> str:
         """
-        Call the GitHub Models API (OpenAI-compatible chat completions).
+        Call the LiteLLM gateway (OpenAI-compatible chat completions).
         """
         if not self.api_key:
-            return "Error: No API key configured. Set GITHUB_TOKEN or OPENAI_API_KEY."
+            return "Error: No API key configured. Set LITELLM_API_BASE and LITELLM_API_KEY."
 
         llm = llm or self._default_llm_config()
 
@@ -154,47 +141,36 @@ class CopilotCLIAgent:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        # Build endpoint URL
-        url = f"{self.api_base}/chat/completions"
-
-        payload = {
-            "model": llm.model or self.model,
-            "messages": messages,
-            "temperature": llm.temperature,
-            "max_tokens": llm.max_tokens,
-        }
-        if llm.reasoning_effort:
-            # Same OpenAI reasoning parameter llm-chain sends as
-            # model_kwargs; only set for tiers that ask for it (STRONG).
-            payload["reasoning_effort"] = llm.reasoning_effort
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+        extra_body = {"reasoning_effort": llm.reasoning_effort} if llm.reasoning_effort else None
+        sdk_client = self._gateway_settings.create_async_client(
+            timeout=self.settings.copilot_timeout,
+            http_client=self._client,
+        )
 
         try:
-            response = await self._client.post(url, json=payload, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-
-            content = data["choices"][0]["message"]["content"]
+            response = await sdk_client.complete(
+                model=llm.model or self.model,
+                messages=messages,
+                temperature=llm.temperature,
+                max_tokens=llm.max_tokens,
+                extra_body=extra_body,
+            )
+            content = response.content or ""
             logger.info(f"LLM response received ({len(content)} chars)")
             return content.strip()
 
-        except httpx.HTTPStatusError as e:
-            error_body = e.response.text[:500]
-            logger.error(f"GitHub Models API error {e.response.status_code}: {error_body}")
+        except GatewayAPIStatusError as e:
+            logger.error("LiteLLM gateway returned HTTP %s", e.status_code)
             return (
-                f"Analysis failed (API error {e.response.status_code}). "
-                "Please check your GitHub token configuration."
+                f"Analysis failed (API error {e.status_code}). "
+                "Please check your LiteLLM gateway configuration."
             )
-        except httpx.TimeoutException:
-            logger.error("GitHub Models API timeout")
+        except GatewayTimeoutError:
+            logger.error("LiteLLM gateway timeout")
             return "Analysis timed out. Please try again with a simpler query."
-        except Exception as e:
-            logger.error(f"LLM call error: {e}")
-            return f"Analysis error: {str(e)}"
+        except Exception:
+            logger.error("LiteLLM gateway request failed")
+            return "Analysis error: LiteLLM gateway request failed"
 
     async def _run_analysis(
         self,
@@ -300,7 +276,7 @@ End Date: {end_date}
             "analysis": result,
             "research_context": news_context
             if research_instructions
-            else "Analysis performed via GitHub Models API"
+            else "Analysis performed via LiteLLM gateway"
             if include_research
             else "",
             "timestamp": datetime.utcnow().isoformat(),
@@ -483,7 +459,7 @@ Provide:
         model: str | None = None,
     ) -> dict[str, Any]:
         """
-        Score a single market opportunity using GitHub Models API.
+        Score a single market opportunity using LiteLLM gateway.
         Uses web research via the ddg-search MCP for credibility.
         """
         # Build a comprehensive prompt with all context
@@ -553,9 +529,9 @@ Provide:
                 "recommended_side", "YES" if yes_price < no_price else "NO"
             ),
             "reasoning": scored.get("reasoning", result[:300]),
-            "search_summary": scored.get("search_summary", "Analysis via GitHub Models API"),
+            "search_summary": scored.get("search_summary", "Analysis via LiteLLM gateway"),
             "key_risks": scored.get("key_risks", []),
-            "search_findings": "Analysis via GitHub Models API",
+            "search_findings": "Analysis via LiteLLM gateway",
             "timestamp": datetime.utcnow().isoformat(),
         }
 
@@ -601,7 +577,7 @@ Provide:
 
         return {
             "analysis": result,
-            "research_context": "Analysis performed via GitHub Models API",
+            "research_context": "Analysis performed via LiteLLM gateway",
             "timestamp": datetime.utcnow().isoformat(),
         }
 
@@ -691,7 +667,7 @@ Provide:
             "ai_score": confidence,
             "risk_level": "high" if confidence < 40 else "medium" if confidence < 70 else "low",
             "market_sentiment": None,
-            "research_context": "Analysis performed via GitHub Models API",
+            "research_context": "Analysis performed via LiteLLM gateway",
             "timestamp": datetime.utcnow().isoformat(),
         }
 

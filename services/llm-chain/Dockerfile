@@ -5,6 +5,7 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install UV for fast package management
@@ -20,8 +21,8 @@ COPY services/mcps/research/ services/mcps/research/
 COPY services/shared/ shared/
 
 # Install dependencies
-RUN uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt \
-    && uv pip sync --system --require-hashes /tmp/requirements.txt
+RUN uv sync --frozen --no-dev --no-install-project
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Copy and compile proto files
 COPY services/proto/ proto/

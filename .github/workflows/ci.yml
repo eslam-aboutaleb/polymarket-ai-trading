@@ -289,6 +289,36 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  container-install:
+    name: Frozen container install / ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: backend
+            context: backend
+            dockerfile: backend/docker/Dockerfile
+          - service: llm-chain
+            context: .
+            dockerfile: services/llm-chain/Dockerfile
+          - service: cli-agent
+            context: .
+            dockerfile: services/cli-agent/Dockerfile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build actual runtime image with the committed frozen graph
+        run: >-
+          docker build --progress=plain --tag polymarket-ci:${{ matrix.service }}
+          --file ${{ matrix.dockerfile }} ${{ matrix.context }}
+      - name: Verify installed SDK in the built image without credentials
+        run: >-
+          docker run --rm polymarket-ci:${{ matrix.service }}
+          python -c "import llm_gateway_sdk; assert llm_gateway_sdk.__version__ == '0.1.0'"
+
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -331,6 +361,7 @@ jobs:
         workflow-lint,
         security,
         dependency-security,
+        container-install,
       ]
     runs-on: ubuntu-latest
     timeout-minutes: 5

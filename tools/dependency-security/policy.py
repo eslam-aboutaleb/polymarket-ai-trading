@@ -74,7 +74,7 @@ def evaluate(findings, manifest, today=None):
         observed.add(key)
         if key in approved:
             allowed.append({**finding, "exception": approved[key]})
-        elif finding["ecosystem"] == "pypi" or finding["severity"] in {
+        elif finding["ecosystem"] in {"pypi", "git"} or finding["severity"] in {
             "high",
             "critical",
             "unknown",
@@ -145,7 +145,7 @@ def write_report(directory, result, inventory):
         ]
     lines += [
         "",
-        "Node high/critical and every Python advisory block unless exactly excepted. "
+        "Node high/critical and every Python registry/Git advisory block unless exactly excepted. "
         "Scanner/service errors always block. Runtime includes optional/platform-specific "
         "locked packages; dev-only packages remain scanned.",
         "",

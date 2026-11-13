@@ -23,7 +23,7 @@ class FakeEmbeddings:
 
 
 def test_sqlite_rag_store_upserts_filters_searches_and_clears(tmp_path, monkeypatch):
-    monkeypatch.setattr(market_rag, "_OpenAIEmbeddings", FakeEmbeddings)
+    monkeypatch.setattr(market_rag, "create_embeddings", lambda _: FakeEmbeddings())
     monkeypatch.setattr(
         market_rag,
         "get_settings",
@@ -33,7 +33,8 @@ def test_sqlite_rag_store_upserts_filters_searches_and_clears(tmp_path, monkeypa
             chroma_persist_dir=str(tmp_path),
             chroma_collection_name="markets",
             rag_embedding_model="test",
-            openai_api_key="test",
+            gateway_base="https://gateway.example/v1",
+            gateway_key="test",
         ),
     )
     monkeypatch.setattr(market_rag.MarketRAGService, "_instance", None)
