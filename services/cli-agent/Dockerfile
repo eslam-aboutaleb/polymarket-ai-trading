@@ -14,8 +14,10 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-COPY services/cli-agent/pyproject.toml services/cli-agent/README.md ./
-RUN pip install --no-cache-dir -e .
+COPY services/cli-agent/pyproject.toml services/cli-agent/uv.lock services/cli-agent/README.md ./
+RUN pip install --no-cache-dir uv==0.13.5 \
+    && uv sync --frozen --no-dev --no-install-project
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Copy proto files and generate
 COPY services/proto/ proto/
