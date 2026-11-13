@@ -22,7 +22,8 @@
     "test:maker": "playwright test --config playwright.maker.config.ts",
     "test:latency": "playwright test --config playwright.latency.config.ts",
     "test:executable": "playwright test --config playwright.executable.config.ts",
-    "test:latency-paper": "playwright test --config playwright.latency-paper.config.ts"
+    "test:latency-paper": "playwright test --config playwright.latency-paper.config.ts",
+    "test:provider": "playwright test --config playwright.provider.config.ts"
   },
   "dependencies": {
     "@walletconnect/ethereum-provider": "^2.23.7",
