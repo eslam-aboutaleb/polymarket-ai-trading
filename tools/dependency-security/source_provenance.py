@@ -156,9 +156,11 @@ def verify_build(root, entry, project, config):
             continue
         versions[package["name"]] = package["version"]
         wheel = next(a for a in package["wheels"] if a["url"].endswith("py3-none-any.whl"))
-        constraints.append(f"{package['name']} @ {wheel['url']}#{wheel['hash'].replace(':', '=')}")
+        constraints.append(
+            {"requirement": f"{package['name']}=={package['version']}", "hashes": [wheel["hash"]]}
+        )
     policy = config.get("tool", {}).get("uv", {})
-    if sorted(constraints) != entry["build_constraints"] or (
+    if constraints != entry["build_constraints"] or (
         policy.get("build-constraint-dependencies") != entry["build_constraints"]
         or policy.get("require-build-hashes") is not True
     ):
