@@ -1,0 +1,42 @@
+{
+  "evidence_type": "live_public_provider_contract_canary",
+  "endpoint": "https://clob.polymarket.com/prices-history",
+  "token_id": "18972576928294474926933600201138647384137258205840985760865562777378592194227",
+  "contract": {
+    "provider_id": "polymarket_clob_prices_history",
+    "source_symbol": "clob_token_id",
+    "event_time_field": "t",
+    "receipt_time_field": "available_at",
+    "data_granularity": "60m",
+    "revision_policy": "append_only",
+    "permitted_use": "research_indicative_only",
+    "history_window_days": 30,
+    "timestamp_semantics": "utc_epoch_seconds",
+    "rate_limit_rpm": 12,
+    "incomplete_page_policy": "fail_closed",
+    "normalization_version": "prices_history_feed_v1"
+  },
+  "report": {
+    "provider_id": "polymarket_clob_prices_history",
+    "source_symbol": "18972576928294474926933600201138647384137258205840985760865562777378592194227",
+    "normalization_version": "prices_history_feed_v1",
+    "permitted_use": "research_indicative_only",
+    "health_state": "READY",
+    "canary_status": "passed",
+    "http_status": 200,
+    "raw_checksum_sha256": "63e63092529ce515b14ffc94aa6514f52c57ea8be649320636a3e40af2ac9890",
+    "observed_bars": 24,
+    "expected_bars": 24,
+    "observed_coverage": 1.0,
+    "missing_bars": 0,
+    "stale_delay_seconds": 8.95,
+    "failure_reason": null,
+    "checked_at": "2026-11-13T19:59:26.945396Z",
+    "requested_start_utc": "2026-11-12T19:59:26.451970Z",
+    "requested_end_utc": "2026-11-13T19:59:26.451970Z",
+    "credentials_used": false,
+    "capture_id": null
+  },
+  "raw_body_base64": "eyJoaXN0b3J5IjpbeyJ0IjoxNzk0NTEzNjE5LCJwIjowLjU1fSx7InQiOjE3OTQ1MTcyMTcsInAiOjAuNTJ9LHsidCI6MTc5NDUyMDgxOSwicCI6MC41MTV9LHsidCI6MTc5NDUyNDQyMCwicCI6MC40NzV9LHsidCI6MTc5NDUyODAyNCwicCI6MC40ODV9LHsidCI6MTc5NDUzMTYxNywicCI6MC40OTV9LHsidCI6MTc5NDUzNTIxNywicCI6MC40OTV9LHsidCI6MTc5NDUzODgyMSwicCI6MC40OTV9LHsidCI6MTc5NDU0MjQyOCwicCI6MC40OTV9LHsidCI6MTc5NDU0NjAxOCwicCI6MC40OTV9LHsidCI6MTc5NDU0OTYyMCwicCI6MC40ODV9LHsidCI6MTc5NDU1MzIxNywicCI6MC40ODV9LHsidCI6MTc5NDU1NjgxNywicCI6MC40ODV9LHsidCI6MTc5NDU2MDQyMCwicCI6MC40ODV9LHsidCI6MTc5NDU2NDAzMSwicCI6MC40ODV9LHsidCI6MTc5NDU2NzYzMiwicCI6MC40OTV9LHsidCI6MTc5NDU3MTIyNCwicCI6MC40OTV9LHsidCI6MTc5NDU3NDgxOCwicCI6MC40OTV9LHsidCI6MTc5NDU3ODQxOCwicCI6MC40OTV9LHsidCI6MTc5NDU4MjA0MCwicCI6MC40OTV9LHsidCI6MTc5NDU4NTYyNCwicCI6MC40OTV9LHsidCI6MTc5NDU4OTIzNCwicCI6MC40OTV9LHsidCI6MTc5NDU5MjgyMSwicCI6MC40OTV9LHsidCI6MTc5NDU5NjQxOCwicCI6MC40OTV9LHsidCI6MTc5NDU5OTk1OCwicCI6MC40OTV9XX0K",
+  "credentials_used": false
+}
