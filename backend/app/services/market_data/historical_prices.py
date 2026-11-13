@@ -29,6 +29,11 @@ from app.services.market_data.polymarket_service import (
     get_polymarket_service,
     market_data_cache,
 )
+from app.services.market_data.provider_contract import (
+    POLYMARKET_CLOB_PRICES_CONTRACT,
+    ProviderContractError,
+    validate_provider_contract,
+)
 
 logger = logging.getLogger(__name__)
 _CONDITION_ID = re.compile(r"^0x[0-9a-fA-F]{64}$")
@@ -566,6 +571,10 @@ async def load_token_price_history(
         raise PriceHistoryError("Invalid price-history fidelity", reason="invalid_request")
     if fidelity_minutes <= 0:
         raise PriceHistoryError("Invalid price-history fidelity", reason="invalid_request")
+    try:
+        validate_provider_contract(POLYMARKET_CLOB_PRICES_CONTRACT)
+    except ProviderContractError as exc:
+        raise PriceHistoryError(str(exc), reason="invalid_source") from exc
     start, end = _window(start_date, end_date)
 
     query = HistoricalPriceQuery(
