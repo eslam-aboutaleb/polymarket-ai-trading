@@ -405,4 +405,4 @@ legacy-history handling, hourly NAV, tests and operator rollout for #27/#35.
 
 See [Frozen executable replay](user%20guide/executable-replay.md) for costed depth replay, periodic NAV statistics, frozen strategy families and evidence assumptions.
 
-Dependency security: [blocking audit policy, current findings and administrator setup](security/README.md).
+Dependency security: [blocking audit policy, current findings and effective branch protection](security/README.md).

@@ -48,7 +48,9 @@ def source_entry(package, manifest):
     if len(matches) != 1:
         raise ValueError("Unreviewed or duplicate source dependency")
     entry = matches[0]
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", entry["repository"]):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", entry["repository"]) or any(
+        part in {".", ".."} for part in entry["repository"].split("/")
+    ):
         raise ValueError("Invalid source repository")
     if (
         not re.fullmatch(r"[0-9a-f]{40}", entry["commit"])
