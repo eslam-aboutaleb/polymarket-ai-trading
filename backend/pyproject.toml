@@ -92,6 +92,7 @@ output = "coverage.xml"
 [tool.uv]
 require-build-hashes = true
 build-constraint-dependencies = [
+    { requirement = "editables==0.5", hashes = ["sha256:61e5ffa82629e0d8bfe09bc44a07db3c1ab8ed1ce78a6980732870f19b5e7d4c"] },
     { requirement = "hatchling==1.26.3", hashes = ["sha256:c407e1c6c17b574584a66ae60e8e9a01235ecb6dc61d01559bb936577aaf5846"] },
     { requirement = "packaging==26.3", hashes = ["sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"] },
     { requirement = "pathspec==1.1.1", hashes = ["sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189"] },
