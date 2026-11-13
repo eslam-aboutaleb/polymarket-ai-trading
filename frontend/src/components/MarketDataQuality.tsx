@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
 import { apiClient } from "../services/apiClient";
 import { getApiErrorMessage } from "../utils/apiError";
+import ProviderContractHealth from "./ProviderContractHealth";
 
 interface Observation {
   snapshot_id: string;
@@ -98,6 +99,7 @@ export default function MarketDataQuality() {
 
   return (
     <section aria-label="Market data quality" className="card space-y-3 p-4">
+      <ProviderContractHealth />
       <h2 className="text-lg font-semibold text-white">Market data quality</h2>
       <p className="text-soft text-sm">
         Inspect captured observations before evaluating a strategy. Missing or interrupted depth is

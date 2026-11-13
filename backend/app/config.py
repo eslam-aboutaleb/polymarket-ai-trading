@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     executable_replay_enabled: bool = False
     binary_book_research_enabled: bool = False
     observation_archive_enabled: bool = False
+    historical_feed_canary_enabled: bool = False
     observation_archive_tokens: str = ""
 
     @field_validator("observation_archive_tokens")
