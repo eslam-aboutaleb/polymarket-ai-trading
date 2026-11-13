@@ -6,6 +6,15 @@ resolution-markers = [
     "python_full_version < '3.15'",
 ]
 
+[manifest]
+build-constraints = [
+    { name = "hatchling", url = "https://files.pythonhosted.org/packages/72/41/b3e29dc4fe623794070e5dfbb9915acb649ce05d6472f005470cbed9de83/hatchling-1.26.3-py3-none-any.whl" },
+    { name = "packaging", url = "https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl" },
+    { name = "pathspec", url = "https://files.pythonhosted.org/packages/f1/d9/7fb5aa316bc299258e68c73ba3bddbc499654a07f151cba08f6153988714/pathspec-1.1.1-py3-none-any.whl" },
+    { name = "pluggy", url = "https://files.pythonhosted.org/packages/40/9e/2b38731e0fc536806f16490e1a12d7f0dc2a1235aa8cc07bcc75416a7daa/pluggy-1.7.0-py3-none-any.whl" },
+    { name = "trove-classifiers", url = "https://files.pythonhosted.org/packages/30/81/0da8afb52a71d0a4f2bd3152357b1a441e393b286374802b9d3addab4ab5/trove_classifiers-2026.9.21.13-py3-none-any.whl" },
+]
+
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.7.1"
@@ -545,6 +554,7 @@ dependencies = [
     { name = "grpcio-reflection" },
     { name = "grpcio-tools" },
     { name = "httpx" },
+    { name = "llm-gateway-sdk", extra = ["settings"] },
     { name = "py-clob-client" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -559,6 +569,7 @@ requires-dist = [
     { name = "grpcio-reflection", specifier = ">=1.60.0" },
     { name = "grpcio-tools", specifier = ">=1.60.0" },
     { name = "httpx", specifier = ">=0.25.0" },
+    { name = "llm-gateway-sdk", extras = ["settings"], git = "https://github.com/eslam-aboutaleb/llm-gateway-sdk.git?rev=v0.1.0" },
     { name = "py-clob-client", specifier = ">=0.1.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pydantic-settings", specifier = ">=2.0.0" },
@@ -1235,6 +1246,20 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/01/e1/2069291243c926a2ff1cd706c7f3eeb9b62144bf60f77c9fb9ff2fb26bd3/iniconfig-2.3.1.tar.gz", hash = "sha256:67f4b9c50da0dedf52af349e7749a80a9057a5031199791b906c3bb3ae878960", size = 21209, upload-time = "2026-10-06T22:48:38.076Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/56/43/4ca9e49d27a1fcf6bece6f6aec0ea46bb9112489b93d4b688fb415457bdb/iniconfig-2.3.1-py3-none-any.whl", hash = "sha256:9121e2c1fdb355232495be3194c8dfe87ccc2d5dee45947b78e68f499790d7a7", size = 7552, upload-time = "2026-10-06T22:48:36.959Z" },
+]
+
+[[package]]
+name = "llm-gateway-sdk"
+version = "0.1.0"
+source = { git = "https://github.com/eslam-aboutaleb/llm-gateway-sdk.git?rev=v0.1.0#ebaa064813f7c1b83f5efefdd22a9fc87af5db19" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+settings = [
+    { name = "pydantic-settings" },
 ]
 
 [[package]]

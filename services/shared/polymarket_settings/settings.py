@@ -178,7 +178,7 @@ class SharedLLMSettings(GatewaySettings):
     """
 
     # Provider-agnostic LLM configuration
-    llm_provider: LLMProvider = LLMProvider.OPENAI
+    llm_provider: LLMProvider = LLMProvider.LITELLM
     # Default model. ``gpt-4o-mini`` replaces the retired
     # ``gpt-4-turbo-preview`` default.
     llm_model: str = "gpt-4o-mini"
@@ -207,7 +207,7 @@ class SharedLLMSettings(GatewaySettings):
     # Reasoning effort for the STRONG tier (OpenAI only).
     llm_strong_reasoning_effort: str = "medium"
 
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
 
 
 def resolve_tier_config(

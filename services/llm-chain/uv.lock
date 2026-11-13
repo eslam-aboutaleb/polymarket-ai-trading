@@ -8,6 +8,15 @@ resolution-markers = [
     "python_full_version < '3.12'",
 ]
 
+[manifest]
+build-constraints = [
+    { name = "hatchling", url = "https://files.pythonhosted.org/packages/72/41/b3e29dc4fe623794070e5dfbb9915acb649ce05d6472f005470cbed9de83/hatchling-1.26.3-py3-none-any.whl" },
+    { name = "packaging", url = "https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl" },
+    { name = "pathspec", url = "https://files.pythonhosted.org/packages/f1/d9/7fb5aa316bc299258e68c73ba3bddbc499654a07f151cba08f6153988714/pathspec-1.1.1-py3-none-any.whl" },
+    { name = "pluggy", url = "https://files.pythonhosted.org/packages/40/9e/2b38731e0fc536806f16490e1a12d7f0dc2a1235aa8cc07bcc75416a7daa/pluggy-1.7.0-py3-none-any.whl" },
+    { name = "trove-classifiers", url = "https://files.pythonhosted.org/packages/30/81/0da8afb52a71d0a4f2bd3152357b1a441e393b286374802b9d3addab4ab5/trove_classifiers-2026.9.21.13-py3-none-any.whl" },
+]
+
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.7.1"
@@ -1818,6 +1827,7 @@ dependencies = [
     { name = "langchain-litellm" },
     { name = "langchain-openai" },
     { name = "litellm" },
+    { name = "llm-gateway-sdk", extra = ["settings"] },
     { name = "newsapi-python" },
     { name = "openai" },
     { name = "pydantic" },
@@ -1877,6 +1887,7 @@ requires-dist = [
     { name = "langchain-litellm", specifier = ">=0.8,<0.9" },
     { name = "langchain-openai", specifier = ">=0.1.0" },
     { name = "litellm", specifier = ">=1.103.9,<1.104" },
+    { name = "llm-gateway-sdk", extras = ["settings"], git = "https://github.com/eslam-aboutaleb/llm-gateway-sdk.git?rev=v0.1.0" },
     { name = "newsapi-python", specifier = ">=0.2.7" },
     { name = "openai", specifier = ">=1.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
@@ -1890,6 +1901,20 @@ provides-extras = ["anthropic", "google", "groq", "all-providers"]
 dev = [
     { name = "pytest", specifier = ">=9" },
     { name = "ruff", specifier = ">=0.6.9" },
+]
+
+[[package]]
+name = "llm-gateway-sdk"
+version = "0.1.0"
+source = { git = "https://github.com/eslam-aboutaleb/llm-gateway-sdk.git?rev=v0.1.0#ebaa064813f7c1b83f5efefdd22a9fc87af5db19" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+settings = [
+    { name = "pydantic-settings" },
 ]
 
 [[package]]
@@ -2503,14 +2528,14 @@ wheels = [
 
 [[package]]
 name = "opentelemetry-api"
-version = "1.45.1"
+version = "1.45.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2e/02/6e0ae9cc61bd3169d401077b507b3ebc344745171e1051ab430be012dcd9/opentelemetry_api-1.45.1.tar.gz", hash = "sha256:aa38ed19bcc084ba42782a73255b3582283eced7ad6dddbd6695189e69adfb75", size = 72804, upload-time = "2026-10-06T17:32:58.133Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/19/14/cf3a6b6448849656e1e5f4e2101f3988dc6789724050096aba1bc5ccf592/opentelemetry_api-1.45.2.tar.gz", hash = "sha256:d7b0008e21e5fd61cbe7a7f34ca3b6905a78ab677d9bc395e299359c75cda6b4", size = 73277, upload-time = "2026-10-29T17:29:37.888Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1e/41/f7dcf80b81ee8e71c1a2b59f14208bc723edbd89ed027a73b175abf6348e/opentelemetry_api-1.45.1-py3-none-any.whl", hash = "sha256:b31553efa588ae44bc306f863c785c5333a9ecc091248c6ee68b4b6c87fdedfb", size = 60256, upload-time = "2026-10-06T17:32:33.506Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/2d/610db864d7513158cebb8f36cc88e67e73bd6c7aa1905ef18d89e1281c81/opentelemetry_api-1.45.2-py3-none-any.whl", hash = "sha256:2cbd737377e710ee740d261c94e93fa0f08e6d037c18f17513cc0a2d94479a34", size = 60335, upload-time = "2026-10-29T17:29:06.955Z" },
 ]
 
 [[package]]

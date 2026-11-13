@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from policy import enforce
+from source_provenance import audit_source, source_entry
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -87,7 +88,7 @@ def validate_node_lock(lock):
             raise ValueError("Node package lacks reviewed registry origin/version")
 
 
-def python_packages(lock, config):
+def python_packages(lock, config, source_manifest=None):
     own_name = re.sub(r"[-_.]+", "-", config["project"]["name"].lower())
     packages = set()
     for package in lock["package"]:
@@ -95,6 +96,9 @@ def python_packages(lock, config):
         if source in ({"virtual": "."}, {"editable": "."}) and package["name"] == own_name:
             continue
         if source != {"registry": "https://pypi.org/simple"}:
+            if "git" in source and source_manifest is not None:
+                source_entry(package, source_manifest)
+                continue  # Audited separately by immutable Git tree/content and OSV commit query.
             raise ValueError("Unaudited local, editable, git or non-PyPI dependency")
         artifacts = package.get("wheels", []) + ([package["sdist"]] if package.get("sdist") else [])
         if not artifacts or any(
@@ -247,6 +251,9 @@ def main():
     nodes, projects = inventory_projects(tracked)
     findings, inventory = [], []
     registry_cache = {}
+    source_cache = {}
+    source_manifest = json.loads((ROOT / "security/sources.json").read_text())
+    used_sources = set()
     for project in nodes:
         lock_path = ROOT / project / "package-lock.json"
         raw = lock_path.read_bytes()
@@ -291,9 +298,15 @@ def main():
         directory = output / project.replace("/", "-")
         directory.mkdir(parents=True, exist_ok=True)
         config = tomllib.loads((ROOT / project / "pyproject.toml").read_text())
-        packages = python_packages(lock, config)
+        packages = python_packages(lock, config, source_manifest)
         integrity = registry_integrity(lock, registry_cache)
         (directory / "registry-integrity.json").write_text(json.dumps(integrity, indent=2))
+        sources = []
+        for package in lock["package"]:
+            if "git" in package["source"]:
+                sources.append(audit_source(package, source_manifest, ROOT, config, source_cache))
+                used_sources.add((package["name"], package["version"]))
+        (directory / "source-integrity.json").write_text(json.dumps(sources, indent=2))
         run(["uv", "lock", "--project", project, "--check"], ROOT)
         for label, extra in (("all", ["--all-groups"]), ("runtime", ["--no-dev"])):
             data = load_json(
@@ -315,6 +328,28 @@ def main():
             )
             (directory / f"{label}-sbom.json").write_text(json.dumps(data, indent=2))
         runtime = {(p["name"], p["version"]) for p in data["components"]}
+        for source in sources:
+            commit = source["source"]["git"].rsplit("#", 1)[-1]
+            for vulnerability in source["commit_advisory_scan"].get("vulns", []):
+                if not isinstance(vulnerability.get("id"), str) or not vulnerability["id"]:
+                    raise ValueError("Source advisory identity missing")
+                findings.append(
+                    {
+                        "project": project,
+                        "ecosystem": "git",
+                        "package": source["package"],
+                        "version": source["version"],
+                        "advisory": vulnerability["id"],
+                        "path": f"uv.lock:{source['package']}#{commit}",
+                        "scope": "runtime"
+                        if (source["package"], source["version"]) in runtime
+                        else "development",
+                        "severity": "unknown",
+                        "lock_sha256": lock_hash,
+                        "direct": True,
+                        "fix": None,
+                    }
+                )
         direct = {
             re.split(r"[\[<>=!~; ]", d, maxsplit=1)[0].lower().replace("_", "-")
             for d in config["project"]["dependencies"]
@@ -359,7 +394,17 @@ def main():
         report = {"dependencies": reports, "fixes": {}}
         (directory / "audit.json").write_text(json.dumps(report, indent=2))
         findings += python_findings(report, project, lock_hash, packages, runtime, direct)
-        inventory.append({"project": project, "lock_sha256": lock_hash, "packages": len(packages)})
+        inventory.append(
+            {
+                "project": project,
+                "lock_sha256": lock_hash,
+                "packages": len(packages) + len(sources),
+                "registry_packages": len(packages),
+                "source_packages": sources,
+            }
+        )
+    if used_sources != {(s["name"], s["version"]) for s in source_manifest["sources"]}:
+        raise ValueError("Unused or missing reviewed source inventory")
     if not projects or not inventory:
         raise ValueError("Empty dependency inventory")
     blocked = enforce(
