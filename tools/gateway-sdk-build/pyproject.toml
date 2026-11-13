@@ -1,0 +1,8 @@
+[project]
+name = "gateway-sdk-build-tools"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "editables==0.5",
+    "hatchling==1.26.3",
+]

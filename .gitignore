@@ -126,3 +126,6 @@ frontend/e2e/.auth/
 
 # Redacted logs from credentialed integration runs.
 /frontend/real-ux-artifacts/
+
+# Full lockfile security evidence is uploaded by CI, never mixed into source.
+/security-artifacts/

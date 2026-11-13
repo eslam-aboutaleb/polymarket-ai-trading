@@ -14,8 +14,8 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
+import jwt
 from fastapi import HTTPException
-from jose import jwt
 
 from app.config import get_settings
 from app.security import auth
