@@ -20,6 +20,7 @@ COPY services/mcps/research/ services/mcps/research/
 # polymarket_settings). Kept as a single implementation so
 # llm-chain and cli-agent cannot drift apart.
 COPY services/shared/ shared/
+COPY prompts/ prompts/
 RUN uv pip install --system -e .
 
 # ── Application code ──────────────────────────────────────────

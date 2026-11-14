@@ -1,0 +1,18 @@
+{
+  "lock_format": 1,
+  "digest_algorithm": "pc-bundle-v1",
+  "contracts": [
+    {
+      "name": "polymarket.sentiment-analysis",
+      "version": "1.0.0",
+      "path": "contracts/polymarket.sentiment-analysis/1.0.0",
+      "bundle_digest": "sha256:22e60abf5fa105ca30306128934ad01b55a1bb611817cbb39555850664e11c56"
+    },
+    {
+      "name": "polymarket.superforecast",
+      "version": "1.0.0",
+      "path": "contracts/polymarket.superforecast/1.0.0",
+      "bundle_digest": "sha256:29e42b5a40c36356813ca40f30eb089e4e342c927c758e5fb538346834d289c0"
+    }
+  ]
+}

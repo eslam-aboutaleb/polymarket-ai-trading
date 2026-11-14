@@ -115,6 +115,31 @@ async def run():
             assert model.ainvoke.call_args.args[0][0].content == "LEGACY_SYSTEM"
         else:
             assert engine._run_analysis.call_args.kwargs["system_prompt"] == "LEGACY_SYSTEM"
+        if kind == "llm-chain":
+            import json
+            from langchain_core.messages import AIMessage
+            from src.contract_prompts import SENTIMENT_REF, load_prompt_contracts
+            engine.prompt_contracts = load_prompt_contracts()
+            engine.search_tool = SimpleNamespace(run=Mock(return_value="Polling evidence"))
+            engine._research_with_tavily = AsyncMock(return_value="")
+            engine._get_news_context = AsyncMock(return_value="")
+            engine._get_binance_context = AsyncMock(return_value="")
+            engine.research_mcp = SimpleNamespace(_call_tool=AsyncMock(return_value={}))
+            model.ainvoke.return_value = AIMessage(content=json.dumps({
+                "sentiment_score": .7, "label": "bullish", "summary": "Polling favors YES",
+                "bullish_factors": ["Polling"], "bearish_factors": [],
+            }))
+            sentiment = await client.analyze_sentiment("Will the measure pass?")
+            assert sentiment["metadata"]["contract_ref"] == SENTIMENT_REF
+            assert sentiment["metadata"]["bundle_digest"].startswith("sha256:")
+            assert sentiment["label"] == "bullish"
+            model.ainvoke.return_value = AIMessage(content='```json\n{}\n```')
+            try:
+                await client.analyze_sentiment("Will the measure pass?")
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("Invalid sentiment became a successful RPC result")
     finally:
         await client.close()
         await channel.close()

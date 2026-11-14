@@ -58,7 +58,7 @@ def source_entry(package, manifest):
         or not re.fullmatch(r"[0-9a-f]{64}", entry["content_sha256"])
     ):
         raise ValueError("Immutable source/tree/content identity required")
-    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", entry["tag"]):
+    if entry.get("tag") is not None and not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", entry["tag"]):
         raise ValueError("Reviewed release tag required")
     evidence = PurePosixPath(entry["review_evidence"])
     if (
@@ -67,7 +67,8 @@ def source_entry(package, manifest):
         or evidence.parts[:2] != ("security", "source-reviews")
     ):
         raise ValueError("Source review must be repository-owned security evidence")
-    expected = f"https://github.com/{entry['repository']}.git?rev={entry['tag']}#{entry['commit']}"
+    revision = entry.get("tag") or entry["commit"]
+    expected = f"https://github.com/{entry['repository']}.git?rev={revision}#{entry['commit']}"
     if package["source"] != {"git": expected}:
         raise ValueError("Source origin, tag or commit differs from reviewed identity")
     return entry
@@ -182,13 +183,16 @@ def audit_source(package, manifest, root, config, cache):
     key = entry["repository"], entry["commit"]
     if key not in cache:
         base = f"https://api.github.com/repos/{entry['repository']}"
-        tag = json.loads(fetch(f"{base}/git/ref/tags/{quote(entry['tag'], safe='')}"))
+        if entry.get("tag") is not None:
+            tag = json.loads(fetch(f"{base}/git/ref/tags/{quote(entry['tag'], safe='')}"))
+            if tag.get("object") != {
+                "type": "commit",
+                "sha": entry["commit"],
+                "url": f"{base}/git/commits/{entry['commit']}",
+            }:
+                raise ValueError("Reviewed source release tag changed")
         commit = json.loads(fetch(f"{base}/git/commits/{entry['commit']}"))
-        if tag.get("object") != {
-            "type": "commit",
-            "sha": entry["commit"],
-            "url": f"{base}/git/commits/{entry['commit']}",
-        } or (
+        if (
             commit.get("sha") != entry["commit"]
             or commit.get("tree", {}).get("sha") != entry["tree"]
         ):
