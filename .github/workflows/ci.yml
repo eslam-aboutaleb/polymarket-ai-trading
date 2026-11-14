@@ -143,6 +143,8 @@ jobs:
           printf 'JWT_SECRET_KEY=%s\n' "$(openssl rand -hex 32)" >> "$GITHUB_ENV"
       - name: Install backend dependencies
         run: uv sync --project backend --frozen
+      - name: Verify generated backend RPC contract
+        run: uv run --project backend --frozen python backend/generate_proto.py --check
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
