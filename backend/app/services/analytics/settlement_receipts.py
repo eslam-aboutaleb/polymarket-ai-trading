@@ -8,6 +8,7 @@ proxy recipients, nested positions or unavailable evidence abstain.
 import hashlib
 import json
 import re
+from datetime import UTC, datetime
 from decimal import Context, Decimal, localcontext
 
 from eth_abi import decode
@@ -155,6 +156,8 @@ async def read_redemption_receipt(client, *, tx_hash, condition_id, wallet):
         raise ValueError("RECEIPT_MISSING")
     block = await rpc(client, "eth_getBlockByNumber", [receipt["blockNumber"], False])
     head = int(await rpc(client, "eth_blockNumber", []), 16)
-    return verify_redemption_receipt(
+    result = verify_redemption_receipt(
         receipt, block, head, tx_hash=tx_hash, condition_id=condition_id, wallet=wallet
     )
+    result["receipt_observed_at"] = datetime.now(UTC).isoformat()
+    return result
