@@ -244,6 +244,11 @@ def _value_recorded_contract(db: Session, inp: BinaryValuationInput, user_id: in
 
         fee, fee_version = archived_taker_fee(meta["raw"], estimate["curve"])
         spec = analysis["spec"]
+        if (
+            estimate["token_id"] != inp.token_id
+            or {"YES": spec["yes_token"], "NO": spec["no_token"]} != rule.token_outcomes
+        ):
+            raise ValueError("ABSTAIN_BOOK_TOKEN_MAPPING_MISMATCH")
         if inp.shares % Decimal(spec["lot"]) != 0:
             raise ValueError("ABSTAIN_INVALID_SHARE_LOT")
         owned = None

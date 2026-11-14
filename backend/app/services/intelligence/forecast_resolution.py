@@ -657,7 +657,10 @@ async def _rule_version_exclusion(db, row, cache):
     created_at = row.created_at
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=UTC)
-    prior = get_rule_snapshot_as_of(db, row.condition_id, created_at)
+    try:
+        prior = get_rule_snapshot_as_of(db, row.condition_id, created_at)
+    except ValueError:
+        return ExclusionReason.RULE_UNVERIFIED
     if prior is None or prior.review_status != "verified":
         return ExclusionReason.RULE_UNVERIFIED
     if row.condition_id not in cache:

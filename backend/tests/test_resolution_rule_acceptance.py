@@ -223,3 +223,21 @@ def test_resolution_path_rejects_changed_or_unrecorded_decision_rules(monkeypatc
         )
         assert asyncio.run(_rule_version_exclusion(db, row, {})) == ExclusionReason.RULE_CHANGED
     engine.dispose()
+
+
+def test_serialized_rule_cannot_be_modified_without_invalidating_its_source_hash():
+    import json
+
+    from app.services.intelligence.resolution_rules import get_rule_snapshot_as_of
+
+    engine = create_engine("sqlite://")
+    ResolutionRuleSnapshot.__table__.create(engine)
+    with Session(engine) as db:
+        row = record_rule_snapshot(db, parse_resolution_rule(CID, market(), NOW))
+        payload = json.loads(row.spec_json)
+        payload["token_outcomes"] = {"YES": "202", "NO": "101"}
+        row.spec_json = json.dumps(payload)
+        db.commit()
+        with pytest.raises(ValueError, match="INTEGRITY_FAILURE"):
+            get_rule_snapshot_as_of(db, CID, NOW)
+    engine.dispose()

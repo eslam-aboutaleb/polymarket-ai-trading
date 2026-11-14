@@ -656,6 +656,7 @@ def parse_resolution_rule(
         source_uri=source_url,
         source_hash=source_hash,
         raw_rules=full_rules,
+        clarifications=clarification_list,
         raw_market=raw,
         observed_at=obs_utc,
         valid_from=obs_utc,
@@ -757,7 +758,23 @@ def get_rule_snapshot_as_of(
     row = db.scalar(stmt)
     if row is None:
         return None
-    return ContractSpecification.model_validate_json(row.spec_json)
+    spec = ContractSpecification.model_validate_json(row.spec_json)
+    received = row.observed_at
+    if received.tzinfo is None:  # SQLite stores the application's UTC datetime without tzinfo.
+        received = received.replace(tzinfo=UTC)
+    derived = parse_resolution_rule(
+        spec.condition_id, spec.raw_market, spec.observed_at, clarifications=spec.clarifications
+    )
+    if (
+        spec != derived
+        or spec.source_hash != row.source_hash
+        or spec.condition_id != row.condition_id
+        or spec.observed_at != received
+        or spec.source_uri != row.source_uri
+        or spec.review_status != row.review_status
+    ):
+        raise ValueError("RULE_SNAPSHOT_INTEGRITY_FAILURE")
+    return spec
 
 
 def invalidate_dependent_forecasts(db: Session, condition_id: str, current_source_hash: str) -> int:
