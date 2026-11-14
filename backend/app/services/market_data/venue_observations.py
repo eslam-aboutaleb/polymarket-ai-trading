@@ -16,6 +16,13 @@ from app.services.market_data.replay_capture import aware, digest
 SOURCE = "polymarket-clob-ws"
 REST_SOURCE = "polymarket-native-rest"
 VERSION = "venue-observation-v1"
+REFERENCE_SOURCES = {
+    "chainlink-data-streams": "Chainlink",
+    "coinbase-public-rest": "Coinbase",
+    "binance-public-rest": "Binance",
+    "kraken-public-rest": "Kraken",
+}
+REFERENCE_KINDS = frozenset({"oracle_reference", "external_reference"})
 
 
 def normalize(raw):
@@ -23,6 +30,28 @@ def normalize(raw):
     flags = ["CONTINUITY_UNVERIFIED"]
     value = {"version": VERSION, "kind": kind}
     try:
+        if kind in REFERENCE_KINDS:
+            price = Decimal(str(raw["value"]))
+            instrument, provider = raw["instrument"], raw["provider"]
+            source_at = datetime.fromisoformat(raw["source_at"].replace("Z", "+00:00"))
+            if (
+                not price.is_finite()
+                or price <= 0
+                or source_at.tzinfo is None
+                or not isinstance(instrument, str)
+                or not 1 <= len(instrument) <= 40
+                or not isinstance(provider, str)
+                or not 1 <= len(provider) <= 100
+            ):
+                raise ValueError("invalid reference point")
+            return {
+                "version": VERSION,
+                "kind": kind,
+                "provider": provider,
+                "instrument": instrument,
+                "value": str(price),
+                "source_at": source_at.astimezone(UTC).isoformat(),
+            }, ["REFERENCE_CONTINUITY_UNVERIFIED"]
         for side in ("bids", "asks") if kind == "book" else ():
             levels = raw.get(side)
             if not isinstance(levels, list) or not levels or len(levels) > 1000:
@@ -73,8 +102,21 @@ def ensure_transaction(db):
 
 def append_event(db, raw, *, received_at, connection_id, source=SOURCE):
     """Caller owns transaction. Duplicate identity preserves first committed receipt."""
-    if source not in (SOURCE, REST_SOURCE):
+    if source not in (SOURCE, REST_SOURCE, *REFERENCE_SOURCES):
         raise ValueError("unsupported capture source")
+    if source in REFERENCE_SOURCES:
+        expected_kind = (
+            "oracle_reference" if source == "chainlink-data-streams" else "external_reference"
+        )
+        if (
+            raw.get("event_type") != expected_kind
+            or raw.get("provider") != REFERENCE_SOURCES[source]
+            or raw.get("asset_id") != raw.get("instrument")
+        ):
+            raise ValueError("reference source identity mismatch")
+        _, flags = normalize(raw)
+        if "INVALID_OR_MISSING_DEPTH" in flags:
+            raise ValueError("invalid reference source payload")
     ensure_transaction(db)
     received_at = aware(received_at)
     token = str(raw.get("asset_id") or raw.get("token_id") or "")
@@ -106,7 +148,11 @@ def append_event(db, raw, *, received_at, connection_id, source=SOURCE):
                 flags.append("SEQUENCE_NOT_ORDERABLE")
 
     try:
-        event_at = datetime.fromtimestamp(int(raw["timestamp"]) / 1000, UTC)
+        event_at = (
+            datetime.fromisoformat(raw["source_at"].replace("Z", "+00:00")).astimezone(UTC)
+            if source in REFERENCE_SOURCES
+            else datetime.fromtimestamp(int(raw["timestamp"]) / 1000, UTC)
+        )
         if event_at > received_at:
             flags.append("SOURCE_CLOCK_AHEAD")
     except (KeyError, TypeError, ValueError, OverflowError, OSError):
@@ -146,7 +192,8 @@ def serialize(row):
     raw = json.loads(row.payload_json)
     normalized, _ = normalize(raw)
     if (
-        row.source not in (SOURCE, REST_SOURCE)
+        row.source not in (SOURCE, REST_SOURCE, *REFERENCE_SOURCES)
+        or row.kind != normalized["kind"]
         or digest(raw) != row.content_hash
         or digest([row.source, row.token_id, row.content_hash]) != row.id
         or normalized != json.loads(row.normalized_json)
