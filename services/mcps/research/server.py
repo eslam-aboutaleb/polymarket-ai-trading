@@ -725,42 +725,36 @@ def _tool_resolution_rule_analysis(args):
     return _run_async(resolution_rule_research(args))
 
 
-async def binary_valuation_research(args: dict[str, Any]) -> dict[str, Any]:
-    """Bounded POST-only bridge for deterministic binary contract valuation."""
-    unavailable = {
-        "schema_version": "binary-valuation-v1",
-        "status": "abstain",
-        "reason": "BINARY_VALUATION_TOOL_UNAVAILABLE",
-        "decision": "research_only",
-        "execution_eligible": False,
-    }
-    headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    if VENUE_API_TOKEN:
-        headers["Authorization"] = f"Bearer {VENUE_API_TOKEN}"
-    try:
-        async with (
-            httpx.AsyncClient(timeout=10) as client,
-            client.stream(
-                "POST",
-                f"{VENUE_API_BASE}/api/valuation/binary",
-                json=args,
-                headers=headers,
-                follow_redirects=False,
-            ) as response,
-        ):
-            if response.status_code != 200:
-                return {**unavailable, "reason": "BINARY_VALUATION_BACKEND_UNAVAILABLE"}
-            data = bytearray()
-            async for chunk in response.aiter_bytes():
-                if len(data) + len(chunk) > 524288:
-                    return {**unavailable, "reason": "BINARY_VALUATION_RESPONSE_TOO_LARGE"}
-                data.extend(chunk)
-        payload = json.loads(data)
-        if not isinstance(payload, dict) or payload.get("schema_version") != "binary-valuation-v1":
-            return {**unavailable, "reason": "INVALID_BINARY_VALUATION_RESPONSE"}
-        return payload
-    except (ValueError, TypeError, httpx.HTTPError, TimeoutError):
-        return unavailable
+def _tool_binary_contract_valuation(args):
+    return _run_async(_structured_skill_research("binary_contract_valuation", args))
+
+
+def _tool_oracle_basis_risk(args):
+    return _run_async(_structured_skill_research("oracle_basis_risk", args))
+
+
+def _tool_event_correlation_risk(args):
+    return _run_async(_structured_skill_research("event_correlation_risk", args))
+
+
+def _tool_recorded_event_risk(args):
+    return _run_async(_structured_skill_research("recorded_event_correlation_risk", args))
+
+
+RECORDED_EVENT_RISK_SCHEMA = {
+    "name": "recorded_event_correlation_risk",
+    "read_only": True,
+    "version": "event-correlation-risk-v1",
+    "input_schema": {
+        "type": "object",
+        "properties": {"account_id": {"type": "integer", "minimum": 1, "maximum": 2147483647}},
+        "additionalProperties": False,
+    },
+    "description": (
+        "Read recorded account executions and durable reservations; "
+        "no wallet reconciliation claim or order action."
+    ),
+}
 
 
 BINARY_VALUATION_TOOL_SCHEMA = {
@@ -777,48 +771,6 @@ BINARY_VALUATION_TOOL_SCHEMA = {
 }
 
 
-def _tool_binary_contract_valuation(args):
-    return _run_async(binary_valuation_research(args))
-
-
-async def oracle_basis_research(args: dict[str, Any]) -> dict[str, Any]:
-    """Bounded POST-only bridge for deterministic oracle basis risk analysis."""
-    unavailable = {
-        "schema_version": "oracle-basis-v1",
-        "status": "abstain",
-        "reason": "ORACLE_BASIS_TOOL_UNAVAILABLE",
-        "decision": "research_only",
-        "execution_eligible": False,
-    }
-    headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    if VENUE_API_TOKEN:
-        headers["Authorization"] = f"Bearer {VENUE_API_TOKEN}"
-    try:
-        async with (
-            httpx.AsyncClient(timeout=10) as client,
-            client.stream(
-                "POST",
-                f"{VENUE_API_BASE}/api/oracle-basis/analyze",
-                json=args,
-                headers=headers,
-                follow_redirects=False,
-            ) as response,
-        ):
-            if response.status_code != 200:
-                return {**unavailable, "reason": "ORACLE_BASIS_BACKEND_UNAVAILABLE"}
-            data = bytearray()
-            async for chunk in response.aiter_bytes():
-                if len(data) + len(chunk) > 524288:
-                    return {**unavailable, "reason": "ORACLE_BASIS_RESPONSE_TOO_LARGE"}
-                data.extend(chunk)
-        payload = json.loads(data)
-        if not isinstance(payload, dict) or payload.get("schema_version") != "oracle-basis-v1":
-            return {**unavailable, "reason": "INVALID_ORACLE_BASIS_RESPONSE"}
-        return payload
-    except (ValueError, TypeError, httpx.HTTPError, TimeoutError):
-        return unavailable
-
-
 ORACLE_BASIS_TOOL_SCHEMA = {
     "name": "oracle_basis_risk",
     "read_only": True,
@@ -833,8 +785,87 @@ ORACLE_BASIS_TOOL_SCHEMA = {
 }
 
 
-def _tool_oracle_basis_risk(args):
-    return _run_async(oracle_basis_research(args))
+EVENT_CORRELATION_TOOL_SCHEMA = {
+    "name": "event_correlation_risk",
+    "read_only": True,
+    "version": "event-correlation-risk-v1",
+    "description": (
+        "Scenario-based portfolio event-correlation, pending-order exposure, "
+        "and worst-case loss assessment; advisory only, no order action."
+    ),
+    "input_schema": json.loads(
+        (Path(__file__).parent / "schemas" / "event-risk-request.json").read_text()
+    ),
+}
+
+
+async def _structured_skill_research(tool, args):
+    """One bounded bridge for fixed analytical endpoints; no caller-supplied path."""
+    contracts = {
+        "binary_contract_valuation": ("POST", "/api/valuation/binary", "binary-valuation-v1"),
+        "oracle_basis_risk": ("POST", "/api/oracle-basis/analyze", "oracle-basis-v1"),
+        "event_correlation_risk": (
+            "POST",
+            "/api/risk/event-correlation/analyze",
+            "event-correlation-risk-v1",
+        ),
+        "recorded_event_correlation_risk": (
+            "GET",
+            "/api/risk/event-correlation/recorded",
+            "event-correlation-risk-v1",
+        ),
+    }
+    if tool not in contracts:
+        raise ValueError("Unknown read-only skill")
+    method, path, version = contracts[tool]
+    unavailable = {
+        "schema_version": version,
+        "status": "abstain",
+        "reason": "READ_ONLY_SKILL_UNAVAILABLE",
+        "execution_eligible": False,
+    }
+    headers = {"Accept": "application/json"}
+    if VENUE_API_TOKEN:
+        headers["Authorization"] = f"Bearer {VENUE_API_TOKEN}"
+    kwargs = {}
+    if method == "GET":
+        if set(args) - {"account_id"}:
+            return unavailable
+        if "account_id" in args:
+            account = args["account_id"]
+            if (
+                isinstance(account, bool)
+                or not isinstance(account, int)
+                or not 0 < account <= 2147483647
+            ):
+                return unavailable
+            headers["X-Account-Id"] = str(account)
+    else:
+        kwargs["json"] = args
+    try:
+        async with (
+            httpx.AsyncClient(timeout=10) as client,
+            client.stream(
+                method, f"{VENUE_API_BASE}{path}", headers=headers, follow_redirects=False, **kwargs
+            ) as response,
+        ):
+            if response.status_code != 200:
+                return unavailable
+            raw = bytearray()
+            async for chunk in response.aiter_bytes():
+                if len(raw) + len(chunk) > 524288:
+                    return unavailable
+                raw.extend(chunk)
+        result = json.loads(raw)
+        if (
+            not isinstance(result, dict)
+            or result.get("schema_version") != version
+            or result.get("execution_eligible") is not False
+        ):
+            return unavailable
+        return result
+    except (ValueError, TypeError, httpx.HTTPError, TimeoutError):
+        return unavailable
 
 
 TOOLS: dict[str, Any] = {
@@ -846,6 +877,10 @@ TOOLS: dict[str, Any] = {
     "describe_binary_contract_valuation": lambda _: BINARY_VALUATION_TOOL_SCHEMA,
     "oracle_basis_risk": _tool_oracle_basis_risk,
     "describe_oracle_basis_risk": lambda _: ORACLE_BASIS_TOOL_SCHEMA,
+    "event_correlation_risk": _tool_event_correlation_risk,
+    "recorded_event_correlation_risk": _tool_recorded_event_risk,
+    "describe_recorded_event_correlation_risk": lambda _: RECORDED_EVENT_RISK_SCHEMA,
+    "describe_event_correlation_risk": lambda _: EVENT_CORRELATION_TOOL_SCHEMA,
     "web_search": _tool_web_search,
     "x_indexed_web_search": _tool_x_indexed_web_search,
     # Compatibility alias: the pre-rename name resolves to the same handler,

@@ -354,6 +354,51 @@ class ResearchMCPClient:
                 return candidate
         return ""
 
+    async def describe_prediction_market_skills(self) -> dict[str, Any]:
+        """Discover only repository-owned read-only schemas, never executable plugins."""
+        names = (
+            "resolution_rule_analysis",
+            "binary_contract_valuation",
+            "oracle_basis_risk",
+            "event_correlation_risk",
+            "recorded_event_correlation_risk",
+        )
+        values = await self.call_tools([("describe_" + name, {}) for name in names])
+        if len(values) != len(names):
+            return {}
+        return {
+            name: value
+            for name, value in zip(names, values, strict=True)
+            if isinstance(value, dict)
+            and value.get("read_only") is True
+            and isinstance(value.get("input_schema"), dict)
+        }
+
+    async def prediction_market_skill(self, tool: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Structured entry for Research/Analysis/orchestrator callers; no execution tools."""
+        versions = {
+            "resolution_rule_analysis": "resolution-rule-v1",
+            "binary_contract_valuation": "binary-valuation-v1",
+            "oracle_basis_risk": "oracle-basis-v1",
+            "event_correlation_risk": "event-correlation-risk-v1",
+            "recorded_event_correlation_risk": "event-correlation-risk-v1",
+        }
+        if tool not in versions:
+            raise ValueError("Unsupported read-only prediction-market skill")
+        result = await self._call_tool(tool, args)
+        if (
+            not isinstance(result, dict)
+            or result.get("schema_version") != versions[tool]
+            or result.get("execution_eligible") is not False
+        ):
+            return {
+                "schema_version": versions[tool],
+                "status": "abstain",
+                "reason": "SKILL_TOOL_UNAVAILABLE_OR_UNSAFE",
+                "execution_eligible": False,
+            }
+        return result
+
     async def binary_book_research(self, condition_id: str, **assumptions) -> dict[str, Any]:
         """Uncached structured read-only tool for Analysis/Research/orchestrator callers."""
         result = await self._call_tool("binary_book", {"condition_id": condition_id, **assumptions})

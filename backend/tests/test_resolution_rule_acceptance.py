@@ -241,3 +241,11 @@ def test_serialized_rule_cannot_be_modified_without_invalidating_its_source_hash
         with pytest.raises(ValueError, match="INTEGRITY_FAILURE"):
             get_rule_snapshot_as_of(db, CID, NOW)
     engine.dispose()
+
+
+def test_explicit_new_protocol_is_not_assumed_to_pay_legacy_usdc():
+    raw = market()
+    raw["version"] = "v2"
+    spec = parse_resolution_rule(CID, raw, NOW)
+    assert spec.review_status != "verified"
+    assert "ABSTAIN_UNSUPPORTED_PROTOCOL_VERSION" in spec.abstain_reasons

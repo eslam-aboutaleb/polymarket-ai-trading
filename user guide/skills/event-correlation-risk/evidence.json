@@ -1,0 +1,22 @@
+{
+  "skill": "event-correlation-risk",
+  "version": "event-correlation-risk-v1",
+  "status": "implemented_detector",
+  "execution_eligible": false,
+  "owner": "backend/app/services/analytics/event_correlation_risk.py",
+  "dependencies": [
+    "#16",
+    "#21",
+    "#26"
+  ],
+  "gates": {
+    "live_trading_unchanged": true,
+    "credentials_required": false,
+    "pre_trade_gate_authoritative": true
+  },
+  "production_approved": false,
+  "human_approval": "not_asserted",
+  "shadow_report": "shadow-baseline.json",
+  "recorded_scope": "Application-recorded fills and reservations; external wallet activity excluded",
+  "trading_authority": "Existing pre-trade, durable execution and emergency halt unchanged"
+}
