@@ -154,6 +154,11 @@ jobs:
       - name: WalletConnect browser regressions (controlled SDK boundary)
         working-directory: frontend
         run: npm run test:walletconnect
+      - name: Session restoration browser regressions
+        working-directory: frontend
+        env:
+          E2E_BASE_URL: ""
+        run: npm run test:session
       - name: Live WalletConnect QR canary
         if: github.event_name == 'workflow_dispatch' && inputs.walletconnect_live_canary
         working-directory: frontend
