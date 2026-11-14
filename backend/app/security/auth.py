@@ -7,10 +7,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
+import jwt
 from eth_account.messages import encode_defunct
 from eth_utils import to_checksum_address
 from fastapi import Header, HTTPException, Request, status
-from jose import JWTError, jwt
+from jwt.exceptions import PyJWTError as JWTError
 from web3 import Web3
 
 from app.config import get_settings

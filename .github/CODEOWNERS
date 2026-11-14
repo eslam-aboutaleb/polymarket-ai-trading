@@ -1,0 +1,22 @@
+# Human review is required for changes that could weaken dependency security.
+/.github/CODEOWNERS @eslam-aboutaleb
+/.github/workflows/ @eslam-aboutaleb
+/security/ @eslam-aboutaleb
+/tools/dependency-security/ @eslam-aboutaleb
+**/package.json @eslam-aboutaleb
+**/package-lock.json @eslam-aboutaleb
+**/pyproject.toml @eslam-aboutaleb
+**/uv.lock @eslam-aboutaleb
+**/npm-shrinkwrap.json @eslam-aboutaleb
+**/pnpm-lock.yaml @eslam-aboutaleb
+**/yarn.lock @eslam-aboutaleb
+**/bun.lock* @eslam-aboutaleb
+/frontend/vite.config.ts @eslam-aboutaleb
+/frontend/src/compat/ @eslam-aboutaleb
+/backend/docker/Dockerfile @eslam-aboutaleb
+/services/**/Dockerfile @eslam-aboutaleb
+/scripts/check-duplication.sh @eslam-aboutaleb
+
+/frontend/Dockerfile* @eslam-aboutaleb
+/services/shared/polymarket_mcp/ @eslam-aboutaleb
+/services/mcps/ @eslam-aboutaleb

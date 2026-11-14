@@ -136,9 +136,12 @@ export default defineConfig(({ command, mode }) => {
         }
       : undefined,
     resolve: {
-      alias: {
-        "@": path.resolve(__dirname, "./src"),
-      },
+      alias: [
+        { find: "@", replacement: path.resolve(__dirname, "./src") },
+        // Wallet dependencies still publish Zod 3's record(value) calls.
+        // Keep that signature on patched v4 parsers, never the vulnerable v3 export.
+        { find: /^zod$/, replacement: path.resolve(__dirname, "./src/compat/walletZod.ts") },
+      ],
     },
   };
 });
