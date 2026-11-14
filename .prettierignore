@@ -24,3 +24,6 @@ frontend/vite.config.d.ts
 
 # Study notes (local, intentionally untracked)
 docs/
+
+# Versioned prompt assets are verified byte for byte against their lockfile.
+prompts/contracts/

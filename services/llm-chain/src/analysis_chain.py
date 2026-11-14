@@ -20,6 +20,12 @@ from polymarket_mcp import no_indexed_matches_text, sanitize_external_text, sear
 from polymarket_mcp.research_contract import RESEARCH_SYSTEM_PROMPT, structured_research_prompt
 
 from src.config import get_settings
+from src.contract_prompts import (
+    SENTIMENT_REF,
+    SUPERFORECAST_REF,
+    invoke_contract,
+    load_prompt_contracts,
+)
 from src.llm_factory import (
     LLMRequestConfig,
     create_llm,
@@ -239,6 +245,7 @@ class TradingAnalysisChain:
             llm_instance: Optional pre-configured LLM instance (for per-request overrides)
         """
         self.prompts = PromptManager()
+        self.prompt_contracts = load_prompt_contracts()
         self._streaming = streaming
         self._task_llm_cache: dict[str, Any] = {}
 
@@ -1142,37 +1149,31 @@ class TradingAnalysisChain:
         evidence = "\n\n".join(evidence_parts) if evidence_parts else "No evidence gathered."
 
         # 5. LLM sentiment analysis
-        prompt_template = self.prompts.get("research", "sentiment_analysis")
-        prompt = prompt_template.format(
-            question=query,
-            outcome=outcome or "the market as a whole",
-            content=evidence,
+        scored, identity = await invoke_contract(
+            llm,
+            self.prompt_contracts.get(SENTIMENT_REF),
+            {"question": query, "outcome": outcome or "the market as a whole", "content": evidence},
         )
-        messages = [HumanMessage(content=prompt)]
-        response = await llm.ainvoke(messages)
-        raw = response.content.strip()
-
-        # Parse JSON
-        json_match = re.search(r"\{[\s\S]*\}", raw)
-        if json_match:
-            try:
-                scored = json.loads(json_match.group())
-            except json.JSONDecodeError:
-                scored = {}
-        else:
-            scored = {}
-
-        try:
-            sentiment_score = float(scored.get("sentiment_score", 0.5))
-        except (TypeError, ValueError):
-            sentiment_score = 0.5
+        sentiment_score = scored["sentiment_score"]
+        expected_label = (
+            "bullish"
+            if sentiment_score > 0.55
+            else "bearish"
+            if sentiment_score < 0.45
+            else "neutral"
+        )
+        if scored["label"] != expected_label:
+            raise ValueError(
+                "Sentiment response label does not match the declared score thresholds"
+            )
 
         return {
             "sentiment_score": round(sentiment_score, 3),
-            "label": str(scored.get("label", "neutral")),
-            "summary": str(scored.get("summary", raw[:500])),
-            "bullish_factors": scored.get("bullish_factors", []),
-            "bearish_factors": scored.get("bearish_factors", []),
+            "label": scored["label"],
+            "summary": scored["summary"],
+            "bullish_factors": scored["bullish_factors"],
+            "bearish_factors": scored["bearish_factors"],
+            "prompt_contract": identity,
             "source_count": len(evidence_parts),
             "evidence_snippet": evidence[:1000],
             "timestamp": datetime.utcnow().isoformat(),
@@ -1366,38 +1367,28 @@ class TradingAnalysisChain:
             with contextlib.suppress(Exception):
                 research_text = self.search_tool.run(f"{question} latest news")[:500]
 
-            sf_prompt = self.prompts.get("auto_discovery", "superforecast")
-            prompt = sf_prompt.format(
-                question=question,
-                description=str(m.get("description", "") or "No description available."),
-                outcome_prices=(
-                    ", ".join(f"{float(p):.2f}" for p in prices if p is not None) or "unavailable"
-                ),
-                outcomes=(", ".join(str(o) for o in (m.get("outcomes") or [])) or "YES / NO"),
-                research_context=research_text or "No research available.",
-                sentiment_context="No sentiment analysis was run for this market.",
+            parsed, identity = await invoke_contract(
+                llm,
+                self.prompt_contracts.get(SUPERFORECAST_REF),
+                {
+                    "question": question,
+                    "description": str(m.get("description", "") or "No description available."),
+                    "outcome_prices": (
+                        ", ".join(f"{float(p):.2f}" for p in prices if p is not None)
+                        or "unavailable"
+                    ),
+                    "outcomes": (
+                        ", ".join(str(o) for o in (m.get("outcomes") or [])) or "YES / NO"
+                    ),
+                    "research_context": research_text or "No research available.",
+                    "sentiment_context": "No sentiment analysis was run for this market.",
+                },
             )
-            response = await llm.ainvoke(
-                [
-                    SystemMessage(content=filter_sys),
-                    HumanMessage(content=prompt),
-                ]
-            )
-
-            parsed: dict = {}
-            json_match = re.search(r"\{[\s\S]*?\}", response.content)
-            if json_match:
-                with contextlib.suppress(json.JSONDecodeError):
-                    parsed = json.loads(json_match.group())
-
-            try:
-                p_yes = float(parsed.get("p_yes", market_price))
-            except (TypeError, ValueError):
-                p_yes = market_price
-            try:
-                confidence = float(parsed.get("confidence", 50))
-            except (TypeError, ValueError):
-                confidence = 50
+            if parsed["question"] != question:
+                raise ValueError("Superforecast response does not match the requested market")
+            p_yes = parsed["p_yes"]
+            # The prompt's confidence is 0..1; downstream candidate scores use percent.
+            confidence = parsed["confidence"] * 100
 
             edge = abs(p_yes - market_price)
             side = "YES" if p_yes > market_price else "NO"
@@ -1412,7 +1403,8 @@ class TradingAnalysisChain:
                     "edge": round(edge, 4),
                     "side": side,
                     "confidence": confidence,
-                    "reasoning": str(parsed.get("reasoning", response.content[:200])),
+                    "reasoning": parsed["reasoning"],
+                    "prompt_contract": identity,
                     "condition_id": str(m.get("condition_id", "") or m.get("conditionId", "")),
                 }
             )

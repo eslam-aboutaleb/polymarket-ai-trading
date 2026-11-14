@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "sentiment_score",
+    "label",
+    "summary",
+    "bullish_factors",
+    "bearish_factors"
+  ],
+  "properties": {
+    "sentiment_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "label": {
+      "type": "string",
+      "enum": [
+        "bullish",
+        "bearish",
+        "neutral"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8000
+    },
+    "bullish_factors": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "string",
+        "maxLength": 4000
+      }
+    },
+    "bearish_factors": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "string",
+        "maxLength": 4000
+      }
+    }
+  }
+}

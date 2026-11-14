@@ -37,3 +37,7 @@ BINANCE_SKILLS_ENABLED=true  # default; set false to disable
 ```
 
 No API key required — all Binance Skills Hub APIs are public.
+
+## Prompt contracts
+
+Sentiment analysis and superforecast responses use locked prompt contracts. See the [integration guide](PROMPT_CONTRACTS.md) for deployment, validation behavior, prompt updates, and rollback.

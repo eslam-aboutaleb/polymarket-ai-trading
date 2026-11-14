@@ -137,6 +137,19 @@ class SourceTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 audit.python_packages({"package": [changed]}, self.config, self.manifest)
 
+    def test_reviewed_commit_pin_keeps_tree_content_and_build_verification(self):
+        self.entry.pop("tag")
+        self.package["source"]["git"] = (
+            "https://github.com/example/sdk.git?rev=" + "a" * 40 + "#" + "a" * 40
+        )
+        with patch.object(source, "fetch", side_effect=self.response) as fetch:
+            record = source.audit_source(self.package, self.manifest, self.root, self.config, {})
+        self.assertEqual(record["tree"], self.entry["tree"])
+        self.assertFalse(any("/git/ref/" in call.args[0] for call in fetch.call_args_list))
+        self.package["source"]["git"] = "https://github.com/example/sdk.git?rev=main#" + "a" * 40
+        with self.assertRaises(ValueError):
+            source.source_entry(self.package, self.manifest)
+
     def test_modified_content_or_unsafe_archive_cannot_match_reviewed_tree(self):
         for archive in [
             self.archive_bytes({"src/example.py": b"changed"}),

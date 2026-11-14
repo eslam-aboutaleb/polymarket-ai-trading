@@ -1,0 +1,13 @@
+{
+  "source_commit": "5749b7532eaefce0cafb6e8bc50bb60ae7d4ba85",
+  "templates": {
+    "polymarket.sentiment-analysis": {
+      "user": "You are a political scientist and media analyst trained in quantitative sentiment scoring.\n\nMarket Question: {question}\nOutcome being evaluated: {outcome}\n\nContent to analyze:\n{content}\n\nAssign a sentiment score between 0.0 and 1.0 where:\n- 0.0 = strongly negative for the outcome (evidence outcome will NOT happen)\n- 0.5 = neutral / no signal\n- 1.0 = strongly positive for the outcome (evidence outcome WILL happen)\n\nYou MUST respond with ONLY a valid JSON object:\n{{\n  \"sentiment_score\": <float 0.0-1.0>,\n  \"label\": \"bullish\" | \"bearish\" | \"neutral\",\n  \"summary\": \"Brief explanation of the score\",\n  \"bullish_factors\": [\"factor1\", \"factor2\"],\n  \"bearish_factors\": [\"factor1\", \"factor2\"]\n}}\n\nLabel rule: label = \"bullish\" if sentiment_score > 0.55, \"bearish\" if sentiment_score < 0.45, otherwise \"neutral\". List the specific evidence that supports each side in bullish_factors and bearish_factors.",
+      "system": null
+    },
+    "polymarket.superforecast": {
+      "user": "You are a Superforecaster. Apply rigorous methodology to predict the outcome:\n\nQuestion: {question}\nDescription: {description}\nCurrent outcome prices: {outcome_prices}\nOutcomes: {outcomes}\n\nResearch findings:\n{research_context}\n\nSentiment data:\n{sentiment_context}\n\nFollow these steps:\n1. DECOMPOSE: Break into 2-3 key sub-questions\n2. BASE RATE: What is the historical base rate for this type of event?\n3. FACTORS: List top factors with direction and magnitude\n4. BAYESIAN UPDATE: Starting from base rate, update based on evidence\n5. CALIBRATED PROBABILITY: Final probability for each outcome\n\nReturn ONLY valid JSON:\n{{\n  \"question\": \"{question}\",\n  \"p_yes\": <float 0.0-1.0>,\n  \"probability_no\": <float 0.0-1.0>,\n  \"confidence\": <float 0.0-1.0>,\n  \"base_rate\": <float 0.0-1.0>,\n  \"key_factors\": [{{\"factor\": \"...\", \"direction\": \"+|-\", \"magnitude\": \"high|medium|low\"}}],\n  \"decomposition\": [\"sub-question 1\", \"sub-question 2\"],\n  \"reasoning\": \"Brief chain of reasoning\"\n}}",
+      "system": "You are an elite autonomous Polymarket trading agent combining Superforecaster methodology with systematic market scanning. Your mission: identify the single highest expected-value trade across all available markets using rigorous probabilistic reasoning. You MUST respond with ONLY a valid JSON object — no markdown, no code fences, no extra text."
+    }
+  }
+}

@@ -38,6 +38,7 @@ dependencies = [
 # (see .pre-commit-config.yaml). Declaring them here keeps the
 # lockfile the single source of truth for the pinned versions.
 dev = [
+    "prompt-contracts @ git+https://github.com/eslam-aboutaleb/prompt-contracts.git@15b8737f3d7e329612fb85a1d440994015a2573e",
     "pytest>=9.0.3",
     "pytest-cov>=7.0",
     "pytest-randomly>=5.0",
