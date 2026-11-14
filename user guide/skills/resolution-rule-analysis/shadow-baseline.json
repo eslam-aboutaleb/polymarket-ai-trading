@@ -1,0 +1,21 @@
+{
+  "skill": "resolution-rule-analysis",
+  "evidence_class": "implemented_detector",
+  "execution_eligible": false,
+  "dataset": "../../acceptance-replay-2026-11-13/dataset.json.gz",
+  "report": "../../acceptance-replay-2026-11-13/report.json",
+  "dataset_sha256": "59a9fc4b0539462a5fb976e3cee021171d97da28654cff5247bbed78d746ee8c",
+  "replay_command": "uv run --project backend --frozen python scripts/acceptance-replay-report.py \"user guide/acceptance-replay-2026-11-13/dataset.json.gz\"",
+  "request_count": 2123,
+  "resolved_market_count": 124,
+  "held_out_usable_quotes": 5,
+  "brier_reconstructed": "0.301479289940828402366863905329940828402366863905325443788",
+  "brier_market_midpoint": "0.087320",
+  "limits": [
+    "Eight forward outcomes are a smoke study, not statistical validation or demonstrated alpha.",
+    "Historical bot forecasts and actual fills never existed in this dataset.",
+    "Reconstructed frequency benchmark is not an independently approved calibrated forecast.",
+    "Displayed terminal references and RTDS spot do not supply the complete authoritative Chainlink TWAP history.",
+    "Production valuation/oracle tooling must abstain where verified rules, calibration or settlement series are absent."
+  ]
+}

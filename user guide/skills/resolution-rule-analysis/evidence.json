@@ -1,0 +1,21 @@
+{
+  "skill": "resolution-rule-analysis",
+  "version": "resolution-rule-v1",
+  "status": "implemented_detector",
+  "execution_eligible": false,
+  "owner": "backend/app/services/intelligence/resolution_rules.py",
+  "dependencies": [
+    "#1",
+    "#16",
+    "#22",
+    "#24"
+  ],
+  "gates": {
+    "live_trading_unchanged": true,
+    "credentials_required": false,
+    "abstain_on_ambiguity": true
+  },
+  "shadow_report": "shadow-baseline.json",
+  "production_approved": false,
+  "human_approval": "not_asserted"
+}
