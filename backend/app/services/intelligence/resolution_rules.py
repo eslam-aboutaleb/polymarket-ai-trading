@@ -455,6 +455,8 @@ def parse_resolution_rule(
 
     if not question.strip():
         abstain_reasons.append("ABSTAIN_MISSING_QUESTION")
+    if raw.get("version") not in (None, "v1"):
+        abstain_reasons.append("ABSTAIN_UNSUPPORTED_PROTOCOL_VERSION")
     if raw.get("neg_risk") is True:
         abstain_reasons.append("ABSTAIN_UNSUPPORTED_MARKET_FORM")
 
