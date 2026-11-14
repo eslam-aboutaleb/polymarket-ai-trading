@@ -869,3 +869,34 @@ async def build_risk_report(
         "narrative": narrative,
         "generated_at": utc_now().isoformat(),
     }
+
+
+def recorded_event_risk(db, account, *, as_of=None):
+    """Optional read-side enhancement; never authorizes or modifies trading."""
+    from app.services.analytics.event_correlation_risk import (
+        EventRiskAssessment,
+        assess_event_correlation_risk,
+    )
+    from app.services.analytics.event_exposure_read_side import recorded_exposure
+
+    try:
+        request, sources = recorded_exposure(db, account, as_of)
+        result = assess_event_correlation_risk(request)
+        result.evidence_class = "recorded_application_execution_bound_not_complete_wallet"
+        result.source_metadata = {
+            "account_id": account.id,
+            "sources": sources,
+            "pending_fee_assumption": (
+                "One-USDC-per-share conservative upper bound until actual fees are reconciled"
+            ),
+            "scope": "Application-recorded fills/reservations; external wallet activity excluded",
+        }
+        return result
+    except (ValueError, TypeError, ArithmeticError) as exc:
+        reason = str(exc)
+        return EventRiskAssessment(
+            status="abstain",
+            abstain_reasons=[
+                reason if reason.startswith("ABSTAIN_") else "ABSTAIN_INVALID_RECORDED_EXPOSURE"
+            ],
+        )

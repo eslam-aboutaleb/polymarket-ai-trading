@@ -231,7 +231,7 @@ def _value_recorded_contract(db: Session, inp: BinaryValuationInput, user_id: in
         parsed = parse_resolution_rule(
             inp.condition_id, raw, datetime.fromisoformat(meta["received_at"])
         )
-        if parsed.source_hash != rule.source_hash:
+        if parsed.review_status != "verified" or parsed.source_hash != rule.source_hash:
             raise ValueError("ABSTAIN_BOOK_RULE_VERSION_MISMATCH")
         estimate = analysis["estimates"][0]
         if (

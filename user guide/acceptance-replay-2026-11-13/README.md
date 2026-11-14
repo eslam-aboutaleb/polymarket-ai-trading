@@ -1,6 +1,6 @@
 # Recreated public-source acceptance replay
 
-Captured on 13 November 2026 UTC (14 November in Cairo). `dataset.json.gz` contains 2,123 HTTP receipts, exact raw response bytes, content hashes, request/receipt clocks, RTDS spot snapshots, the capture hypothesis and the separately frozen frequency benchmark. Sources are public Gamma/CLOB, Polymarket's displayed terminal-reference endpoint and Coinbase. No account, wallet or provider credentials were used.
+Collection began on 13 November 2026 UTC; each receipt retains its exact timestamp. `dataset.json.gz` contains 2,123 HTTP receipts, exact raw response bytes, content hashes, request/receipt clocks, RTDS spot snapshots, the capture hypothesis and the separately frozen frequency benchmark. Sources are public Gamma/CLOB, Polymarket's displayed terminal-reference endpoint and Coinbase. No account, wallet or provider credentials were used.
 
 The training cohort contains 24 previously resolved windows per asset (BTC/ETH/SOL/XRP). Training labels were received before the frequency benchmark was frozen at 21:42:39 UTC. Its holdout begins at 21:45 UTC. Historical data retrieved today is not backdated into old decisions. The benchmark is reconstructed, not a record of historical bot forecasts or independently approved individual-event calibration.
 

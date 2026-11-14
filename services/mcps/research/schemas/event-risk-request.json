@@ -1,0 +1,299 @@
+{
+  "$defs": {
+    "ExposureLeg": {
+      "additionalProperties": false,
+      "description": "Single position, pending order, or unsettled payout leg.",
+      "properties": {
+        "condition_id": {
+          "pattern": "^0x[a-fA-F0-9]{64}$",
+          "title": "Condition Id",
+          "type": "string"
+        },
+        "token_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Token Id",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "YES",
+            "NO"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "shares": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,18}|(?=[\\d.]{1,37}0*$)\\d{0,18}\\.\\d{0,18}0*$)",
+              "type": "string"
+            }
+          ],
+          "title": "Shares"
+        },
+        "entry_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,18}|(?=[\\d.]{1,37}0*$)\\d{0,18}\\.\\d{0,18}0*$)",
+              "type": "string"
+            }
+          ],
+          "title": "Entry Price"
+        },
+        "fee_per_share": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,18}|(?=[\\d.]{1,37}0*$)\\d{0,18}\\.\\d{0,18}0*$)",
+              "type": "string"
+            }
+          ],
+          "default": "0",
+          "title": "Fee Per Share"
+        },
+        "status": {
+          "default": "open_position",
+          "enum": [
+            "open_position",
+            "pending_order",
+            "unsettled_payout"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "leg_id": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Leg Id"
+        },
+        "filled_shares": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,18}|(?=[\\d.]{1,37}0*$)\\d{0,18}\\.\\d{0,18}0*$)",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Filled Shares"
+        },
+        "event_id": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Event Id"
+        },
+        "underlying_asset": {
+          "anyOf": [
+            {
+              "maxLength": 40,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Underlying Asset"
+        },
+        "oracle": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Oracle"
+        },
+        "market_family": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Market Family"
+        },
+        "jurisdiction": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Jurisdiction"
+        },
+        "resolution_utc": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolution Utc"
+        },
+        "rule_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rule Hash"
+        }
+      },
+      "required": [
+        "condition_id",
+        "token_id",
+        "outcome",
+        "shares",
+        "entry_price"
+      ],
+      "title": "ExposureLeg",
+      "type": "object"
+    },
+    "LogicalRelation": {
+      "additionalProperties": false,
+      "description": "Declared logical relationship between two conditions.",
+      "properties": {
+        "relation_type": {
+          "enum": [
+            "identical",
+            "mutually_exclusive",
+            "implies",
+            "complementary_hedge"
+          ],
+          "title": "Relation Type",
+          "type": "string"
+        },
+        "left_condition_id": {
+          "pattern": "^0x[a-fA-F0-9]{64}$",
+          "title": "Left Condition Id",
+          "type": "string"
+        },
+        "right_condition_id": {
+          "pattern": "^0x[a-fA-F0-9]{64}$",
+          "title": "Right Condition Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "relation_type",
+        "left_condition_id",
+        "right_condition_id"
+      ],
+      "title": "LogicalRelation",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Input payload for assessing portfolio event-correlation risk.",
+  "properties": {
+    "legs": {
+      "items": {
+        "$ref": "#/$defs/ExposureLeg"
+      },
+      "maxItems": 500,
+      "title": "Legs",
+      "type": "array"
+    },
+    "relations": {
+      "items": {
+        "$ref": "#/$defs/LogicalRelation"
+      },
+      "maxItems": 500,
+      "title": "Relations",
+      "type": "array"
+    },
+    "proposed_leg": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExposureLeg"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "max_cluster_concentration_pct": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        }
+      ],
+      "default": "0.40",
+      "title": "Max Cluster Concentration Pct"
+    },
+    "as_of": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "As Of"
+    }
+  },
+  "title": "EventCorrelationRequest",
+  "type": "object"
+}

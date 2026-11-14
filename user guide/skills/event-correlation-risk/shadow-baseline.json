@@ -1,0 +1,40 @@
+{
+  "dataset_sha256": "59a9fc4b0539462a5fb976e3cee021171d97da28654cff5247bbed78d746ee8c",
+  "diagnostics": [
+    {
+      "actual_fills": false,
+      "as_of": "2026-11-13T21:52:19.587309+00:00",
+      "book_sha256": [
+        "cf649d47c14edb82df849f847406b4c6ddcfe749a91b9e7693e903b381e83df7",
+        "e1cd7751f95c629be5428f9db5085f73cdcc34262bcaa344062f9cfa9f279501",
+        "45ae06e42dca4beb5b8243819e7d56779b31c22aeb4f717f94681f2022c95cae",
+        "02a8e1fe5a72263e2b31b942be1167c98ca521b70d36440084abbb606c9fc004"
+      ],
+      "counterfactual_terminal_pnl_after_fee_bound": "6.71668",
+      "evidence_class": "post_capture_diagnostic_on_forward_recorded_matched_quotes",
+      "group_concentration_flags": [
+        "CLUSTER_CONCENTRATION_EXCEEDED:oracle:chainlink-twap-60s-declared-in-official-rules",
+        "AGGREGATED_CORRELATED_CONTRACTS:oracle:chainlink-twap-60s-declared-in-official-rules",
+        "CLUSTER_CONCENTRATION_EXCEEDED:time:2026-11-13T21:55:00+00:00",
+        "AGGREGATED_CORRELATED_CONTRACTS:time:2026-11-13T21:55:00+00:00"
+      ],
+      "observed_counterfactual_loss_within_bound": true,
+      "oracle_outage_or_zero_payout_stress_bound": "33.283320",
+      "quote_count": 4,
+      "single_condition_concentration_flags": [],
+      "window_start": 1794606600,
+      "worst_case_loss": "33.283320"
+    }
+  ],
+  "expected_shortfall": null,
+  "hypothesis_status": "Concentration comparison is diagnostic, not a precommitted trading-strategy backtest.",
+  "limitations": [
+    "No actual historical account holdings, wallet reconciliation or fills are fabricated.",
+    "Declared oracle grouping is operational source concentration, not measured price correlation.",
+    "Future source outages/void/revision states use a conservative gross-loss bound, not invented probabilities.",
+    "Existing account caps, signing, order gateway and halt remain authoritative."
+  ],
+  "mode": "read_only_implemented_detector",
+  "production_approved": false,
+  "schema": "event-risk-shadow-v1"
+}
