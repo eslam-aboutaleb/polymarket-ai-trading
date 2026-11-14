@@ -146,6 +146,8 @@ class ExclusionReason(StrEnum):
     INVALID_PROBABILITY = "invalid_probability"
     #: The forecast was recorded after the market had already closed.
     FORECAST_AFTER_CLOSE = "forecast_after_close"
+    RULE_UNVERIFIED = "rule_unverified"
+    RULE_CHANGED = "rule_changed"
 
 
 @dataclass
@@ -502,8 +504,18 @@ async def resolve_pending(db: Session, limit: int = _RESOLUTION_BATCH_LIMIT) -> 
         return run
 
     resolutions = await fetch_resolutions([row.condition_id for row in rows])
+    current_rules = {}
     for row in rows:
         run.checked += 1
+        if str(row.exclusion_reason or "").startswith("rule_changed"):
+            run.exclude(row.condition_id, ExclusionReason.RULE_CHANGED)
+            continue
+        if get_settings().resolution_rule_analysis_enabled:
+            reason = await _rule_version_exclusion(db, row, current_rules)
+            if reason is not None:
+                row.exclusion_reason = reason.value
+                run.exclude(row.condition_id, reason)
+                continue
         market = resolutions.get(row.condition_id or "")
         if market is None:
             market = MarketResolution(reason=ExclusionReason.MARKET_NOT_FOUND)
@@ -620,3 +632,44 @@ async def stop_forecast_resolution():
             await _resolution_task
     _resolution_task = None
     logger.info("Forecast resolution manager stopped")
+
+
+def verify_rule_before_settlement(
+    condition_id: str,
+    raw_market: dict[str, Any],
+    observed_at: datetime | None = None,
+) -> tuple[bool, str | None, str]:
+    """Verify resolution rule & token mapping before interpreting settlement payout."""
+    from app.services.intelligence.resolution_rules import parse_resolution_rule
+
+    spec = parse_resolution_rule(condition_id, raw_market, observed_at or utc_now())
+    if spec.review_status != "verified":
+        reason = spec.abstain_reasons[0] if spec.abstain_reasons else "ABSTAIN_UNVERIFIED_RULE"
+        return False, reason, spec.source_hash
+    return True, None, spec.source_hash
+
+
+async def _rule_version_exclusion(db, row, cache):
+    """Use recorded decision-time rules; refreshing never reconstructs past knowledge."""
+    from app.services.intelligence.resolution_rules import get_rule_snapshot_as_of
+    from app.services.market_data.polymarket_service import PolymarketService
+
+    created_at = row.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    prior = get_rule_snapshot_as_of(db, row.condition_id, created_at)
+    if prior is None or prior.review_status != "verified":
+        return ExclusionReason.RULE_UNVERIFIED
+    if row.condition_id not in cache:
+        try:
+            raw = await PolymarketService().get_market_outcome_tokens(row.condition_id)
+            cache[row.condition_id] = verify_rule_before_settlement(row.condition_id, raw)
+        except Exception:
+            logger.warning("Rule verification unavailable for %s", row.condition_id)
+            cache[row.condition_id] = (False, "unavailable", None)
+    verified, _, current_hash = cache[row.condition_id]
+    if not verified:
+        return ExclusionReason.RULE_UNVERIFIED
+    if current_hash != prior.source_hash:
+        return ExclusionReason.RULE_CHANGED
+    return None

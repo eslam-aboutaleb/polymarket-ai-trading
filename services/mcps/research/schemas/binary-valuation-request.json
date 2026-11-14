@@ -1,0 +1,160 @@
+{
+  "additionalProperties": false,
+  "description": "Identifiers select recorded evidence; callers cannot approve provenance.",
+  "properties": {
+    "condition_id": {
+      "pattern": "^0x[a-fA-F0-9]{64}$",
+      "title": "Condition Id",
+      "type": "string"
+    },
+    "token_id": {
+      "pattern": "^[0-9]{1,120}$",
+      "title": "Token Id",
+      "type": "string"
+    },
+    "outcome": {
+      "enum": [
+        "YES",
+        "NO"
+      ],
+      "title": "Outcome",
+      "type": "string"
+    },
+    "side": {
+      "default": "BUY",
+      "enum": [
+        "BUY",
+        "SELL"
+      ],
+      "title": "Side",
+      "type": "string"
+    },
+    "shares": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0.0,
+          "maximum": 1000000000.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,18}|(?=[\\d.]{1,37}0*$)\\d{0,18}\\.\\d{0,18}0*$)",
+          "type": "string"
+        }
+      ],
+      "title": "Shares"
+    },
+    "as_of": {
+      "format": "date-time",
+      "title": "As Of",
+      "type": "string"
+    },
+    "rules_hash": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Rules Hash",
+      "type": "string"
+    },
+    "forecast_id": {
+      "exclusiveMinimum": 0,
+      "title": "Forecast Id",
+      "type": "integer"
+    },
+    "account_id": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Account Id"
+    },
+    "limit_price": {
+      "anyOf": [
+        {
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,18}|(?=[\\d.]{1,37}0*$)\\d{0,18}\\.\\d{0,18}0*$)",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Limit Price"
+    },
+    "redemption_cost_per_share": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,18}|(?=[\\d.]{1,37}0*$)\\d{0,18}\\.\\d{0,18}0*$)",
+          "type": "string"
+        }
+      ],
+      "default": "0",
+      "title": "Redemption Cost Per Share"
+    },
+    "adverse_fill_haircut_per_share": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,18}|(?=[\\d.]{1,37}0*$)\\d{0,18}\\.\\d{0,18}0*$)",
+          "type": "string"
+        }
+      ],
+      "default": "0",
+      "title": "Adverse Fill Haircut Per Share"
+    },
+    "capital_lockup_days": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,18}|(?=[\\d.]{1,37}0*$)\\d{0,18}\\.\\d{0,18}0*$)",
+          "type": "string"
+        }
+      ],
+      "default": "0",
+      "title": "Capital Lockup Days"
+    },
+    "annual_funding_rate": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,18}|(?=[\\d.]{1,37}0*$)\\d{0,18}\\.\\d{0,18}0*$)",
+          "type": "string"
+        }
+      ],
+      "default": "0",
+      "title": "Annual Funding Rate"
+    }
+  },
+  "required": [
+    "condition_id",
+    "token_id",
+    "outcome",
+    "shares",
+    "as_of",
+    "rules_hash",
+    "forecast_id"
+  ],
+  "title": "RecordedValuationRequest",
+  "type": "object"
+}
