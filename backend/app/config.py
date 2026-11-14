@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     binary_book_research_enabled: bool = False
     resolution_rule_analysis_enabled: bool = False
     binary_valuation_enabled: bool = False
+    oracle_basis_risk_enabled: bool = False
     observation_archive_enabled: bool = False
     historical_feed_canary_enabled: bool = False
     observation_archive_tokens: str = ""

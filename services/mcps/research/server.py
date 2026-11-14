@@ -781,6 +781,62 @@ def _tool_binary_contract_valuation(args):
     return _run_async(binary_valuation_research(args))
 
 
+async def oracle_basis_research(args: dict[str, Any]) -> dict[str, Any]:
+    """Bounded POST-only bridge for deterministic oracle basis risk analysis."""
+    unavailable = {
+        "schema_version": "oracle-basis-v1",
+        "status": "abstain",
+        "reason": "ORACLE_BASIS_TOOL_UNAVAILABLE",
+        "decision": "research_only",
+        "execution_eligible": False,
+    }
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    if VENUE_API_TOKEN:
+        headers["Authorization"] = f"Bearer {VENUE_API_TOKEN}"
+    try:
+        async with (
+            httpx.AsyncClient(timeout=10) as client,
+            client.stream(
+                "POST",
+                f"{VENUE_API_BASE}/api/oracle-basis/analyze",
+                json=args,
+                headers=headers,
+                follow_redirects=False,
+            ) as response,
+        ):
+            if response.status_code != 200:
+                return {**unavailable, "reason": "ORACLE_BASIS_BACKEND_UNAVAILABLE"}
+            data = bytearray()
+            async for chunk in response.aiter_bytes():
+                if len(data) + len(chunk) > 524288:
+                    return {**unavailable, "reason": "ORACLE_BASIS_RESPONSE_TOO_LARGE"}
+                data.extend(chunk)
+        payload = json.loads(data)
+        if not isinstance(payload, dict) or payload.get("schema_version") != "oracle-basis-v1":
+            return {**unavailable, "reason": "INVALID_ORACLE_BASIS_RESPONSE"}
+        return payload
+    except (ValueError, TypeError, httpx.HTTPError, TimeoutError):
+        return unavailable
+
+
+ORACLE_BASIS_TOOL_SCHEMA = {
+    "name": "oracle_basis_risk",
+    "read_only": True,
+    "version": "oracle-basis-v1",
+    "description": (
+        "Compare external spot feeds against authoritative settlement observations "
+        "to quantify basis bps and threshold sign-reversal risk; no order action."
+    ),
+    "input_schema": json.loads(
+        (Path(__file__).parent / "schemas" / "oracle-basis-request.json").read_text()
+    ),
+}
+
+
+def _tool_oracle_basis_risk(args):
+    return _run_async(oracle_basis_research(args))
+
+
 TOOLS: dict[str, Any] = {
     "binary_book": _tool_binary_book,
     "describe_book_research": lambda _: BOOK_TOOL_SCHEMA,
@@ -788,6 +844,8 @@ TOOLS: dict[str, Any] = {
     "describe_resolution_rule_analysis": lambda _: RESOLUTION_RULE_TOOL_SCHEMA,
     "binary_contract_valuation": _tool_binary_contract_valuation,
     "describe_binary_contract_valuation": lambda _: BINARY_VALUATION_TOOL_SCHEMA,
+    "oracle_basis_risk": _tool_oracle_basis_risk,
+    "describe_oracle_basis_risk": lambda _: ORACLE_BASIS_TOOL_SCHEMA,
     "web_search": _tool_web_search,
     "x_indexed_web_search": _tool_x_indexed_web_search,
     # Compatibility alias: the pre-rename name resolves to the same handler,
