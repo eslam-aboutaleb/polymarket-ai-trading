@@ -1,0 +1,17 @@
+format_version = 1
+name = "polymarket.superforecast"
+version = "1.0.0"
+renderer = "placeholders-v1"
+input_schema = "input.schema.json"
+
+[output]
+mode = "json"
+schema = "output.schema.json"
+
+[[messages]]
+role = "system"
+file = "system.md"
+
+[[messages]]
+role = "user"
+file = "user.md"

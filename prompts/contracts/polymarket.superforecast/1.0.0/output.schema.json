@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "question",
+    "p_yes",
+    "probability_no",
+    "confidence",
+    "base_rate",
+    "key_factors",
+    "decomposition",
+    "reasoning"
+  ],
+  "properties": {
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "p_yes": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "probability_no": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "base_rate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "key_factors": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "factor",
+          "direction",
+          "magnitude"
+        ],
+        "properties": {
+          "factor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "+",
+              "-"
+            ]
+          },
+          "magnitude": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ]
+          }
+        }
+      }
+    },
+    "decomposition": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4000
+      }
+    },
+    "reasoning": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 12000
+    }
+  }
+}

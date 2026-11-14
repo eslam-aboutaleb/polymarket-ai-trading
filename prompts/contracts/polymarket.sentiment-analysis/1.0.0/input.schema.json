@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "question",
+    "outcome",
+    "content"
+  ],
+  "properties": {
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "outcome": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "content": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200000
+    }
+  }
+}

@@ -19,6 +19,7 @@ COPY services/mcps/research/ services/mcps/research/
 # polymarket_settings). Kept as a single implementation so
 # llm-chain and cli-agent cannot drift apart.
 COPY services/shared/ shared/
+COPY prompts/ prompts/
 
 # Install dependencies
 RUN uv sync --frozen --no-dev --no-install-project

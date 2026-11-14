@@ -474,6 +474,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 "label": result.get("label", "neutral"),
                 "source_count": str(result.get("source_count", 0)),
             }
+            metadata.update(result.get("prompt_contract", {}))
             metadata.update(provider_meta)
 
             return analysis_pb2.AnalysisResponse(

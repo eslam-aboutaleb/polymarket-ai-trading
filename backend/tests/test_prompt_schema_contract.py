@@ -18,6 +18,17 @@ PROMPTS_PATH = REPO_ROOT / "prompts" / "prompts.json"
 STORE = json.loads(PROMPTS_PATH.read_text())
 
 
+def _template(category: str, key: str) -> str:
+    migrated = {
+        ("auto_discovery", "superforecast"): "polymarket.superforecast",
+        ("research", "sentiment_analysis"): "polymarket.sentiment-analysis",
+    }
+    contract = migrated.get((category, key))
+    if contract:
+        return (REPO_ROOT / "prompts/contracts" / contract / "1.0.0/user.md").read_text()
+    return STORE[category][key]
+
+
 @pytest.mark.parametrize(
     ("category", "key", "required", "forbidden"),
     [
@@ -68,7 +79,7 @@ STORE = json.loads(PROMPTS_PATH.read_text())
 def test_fixed_template_schema_matches_its_parser(
     category: str, key: str, required: list[str], forbidden: list[str]
 ) -> None:
-    template = STORE[category][key]
+    template = _template(category, key)
 
     for field in required:
         assert field in template, f"{category}.{key} must ask for {field}"
@@ -78,7 +89,7 @@ def test_fixed_template_schema_matches_its_parser(
 
 
 def test_sentiment_template_encodes_the_label_thresholds() -> None:
-    template = STORE["research"]["sentiment_analysis"]
+    template = _template("research", "sentiment_analysis")
 
     assert "sentiment_score > 0.55" in template
     assert "sentiment_score < 0.45" in template
