@@ -1,0 +1,2124 @@
+{
+  "brier_market_midpoint": "0.087320",
+  "brier_reconstructed": "0.301479289940828402366863905329940828402366863905325443788",
+  "dataset_sha256": "59a9fc4b0539462a5fb976e3cee021171d97da28654cff5247bbed78d746ee8c",
+  "excluded": {
+    "invalid_or_empty_book": 3
+  },
+  "forecasts": [
+    {
+      "actual_fill": false,
+      "book_sha256": "5311cb230b044bca04a31a14fab0a2f6fdf559d44e81b9f4001e12db824fd325",
+      "book_source_at_ms": "1794606534722",
+      "brier_market": "0.2601",
+      "brier_reconstructed": "0.25",
+      "clob_sha256": "05e5cf45e241bb911e55ac784e133dad73ef4f0464e1c7ed2101b9df1ecb8f31",
+      "condition_id": "0xaa8cfaa4fadccb62db3101b2bd468f1eed3627f4c86c181ea5407ca295a67ebd",
+      "decision_available_at": "2026-11-13T21:48:54.783190Z",
+      "fee_schedule_version": "gamma-crypto-fees-v2-ceiling5-57e1fb1917147ed5",
+      "fee_upper_bound": "0.17472",
+      "gamma_sha256": "9a0a8e2b304fe08ce614b3a57f49ba15b27b9abdabb59a9203d09005b4683b01",
+      "market_baseline_net_per_share": "-0.027472",
+      "modeled_settlement_cashflow_after_fee": "-5.37472",
+      "net_sensitivity_per_share": {
+        "0": "-0.037472",
+        "0.005": "-0.042472",
+        "0.01": "-0.047472",
+        "0.02": "-0.057472"
+      },
+      "outcome_received_at": "2026-11-14T00:54:26.313909+00:00",
+      "outcome_sha256": "9e9921c1fd4d7b7f0b7eb8ccaf92f9b07efc420f654f4383b2599f10d0e7ec29",
+      "outcome_up": false,
+      "p_market_midpoint": "0.51",
+      "p_reconstructed": "0.5",
+      "symbol": "SOL",
+      "vwap_ten_shares": "0.52",
+      "window_start": 1794606300
+    },
+    {
+      "actual_fill": false,
+      "book_sha256": "cf649d47c14edb82df849f847406b4c6ddcfe749a91b9e7693e903b381e83df7",
+      "book_source_at_ms": "1794606738078",
+      "brier_market": "0.013225",
+      "brier_reconstructed": "0.28994082840236686390532544382840236686390532544378698225",
+      "clob_sha256": "277dcb9f944ab6c7c8bb7eaa4d5929d24c0b4b4d387ed6e25f8e70fa12c41519",
+      "condition_id": "0x6b3f49fbb929ef3112636db087bdcc2400279c11026beef1d31f51e8b6e29f0c",
+      "decision_available_at": "2026-11-13T21:52:18.213602Z",
+      "fee_schedule_version": "gamma-crypto-fees-v2-ceiling5-57e1fb1917147ed5",
+      "fee_upper_bound": "0.06853",
+      "gamma_sha256": "f053f9de8b7583214d6d7ca428dab1a81e0cd2ae9adcf2f17b05d10f2bd27aa8",
+      "market_baseline_net_per_share": "-0.011853",
+      "modeled_settlement_cashflow_after_fee": "1.03147",
+      "net_sensitivity_per_share": {
+        "0": "-0.4353145384615384615384615385",
+        "0.005": "-0.4403145384615384615384615385",
+        "0.01": "-0.4453145384615384615384615385",
+        "0.02": "-0.4553145384615384615384615385"
+      },
+      "outcome_received_at": "2026-11-14T00:54:27.670305+00:00",
+      "outcome_sha256": "cd4348bd7c19c6cf7ee41bff918a02acf2a99148c5c37e67eeeaf5a0be94d09b",
+      "outcome_up": true,
+      "p_market_midpoint": "0.885",
+      "p_reconstructed": "0.4615384615384615384615384615",
+      "symbol": "BTC",
+      "vwap_ten_shares": "0.89",
+      "window_start": 1794606600
+    },
+    {
+      "actual_fill": false,
+      "book_sha256": "e1cd7751f95c629be5428f9db5085f73cdcc34262bcaa344062f9cfa9f279501",
+      "book_source_at_ms": "1794606739065",
+      "brier_market": "0.024025",
+      "brier_reconstructed": "0.28994082840236686390532544382840236686390532544378698225",
+      "clob_sha256": "ca9cbcba6d1ba13bf6573f0806f5436ae671600f468254826e2f6f9026de8890",
+      "condition_id": "0xfb9ee8cc413feb3edbd19680575cb692bf9e5b627cd1b721bf0187c7b74b6474",
+      "decision_available_at": "2026-11-13T21:52:19.215370Z",
+      "fee_schedule_version": "gamma-crypto-fees-v2-ceiling5-57e1fb1917147ed5",
+      "fee_upper_bound": "0.08925",
+      "gamma_sha256": "32fd17e32a2efe02d919bcf29c56c4164cde211ba79bd26bc65d368b45d33ef5",
+      "market_baseline_net_per_share": "-0.013925",
+      "modeled_settlement_cashflow_after_fee": "1.41075",
+      "net_sensitivity_per_share": {
+        "0": "-0.3973865384615384615384615385",
+        "0.005": "-0.4023865384615384615384615385",
+        "0.01": "-0.4073865384615384615384615385",
+        "0.02": "-0.4173865384615384615384615385"
+      },
+      "outcome_received_at": "2026-11-14T00:54:28.161969+00:00",
+      "outcome_sha256": "e69f3dfc6587fe5d735723cd4760ba75a2fc60ea8004418def6402bcd343ecb5",
+      "outcome_up": true,
+      "p_market_midpoint": "0.845",
+      "p_reconstructed": "0.4615384615384615384615384615",
+      "symbol": "ETH",
+      "vwap_ten_shares": "0.85",
+      "window_start": 1794606600
+    },
+    {
+      "actual_fill": false,
+      "book_sha256": "45ae06e42dca4beb5b8243819e7d56779b31c22aeb4f717f94681f2022c95cae",
+      "book_source_at_ms": "1794606739356",
+      "brier_market": "0.126025",
+      "brier_reconstructed": "0.25",
+      "clob_sha256": "ec6924c9d441988ea08781486859b969d774eb25484ae2d6fe0a36150641fd63",
+      "condition_id": "0x03c223f429b6933260da36b1553c4173cc64f61a32fea960e4608c056a8a3dec",
+      "decision_available_at": "2026-11-13T21:52:19.511450Z",
+      "fee_schedule_version": "gamma-crypto-fees-v2-ceiling5-57e1fb1917147ed5",
+      "fee_upper_bound": "0.15701",
+      "gamma_sha256": "367fcc3bf949c541c49ea786cd4f5bf7ad98dfe3f1b68bdeb7a74eb5e52002e6",
+      "market_baseline_net_per_share": "-0.030701",
+      "modeled_settlement_cashflow_after_fee": "3.24299",
+      "net_sensitivity_per_share": {
+        "0": "-0.175701",
+        "0.005": "-0.180701",
+        "0.01": "-0.185701",
+        "0.02": "-0.195701"
+      },
+      "outcome_received_at": "2026-11-14T00:54:28.592810+00:00",
+      "outcome_sha256": "f87cf6c70e000ac663555922ab53facfa3f8419f9a88e39445fa3141c57d0263",
+      "outcome_up": true,
+      "p_market_midpoint": "0.645",
+      "p_reconstructed": "0.5",
+      "symbol": "SOL",
+      "vwap_ten_shares": "0.66",
+      "window_start": 1794606600
+    },
+    {
+      "actual_fill": false,
+      "book_sha256": "02a8e1fe5a72263e2b31b942be1167c98ca521b70d36440084abbb606c9fc004",
+      "book_source_at_ms": "1794606739524",
+      "brier_market": "0.013225",
+      "brier_reconstructed": "0.42751479289940828402366863899289940828402366863905325444",
+      "clob_sha256": "9633f5e41c38e11f6dd202b45847a5c889395955dfc27e7d0ab2d3af70129de2",
+      "condition_id": "0x8cfa06035f0e731044e590899a536bfb85491825bea17eb9e9d48d9932205080",
+      "decision_available_at": "2026-11-13T21:52:19.587309Z",
+      "fee_schedule_version": "gamma-crypto-fees-v2-ceiling5-57e1fb1917147ed5",
+      "fee_upper_bound": "0.06853",
+      "gamma_sha256": "347a02b1a534cf66c6ab37236ca6ecd55d4d8fa7f9d2346c0ba73188112ca40b",
+      "market_baseline_net_per_share": "-0.011853",
+      "modeled_settlement_cashflow_after_fee": "1.03147",
+      "net_sensitivity_per_share": {
+        "0": "-0.5506991538461538461538461538",
+        "0.005": "-0.5556991538461538461538461538",
+        "0.01": "-0.5606991538461538461538461538",
+        "0.02": "-0.5706991538461538461538461538"
+      },
+      "outcome_received_at": "2026-11-14T00:54:29.025121+00:00",
+      "outcome_sha256": "737e5a7ed2fed746d2b95da288e017b2642f49d13f2003d80fae2d0b57ab208d",
+      "outcome_up": true,
+      "p_market_midpoint": "0.885",
+      "p_reconstructed": "0.3461538461538461538461538462",
+      "symbol": "XRP",
+      "vwap_ten_shares": "0.89",
+      "window_start": 1794606600
+    }
+  ],
+  "frozen_model": {
+    "formula": "Beta(1,1)-smoothed previous observed resolved Up frequency per asset; no model selection or fitting after holdout begins",
+    "frozen_at": "2026-11-13T21:42:39.459261+00:00",
+    "holdout_start": 1794606300,
+    "limits": "Reconstructed frequency benchmark, not historical bot decisions, independent model approval, individual-event calibration or profit evidence. Repeated overlapping market regimes invalidate IID confidence interpretations.",
+    "probabilities": {
+      "BTC": "0.4615384615384615384615384615",
+      "ETH": "0.4615384615384615384615384615",
+      "SOL": "0.5",
+      "XRP": "0.3461538461538461538461538462"
+    },
+    "training_counts": {
+      "BTC": {
+        "n": 24,
+        "up": 11
+      },
+      "ETH": {
+        "n": 24,
+        "up": 11
+      },
+      "SOL": {
+        "n": 24,
+        "up": 12
+      },
+      "XRP": {
+        "n": 24,
+        "up": 8
+      }
+    },
+    "training_receipt_hashes": [
+      "ebd3bd2b3c6dd291805549bd6aadbd1c3ad99fc2a7188fe22dbd1337dbb795d9",
+      "0d11b72e6d40db00e3fd1cda55d735e51f09ae24887b0e5b8918620ca7d4dafb",
+      "fd3118e98dbc957910f0b9bf3262106ae323cc3b5e63af80989aa2016b93336e",
+      "766675042647b71dcb6bc8dd05584ffd85df85c968823a1952e27bc3d7d86a06",
+      "fba4d233f08929e1049b3ef3abca875c749334249af9f932e84a551d59951160",
+      "d33dd21ccaf3fd15f54c5f44c3ec734963e5bd467bfb09c473628938ba2a220d",
+      "d26519741ce551200213f08b484d06dff8cc628e74e1a751943bfd4171451aa9",
+      "722840a12b562d2e32df05f3baf7d1f2a96435a1bc78e37b901335cd3382fe4c",
+      "83a3bbf11386810f9a7c7883f166acab78cc35676da9ef68b893a9c3c68a9751",
+      "7e14fe2e8957dd830a448bb4d3d74a3f9f806564c883ce62f0b4ffffd5a57ac6",
+      "bf42458d7e65af41f8aa73f27f4f0676973c0e6d0bd50442a69a6ef5bd0ddc2b",
+      "ad21e9795f149f38ed9b81ed7ce084d74426b3819ff434ebcab2006f46d0d469",
+      "4deb3577083c3e204f75325b74a544177f55fe9982d5c54fdd319801dd460cad",
+      "1eabc80d6062c9da0f86a27cbe462fda6adeed97513186a5df8a34ec36fb8ad8",
+      "249966e169d98bebe662b032d26a8f3d2f54461ee26980a3010f5f169a40f57b",
+      "a1c48e6bc5ac413852ff8eb6b5f43931f746768ee6cbe013117e59f69fd1f03f",
+      "ca6283b88693cd348d9d62ff5ed08baa8b1d3a1cb88e322572966f7ee42df360",
+      "8254dd740499d3549d23557ffdb5e3737072795dde91ed9fc05ad32af8c204f3",
+      "07b42db84f3622d34993f06c96f74f732cf2334f40473779c88a8e6e236ce703",
+      "dd20a1efa66d7f8a61ef7555dd59079e2072a758e840c792d5f7651264ebd5d9",
+      "90326948ce5552b9abcd286f4d29cb03e39a2cf90cb817d8163d0c511c0e6d82",
+      "dd0d4b721dd028f4ff6b5cc4ad23952fbcab32fe95d9ea937f37f5cde9a81ca2",
+      "6ec0fd1027346965e66cb2958bd03946621208f15758ffdc87f829ae3864814f",
+      "4a1b07fb2ea43359eecaa86b81fbe981f520e78acc82cfb33bbd46f9bbc35d9b",
+      "a66661fc58871bad84770b38e8488563cf8062357d7349921380f51efec83661",
+      "62ce2d46072dcb2db2f574f232a9dcedc2d059333ad735ee4c8024879b0b0b06",
+      "2eaf66a1798ab46b919cc1744249cdab1813ace00b7c0f7ebfd0aa5d147a31ec",
+      "b4b0dc5413ae76edb43a9960fc83cd1ace28da94a1cef98d1116fd657aa85254",
+      "2bc33df3cf8d36aa4d1874c4abbbba1d43e1fdf9a15a01af9459486eb8c450dc",
+      "e6d6524d0d232bc2ffc0f5224ca3bff64ed248776dea27f813995a57bb937e90",
+      "2035ba55d41e1f4332bacf5ee0eb8fce8ad4afcacfe3f15b003b6bf47c4949bc",
+      "cce5e970029511585b604e757fbff02da4ee2548d63eebef57a56efbeab8b7ed",
+      "5259f013eb710926f23196a834eadcc98cd3219602f5617534e56b73cbbb2b29",
+      "ba3f66b1d0ff6a58a8d2a40e3a62c145dcd88b48661c3164886dd715eec2fd2c",
+      "bde9461837de3097b6c2971fae04235f1d877994fa4952bc78e41fcff3076340",
+      "eea080efc973750913582c87f443c1f03dcacd1486c5ee7b63a5578ca41b2347",
+      "f63d56d42b50ea6da2784cfa53900f11d0dda74415b4f3db81b138d0e9b8ce04",
+      "043085b3120c7429016dae16971f0a5f73fb89f267992f8e1a959fc22e35b686",
+      "a2184866ea98d81bc457ab257b50b168dc5b24b70acd4ae7e93cb4f23e42b961",
+      "71c31660db4a3050c50ab2b7005b7db989606e062c12901b05d97d54c47e662a",
+      "a9bc91ac87a826f173d6dd657b7115e99ad108b6cba6dd703df5e281e932bdfa",
+      "f9e809d4bb9ad44c26e9444fc1be9ce8a693fc52f84b7710f276eac5646a3add",
+      "255387fc1b3e81844d53d30854a05c0698ae27683f3ff343aa061f8247f18ce4",
+      "849e08d53a18aad8007ee6f0e696986f0368d8806249dd5b9fb810c631170cf6",
+      "617109a7cba95cf47422dc63712353b6a240e3a283e374bec720e72873dc5112",
+      "9106975db82191037f06d80ed6ade2d0a97592d9c40fa86d554717d3c80fc303",
+      "074dcd3da136108ee03a8ec85335f47266536aac95f55503dfc87fb7125e77ec",
+      "036266d6d7e802f3cb9356ac3070cca77be401e109e677dbba84344de57be818",
+      "00955f05d09a5e25f4e1564be9866edbc8c0b97ddcc0f20699d5353ff36cea1d",
+      "9646bee509878f44d5c39abb6cad2262bbbf75796983ba6d742e2d949f24a14b",
+      "d1d7c5eeda498e2e509eabb94d5bd4aa4cdeeb97aea5ffce5610c9f4857aebd5",
+      "24fbc661838f149800845c38008ae4cf8d100542ffc46057c448de80654d89c3",
+      "3fa39927e9b3a92c7a9a54e6f2693b99351c1b50ee1887394e879cf7b61965c5",
+      "2650d6b1d119ea1b86760b38a9eb53131f4b6a50c235277f5d73d8afe488b065",
+      "3d146c8b1f8b7f2e21148b47495f9c0689d3830b0982b28892ca5dc60d7ff6b1",
+      "4635af09a8f0846d657eec957085d41c2ddc21b2467f63cbf68f55fb836cf841",
+      "4b28403fca7f5d58db110bd2caf7ecc033ea2feffd3f77ea2ce521a12fbf29fe",
+      "264dbfd94f0b6a4ea94c35c3d949dd2037b63774620d1ff85897ac5bfa39fb9c",
+      "0b23154864cf3bc5043e40cf94b3de2ecfc5d4a8e0b632d1e98923880d8b8dd8",
+      "1569d0c81afaba4bc833f471630d1f1777e81648b14728061b329eb55edacddd",
+      "3ae3c321eb9a08b728bdb12a931f0ff9ac61ae57b73fc799820702500add8495",
+      "49282c6dceb580f1421486843e01886e4f42a909e17ebea434ac70390156ec7a",
+      "38ed39ce6c91e54ed5a2cdb313cb65ec591a4c357f4d85a12df5816063962088",
+      "595f36ddad53d10a2adb38857c141657e86b1b08fc0636af332028c3e7e41dd5",
+      "c8ff3ee62ae3782afda79aabcde1433730a72f044be1cc07f686e8eafd75281d",
+      "d0f3a443aa89a4a79322da2e30bece168e529db4f926702a4198848cb74b93f3",
+      "03aa8313f8df54a7964f9e93fefa98418a345b19604ae9975674673b80e84b7a",
+      "d1d95bd6f57e15714ef335749e870429b9aad0e8227e68d5b4d39fa1ea382b99",
+      "f23a3024025308d066d74c24407182f6414040b4f5c6bd75f35d9b57ca55cb67",
+      "03366a6e2c07859b882dd848afb37ad7491b8d79d12dd3c5acb782d9cad7fdb6",
+      "450edf4dcad0883a2793365de25295e6267b4b2152758011bfdf7923beb690bf",
+      "018dd15dfe33f1194a9a887d2107eb87231ab06fc11658def119f14f5e0c2fbb",
+      "2ae73d02e4323de9558f27009b591e896db8a6b7cdcf30165a5b1801b9565267",
+      "59cc4797de5db3d61e03281d06d331ebd51baa5a7c2936752e75c839a7dab99e",
+      "482e772563b17cb297116a7ef1c1b3d03768549be7446426e16fdb5f55eca4ba",
+      "22cfc7e8137d2724161f89386dc9156c968cf75560d14873e1af1ef17d5516d3",
+      "0f23172089cd93a96d8638971848b58fbc59b35fab056805705b24efc521d27a",
+      "38b00104f342929760f12bc47411e24afdd00b553c1a15585a0168266c326156",
+      "ac11def07a4d7732979e6f1809dcc56ba95a99305d68fbf0503bca82c1ea55aa",
+      "04bc205ebd6f8ecb22114bf943c2f664e88f0f448aa698810b57ada5f98331ba",
+      "f1f82ee481332ce50ee46ea6b0dd91915fc1c93c92aa6c777479e042d78db1d9",
+      "ac4eb8d0dbe522ceaa622ff6bd119e0bdc4284fa09c8c690831380e7696f68a6",
+      "e24f7b2a21e107511cda83d5ea3dcdb23d178226bec0b86f14865d3e00999c66",
+      "19242b3968a7e326393af521063b46d01e0858990bdaf875caf3e0b095548c09",
+      "b9ba980a08824aee9445c8ca424da77ba5bee18fea71c50c5216a7289dd6f0be",
+      "31abb641e833be3aabc9ce927ded913ba5323e658efa88a63095acbbfddc190a",
+      "1943c19f5f2b610443584e0755915e130808a73286b19a1cdc49a0012d76aa19",
+      "930450e544669ba546925592ff786ecb473680f03f3a342d8528bb61a4ca421d",
+      "6cad6c12b20eb88954759b698781a56954cda94c0dae454cbd68a7510665a022",
+      "7bfacf66374fcd151de825582a53e0991f51c106628941f03be062cbd4d4a0f0",
+      "66c8d7f73ece593c7a3c3cbf29ea39bb707b44ed0f8e1570da4403ca0c7f4d45",
+      "d28c6888132822c5f0606c274ce6d0383d43b036828d3737f22c14dbc1b7386c",
+      "6fd8e7bb918cfbefe43d028ff6b4829e21bba17238162ec89d43f2fff5af823d",
+      "051fe9401a98cae30be6dc91bdf5f7bd54a1371386589c987c9c9f48772f452e",
+      "83aca2bf6180076b546d775a7c075cc805ae3bb5524632a5321aedde06b8e57e",
+      "1bcb71a8b63161568f2c571cda896d901dbf37e38837fe15c413280c5cf1a149"
+    ],
+    "version": "reconstructed-frequency-v1"
+  },
+  "limitations": [
+    "Eight forward outcomes are a smoke study, not statistical validation or demonstrated alpha.",
+    "Historical bot forecasts and actual fills never existed in this dataset.",
+    "Reconstructed frequency benchmark is not an independently approved calibrated forecast.",
+    "Displayed terminal references and RTDS spot do not supply the complete authoritative Chainlink TWAP history.",
+    "Production valuation/oracle tooling must abstain where verified rules, calibration or settlement series are absent."
+  ],
+  "opportunity_ranking": [
+    "0xaa8cfaa4fadccb62db3101b2bd468f1eed3627f4c86c181ea5407ca295a67ebd",
+    "0x03c223f429b6933260da36b1553c4173cc64f61a32fea960e4608c056a8a3dec",
+    "0xfb9ee8cc413feb3edbd19680575cb692bf9e5b627cd1b721bf0187c7b74b6474",
+    "0x6b3f49fbb929ef3112636db087bdcc2400279c11026beef1d31f51e8b6e29f0c",
+    "0x8cfa06035f0e731044e590899a536bfb85491825bea17eb9e9d48d9932205080"
+  ],
+  "oracle_counterexamples": [
+    {
+      "actual_polymarket_winner": "Down",
+      "external_final_minute_close": "68988.74",
+      "external_open": "68977.63",
+      "interpretation": "Exchange candles rose; official winner was Down. Minute close is not exact TWAP. Diagnostic backfill, never OOS forecast input.",
+      "outcome_sha256": "f1f82ee481332ce50ee46ea6b0dd91915fc1c93c92aa6c777479e042d78db1d9",
+      "symbol": "BTC",
+      "window_start": 1794598500
+    },
+    {
+      "actual_polymarket_winner": "Down",
+      "external_final_minute_close": "68838.55",
+      "external_open": "68828.03",
+      "interpretation": "Exchange candles rose; official winner was Down. Minute close is not exact TWAP. Diagnostic backfill, never OOS forecast input.",
+      "outcome_sha256": "cce5e970029511585b604e757fbff02da4ee2548d63eebef57a56efbeab8b7ed",
+      "symbol": "BTC",
+      "window_start": 1794602100
+    },
+    {
+      "actual_polymarket_winner": "Down",
+      "external_final_minute_close": "1947.88",
+      "external_open": "1947.76",
+      "interpretation": "Exchange candles rose; official winner was Down. Minute close is not exact TWAP. Diagnostic backfill, never OOS forecast input.",
+      "outcome_sha256": "7bfacf66374fcd151de825582a53e0991f51c106628941f03be062cbd4d4a0f0",
+      "symbol": "ETH",
+      "window_start": 1794597900
+    },
+    {
+      "actual_polymarket_winner": "Down",
+      "external_final_minute_close": "1948.88",
+      "external_open": "1948.78",
+      "interpretation": "Exchange candles rose; official winner was Down. Minute close is not exact TWAP. Diagnostic backfill, never OOS forecast input.",
+      "outcome_sha256": "ac4eb8d0dbe522ceaa622ff6bd119e0bdc4284fa09c8c690831380e7696f68a6",
+      "symbol": "ETH",
+      "window_start": 1794598500
+    },
+    {
+      "actual_polymarket_winner": "Down",
+      "external_final_minute_close": "1944.25",
+      "external_open": "1944",
+      "interpretation": "Exchange candles rose; official winner was Down. Minute close is not exact TWAP. Diagnostic backfill, never OOS forecast input.",
+      "outcome_sha256": "ba3f66b1d0ff6a58a8d2a40e3a62c145dcd88b48661c3164886dd715eec2fd2c",
+      "symbol": "ETH",
+      "window_start": 1794602100
+    },
+    {
+      "actual_polymarket_winner": "Down",
+      "external_final_minute_close": "1936.55",
+      "external_open": "1936.29",
+      "interpretation": "Exchange candles rose; official winner was Down. Minute close is not exact TWAP. Diagnostic backfill, never OOS forecast input.",
+      "outcome_sha256": "d26519741ce551200213f08b484d06dff8cc628e74e1a751943bfd4171451aa9",
+      "symbol": "ETH",
+      "window_start": 1794604200
+    },
+    {
+      "actual_polymarket_winner": "Down",
+      "external_final_minute_close": "80.35",
+      "external_open": "80.34",
+      "interpretation": "Exchange candles rose; official winner was Down. Minute close is not exact TWAP. Diagnostic backfill, never OOS forecast input.",
+      "outcome_sha256": "074dcd3da136108ee03a8ec85335f47266536aac95f55503dfc87fb7125e77ec",
+      "symbol": "SOL",
+      "window_start": 1794601200
+    },
+    {
+      "actual_polymarket_winner": "Down",
+      "external_final_minute_close": "1.0123",
+      "external_open": "1.0121",
+      "interpretation": "Exchange candles rose; official winner was Down. Minute close is not exact TWAP. Diagnostic backfill, never OOS forecast input.",
+      "outcome_sha256": "ad21e9795f149f38ed9b81ed7ce084d74426b3819ff434ebcab2006f46d0d469",
+      "symbol": "XRP",
+      "window_start": 1794603900
+    }
+  ],
+  "oracle_verified": false,
+  "out_of_sample_count": 5,
+  "raw_source_count": 1447,
+  "request_count": 2123,
+  "request_states": {
+    "200": 2116,
+    "400": 6,
+    "None": 1
+  },
+  "resolved_market_count": 124,
+  "rule_shadow_audit": [
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x07445d764f1293bf632de320fe3a0909d731058ef8e80965348357eb6d4fdef6",
+      "observed_at": "2026-11-13T21:24:41.032195Z",
+      "raw_sha256": "ebd3bd2b3c6dd291805549bd6aadbd1c3ad99fc2a7188fe22dbd1337dbb795d9",
+      "review_status": "ambiguous",
+      "source_hash": "d75d7d5c70f42d423ca8db2f3fd95acde6865c2396bc04436837b807bafd0003",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x52e9afe801a65ae6a9540984e9c9b04beacec1dd22aca3f522c408d702dc9904",
+      "observed_at": "2026-11-13T21:24:41.040204Z",
+      "raw_sha256": "0d11b72e6d40db00e3fd1cda55d735e51f09ae24887b0e5b8918620ca7d4dafb",
+      "review_status": "ambiguous",
+      "source_hash": "3f5f293c81ee83b89d75a95f976a74870abc3420c7f502401d5ce034881a5469",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x3815534ea33187933e1f7d145787b6e7cb2ba1be0c2cd878a1b2e025873b170e",
+      "observed_at": "2026-11-13T21:24:41.093263Z",
+      "raw_sha256": "fd3118e98dbc957910f0b9bf3262106ae323cc3b5e63af80989aa2016b93336e",
+      "review_status": "ambiguous",
+      "source_hash": "546e4a3c1e0b4dce33a4d34090ecc3b7ff77f5340d090f9dbe31585b119ee67c",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x8fcb3ec9d8dae5a1dff919ff289a005e5950d82def93772207f8a71b26301dad",
+      "observed_at": "2026-11-13T21:24:41.103298Z",
+      "raw_sha256": "766675042647b71dcb6bc8dd05584ffd85df85c968823a1952e27bc3d7d86a06",
+      "review_status": "ambiguous",
+      "source_hash": "34a86220f05a922a92246d0d96d3a9f5b400e5198c800056768306afce185e84",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x10e98fb91b1dddecaed6424b125c02e95954086f12010ab949619b0f705cfeb7",
+      "observed_at": "2026-11-13T21:24:41.722557Z",
+      "raw_sha256": "fba4d233f08929e1049b3ef3abca875c749334249af9f932e84a551d59951160",
+      "review_status": "ambiguous",
+      "source_hash": "e4d41025f0fa602340c81fb231694462e2d819b00e7cdc2fd9a5075915f89f0b",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x88b2fccc53c67a0b6787f5194e8dbe11ee49cafe389035b729efe3cef68c3ceb",
+      "observed_at": "2026-11-13T21:24:42.437212Z",
+      "raw_sha256": "d33dd21ccaf3fd15f54c5f44c3ec734963e5bd467bfb09c473628938ba2a220d",
+      "review_status": "ambiguous",
+      "source_hash": "ba53d19f20dc4a12010dcea064aa19d103b60b180b370473bc62d365a2be077a",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x0909f5e370b6fc9723a69cecbbda033a286252e135dca9036ebef7f449739c71",
+      "observed_at": "2026-11-13T21:24:42.488294Z",
+      "raw_sha256": "d26519741ce551200213f08b484d06dff8cc628e74e1a751943bfd4171451aa9",
+      "review_status": "ambiguous",
+      "source_hash": "2bb9007ba8cd0b97c1c3ea8ef27da3d27bec771a9825893ebaf935e22ca5a21d",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xcd9286c492d756b952cd3d12f9d946d9ce7ab8faaa46b23168301fffbb2b78e6",
+      "observed_at": "2026-11-13T21:24:42.693522Z",
+      "raw_sha256": "722840a12b562d2e32df05f3baf7d1f2a96435a1bc78e37b901335cd3382fe4c",
+      "review_status": "ambiguous",
+      "source_hash": "4ad38475c292590273b590d82bc85ef5d32c72e36518edb269eab98e23991a8d",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xb680497b93c588d255b7f02bfeb189978b1245cf93824b0a6ac8a39a75db2b8f",
+      "observed_at": "2026-11-13T21:24:43.186539Z",
+      "raw_sha256": "83a3bbf11386810f9a7c7883f166acab78cc35676da9ef68b893a9c3c68a9751",
+      "review_status": "ambiguous",
+      "source_hash": "bfd9f11da5d76068dce66c93455f2b67132d36b58c9f4022d9506ae46e82f7a6",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xc6b71dca2ed75d5ae109b420b2ccb315d591ff9e60911403095e52b2b08c5456",
+      "observed_at": "2026-11-13T21:24:44.004825Z",
+      "raw_sha256": "7e14fe2e8957dd830a448bb4d3d74a3f9f806564c883ce62f0b4ffffd5a57ac6",
+      "review_status": "ambiguous",
+      "source_hash": "483a6fca36a66ddee2c5cc91f9bf68970204adabce46e8e1aaf637f4fe438103",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xc8d45e6d4fb283dc6fba1f39da42d0c00b3bb735ab522b29eb0baaff88261734",
+      "observed_at": "2026-11-13T21:24:44.063318Z",
+      "raw_sha256": "bf42458d7e65af41f8aa73f27f4f0676973c0e6d0bd50442a69a6ef5bd0ddc2b",
+      "review_status": "ambiguous",
+      "source_hash": "6533a46a454356d8d9fbaa9319979f1d67e2fd226aaff3cae28a66f9c36702a8",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xfc87b609282acde3158b0c68700255a0c1ba4f3913d62232d82c80ba7e22994b",
+      "observed_at": "2026-11-13T21:24:44.319194Z",
+      "raw_sha256": "ad21e9795f149f38ed9b81ed7ce084d74426b3819ff434ebcab2006f46d0d469",
+      "review_status": "ambiguous",
+      "source_hash": "4a2ad632bcb70e074d8e5e853b79a55ee09aa4ff069fd0e79a4579b9a5f57b62",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x6e2c03a2dcbb2f651d3e4ae1eb40b6e02ccf37f32a60643c06102950ce55cf62",
+      "observed_at": "2026-11-13T21:24:44.673910Z",
+      "raw_sha256": "4deb3577083c3e204f75325b74a544177f55fe9982d5c54fdd319801dd460cad",
+      "review_status": "ambiguous",
+      "source_hash": "a904986eca9404345a6d5fa2760a4614d525ee7334c9b1420daf9f099042c63c",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x5b7286231608c29b6e5626f5453f0869d8f8947c1c6fef4432f1528e58b08f70",
+      "observed_at": "2026-11-13T21:24:45.348381Z",
+      "raw_sha256": "1eabc80d6062c9da0f86a27cbe462fda6adeed97513186a5df8a34ec36fb8ad8",
+      "review_status": "ambiguous",
+      "source_hash": "cab11887deb6e24a2a798e774f0c60fcf08065668ccd9b68ca56fd8c9a4a3316",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x4d55d0bc41744dbd5b9715cea77b2e01b2598a7c8e328bb22b153446b8d98a5e",
+      "observed_at": "2026-11-13T21:24:45.429764Z",
+      "raw_sha256": "249966e169d98bebe662b032d26a8f3d2f54461ee26980a3010f5f169a40f57b",
+      "review_status": "ambiguous",
+      "source_hash": "f9b275f9c1e308aa2e56f18d726fec5b335d9492e2481039bb1f82824dfb802a",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x7f16eca0f800d8d20636607744ed9eaec401c18330e96b55ed59355b86de06eb",
+      "observed_at": "2026-11-13T21:24:45.706317Z",
+      "raw_sha256": "a1c48e6bc5ac413852ff8eb6b5f43931f746768ee6cbe013117e59f69fd1f03f",
+      "review_status": "ambiguous",
+      "source_hash": "734f10eae1a1ba4270eff6e2079c1916615679d37ffef7bad7c642e67bce7c09",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xd2d62f5e38c5f666880de01030164dcdefbfb026089e3a1f09c02dfafab35a09",
+      "observed_at": "2026-11-13T21:24:46.068050Z",
+      "raw_sha256": "ca6283b88693cd348d9d62ff5ed08baa8b1d3a1cb88e322572966f7ee42df360",
+      "review_status": "ambiguous",
+      "source_hash": "819705be84ce3f29d383a4cb36bca8926825a68751b9b3d2710b676fd8ef8688",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x4e7d6f0e8213630fae3aecb41181bd195eb505c662e636e354d82344e31f4022",
+      "observed_at": "2026-11-13T21:24:46.625756Z",
+      "raw_sha256": "8254dd740499d3549d23557ffdb5e3737072795dde91ed9fc05ad32af8c204f3",
+      "review_status": "ambiguous",
+      "source_hash": "0204ebec2f72021d50f27de38132b92477c952d47d9bbce1e04414aac5a71a5f",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xfca1a12c88fa4969d2ee68e8b43443d5fdcc0f9724f0b82cb10484aa8ea81e25",
+      "observed_at": "2026-11-13T21:24:46.705414Z",
+      "raw_sha256": "07b42db84f3622d34993f06c96f74f732cf2334f40473779c88a8e6e236ce703",
+      "review_status": "ambiguous",
+      "source_hash": "e375433c701a5c0264c4df5c557b8af0cd4aaf5cbd55c002729f6e499ffc6e7b",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x07c0c92107476b6de8257fc721da3442bded09c302a2288786bfde148a660fb3",
+      "observed_at": "2026-11-13T21:24:47.115056Z",
+      "raw_sha256": "dd20a1efa66d7f8a61ef7555dd59079e2072a758e840c792d5f7651264ebd5d9",
+      "review_status": "ambiguous",
+      "source_hash": "a03351a8e87e5759da807bc4ab71239c39f06b25152aee886dc59095e8c0d707",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xa514621603e3045491c937f37d31c242aee4409dd57ac4bca3e8db7d4bb69526",
+      "observed_at": "2026-11-13T21:24:47.468985Z",
+      "raw_sha256": "90326948ce5552b9abcd286f4d29cb03e39a2cf90cb817d8163d0c511c0e6d82",
+      "review_status": "ambiguous",
+      "source_hash": "a739fd515c73ca32955eadc0bbff29201ee7530834b2ea501adc40a38a5a5682",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x4af66b97a4eb44857b7f4b13537526c619fff964623e3130ba261e6624b78e79",
+      "observed_at": "2026-11-13T21:24:48.148661Z",
+      "raw_sha256": "dd0d4b721dd028f4ff6b5cc4ad23952fbcab32fe95d9ea937f37f5cde9a81ca2",
+      "review_status": "ambiguous",
+      "source_hash": "d6f7b4b0f0fec5b17326a911594ff9a04d70071382891b2c334d3d3578df0073",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x427d2e7a35a60170baf503da3a6e2e0310ccf90eff9fa9e6c0b6b47fbfb6af95",
+      "observed_at": "2026-11-13T21:24:48.250069Z",
+      "raw_sha256": "6ec0fd1027346965e66cb2958bd03946621208f15758ffdc87f829ae3864814f",
+      "review_status": "ambiguous",
+      "source_hash": "87363a6c926a9cf1cebdfa489de53efed7a75d4c5b0c39f9d75a178d12aed993",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xa2adfff92bf8719985b5d6ea64ddc03ed1c994fd06cd6c7cbedab7f7ef2a6aeb",
+      "observed_at": "2026-11-13T21:24:48.688860Z",
+      "raw_sha256": "4a1b07fb2ea43359eecaa86b81fbe981f520e78acc82cfb33bbd46f9bbc35d9b",
+      "review_status": "ambiguous",
+      "source_hash": "5535a4658db5cb34a3425682f345a63d8046a6282b0cd7fd0a20c4a221294d99",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x03272c1e7e3c55d0275d6371aa64c16b28ec92e3313a7074d535386afad7fe6b",
+      "observed_at": "2026-11-13T21:24:48.726895Z",
+      "raw_sha256": "a66661fc58871bad84770b38e8488563cf8062357d7349921380f51efec83661",
+      "review_status": "ambiguous",
+      "source_hash": "07aa6d3606df8303f00601682e50c132ae41b96f90950dfdb55cd9d14c29c78c",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x0fe4c328251bb082ef5f902da69861cdbcea8c16c3e3cb9696bd2f30a8bc8cf0",
+      "observed_at": "2026-11-13T21:24:49.458413Z",
+      "raw_sha256": "62ce2d46072dcb2db2f574f232a9dcedc2d059333ad735ee4c8024879b0b0b06",
+      "review_status": "ambiguous",
+      "source_hash": "6c3a75fa5b406e250ac6908ba06658939d3de84fdadd548aa44e62b94f348207",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xe4e174693b35a2789c58ed49c99fc73e68e9c9178d79311362c9836e99373064",
+      "observed_at": "2026-11-13T21:24:49.626969Z",
+      "raw_sha256": "2eaf66a1798ab46b919cc1744249cdab1813ace00b7c0f7ebfd0aa5d147a31ec",
+      "review_status": "ambiguous",
+      "source_hash": "1586af7640e966d79f0a1f4cb6242506ee21756973605d60718d13bf64b89796",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xefafaee4f289f7d5a7b8a887947dd6821aa1d6c3328aae9e3b18b551102e8057",
+      "observed_at": "2026-11-13T21:24:50.204492Z",
+      "raw_sha256": "b4b0dc5413ae76edb43a9960fc83cd1ace28da94a1cef98d1116fd657aa85254",
+      "review_status": "ambiguous",
+      "source_hash": "559b2ddb29610f8b6b555f8de0602734960bc25960e4e8e44ddd700c6911542d",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x2da81e0d4c0c38b2c20516fdb4bc373ccd857c80fbf71cc53980001c5e173f72",
+      "observed_at": "2026-11-13T21:24:50.222342Z",
+      "raw_sha256": "2bc33df3cf8d36aa4d1874c4abbbba1d43e1fdf9a15a01af9459486eb8c450dc",
+      "review_status": "ambiguous",
+      "source_hash": "236b6c32d5a830ff98433f3de7eeafc41adb50b7d5687da80855e8b7f3ace823",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xa74706aafe9dce7990027fcb75ae571de9c6100a05b6e03251f16123d2a7e2e7",
+      "observed_at": "2026-11-13T21:24:50.844520Z",
+      "raw_sha256": "e6d6524d0d232bc2ffc0f5224ca3bff64ed248776dea27f813995a57bb937e90",
+      "review_status": "ambiguous",
+      "source_hash": "bfdf9d5593e56f0ceb44edf07aa4591a12f837ff24148ec722607e452d34801c",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x819c26ccdee14d25a2533bf595a30a2b7d0d554d34cd81ed7bcd274cbceebe1a",
+      "observed_at": "2026-11-13T21:24:50.985460Z",
+      "raw_sha256": "2035ba55d41e1f4332bacf5ee0eb8fce8ad4afcacfe3f15b003b6bf47c4949bc",
+      "review_status": "ambiguous",
+      "source_hash": "c235d4fdcb88597f4d06ae64d444edfa4d0f1e7c48f9f7a02f63fa2f74576b74",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x039b95d790db7ac48c2d5f5f3eebbbffb38ce3a7894462c19135779e8b79b81a",
+      "observed_at": "2026-11-13T21:24:50.988702Z",
+      "raw_sha256": "cce5e970029511585b604e757fbff02da4ee2548d63eebef57a56efbeab8b7ed",
+      "review_status": "ambiguous",
+      "source_hash": "1724935e587a8ceecf130c1a5e65357166159cfe0fbde929af4c0779d4d53450",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x9a774a9610ce145b6ef0e816ba93f1a6c8db98292a5798febca71462fbf7f4c5",
+      "observed_at": "2026-11-13T21:24:51.784175Z",
+      "raw_sha256": "5259f013eb710926f23196a834eadcc98cd3219602f5617534e56b73cbbb2b29",
+      "review_status": "ambiguous",
+      "source_hash": "177c4ca4a089e6b7d607a6e0f5a41d45fe31d732053ab71dba612d483cfe7792",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x6b65be1840427ab75af2895053d541050a642bbaf675ed3a03080dc77546ae4c",
+      "observed_at": "2026-11-13T21:24:52.442657Z",
+      "raw_sha256": "ba3f66b1d0ff6a58a8d2a40e3a62c145dcd88b48661c3164886dd715eec2fd2c",
+      "review_status": "ambiguous",
+      "source_hash": "cdbba203089d7769e33504310421e2d5f88fc043c88b8b43d12114065d2d5060",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x578b494ccaf81ed050a5c3077f1be402eeb562457317e49b9c6cd91a237cc4b3",
+      "observed_at": "2026-11-13T21:24:52.465290Z",
+      "raw_sha256": "bde9461837de3097b6c2971fae04235f1d877994fa4952bc78e41fcff3076340",
+      "review_status": "ambiguous",
+      "source_hash": "10b6a16264ad65a0e40012a429b6b997a42c050188e8558b3e2da73849a42991",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xa13fc84a929e0f33f5f2330e5aa1b010d9a1efa4922593a5ed2ea9f13916e5a5",
+      "observed_at": "2026-11-13T21:24:52.491266Z",
+      "raw_sha256": "eea080efc973750913582c87f443c1f03dcacd1486c5ee7b63a5578ca41b2347",
+      "review_status": "ambiguous",
+      "source_hash": "4e0dea9f33bd88a8d9b65603d4fc49a211dfcee585e531f48afc10e77d83be28",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xe520f14936077770dd7a3e45cb39018db75f0ee9b712ef3870f3d865cdba4831",
+      "observed_at": "2026-11-13T21:24:53.388770Z",
+      "raw_sha256": "f63d56d42b50ea6da2784cfa53900f11d0dda74415b4f3db81b138d0e9b8ce04",
+      "review_status": "ambiguous",
+      "source_hash": "8cfbc0e16b0b73fd1b0dc6b23cf6d5d8bc7a0d50ab3fecab5e0df927d73d0765",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x156de94fc933672e181e5807b6a3ceb7e7456c7071756ef3aa626e61c9c51b27",
+      "observed_at": "2026-11-13T21:24:53.887120Z",
+      "raw_sha256": "043085b3120c7429016dae16971f0a5f73fb89f267992f8e1a959fc22e35b686",
+      "review_status": "ambiguous",
+      "source_hash": "c499e012be37777154e8ff64e067815ac14c1f1a7bf9719b74b7b0f90682a543",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x53e67b1dcac31c1ac635054e9278e4ec95cc8a552ee933f25b4efd7930660b49",
+      "observed_at": "2026-11-13T21:24:53.903565Z",
+      "raw_sha256": "a2184866ea98d81bc457ab257b50b168dc5b24b70acd4ae7e93cb4f23e42b961",
+      "review_status": "ambiguous",
+      "source_hash": "b2f4dc3c3337dee6e1ca5075f65f7373aaba75d5877ef7dafd93e843fe450ae7",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x15c14134815e03a57a0c349378a3e6c1a8ebb0a729edd0faca42bb4728e2d8fd",
+      "observed_at": "2026-11-13T21:24:54.117274Z",
+      "raw_sha256": "71c31660db4a3050c50ab2b7005b7db989606e062c12901b05d97d54c47e662a",
+      "review_status": "ambiguous",
+      "source_hash": "3b9e3b6e9aa953cea047480aef389d20f57f65218173169dc89933b81e1d4e4c",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xa48c3d1dc36169ce771e325b142d2f3852a61306011a7abf29850a7169d1f731",
+      "observed_at": "2026-11-13T21:24:54.721780Z",
+      "raw_sha256": "a9bc91ac87a826f173d6dd657b7115e99ad108b6cba6dd703df5e281e932bdfa",
+      "review_status": "ambiguous",
+      "source_hash": "2c648cac18a891a27c3891d9f2ec75277aa20679c3acd14bc4f617880807d4cb",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x57b893a288a46b0f339b989c8e4a270e017ae1ba62a7ac39f22c5835d182844f",
+      "observed_at": "2026-11-13T21:24:55.520029Z",
+      "raw_sha256": "f9e809d4bb9ad44c26e9444fc1be9ce8a693fc52f84b7710f276eac5646a3add",
+      "review_status": "ambiguous",
+      "source_hash": "a69464109d78d407890e8c1c342a7d29b16f992f00b9d10d797dc06fb637c58e",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x12255518f1dc09974f8b9a4364e4423b76a48576382a13012cec3d3a1693b38e",
+      "observed_at": "2026-11-13T21:24:55.522236Z",
+      "raw_sha256": "255387fc1b3e81844d53d30854a05c0698ae27683f3ff343aa061f8247f18ce4",
+      "review_status": "ambiguous",
+      "source_hash": "eb0bfcdf1a22d136c89dd6c85c11932538eccf5f243f59424cc1530700a8d35b",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x5196aec62a50cff4343388c6ac655367f7e51c4987e9011e5a1351f287cfbe0c",
+      "observed_at": "2026-11-13T21:24:55.757377Z",
+      "raw_sha256": "849e08d53a18aad8007ee6f0e696986f0368d8806249dd5b9fb810c631170cf6",
+      "review_status": "ambiguous",
+      "source_hash": "8ba845e019c5512e4a430b81e58afe1a7f1a027e81dfe5b74cc8aecafa1ef947",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x31d1d6f066d894bef8ba19dbabb4d34b6b3c0d7246d59af3639e633244af8931",
+      "observed_at": "2026-11-13T21:24:56.209048Z",
+      "raw_sha256": "617109a7cba95cf47422dc63712353b6a240e3a283e374bec720e72873dc5112",
+      "review_status": "ambiguous",
+      "source_hash": "fd65a151e27871d8caead1a538ebee376e2cac4f8f3a0f64482ec68ed549d419",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xf31560acac958d38301a7e743c9c3ca7a97b7195665739094c7b0411c8d59086",
+      "observed_at": "2026-11-13T21:24:56.889789Z",
+      "raw_sha256": "9106975db82191037f06d80ed6ade2d0a97592d9c40fa86d554717d3c80fc303",
+      "review_status": "ambiguous",
+      "source_hash": "75845260cc1f232ad7b72884a235bc09aa94e0f34cd8853be4daf3c332fdbd27",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x7b0877f28b2d8445ba341c975b6b5a9b9441c5994dad744ed023308030bc3df1",
+      "observed_at": "2026-11-13T21:24:57.124955Z",
+      "raw_sha256": "074dcd3da136108ee03a8ec85335f47266536aac95f55503dfc87fb7125e77ec",
+      "review_status": "ambiguous",
+      "source_hash": "a806c10394905ee44620337b4cb88431e95a0c99732490b9986e65938a6d6495",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x027c7cc3c9187f98010828a45f041d8bd84fcffc6e06362ab64dd4f7f79f6a2d",
+      "observed_at": "2026-11-13T21:24:57.310178Z",
+      "raw_sha256": "036266d6d7e802f3cb9356ac3070cca77be401e109e677dbba84344de57be818",
+      "review_status": "ambiguous",
+      "source_hash": "77c076cc5fd78a2f3e31de334c7589b41e91f41151cac9295c3d634ff98b002f",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x8b69fc504e99c7501929f484bbaaac300829509941ebab45155d263be245365e",
+      "observed_at": "2026-11-13T21:24:57.718241Z",
+      "raw_sha256": "00955f05d09a5e25f4e1564be9866edbc8c0b97ddcc0f20699d5353ff36cea1d",
+      "review_status": "ambiguous",
+      "source_hash": "7f12814f19f4a5c401a38ca41ed11605f48cec3e9b62e9f34484fb001606760c",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xb44764aec001cbae0427db4cd0993ae3844dfbe2b4e1393a627b3e0cddb928e3",
+      "observed_at": "2026-11-13T21:24:58.467363Z",
+      "raw_sha256": "9646bee509878f44d5c39abb6cad2262bbbf75796983ba6d742e2d949f24a14b",
+      "review_status": "ambiguous",
+      "source_hash": "3f0f538adfc96b229ce9160a43817b7c8c6696dc08ce160cbf354279a92c8295",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xa4e33a1e0064c7e4895473ff5c445678a3eb9beed96a4163543142c561f4b0f0",
+      "observed_at": "2026-11-13T21:24:58.516346Z",
+      "raw_sha256": "d1d7c5eeda498e2e509eabb94d5bd4aa4cdeeb97aea5ffce5610c9f4857aebd5",
+      "review_status": "ambiguous",
+      "source_hash": "671ceef144b7b6cf94de6da3a06790b9f7caced3f5d2c3c706146893662758e1",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x1cc388ca0f3d6b776b9c99cbff7dc959e086328a0a352d791c37ccf32255f5bd",
+      "observed_at": "2026-11-13T21:24:58.817932Z",
+      "raw_sha256": "24fbc661838f149800845c38008ae4cf8d100542ffc46057c448de80654d89c3",
+      "review_status": "ambiguous",
+      "source_hash": "de015851d1ce44a7489377bcae058726bb093cc033cd48791d8ec0fd2a7dd6d5",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xd4cc49f0ca8ab87f3fa879d11c63c9218b6ff87424cbe797ddb245e245c08573",
+      "observed_at": "2026-11-13T21:24:59.339532Z",
+      "raw_sha256": "3fa39927e9b3a92c7a9a54e6f2693b99351c1b50ee1887394e879cf7b61965c5",
+      "review_status": "ambiguous",
+      "source_hash": "799999f4ca032c4671655abbf0ff8930347cf831da883706340a7ccbef4fb428",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xed1c0a26d6cc37621444034b1fc5336b045ad2aca097762e5c89e5416c452bf6",
+      "observed_at": "2026-11-13T21:24:59.892712Z",
+      "raw_sha256": "2650d6b1d119ea1b86760b38a9eb53131f4b6a50c235277f5d73d8afe488b065",
+      "review_status": "ambiguous",
+      "source_hash": "cf2eae543d730a56701ea61d15a865732c2051ea455f1ce411c1057ef21251b2",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xdceec7620eb9a0a7be5a3438a7d9a1727b940f32ddca35a573d5a46448e28516",
+      "observed_at": "2026-11-13T21:25:00.038611Z",
+      "raw_sha256": "3d146c8b1f8b7f2e21148b47495f9c0689d3830b0982b28892ca5dc60d7ff6b1",
+      "review_status": "ambiguous",
+      "source_hash": "a861ccee0389b7b9046dcaca4d8788582b2fa60c7eee0c397c5cd637a2ca86ab",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x66b18bbdf8efc6f4ca15295404cb713fdf1de34ec56c92a5bcbc0ab57403c613",
+      "observed_at": "2026-11-13T21:25:00.459130Z",
+      "raw_sha256": "4635af09a8f0846d657eec957085d41c2ddc21b2467f63cbf68f55fb836cf841",
+      "review_status": "ambiguous",
+      "source_hash": "481d1894ab8d8908978a9b204c0ed7c5a588fac834d5bec8b2915650a1787930",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xee2e9502761d78d8ad8c648a258eae5870eeef22e95eaafab78690a2bc7698a3",
+      "observed_at": "2026-11-13T21:25:00.851786Z",
+      "raw_sha256": "4b28403fca7f5d58db110bd2caf7ecc033ea2feffd3f77ea2ce521a12fbf29fe",
+      "review_status": "ambiguous",
+      "source_hash": "03562ce0c2cfbd03a01e4c10f523f42228da388762089a255be0e648ea97f7f7",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x347bf48e115e19f0acf15a9535a7e0932994ecbe4e1d53c1edffe73d976f16d7",
+      "observed_at": "2026-11-13T21:25:01.599809Z",
+      "raw_sha256": "264dbfd94f0b6a4ea94c35c3d949dd2037b63774620d1ff85897ac5bfa39fb9c",
+      "review_status": "ambiguous",
+      "source_hash": "c4f4cd15570ad5bd7288735ad1d34efe2b1f5ade00cde549f89d62d4349f7f28",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xf7a5613a49f55c79acb2d250ebde490cb9b70af16fd274c4acbb86c59d2bae87",
+      "observed_at": "2026-11-13T21:25:01.619170Z",
+      "raw_sha256": "0b23154864cf3bc5043e40cf94b3de2ecfc5d4a8e0b632d1e98923880d8b8dd8",
+      "review_status": "ambiguous",
+      "source_hash": "937779b418e444911be1bd4dc5eb7890b3049750addaf507bb6e4aa5557b9e10",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xcb95aca38020c0a0a16c727fc3eeec573585c29185e6547ae8dd06bd3eb4973d",
+      "observed_at": "2026-11-13T21:25:02.029994Z",
+      "raw_sha256": "1569d0c81afaba4bc833f471630d1f1777e81648b14728061b329eb55edacddd",
+      "review_status": "ambiguous",
+      "source_hash": "5e268e7d9674fab40a378123926f4368c26685ed0a7fcea2e4b1744871bd0808",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xfbebe5308a1df5696028dad1bf72db627dffd11cb0247d81533052c6c670353e",
+      "observed_at": "2026-11-13T21:25:02.437796Z",
+      "raw_sha256": "3ae3c321eb9a08b728bdb12a931f0ff9ac61ae57b73fc799820702500add8495",
+      "review_status": "ambiguous",
+      "source_hash": "c53fc833445ea7bd677d9d7c92b0ffd0904f55545e4830ddc5e2635fae239f94",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xa35feb9ca40c9247ef90cdd4befde6b7228c4619f7a4c4428b74dbc1ab4fe5a6",
+      "observed_at": "2026-11-13T21:25:03.075687Z",
+      "raw_sha256": "49282c6dceb580f1421486843e01886e4f42a909e17ebea434ac70390156ec7a",
+      "review_status": "ambiguous",
+      "source_hash": "f5e0d2bc4e7682a674357b99d69028847d0e2397b71187f05eeeb45b9e3aebf9",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x9b85eaa5a169267b57d753e384f34e2bd42a5b3b6de115b481f2ad6559c5364e",
+      "observed_at": "2026-11-13T21:25:03.102550Z",
+      "raw_sha256": "38ed39ce6c91e54ed5a2cdb313cb65ec591a4c357f4d85a12df5816063962088",
+      "review_status": "ambiguous",
+      "source_hash": "76efe830e80db5054b324efdfe1a86edf509c216ed05d2b2628fe2c4dd061619",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x0eac39cd4cfc5a2868c74e2c66fa0859714bbbf08a7b7489e343d536320a0b9a",
+      "observed_at": "2026-11-13T21:25:03.426765Z",
+      "raw_sha256": "595f36ddad53d10a2adb38857c141657e86b1b08fc0636af332028c3e7e41dd5",
+      "review_status": "ambiguous",
+      "source_hash": "bf128da6a144e5cf11fd2c9e4a4b23161b2ec66461505fe9ee41ce1baf0182ff",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xccbf84f16af48a5f9f290ae553dcf958c32049ac605df7d977be89874c57590b",
+      "observed_at": "2026-11-13T21:25:03.864824Z",
+      "raw_sha256": "c8ff3ee62ae3782afda79aabcde1433730a72f044be1cc07f686e8eafd75281d",
+      "review_status": "ambiguous",
+      "source_hash": "ba4a942aba67c2d4b5086e8725bb1cf13d892e7c427cd5ce566b2cc9206c80be",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x6daa6106ce5810916a5c309e84c64cb135e2ec5af245f4afe33e1c6db2e5fc66",
+      "observed_at": "2026-11-13T21:25:04.614462Z",
+      "raw_sha256": "d0f3a443aa89a4a79322da2e30bece168e529db4f926702a4198848cb74b93f3",
+      "review_status": "ambiguous",
+      "source_hash": "19f1146e7970ffaa2a704c328b97d9f815ac3cafb2d8efc3017d893f1cc3bd1a",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xfa5b9db69aa6b0dd218386d653bd7a5d23276d7560401a24d4034b138bdcce33",
+      "observed_at": "2026-11-13T21:25:04.787314Z",
+      "raw_sha256": "03aa8313f8df54a7964f9e93fefa98418a345b19604ae9975674673b80e84b7a",
+      "review_status": "ambiguous",
+      "source_hash": "7e69cd5193758b7d180de8defeaa95c08cc7e7562c49c3934773139c84672f6e",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xb3cc2c76564a4544c4bd0e625e0615d8328b99ca2b78f1fa0beafd7a9a728e25",
+      "observed_at": "2026-11-13T21:25:05.042703Z",
+      "raw_sha256": "d1d95bd6f57e15714ef335749e870429b9aad0e8227e68d5b4d39fa1ea382b99",
+      "review_status": "ambiguous",
+      "source_hash": "d0a3cb63b9b5fc6a33e8b3217d948bba8389b121f4e4617b795b4505becabf98",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x8a5022e1c3903036c836db605cc83634db0ff554c8fb6c318b900439d149d68f",
+      "observed_at": "2026-11-13T21:25:05.516667Z",
+      "raw_sha256": "f23a3024025308d066d74c24407182f6414040b4f5c6bd75f35d9b57ca55cb67",
+      "review_status": "ambiguous",
+      "source_hash": "5943c2f51f7a8eddf7221f53d0fb3b9acc4dad72e57e8a4f9b86ff17be6db86e",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x6c686f56d8817739852480470f63fd62b7219e69adcc19397a40eef73ff45671",
+      "observed_at": "2026-11-13T21:25:06.167649Z",
+      "raw_sha256": "03366a6e2c07859b882dd848afb37ad7491b8d79d12dd3c5acb782d9cad7fdb6",
+      "review_status": "ambiguous",
+      "source_hash": "c3bbe4b3fea9d2d2e4e22b617bb8e78ac8a3bb2373331e76e910d39d37624b26",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xf65ca7cb2ad0187d41feaa267a9a3b7be30116a7154e1a2963a7310ad4e003ee",
+      "observed_at": "2026-11-13T21:25:06.353234Z",
+      "raw_sha256": "450edf4dcad0883a2793365de25295e6267b4b2152758011bfdf7923beb690bf",
+      "review_status": "ambiguous",
+      "source_hash": "f34e2e241fcdc599500e6b5330b0904500aa62617c94e5bc1102750212a0ba0e",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x8fedbd2b8040b9c05c1d5a2346366f392ecd04ba2c341263f0051fb2b6f86f0f",
+      "observed_at": "2026-11-13T21:25:06.578672Z",
+      "raw_sha256": "018dd15dfe33f1194a9a887d2107eb87231ab06fc11658def119f14f5e0c2fbb",
+      "review_status": "ambiguous",
+      "source_hash": "d0ccb774f0f8234f646bd449403e19731be1b92fc9e1bd5b8613886f41831de6",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x7016e8854e7562cd08c0c0fcc18f87d7ca409efdd93c67b9ed475bb3ee3680b6",
+      "observed_at": "2026-11-13T21:25:06.786339Z",
+      "raw_sha256": "2ae73d02e4323de9558f27009b591e896db8a6b7cdcf30165a5b1801b9565267",
+      "review_status": "ambiguous",
+      "source_hash": "4bde375c9c9551f2d3c83359f6d4e979f8fbd4638fec24e30726778848ef0b60",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x02f74ddbdccbb51ed5f556d6de7b4355389f945d3ec7381ce448a3e701e7645a",
+      "observed_at": "2026-11-13T21:25:07.567326Z",
+      "raw_sha256": "59cc4797de5db3d61e03281d06d331ebd51baa5a7c2936752e75c839a7dab99e",
+      "review_status": "ambiguous",
+      "source_hash": "53ec91ab064f4440d7a0fcf3db1ca2e0867bca7e2caa694fe23400c09841d8ac",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xc959bc65631b89cafa872ae134fadcef0e03fb9f1c3d79821e4e5dde0174ad08",
+      "observed_at": "2026-11-13T21:25:07.751463Z",
+      "raw_sha256": "482e772563b17cb297116a7ef1c1b3d03768549be7446426e16fdb5f55eca4ba",
+      "review_status": "ambiguous",
+      "source_hash": "10ae9d942de1373f9ad59b2fc68ec300b3ee04d762fb59befd5feb1db8f0e56a",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x97c69d7e010f8d51a3acafbf942814f9f0fbe1f39a3dd5505cc675349749529a",
+      "observed_at": "2026-11-13T21:25:07.898685Z",
+      "raw_sha256": "22cfc7e8137d2724161f89386dc9156c968cf75560d14873e1af1ef17d5516d3",
+      "review_status": "ambiguous",
+      "source_hash": "b79740e55e92a7398004bf3131582a55d6800b8c1730b9e901cde5aff768ac59",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x1cf85eeec9ef2a143ceeb8819fc0e11538248e858e1dd7abe234675a32d68633",
+      "observed_at": "2026-11-13T21:25:08.220576Z",
+      "raw_sha256": "0f23172089cd93a96d8638971848b58fbc59b35fab056805705b24efc521d27a",
+      "review_status": "ambiguous",
+      "source_hash": "e4a42f481fcbd6edb1dc44c366403b8dd3061daa00cac2cff1d961aed33e47b6",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xfb65ae94d759dd8420ac1dc865a9b07231b08feb60bb54045c57bc75cd1845bd",
+      "observed_at": "2026-11-13T21:25:09.238665Z",
+      "raw_sha256": "38b00104f342929760f12bc47411e24afdd00b553c1a15585a0168266c326156",
+      "review_status": "ambiguous",
+      "source_hash": "588f97259764489017ebaca73592936a34aae254bb1261d00ff5f4d5649bb0d2",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xd0b89fb826d0a7cb4d4603bc2e6e946db3e211dee6492628378c3a15f62e2ae4",
+      "observed_at": "2026-11-13T21:25:09.367324Z",
+      "raw_sha256": "ac11def07a4d7732979e6f1809dcc56ba95a99305d68fbf0503bca82c1ea55aa",
+      "review_status": "ambiguous",
+      "source_hash": "337b3ffa5688069807dd70ba89ab6699a97d9a9a5f9751b8ca777ab063d8fdb2",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x5b5572ab3cca304400684783cebe7c4cf46d35a7778f309983722372cc70dfbb",
+      "observed_at": "2026-11-13T21:25:09.487286Z",
+      "raw_sha256": "04bc205ebd6f8ecb22114bf943c2f664e88f0f448aa698810b57ada5f98331ba",
+      "review_status": "ambiguous",
+      "source_hash": "c31cb6c1ad8a3e4c3052ad405c83e2d5fca0847d473b65b32fb8be1cf53a6a95",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xdfa46a87f814ca34492074730180b2771dc4eb74d291152096f713bd2fa8f3f3",
+      "observed_at": "2026-11-13T21:25:09.667855Z",
+      "raw_sha256": "f1f82ee481332ce50ee46ea6b0dd91915fc1c93c92aa6c777479e042d78db1d9",
+      "review_status": "ambiguous",
+      "source_hash": "0fab839773cc42498df6701d3fbd19bcff4a727b12e75be0d5310f9f5fc145bf",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x5c9c7fbfe92242a5abdd3b89c2ab7ce5d4cfc7597898244d83fdcd85bdf9a522",
+      "observed_at": "2026-11-13T21:25:10.660637Z",
+      "raw_sha256": "ac4eb8d0dbe522ceaa622ff6bd119e0bdc4284fa09c8c690831380e7696f68a6",
+      "review_status": "ambiguous",
+      "source_hash": "70314ba5de0893bd2d27261dbf604bef84315cbb53d18d8653f4cbf6e08c2ce6",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x6be4675df7b1343892409a79e8fd4f6e67bde5d8e035cc60c98caf29667e6ff6",
+      "observed_at": "2026-11-13T21:25:10.936934Z",
+      "raw_sha256": "e24f7b2a21e107511cda83d5ea3dcdb23d178226bec0b86f14865d3e00999c66",
+      "review_status": "ambiguous",
+      "source_hash": "5aac72ac60266084e379ae1069c1e6974a216c4916d34d449893ef18b2b993af",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x6c9b8dd77a30ae021edce23eb76877926bd6892132cdf8364c1ec20541f6ce0e",
+      "observed_at": "2026-11-13T21:25:10.996103Z",
+      "raw_sha256": "19242b3968a7e326393af521063b46d01e0858990bdaf875caf3e0b095548c09",
+      "review_status": "ambiguous",
+      "source_hash": "f8af796300b20af0030c08cba934a6f59b66db68d5aab9962e7b573743b46373",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xf6235f39a2c992f0f47bbae26fe52e08f96120a49379bd5fc908fac42d095ea3",
+      "observed_at": "2026-11-13T21:25:11.132463Z",
+      "raw_sha256": "b9ba980a08824aee9445c8ca424da77ba5bee18fea71c50c5216a7289dd6f0be",
+      "review_status": "ambiguous",
+      "source_hash": "f2c87fb3d9467810f339ca4558f00fd84600bd3e18f2cfeeeb05937f7d1b0867",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x8a441c146e20b73fd2bca6ac733f5878ad7c1e00d4b69a791643f7ec6919d361",
+      "observed_at": "2026-11-13T21:25:11.947632Z",
+      "raw_sha256": "31abb641e833be3aabc9ce927ded913ba5323e658efa88a63095acbbfddc190a",
+      "review_status": "ambiguous",
+      "source_hash": "113ea5c03849108ce48a73a4241a2446a096be592a049a1aca32d0547785b5fc",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x5671016311dd7342f74285f82ada34e9d84f8ab41ebc3c2017f505f49bfbbbd9",
+      "observed_at": "2026-11-13T21:25:12.460499Z",
+      "raw_sha256": "1943c19f5f2b610443584e0755915e130808a73286b19a1cdc49a0012d76aa19",
+      "review_status": "ambiguous",
+      "source_hash": "866ac06987eae530b7840acd22b6e995749b6e1bbd645cfd549e30bfccb21e96",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xc08a02f2590a8dc5dba887ea6d6f80fbbeb0fb9c4729a87250e7a8f872226009",
+      "observed_at": "2026-11-13T21:25:12.474191Z",
+      "raw_sha256": "930450e544669ba546925592ff786ecb473680f03f3a342d8528bb61a4ca421d",
+      "review_status": "ambiguous",
+      "source_hash": "cfe555333f604ddebadc28cb33fea34342deb6c16bc14f570f517ddcd9f640e3",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x6f86b5cf0b0701c3bc356c732ac3800a1bb51ee136628d53c680458fd0882710",
+      "observed_at": "2026-11-13T21:25:12.622251Z",
+      "raw_sha256": "6cad6c12b20eb88954759b698781a56954cda94c0dae454cbd68a7510665a022",
+      "review_status": "ambiguous",
+      "source_hash": "341269c42c224294725b6c643955fdbcb329e04bae8a359447724b191e861192",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x0e7548ad1f14d24f4822c852e40da630a9ffe2827f0a4a819024f901a9eb74d5",
+      "observed_at": "2026-11-13T21:25:13.181374Z",
+      "raw_sha256": "7bfacf66374fcd151de825582a53e0991f51c106628941f03be062cbd4d4a0f0",
+      "review_status": "ambiguous",
+      "source_hash": "f08468fb97a78b77e696956f86804e5d6163993bdc913b063ccea4f4342387f8",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x81518a5be5f4dbfa6bbf301ed1855948d108326265ef0687f640c05045cc9c35",
+      "observed_at": "2026-11-13T21:25:13.852298Z",
+      "raw_sha256": "66c8d7f73ece593c7a3c3cbf29ea39bb707b44ed0f8e1570da4403ca0c7f4d45",
+      "review_status": "ambiguous",
+      "source_hash": "07c3e964b60d837150dfdc1fb4924980b9ed9b95edc6dcbfa54fe769056c4545",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x9b52ff4ea80904906fade84737797ec42d11d366ff52a1d44cc008178aedbace",
+      "observed_at": "2026-11-13T21:25:13.928344Z",
+      "raw_sha256": "d28c6888132822c5f0606c274ce6d0383d43b036828d3737f22c14dbc1b7386c",
+      "review_status": "ambiguous",
+      "source_hash": "7d0818622b8a51a710b07574f90907a84741db609389ef7a78dd7017a85ee662",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xd2c87e9b106e0963a9a2ae4bbdeb3a2238c54433b7aeb7a2e1370f46c8407098",
+      "observed_at": "2026-11-13T21:25:14.030477Z",
+      "raw_sha256": "6fd8e7bb918cfbefe43d028ff6b4829e21bba17238162ec89d43f2fff5af823d",
+      "review_status": "ambiguous",
+      "source_hash": "838f6860deeac95cb484a99e412ca425b103b008e65eb873d72923de36a75858",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x1994c83677579cc0d4acbb07d8bdc6e242d9f8273d5c29819071c5b5d088789d",
+      "observed_at": "2026-11-13T21:25:14.446640Z",
+      "raw_sha256": "051fe9401a98cae30be6dc91bdf5f7bd54a1371386589c987c9c9f48772f452e",
+      "review_status": "ambiguous",
+      "source_hash": "36dd1a9f5a0a776a7a34c84f17ce9d1cc3e231c3feab0c3d2aa02c7abb36cde4",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x64546036059043af8e5ea0a056a3817cfa770cbf16d624420241ccc283225f92",
+      "observed_at": "2026-11-13T21:25:15.144401Z",
+      "raw_sha256": "83aca2bf6180076b546d775a7c075cc805ae3bb5524632a5321aedde06b8e57e",
+      "review_status": "ambiguous",
+      "source_hash": "97d8a0c820c260ce8f748107bb1e27e3dd85ec4a3732e0fed199bd49e79eba8b",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x5b99eead36a18d22839e84aff94c1880cf865f29e26c0419c04f4cf4d8ada319",
+      "observed_at": "2026-11-13T21:25:15.472993Z",
+      "raw_sha256": "1bcb71a8b63161568f2c571cda896d901dbf37e38837fe15c413280c5cf1a149",
+      "review_status": "ambiguous",
+      "source_hash": "69f785ee2db2672b1007a7cf816ff04deb97872c74cb7649f3d77a167a7a3e8d",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xa95199f1cc294329afaefe136758567add2f6dc1debbccf9c2ac45f3eadd7370",
+      "observed_at": "2026-11-13T21:25:16.542485Z",
+      "raw_sha256": "baf2e438c2c6f4a0a9598eec40b10a0a48c6042527e34449ad4f5a6412ef4835",
+      "review_status": "ambiguous",
+      "source_hash": "e4faeebcadfccc535865f11c3fabe712510fb9e0b6eb16125b3454e8d0bb8a6c",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xd12986c79c21beb6b1c85c6fbb5e841acb5de9f27264a4ea668c56bb49cdbabd",
+      "observed_at": "2026-11-13T21:25:16.583904Z",
+      "raw_sha256": "d3fa405b239f7421d2631ceb4fda843674ecd8fc7549c6bba28561ef7fcd510c",
+      "review_status": "ambiguous",
+      "source_hash": "2f49a77fd64be24734debc97a5f84b03d076b439d7e304f9b01177bc7d85e77c",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xd65c7fbfe83ff6cb245f2b7c00e9b752c45a850994b7b7119bd12e615b604c47",
+      "observed_at": "2026-11-13T21:25:16.801693Z",
+      "raw_sha256": "1e153f76f28cd7ff4c5eaaf6ba6b21f9ab8b03bf9b530f637ee8dcc905e0b09b",
+      "review_status": "ambiguous",
+      "source_hash": "5225a60c5a5bc8d2634b7a1b0b0f62baffdc4bbec793683081164ffb5d959c69",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x666d1bc67bb66b612b3bca547523225374c7b4990ad0a99a53392135e569c00f",
+      "observed_at": "2026-11-13T21:25:16.806448Z",
+      "raw_sha256": "7f5a365d5bf1afb91b224795557c0ae691a26d454e47a122d22fa9065d8cd714",
+      "review_status": "ambiguous",
+      "source_hash": "9a46a0b58f62e3c8005f35a5ac7a054c590d2bba998aac446317ae5d3b84cc61",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x76e1e5a8ca689e24160289d1d543821708130117cb554ea252acf284ab54517f",
+      "observed_at": "2026-11-13T21:25:17.264840Z",
+      "raw_sha256": "d563ec36baf5a4f2c3c8b3a9ab4e6d49d949c5b3b8fd452688c7ebfa1c875fde",
+      "review_status": "ambiguous",
+      "source_hash": "7b648faaa22c534542e9b3da5962988f2db1646262677b6f290df3291f35a87e",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x5432911f329feb4bf6a1cbef211e3090cf3179e0db8a3a20c94747d18bbce4d0",
+      "observed_at": "2026-11-13T21:25:18.252450Z",
+      "raw_sha256": "078b6c9df5f88de246fc226674dbc8fd66c12687e01db19cbb7e3de80f33bc4a",
+      "review_status": "ambiguous",
+      "source_hash": "df69c68bd47ff7a803b2415f4c671c3343b31c97961adb4025ce722cf28c15d3",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x226fd8f7f4f3c7e3dda69d31ccc4b25b9a76f62b45a1b69dcc7584b7bd18697c",
+      "observed_at": "2026-11-13T21:25:18.417845Z",
+      "raw_sha256": "88ef5f9c14b2d293bf9dd31025a2d8bcfeaff58608dd2a0a918797c741177809",
+      "review_status": "ambiguous",
+      "source_hash": "3c3b767c93ce60414bfa9764b67c80e45e97ac25f544c3b6a2b0aeeb16a07b80",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xd83373ea60e2fe60f3906caedd23ed0dda6317bccf43644268993a2edc59c3f4",
+      "observed_at": "2026-11-13T21:25:19.029586Z",
+      "raw_sha256": "75eee09ad3a3b6907f3412529898a34cfb2569e612c686971f3795b3c0076f22",
+      "review_status": "ambiguous",
+      "source_hash": "68981b49e1699cd11f97ccf6be589906bbdb4679be0a0d9121f41dbf3a6cf44a",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x565c5c54e3cb50223fbad14625eaf1857d078fca8054c96934d47aee648921ab",
+      "observed_at": "2026-11-13T21:30:02.900407Z",
+      "raw_sha256": "8516b31790ff843e6ad469df14743cdcb18c042242dc5add9e938063603a2980",
+      "review_status": "ambiguous",
+      "source_hash": "2ce8f0c6198527de8f688b02c852d5e5deb5eea0c7124078d4d63b62ed83f947",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x3a9e255289d60bec78486cf5994fd6fc7795364ff8fc27fc1d8190773ef74855",
+      "observed_at": "2026-11-13T21:30:04.070951Z",
+      "raw_sha256": "b3d4d057dbeb29de436a0c83e72a61a4e3bf4c47264f79bdc55695ce89227315",
+      "review_status": "ambiguous",
+      "source_hash": "58e138447f397a0e9bc0542ef4493a114586037916ddcff6733f335142e5727f",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x03531db73634ded482444aa29ee4098a0fd803c8c0203243170aebe0908dc8ae",
+      "observed_at": "2026-11-13T21:30:04.130815Z",
+      "raw_sha256": "afd792bcdbe609ee017feac62089db6f6ef387bf4a6e6131c6627607e3802028",
+      "review_status": "ambiguous",
+      "source_hash": "804fdabaa8fc12c58b3af3184a46ebc2ada714f3692ad112793fa5e9d0962972",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xe176509a510126ac6663f76ba9d9ce934cc795020822910b02b3bd1afb87b840",
+      "observed_at": "2026-11-13T21:30:05.066346Z",
+      "raw_sha256": "e0e1112984606aec37aa8fe6d8ef2ce00931405265335c0815306ddd5ddd46e9",
+      "review_status": "ambiguous",
+      "source_hash": "6c601b6828f32f31918b3b8d629d51675aa8428a6ac61283ac90f91f915cdfcf",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xb53925c09c52f7fd6509340225ade7de0765c7cbf06cc708d39df614cc866ae7",
+      "observed_at": "2026-11-13T21:35:19.901780Z",
+      "raw_sha256": "98177cbe9c2b8b69b119f7eb20c944dac4eb858685548806233eb9792e85a9db",
+      "review_status": "ambiguous",
+      "source_hash": "19bf2b2e92d9b9d61adb20ce947b3924e06c3feaac0e39c41e544253b090a5cb",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x7d5a75a7161ed9055103fcbb19b2a88d418c554763341e50d48e9316225a9212",
+      "observed_at": "2026-11-13T21:35:20.495303Z",
+      "raw_sha256": "74f6cad504ad69469ecc340e2ffb098e18071c42f66e996146f11a7de004f0ab",
+      "review_status": "ambiguous",
+      "source_hash": "24f5b1c963b13b51434d88335a02a5d2ab6bff16fe00057e042670f52f9e3189",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x371f85c6bfe221279cdb8a9d6fd7e05e73fafdafabc20ccbc97d07b32cf32067",
+      "observed_at": "2026-11-13T21:35:22.029941Z",
+      "raw_sha256": "89ca8dde11b531ab0e7d65488de30fb37559ca97e4a261b49fe9fa36d122e392",
+      "review_status": "ambiguous",
+      "source_hash": "406a4c2c2adc1e0b44b041c065d15645a8ba73fd01f71597d00888b4447828c8",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xe914cdb3c589f2df752cf1f49c25166c0f6e1095ebefdfa9c3d6f72d5971d72f",
+      "observed_at": "2026-11-13T21:35:22.876733Z",
+      "raw_sha256": "37117aeca83240b7dd990c35edf347099b55e51aebce957b72e9dc521ed47685",
+      "review_status": "ambiguous",
+      "source_hash": "6599885c84406abad1caa034e30d31736d9c9609182f45aa1fda42df0e872361",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x4e30a1254f675f1b7313fa5b010e40f17ea7cbbb4f70a41366440e296c643047",
+      "observed_at": "2026-11-13T21:40:18.234396Z",
+      "raw_sha256": "c5713a11fcb877c40e0182e7a6cf0a9b31c14a26dbbc9038db79e36769619e60",
+      "review_status": "ambiguous",
+      "source_hash": "136c41d4bece1d59fd18eb9b7eddabe8fd5520f82cbd28488192f22112147f0d",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xf5bd9bd03721135b28da387c1117e8605df95657c584d747c47595d339e4acc3",
+      "observed_at": "2026-11-13T21:40:18.772573Z",
+      "raw_sha256": "fc85700da30f78fe0415d60998bdf4d92be9867f3a025026a6c7c90b968dc373",
+      "review_status": "ambiguous",
+      "source_hash": "e01bcd1b8a7c85d44cf3fc48f50a29283255079a80c361cd840aafb569b4b48e",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x408d1ae81b5605f2311689971c83ddb142e492b5b8472a274620db28bd06a163",
+      "observed_at": "2026-11-13T21:40:19.818291Z",
+      "raw_sha256": "829596e7351f0a387cd0b2d9ff37b3460786f36f0432151b22a6e7d3b109376a",
+      "review_status": "ambiguous",
+      "source_hash": "ea14a63994ac431be7b2001d6953c1b466f713e560907110fb81f8834dc4a81a",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xa63926f48d5b93072d99473e469c11fc54a819bf86e72f6f77a4fc942bed2831",
+      "observed_at": "2026-11-13T21:40:20.996587Z",
+      "raw_sha256": "2ab1f9909f8c8bc4c354416a00918a147f65e81dee4931e68f91180b9d49f535",
+      "review_status": "ambiguous",
+      "source_hash": "ff3d641c28d20e86debe7a6127dff733e4297f217a1e3aa7c156b22c5b3d3d6c",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xe559be1985d60d60969b055eed8430cccf83cb8de00186808b2a24acfcb3df19",
+      "observed_at": "2026-11-13T21:48:53.498388Z",
+      "raw_sha256": "72863348651446ea39dabb40186db0e22dc0362be80f5707b15a331b9fb3c3ee",
+      "review_status": "ambiguous",
+      "source_hash": "51b645ed20303275d1d9156cb99acbdd76fb595ec8c6ef711d8bd5b390835c62",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xaa8cfaa4fadccb62db3101b2bd468f1eed3627f4c86c181ea5407ca295a67ebd",
+      "observed_at": "2026-11-13T21:48:54.530897Z",
+      "raw_sha256": "05e5cf45e241bb911e55ac784e133dad73ef4f0464e1c7ed2101b9df1ecb8f31",
+      "review_status": "ambiguous",
+      "source_hash": "1f774c540492efd88adaa334c9be8fdbd3180e7bff19820847e1199fad86f37b",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xdfc3eda8797fcb6b182978bc37e382d2f277b59804b4e68d915810941ea02a18",
+      "observed_at": "2026-11-13T21:48:54.846440Z",
+      "raw_sha256": "9ea5a35b68f9f4a2b7e7a6d5e0d5b983cb061bb23c02930ee305f0f4599789aa",
+      "review_status": "ambiguous",
+      "source_hash": "81d4714e8e5d6d72f4786ea10b5ff1257a3e6f54a2199979e63f7e9ae52baccb",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x01520fd0eff01022d27826422a23e2dfff9004fd7e9fc5a3dabcbada0ac74141",
+      "observed_at": "2026-11-13T21:48:55.078711Z",
+      "raw_sha256": "8da2f6ff9d3b32d9bddf0fdf7392db2fe281abb3f76d5462809aaca4aac8296b",
+      "review_status": "ambiguous",
+      "source_hash": "720c9340f33fea7aa36bacae9cda9369e049e223dd8bf18ce407a94c2991a88c",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x6b3f49fbb929ef3112636db087bdcc2400279c11026beef1d31f51e8b6e29f0c",
+      "observed_at": "2026-11-13T21:50:09.422401Z",
+      "raw_sha256": "6f0363a35063def52c35f8eed53d3d4e586af03f8d202d3856d74d634cbb43e2",
+      "review_status": "ambiguous",
+      "source_hash": "10eaaaaeb387ae468cbe76df5ce9741bce71a03b8ad6f143b432084942377ed4",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0xfb9ee8cc413feb3edbd19680575cb692bf9e5b627cd1b721bf0187c7b74b6474",
+      "observed_at": "2026-11-13T21:50:09.465587Z",
+      "raw_sha256": "30d33852beb4ad629d660d1d411c577a718cd244184f91d4589fb11de7732981",
+      "review_status": "ambiguous",
+      "source_hash": "2183ff2f0d1993d7c1474ed7806f8e1a318240fbc41615bc57ff3b389c679648",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x03c223f429b6933260da36b1553c4173cc64f61a32fea960e4608c056a8a3dec",
+      "observed_at": "2026-11-13T21:50:10.152310Z",
+      "raw_sha256": "ff0aae490b85fd7447c5e3918c657b0da54c496558672e9b250f97c7bbfd8099",
+      "review_status": "ambiguous",
+      "source_hash": "b467eaec042dfe983989214e7d3e6e42213e8a1da4b7eeb22f237d1c4f26e566",
+      "tradable_edge_allowed": false
+    },
+    {
+      "abstain_reasons": [
+        "ABSTAIN_AMBIGUOUS_TOKEN_MAPPING",
+        "ABSTAIN_UNSUPPORTED_AGGREGATION_OR_WINDOW",
+        "ABSTAIN_AMBIGUOUS_CUTOFF",
+        "ABSTAIN_METADATA_RULES_MISMATCH"
+      ],
+      "condition_id": "0x8cfa06035f0e731044e590899a536bfb85491825bea17eb9e9d48d9932205080",
+      "observed_at": "2026-11-13T21:50:11.793590Z",
+      "raw_sha256": "e592576c24ddf5dec1873d5f4b1b07e7d0ff9d1503e85a92045daaa763afc2d9",
+      "review_status": "ambiguous",
+      "source_hash": "7c960a8ab6c41b8072e3680187e36681dd24a5385be3ada5181c8ab4d77a04b5",
+      "tradable_edge_allowed": false
+    }
+  ],
+  "rule_verification_counts": {
+    "ambiguous": 124
+  },
+  "schema": "acceptance-shadow-report/v1"
+}
