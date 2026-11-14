@@ -29,6 +29,7 @@ class RecordedSettlementReport(BaseModel):
     status: Literal["observed", "abstain"]
     account_id: int
     as_of: datetime
+    positions_as_of: datetime
     positions: list[dict[str, Any]] = Field(default_factory=list)
     attempts: list[dict[str, Any]] = Field(default_factory=list)
     sources: list[dict[str, Any]] = Field(default_factory=list)
@@ -140,7 +141,8 @@ async def recorded_settlement(db, account):
     return RecordedSettlementReport(
         status="abstain" if reasons else "observed",
         account_id=account.id,
-        as_of=now,
+        as_of=datetime.now(UTC),
+        positions_as_of=now,
         positions=positions,
         attempts=attempts,
         sources=sources,
