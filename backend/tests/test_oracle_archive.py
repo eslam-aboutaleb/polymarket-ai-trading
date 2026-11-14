@@ -3,6 +3,8 @@
 from datetime import timedelta
 from decimal import Decimal
 
+from test_valuation_recorded_evidence import valuation_db as _valuation_db
+
 from app.services.intelligence.resolution_rules import get_rule_snapshot_as_of
 from app.services.market_data.oracle_basis import (
     FeedObservation,
@@ -11,6 +13,8 @@ from app.services.market_data.oracle_basis import (
 )
 from app.services.market_data.oracle_basis_archive import evaluate_archived_oracle_basis
 from app.services.market_data.venue_observations import append_event
+
+valuation_db = _valuation_db
 
 
 def archived_pair(db, inp):
