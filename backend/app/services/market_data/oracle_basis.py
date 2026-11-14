@@ -36,10 +36,10 @@ class OracleSpecification(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     condition_id: str = Field(pattern=r"^0x[a-fA-F0-9]{64}$")
-    rule_hash: str
+    rule_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     rule_review_status: Literal["verified", "unverified", "ambiguous", "invalid"]
-    authoritative_provider: str
-    eligible_instrument: str
+    authoritative_provider: str = Field(min_length=1, max_length=100)
+    eligible_instrument: str = Field(min_length=1, max_length=40)
     aggregation: Literal["last", "median", "twap"] = "last"
     sampling_interval_seconds: int = Field(default=60, gt=0)
     rounding_decimals: int = Field(default=2, ge=0, le=12)
@@ -55,12 +55,12 @@ class FeedObservation(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    source: str
-    instrument: str | None = None
+    source: str = Field(min_length=1, max_length=100)
+    instrument: str | None = Field(default=None, min_length=1, max_length=40)
     capture_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     source_at: datetime
     received_at: datetime
-    value: Decimal
+    value: Decimal = Field(gt=0, le=Decimal("1e18"), max_digits=36, decimal_places=18)
 
 
 class OracleBasisObservation(BaseModel):
@@ -117,7 +117,7 @@ class OracleBasisRequest(BaseModel):
 
     specification: OracleSpecification
     as_of: datetime | None = None
-    strike: Decimal
+    strike: Decimal = Field(max_digits=36, decimal_places=18)
     comparator: Literal[">", ">=", "<", "<="] = ">="
     spot_observations: list[FeedObservation] = Field(default_factory=list, max_length=5000)
     settlement_observations: list[FeedObservation] = Field(default_factory=list, max_length=5000)

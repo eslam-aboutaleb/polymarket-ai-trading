@@ -5,12 +5,16 @@
       "description": "Single point-in-time observation from either spot or settlement feed.",
       "properties": {
         "source": {
+          "maxLength": 100,
+          "minLength": 1,
           "title": "Source",
           "type": "string"
         },
         "instrument": {
           "anyOf": [
             {
+              "maxLength": 40,
+              "minLength": 1,
               "type": "string"
             },
             {
@@ -46,10 +50,12 @@
         "value": {
           "anyOf": [
             {
+              "exclusiveMinimum": 0.0,
+              "maximum": 1e+18,
               "type": "number"
             },
             {
-              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,18}|(?=[\\d.]{1,37}0*$)\\d{0,18}\\.\\d{0,18}0*$)",
               "type": "string"
             }
           ],
@@ -75,6 +81,7 @@
           "type": "string"
         },
         "rule_hash": {
+          "pattern": "^[a-f0-9]{64}$",
           "title": "Rule Hash",
           "type": "string"
         },
@@ -89,10 +96,14 @@
           "type": "string"
         },
         "authoritative_provider": {
+          "maxLength": 100,
+          "minLength": 1,
           "title": "Authoritative Provider",
           "type": "string"
         },
         "eligible_instrument": {
+          "maxLength": 40,
+          "minLength": 1,
           "title": "Eligible Instrument",
           "type": "string"
         },
@@ -206,7 +217,7 @@
           "type": "number"
         },
         {
-          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,18}|(?=[\\d.]{1,37}0*$)\\d{0,18}\\.\\d{0,18}0*$)",
           "type": "string"
         }
       ],

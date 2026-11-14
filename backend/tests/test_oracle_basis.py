@@ -257,4 +257,6 @@ def test_oracle_basis_api_and_mcp_tool(monkeypatch):
     import server as mcp_server
 
     assert "oracle_basis_risk" in mcp_server.TOOLS
-    assert mcp_server.TOOLS["describe_oracle_basis_risk"]({})["read_only"] is True
+    descriptor = mcp_server.TOOLS["describe_oracle_basis_risk"]({})
+    assert descriptor["read_only"] is True
+    assert descriptor["input_schema"] == OracleBasisRequest.model_json_schema()
