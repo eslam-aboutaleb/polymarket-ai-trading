@@ -1,0 +1,120 @@
+{
+  "baseline": "Unsafe end-date-only capital-release assumption; not recorded bot decisions",
+  "dataset_sha256": "59a9fc4b0539462a5fb976e3cee021171d97da28654cff5247bbed78d746ee8c",
+  "evidence_class": "implemented_detector_post_capture_diagnostic",
+  "limitations": [
+    "No historical account fills, authenticated redemption receipts, realized returns or calibrated delay distribution are fabricated.",
+    "Label availability is an observed receipt clock, not economic resolution time or canonical chain finality.",
+    "Funding/gas sensitivities are declared scenarios; not measured fees, available cash or actual P&L."
+  ],
+  "observations": [
+    {
+      "actual_fill": false,
+      "chain_receipt_available": false,
+      "condition_id": "0xaa8cfaa4fadccb62db3101b2bd468f1eed3627f4c86c181ea5407ca295a67ebd",
+      "counterfactual_entry_cost_usdc": "5.37472",
+      "end_at": "2026-11-13T21:50:00+00:00",
+      "end_date_only_cash_release_baseline_usdc": "5.37472",
+      "expected_funding_cost_8pct_2days_usdc": "0.002356",
+      "hypothetical_full_claim_pnl_by_gas_usdc": {
+        "0": "-5.37472",
+        "0.1": "-5.47472",
+        "1": "-6.37472",
+        "5": "-10.37472"
+      },
+      "label_available_at": "2026-11-14T00:54:26.313909+00:00",
+      "label_sha256": "9e9921c1fd4d7b7f0b7eb8ccaf92f9b07efc420f654f4383b2599f10d0e7ec29",
+      "observed_label_delay_seconds": "11066.313909",
+      "quote_sha256": "5311cb230b044bca04a31a14fab0a2f6fdf559d44e81b9f4001e12db824fd325",
+      "stressed_funding_cost_8pct_14days_usdc": "0.016492",
+      "verified_receipt_required_cash_release_usdc": "0"
+    },
+    {
+      "actual_fill": false,
+      "chain_receipt_available": false,
+      "condition_id": "0x6b3f49fbb929ef3112636db087bdcc2400279c11026beef1d31f51e8b6e29f0c",
+      "counterfactual_entry_cost_usdc": "8.96853",
+      "end_at": "2026-11-13T21:55:00+00:00",
+      "end_date_only_cash_release_baseline_usdc": "8.96853",
+      "expected_funding_cost_8pct_2days_usdc": "0.003931",
+      "hypothetical_full_claim_pnl_by_gas_usdc": {
+        "0": "1.03147",
+        "0.1": "0.93147",
+        "1": "0.03147",
+        "5": "-3.96853"
+      },
+      "label_available_at": "2026-11-14T00:54:27.670305+00:00",
+      "label_sha256": "cd4348bd7c19c6cf7ee41bff918a02acf2a99148c5c37e67eeeaf5a0be94d09b",
+      "observed_label_delay_seconds": "10767.670305",
+      "quote_sha256": "cf649d47c14edb82df849f847406b4c6ddcfe749a91b9e7693e903b381e83df7",
+      "stressed_funding_cost_8pct_14days_usdc": "0.027520",
+      "verified_receipt_required_cash_release_usdc": "0"
+    },
+    {
+      "actual_fill": false,
+      "chain_receipt_available": false,
+      "condition_id": "0xfb9ee8cc413feb3edbd19680575cb692bf9e5b627cd1b721bf0187c7b74b6474",
+      "counterfactual_entry_cost_usdc": "8.58925",
+      "end_at": "2026-11-13T21:55:00+00:00",
+      "end_date_only_cash_release_baseline_usdc": "8.58925",
+      "expected_funding_cost_8pct_2days_usdc": "0.003765",
+      "hypothetical_full_claim_pnl_by_gas_usdc": {
+        "0": "1.41075",
+        "0.1": "1.31075",
+        "1": "0.41075",
+        "5": "-3.58925"
+      },
+      "label_available_at": "2026-11-14T00:54:28.161969+00:00",
+      "label_sha256": "e69f3dfc6587fe5d735723cd4760ba75a2fc60ea8004418def6402bcd343ecb5",
+      "observed_label_delay_seconds": "10768.161969",
+      "quote_sha256": "e1cd7751f95c629be5428f9db5085f73cdcc34262bcaa344062f9cfa9f279501",
+      "stressed_funding_cost_8pct_14days_usdc": "0.026356",
+      "verified_receipt_required_cash_release_usdc": "0"
+    },
+    {
+      "actual_fill": false,
+      "chain_receipt_available": false,
+      "condition_id": "0x03c223f429b6933260da36b1553c4173cc64f61a32fea960e4608c056a8a3dec",
+      "counterfactual_entry_cost_usdc": "6.75701",
+      "end_at": "2026-11-13T21:55:00+00:00",
+      "end_date_only_cash_release_baseline_usdc": "6.75701",
+      "expected_funding_cost_8pct_2days_usdc": "0.002962",
+      "hypothetical_full_claim_pnl_by_gas_usdc": {
+        "0": "3.24299",
+        "0.1": "3.14299",
+        "1": "2.24299",
+        "5": "-1.75701"
+      },
+      "label_available_at": "2026-11-14T00:54:28.592810+00:00",
+      "label_sha256": "f87cf6c70e000ac663555922ab53facfa3f8419f9a88e39445fa3141c57d0263",
+      "observed_label_delay_seconds": "10768.59281",
+      "quote_sha256": "45ae06e42dca4beb5b8243819e7d56779b31c22aeb4f717f94681f2022c95cae",
+      "stressed_funding_cost_8pct_14days_usdc": "0.020734",
+      "verified_receipt_required_cash_release_usdc": "0"
+    },
+    {
+      "actual_fill": false,
+      "chain_receipt_available": false,
+      "condition_id": "0x8cfa06035f0e731044e590899a536bfb85491825bea17eb9e9d48d9932205080",
+      "counterfactual_entry_cost_usdc": "8.96853",
+      "end_at": "2026-11-13T21:55:00+00:00",
+      "end_date_only_cash_release_baseline_usdc": "8.96853",
+      "expected_funding_cost_8pct_2days_usdc": "0.003931",
+      "hypothetical_full_claim_pnl_by_gas_usdc": {
+        "0": "1.03147",
+        "0.1": "0.93147",
+        "1": "0.03147",
+        "5": "-3.96853"
+      },
+      "label_available_at": "2026-11-14T00:54:29.025121+00:00",
+      "label_sha256": "737e5a7ed2fed746d2b95da288e017b2642f49d13f2003d80fae2d0b57ab208d",
+      "observed_label_delay_seconds": "10769.025121",
+      "quote_sha256": "02a8e1fe5a72263e2b31b942be1167c98ca521b70d36440084abbb606c9fc004",
+      "stressed_funding_cost_8pct_14days_usdc": "0.027520",
+      "verified_receipt_required_cash_release_usdc": "0"
+    }
+  ],
+  "production_approved": false,
+  "sample_count": 5,
+  "schema_version": "settlement-shadow-v1"
+}
