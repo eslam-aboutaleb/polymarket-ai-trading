@@ -52,7 +52,13 @@ jobs:
       - name: Gateway adapter regression tests (no production secrets)
         env:
           PYTHONPATH: services/shared:services/llm-chain
-        run: uv run --project services/llm-chain --frozen pytest services/tests/test_gateway.py -q
+        run: uv run --project services/llm-chain --frozen pytest services/tests/test_gateway.py services/tests/test_prompt_contracts.py -q
+      - name: Verify immutable prompt contracts and reviewed baseline
+        run: |
+          uv run --project services/llm-chain --frozen prompt-contracts lint prompts/contracts
+          uv run --project services/llm-chain --frozen prompt-contracts verify prompts/contracts --lock prompts/contracts.lock.json
+          git fetch --no-tags origin main
+          uv run --project services/llm-chain --frozen python scripts/check-prompt-contracts.py --baseline-ref FETCH_HEAD
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.22.1"
