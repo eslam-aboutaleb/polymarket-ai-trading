@@ -1,0 +1,382 @@
+{
+  "$defs": {
+    "RedemptionAttemptView": {
+      "description": "Read-only snapshot of a dry-run preview or broadcast redemption attempt.",
+      "properties": {
+        "attempt_id": {
+          "minLength": 1,
+          "title": "Attempt Id",
+          "type": "string"
+        },
+        "dry_run": {
+          "default": true,
+          "title": "Dry Run",
+          "type": "boolean"
+        },
+        "tx_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tx Hash"
+        },
+        "chain_receipt_status": {
+          "anyOf": [
+            {
+              "enum": [
+                "confirmed",
+                "reverted",
+                "pending",
+                "missing"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chain Receipt Status"
+        },
+        "confirmations": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Confirmations",
+          "type": "integer"
+        },
+        "required_confirmations": {
+          "default": 12,
+          "minimum": 1,
+          "title": "Required Confirmations",
+          "type": "integer"
+        },
+        "gas_fee_usdc": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "default": "0",
+          "title": "Gas Fee Usdc"
+        },
+        "payout_usdc": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "default": "0",
+          "title": "Payout Usdc"
+        },
+        "redeemed_shares": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Redeemed Shares"
+        },
+        "submitted_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Submitted At"
+        },
+        "confirmed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confirmed At"
+        }
+      },
+      "required": [
+        "attempt_id"
+      ],
+      "title": "RedemptionAttemptView",
+      "type": "object"
+    },
+    "SettlementState": {
+      "description": "Lifecycle states from trading through on-chain redemption finality.",
+      "enum": [
+        "TRADING_OPEN",
+        "TRADING_CLOSED",
+        "RESOLUTION_PROPOSED",
+        "DISPUTED",
+        "CHALLENGED",
+        "FINAL",
+        "VOID",
+        "REVERSED",
+        "REDEEMABLE",
+        "TX_PENDING",
+        "TX_CONFIRMED",
+        "TX_FAILED"
+      ],
+      "title": "SettlementState",
+      "type": "string"
+    }
+  },
+  "description": "Input payload for read-only settlement lifecycle & capital lockup analysis.",
+  "properties": {
+    "market_id": {
+      "minLength": 1,
+      "title": "Market Id",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/SettlementState"
+    },
+    "previous_state": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SettlementState"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "position_shares": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        }
+      ],
+      "default": "0",
+      "title": "Position Shares"
+    },
+    "entry_cost_usdc": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        }
+      ],
+      "default": "0",
+      "title": "Entry Cost Usdc"
+    },
+    "expected_payout_per_share": {
+      "anyOf": [
+        {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        }
+      ],
+      "default": "1",
+      "title": "Expected Payout Per Share"
+    },
+    "venue_reported_payout_usdc": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Venue Reported Payout Usdc"
+    },
+    "proxy_token_balance": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Proxy Token Balance"
+    },
+    "eoa_token_balance": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Eoa Token Balance"
+    },
+    "starting_available_cash_usdc": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        }
+      ],
+      "default": "0",
+      "title": "Starting Available Cash Usdc"
+    },
+    "locked_collateral_usdc": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        }
+      ],
+      "default": "0",
+      "title": "Locked Collateral Usdc"
+    },
+    "annual_funding_rate": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        }
+      ],
+      "default": "0.08",
+      "title": "Annual Funding Rate"
+    },
+    "expected_lockup_days": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        }
+      ],
+      "default": "2",
+      "title": "Expected Lockup Days"
+    },
+    "stressed_lockup_days": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        }
+      ],
+      "default": "14",
+      "title": "Stressed Lockup Days"
+    },
+    "dispute_window_ends_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Dispute Window Ends At"
+    },
+    "now": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Now"
+    },
+    "redemption_attempts": {
+      "items": {
+        "$ref": "#/$defs/RedemptionAttemptView"
+      },
+      "maxItems": 100,
+      "title": "Redemption Attempts",
+      "type": "array"
+    }
+  },
+  "required": [
+    "market_id",
+    "state"
+  ],
+  "title": "SettlementAnalysisRequest",
+  "type": "object"
+}

@@ -15,6 +15,8 @@ from polymarket_mcp import ResearchMCPClient
         ("oracle_basis_risk", "oracle-basis-v1"),
         ("event_correlation_risk", "event-correlation-risk-v1"),
         ("recorded_event_correlation_risk", "event-correlation-risk-v1"),
+        ("settlement_and_redemption", "settlement-lifecycle-v1"),
+        ("recorded_settlement_and_redemption", "settlement-lifecycle-v1"),
     ],
 )
 def test_structured_skill_result_must_be_known_version_and_read_only(tool, version):

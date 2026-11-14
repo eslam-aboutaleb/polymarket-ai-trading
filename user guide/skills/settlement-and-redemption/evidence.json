@@ -1,0 +1,28 @@
+{
+  "skill": "settlement-and-redemption",
+  "issue": 24,
+  "read_only": true,
+  "execution_eligible": false,
+  "feature_flag": "settlement_redemption_enabled",
+  "endpoints": [
+    "GET /api/settlement/schema",
+    "POST /api/settlement/analyze",
+    "GET /api/settlement/recorded"
+  ],
+  "mcp_tools": [
+    "settlement_and_redemption",
+    "describe_settlement_and_redemption",
+    "recorded_settlement_and_redemption",
+    "describe_recorded_settlement_and_redemption"
+  ],
+  "service": "backend/app/services/analytics/settlement_lifecycle.py",
+  "status": "implemented_detector",
+  "version": "settlement-lifecycle-v1",
+  "production_approved": false,
+  "human_approval": "not_asserted",
+  "shadow_report": "shadow-baseline.json",
+  "rpc_canary": "HTTP 403 in this environment; controlled HTTP success/fault branches tested",
+  "accounting_status": "abstain until complete ledger/finality/fee reconciliation",
+  "recorded_scope": "application-recorded data and current supported RPC cashflow observations",
+  "related_issue": 56
+}

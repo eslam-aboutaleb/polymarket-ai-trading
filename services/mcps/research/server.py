@@ -802,6 +802,12 @@ EVENT_CORRELATION_TOOL_SCHEMA = {
 async def _structured_skill_research(tool, args):
     """One bounded bridge for fixed analytical endpoints; no caller-supplied path."""
     contracts = {
+        "settlement_and_redemption": ("POST", "/api/settlement/analyze", "settlement-lifecycle-v1"),
+        "recorded_settlement_and_redemption": (
+            "GET",
+            "/api/settlement/recorded",
+            "settlement-lifecycle-v1",
+        ),
         "binary_contract_valuation": ("POST", "/api/valuation/binary", "binary-valuation-v1"),
         "oracle_basis_risk": ("POST", "/api/oracle-basis/analyze", "oracle-basis-v1"),
         "event_correlation_risk": (
@@ -868,7 +874,47 @@ async def _structured_skill_research(tool, args):
         return unavailable
 
 
+SETTLEMENT_TOOL_SCHEMA = {
+    "name": "settlement_and_redemption",
+    "read_only": True,
+    "version": "settlement-lifecycle-v1",
+    "description": (
+        "Declared hypothetical settlement scenarios, partial "
+        "redemptions and capital lockup; no chain verification or execution."
+    ),
+    "input_schema": json.loads(
+        (Path(__file__).parent / "schemas/settlement-request.json").read_text()
+    ),
+}
+RECORDED_SETTLEMENT_SCHEMA = {
+    "name": "recorded_settlement_and_redemption",
+    "read_only": True,
+    "version": "settlement-lifecycle-v1",
+    "description": (
+        "Account-scoped recorded fills and current canonical "
+        "redemption receipts; unknown accounting is explicit."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {"account_id": {"type": "integer", "minimum": 1}},
+        "additionalProperties": False,
+    },
+}
+
+
+def _tool_settlement_and_redemption(args):
+    return _run_async(_structured_skill_research("settlement_and_redemption", args))
+
+
+def _tool_recorded_settlement(args):
+    return _run_async(_structured_skill_research("recorded_settlement_and_redemption", args))
+
+
 TOOLS: dict[str, Any] = {
+    "settlement_and_redemption": _tool_settlement_and_redemption,
+    "describe_settlement_and_redemption": lambda _: SETTLEMENT_TOOL_SCHEMA,
+    "recorded_settlement_and_redemption": _tool_recorded_settlement,
+    "describe_recorded_settlement_and_redemption": lambda _: RECORDED_SETTLEMENT_SCHEMA,
     "binary_book": _tool_binary_book,
     "describe_book_research": lambda _: BOOK_TOOL_SCHEMA,
     "resolution_rule_analysis": _tool_resolution_rule_analysis,
