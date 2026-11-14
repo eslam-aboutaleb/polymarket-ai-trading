@@ -56,3 +56,36 @@ test("a valid restored session stays signed in after the deadline", async ({ pag
   await expect(page).toHaveURL(/\/settings$/);
   await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
 });
+
+test("a successful refresh restores the user before the deadline", async ({ page }) => {
+  let refreshed = false;
+  let refreshCalls = 0;
+  await page.clock.install();
+  await page.route("**/api/**", async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname === "/api/auth/refresh") {
+      refreshed = true;
+      refreshCalls += 1;
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    } else if (pathname === "/api/auth/me") {
+      await route.fulfill({
+        status: refreshed ? 200 : 401,
+        contentType: "application/json",
+        body: JSON.stringify(refreshed ? {
+          id: 1,
+          wallet_address: "0x1111111111111111111111111111111111111111",
+          is_admin: false,
+          created_at: "2026-01-01T00:00:00Z",
+          last_login: null,
+        } : { detail: "Session expired" }),
+      });
+    } else {
+      await route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+    }
+  });
+  await page.goto("/settings");
+  await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
+  expect(refreshCalls).toBe(1);
+  await page.clock.fastForward(10_000);
+  await expect(page).toHaveURL(/\/settings$/);
+});
