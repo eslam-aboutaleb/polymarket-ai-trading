@@ -78,23 +78,33 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
 
     setSessionReady(false);
+    // A stalled backend or refresh must not hold the entire app behind this gate.
+    const deadline = window.setTimeout(() => {
+      controller.abort();
+      if (!cancelled) {
+        clearSession();
+        setSessionReady(true);
+      }
+    }, 8_000);
 
     authService
-      .getCurrentUser()
+      .getCurrentUser(controller.signal)
       .then((user) => {
-        if (cancelled) return;
+        if (cancelled || controller.signal.aborted) return;
         setSession({
           walletAddress: user.wallet_address,
           isAdmin: user.is_admin,
         });
       })
       .catch(() => {
-        if (cancelled) return;
+        if (cancelled || controller.signal.aborted) return;
         clearSession();
       })
       .finally(() => {
+        window.clearTimeout(deadline);
         if (!cancelled) {
           setSessionReady(true);
         }
@@ -102,6 +112,8 @@ function App() {
 
     return () => {
       cancelled = true;
+      window.clearTimeout(deadline);
+      controller.abort();
     };
   }, [setSession, setSessionReady, clearSession]);
 

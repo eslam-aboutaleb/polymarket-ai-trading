@@ -80,7 +80,7 @@ export const authService = {
     await apiClient.post("/api/auth/logout", {});
   },
 
-  async getCurrentUser(): Promise<CurrentUserResponse> {
-    return apiClient.get<CurrentUserResponse>("/api/auth/me");
+  async getCurrentUser(signal?: AbortSignal): Promise<CurrentUserResponse> {
+    return apiClient.get<CurrentUserResponse>("/api/auth/me", { signal, timeout: 8_000 });
   },
 };
