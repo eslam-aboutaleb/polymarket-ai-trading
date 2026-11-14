@@ -54,6 +54,7 @@ class ContractSpecification(BaseModel):
     source_uri: str
     source_hash: str
     raw_rules: str = ""
+    clarifications: list[str] = Field(default_factory=list)
     raw_market: dict[str, Any] = Field(default_factory=dict)
     observed_at: datetime
     valid_from: datetime
