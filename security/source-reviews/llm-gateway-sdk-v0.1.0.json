@@ -1,0 +1,236 @@
+{
+  "source": "eslam-aboutaleb/llm-gateway-sdk",
+  "commit": "ebaa064813f7c1b83f5efefdd22a9fc87af5db19",
+  "license": "MIT",
+  "review_type": "automated_source_and_keyless_regression_review",
+  "human_approval": "required_by_native_code_owner_policy_not_asserted_here",
+  "files": [
+    {
+      "path": ".env.example",
+      "sha256": "acc234ee6ae91d77e61e21533ddaa0fede785c8bf5364ecb07611344fbbb21df"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "3a80412cbb79799a830925c9be914d80776f2316489d48d957bfd0cbfe781588"
+    },
+    {
+      "path": ".github/workflows/publish.yml",
+      "sha256": "40bfe6e35829c8fc8b8890e032f74bf633551f9a815a0aa7c06f440ca23afae6"
+    },
+    {
+      "path": ".github/workflows/security.yml",
+      "sha256": "7279b56c9cb3067095677fd312c9a9844280e48e5ba45965e67ea8a1a2c8b1f3"
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "df348a45523282a2f8513b0b6a105f0cf9f4feb9bf5f424856b95fb2a91d006d"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "sha256": "a25123ef3a1884dcd116f179c5e45e60c12bcfb73212ae425e1f82703d2381aa"
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "sha256": "363b8c2bcc828dfa7dd2b44fef1ca4c9d71d573789aa810bedd04e143925eabb"
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "9b22baa49657204629fe5e5692733d9ecb5da0f2cd56ac0d7bf2c1964b824f95"
+    },
+    {
+      "path": "README.md",
+      "sha256": "69e06fec9888d33e79b28157c3498a681973ec3f9b4531e13d7cd65aef34f56f"
+    },
+    {
+      "path": "SECURITY.md",
+      "sha256": "af6e97395cc6a648bbe09d9ffcf8fa4231e000a3aea47bcde3d0991e6c36a6e2"
+    },
+    {
+      "path": "docs/CLIENT_LIFECYCLE.md",
+      "sha256": "f6f5746a78161350d797c4c888d9f518064235666fdc6a0694120dc639c023ce"
+    },
+    {
+      "path": "docs/CONFIGURATION.md",
+      "sha256": "7d323ebf2cab33dbc55fed1ae0765acf7e37abc47cfcd1b449682198afcaccf1"
+    },
+    {
+      "path": "docs/ERROR_HANDLING.md",
+      "sha256": "f75462c2539d355028582df47ed2e3fdb9cbe30459458f02efa4a29936b1730b"
+    },
+    {
+      "path": "docs/FRAMEWORK_INTEGRATIONS.md",
+      "sha256": "c1cd831b15d3ee4c0f15409c5535cbe3558375eccaef420d379ff9822ee05eeb"
+    },
+    {
+      "path": "docs/GATEWAY_COMPATIBILITY.md",
+      "sha256": "e04591fe586c5c1952c89e8b909d08f98e1fb3b7065a5fd09d9a1590bea24748"
+    },
+    {
+      "path": "docs/POLYMARKET_MIGRATION.md",
+      "sha256": "d40f68c85286a020d0823b01ee57fc5772e2c344b541f2b269d255c6cc3737e8"
+    },
+    {
+      "path": "docs/QUICKSTART.md",
+      "sha256": "c318c0fc183070d876343cdc6a55a74a865a9afca56f2e4255cc094675502c4c"
+    },
+    {
+      "path": "docs/RELEASE_PROCESS.md",
+      "sha256": "e75529890de8336672cde8a9d7b11fd985f5085a180e1f1dd5002d0bb3bad7ee"
+    },
+    {
+      "path": "docs/SDK_ARCHITECTURE.md",
+      "sha256": "ae547ddcd3a940dae9db6d5815144f87148a1b5daf25f0b254b6b8e2f9274b14"
+    },
+    {
+      "path": "docs/SECURITY.md",
+      "sha256": "271e8d8f6ade2b28cd5c4af4e1aed732d02cf5431ffc5817a0022b7031b0523d"
+    },
+    {
+      "path": "docs/TESTING.md",
+      "sha256": "13d1f8fb4d892aa3b87af95a19f2fc665fe17b92a25ad6a5685c8977e795aa93"
+    },
+    {
+      "path": "docs/THIRD_PARTY_LICENSES.md",
+      "sha256": "e84ad33b17f18e79ffd0acbc5ee5a8acc133b13ab05ce0aa404f0e1779fa84ff"
+    },
+    {
+      "path": "docs/VERSIONING.md",
+      "sha256": "a5616d701672526d59136d05e613d97f0cf8090ae5c8f485451c956aca45d6dd"
+    },
+    {
+      "path": "examples/async_chat.py",
+      "sha256": "c83a66d623954bd946e93a744c5b056fa180e00113d80cca6864961ee4d3bba0"
+    },
+    {
+      "path": "examples/basic_chat.py",
+      "sha256": "5ba715712280382443f688537566926ea047715fa351589ee0e7bd3bae110575"
+    },
+    {
+      "path": "examples/embeddings.py",
+      "sha256": "bc58cbbae0239cc7a9a0727a23104b893462bf438b3cb001e3adc409083ec4e2"
+    },
+    {
+      "path": "examples/fastapi.py",
+      "sha256": "205fa53e9756507effb23cfb55b582432c8664153d487e7d5a5bb118f0cb984d"
+    },
+    {
+      "path": "examples/streaming.py",
+      "sha256": "bdbbd48f881e34cfee4dab58881f968fad5b7fe2e11f1f31515a03fc62669ee9"
+    },
+    {
+      "path": "pyproject.toml",
+      "sha256": "d5c90a569bd62834097b9c9d0c1a3b68271fc8f51c9829ddff5c7335b80d3d95"
+    },
+    {
+      "path": "src/llm_gateway_sdk/__init__.py",
+      "sha256": "a9c3147bcdf99b669cb136d84e4aae1f20b305723c558b868c82881fb3a4dd15"
+    },
+    {
+      "path": "src/llm_gateway_sdk/clients.py",
+      "sha256": "2c1f722d85e40f6f03b11fd744baee3d74831a523be4369cdd8c377c62da0539"
+    },
+    {
+      "path": "src/llm_gateway_sdk/constants.py",
+      "sha256": "090d2249cca04b7873f140aead8ae812164787ffc6f21bdadefc739ec13a7fe1"
+    },
+    {
+      "path": "src/llm_gateway_sdk/exceptions.py",
+      "sha256": "f13c5b7bd6b46944f5705b6796e0d892483bc8739cb57964d1af971edb927244"
+    },
+    {
+      "path": "src/llm_gateway_sdk/integrations/__init__.py",
+      "sha256": "033de573609f96755f511c286df1fc568ee892cbe1733fd5d55edc3a9bed0176"
+    },
+    {
+      "path": "src/llm_gateway_sdk/integrations/pydantic_settings.py",
+      "sha256": "b32d05ca35c23c49c049e2bcbdd5864b93a9ead013fab87ee52b451958646433"
+    },
+    {
+      "path": "src/llm_gateway_sdk/models.py",
+      "sha256": "3b29179920796459fbacc2f25cb60416b8c3237bac4375875c26c7718b0dc14c"
+    },
+    {
+      "path": "src/llm_gateway_sdk/py.typed",
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "src/llm_gateway_sdk/settings.py",
+      "sha256": "b12a6ce8682d6397505e5454b3f40868818bdb6cdcb650c3afc07ef756d75b0e"
+    },
+    {
+      "path": "src/llm_gateway_sdk/validation.py",
+      "sha256": "73e573d32a98222e600402ec2c338c0fc98d603a7201617df5ce5b4a4182b907"
+    },
+    {
+      "path": "tests/compatibility/test_litellm_contract.py",
+      "sha256": "00703bd93bc5606c318712f9c85a3332d7de2c40164802ce087bd617371eec31"
+    },
+    {
+      "path": "tests/compatibility/test_openai_contract.py",
+      "sha256": "1d4c3588f9b2221f009af065dbf11d11546e6663358f6db5d84a9798ead9e061"
+    },
+    {
+      "path": "tests/conftest.py",
+      "sha256": "d6eccfb648dac3411fb3170e5037ec00a1f04b9ffdd04f0d157526f2e1577b55"
+    },
+    {
+      "path": "tests/integration/test_async.py",
+      "sha256": "dc5fc86fe400452bbd55fb6651efe0bfc47686d3ea5dfb3af103ea69873bf1d6"
+    },
+    {
+      "path": "tests/integration/test_chat.py",
+      "sha256": "36f936671c76e61cab29af10df1847389c462e69f5a358c3d78b7968c0054c15"
+    },
+    {
+      "path": "tests/integration/test_embeddings.py",
+      "sha256": "ac47b4fdb83d7dfcc6299d8f539b9ac1e37ec4645abc556a628bf44b49638869"
+    },
+    {
+      "path": "tests/integration/test_streaming.py",
+      "sha256": "7a2f20bbee1c07bf052e0efbbad7142a0ada1ececedca8903b63ac0aed82e661"
+    },
+    {
+      "path": "tests/integration/test_structured_output.py",
+      "sha256": "98f650afa02d082cafa2a17dbf08f9327371d852f86e0ead16fd9f5eab8edab8"
+    },
+    {
+      "path": "tests/integration/test_tools.py",
+      "sha256": "1a7e7e56c5c821096f231c1b48ae1f4c2e0aa426e0ed2b4a79ad2f79c48c4f72"
+    },
+    {
+      "path": "tests/unit/test_client_factory.py",
+      "sha256": "d9c67219ee3eb88a257cd327967eabe6c68a9577ca52fc4448de7c5a6bc6d6d0"
+    },
+    {
+      "path": "tests/unit/test_exceptions.py",
+      "sha256": "3a2c48ffaef6cf1691db20602404a070c48363eda366b2982b5dbf162254e495"
+    },
+    {
+      "path": "tests/unit/test_integrations.py",
+      "sha256": "a6da05d92aa3b2ca87993ec1300c1128ae26747c687ad17bbdfb939efcdb74b2"
+    },
+    {
+      "path": "tests/unit/test_lifecycle.py",
+      "sha256": "8be0dd241d2f172a9c13e04056c5dade271994025d7736d846df12d28532668a"
+    },
+    {
+      "path": "tests/unit/test_settings.py",
+      "sha256": "ec0dcd70a7c0bdb12fa37ed213547d8fcf2c1d848aeeb7b0c5d3ec3bdeef1092"
+    },
+    {
+      "path": "tests/unit/test_validation.py",
+      "sha256": "79370db939dc28826fa21c39085e764571c025b7c1272342b4b8268e00c2e7ca"
+    },
+    {
+      "path": "uv.lock",
+      "sha256": "7a24bc121e030c9f6ed4370772adaf2fe55235271ad5ab1cb77db76f427801e4"
+    }
+  ],
+  "validation": {
+    "keyless_sdk_tests_passed": 163,
+    "live_gateway_tests_skipped": 1,
+    "coverage_percent": 93.64,
+    "commit_signature_verified": false,
+    "scope": "Pinned public source content, URL/header/key validation, settings redaction, parser/transport tests; no human approval asserted."
+  }
+}

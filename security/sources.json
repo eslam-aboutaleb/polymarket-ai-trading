@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "name": "llm-gateway-sdk",
+      "version": "0.1.0",
+      "repository": "eslam-aboutaleb/llm-gateway-sdk",
+      "tag": "v0.1.0",
+      "commit": "ebaa064813f7c1b83f5efefdd22a9fc87af5db19",
+      "tree": "f0af757bb0f1d8cac874c189523b0b3778f77075",
+      "content_sha256": "49fc4427f5091476e215da9dc0fa0cacc932160cae1ee5f7c1b1c2c33663061b",
+      "license": "MIT",
+      "build_project": "tools/gateway-sdk-build",
+      "build_constraints": [
+        {
+          "requirement": "editables==0.5",
+          "hashes": [
+            "sha256:61e5ffa82629e0d8bfe09bc44a07db3c1ab8ed1ce78a6980732870f19b5e7d4c"
+          ]
+        },
+        {
+          "requirement": "hatchling==1.26.3",
+          "hashes": [
+            "sha256:c407e1c6c17b574584a66ae60e8e9a01235ecb6dc61d01559bb936577aaf5846"
+          ]
+        },
+        {
+          "requirement": "packaging==26.3",
+          "hashes": [
+            "sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"
+          ]
+        },
+        {
+          "requirement": "pathspec==1.1.1",
+          "hashes": [
+            "sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189"
+          ]
+        },
+        {
+          "requirement": "pluggy==1.7.0",
+          "hashes": [
+            "sha256:7dd7b0d8832ba3cb632c306926ded123429211b83641b35dc5c41ad2d34f9bec"
+          ]
+        },
+        {
+          "requirement": "trove-classifiers==2026.9.21.13",
+          "hashes": [
+            "sha256:8b1ff4f9c191b1040b71c37f1e445ab99732911e3cd91de52838453a854d7a17"
+          ]
+        }
+      ],
+      "review_evidence": "security/source-reviews/llm-gateway-sdk-v0.1.0.json"
+    }
+  ]
+}
