@@ -10,6 +10,7 @@ from app.models.analytics.book_research_run import BookResearchRun
 from app.models.analytics.executable_replay import ExecutableReplayRun, ExecutableSignalSource
 from app.models.analytics.follower_experiment import FollowerExperimentRun
 from app.models.analytics.portfolio_snapshot import PortfolioSnapshot
+from app.models.analytics.resolution_rule_snapshot import ResolutionRuleSnapshot
 from app.models.base import Base
 from app.models.billing.subscription import BillingWebhookEvent, Subscription
 from app.models.intelligence.collaboration import ForecastVote, MarketAnnotation, UserFollow
@@ -76,6 +77,7 @@ __all__ = [
     "Winner",
     "TradeHistory",
     "Assessment",
+    "ResolutionRuleSnapshot",
     "UserTrade",
     "RefreshToken",
     "FollowedTrader",

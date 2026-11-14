@@ -39,6 +39,7 @@ import json
 import os
 import sys
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -655,9 +656,138 @@ def _tool_binary_book(args):
     return _run_async(binary_book_research(args))
 
 
+async def resolution_rule_research(args: dict[str, Any]) -> dict[str, Any]:
+    """Bounded GET-only bridge for deterministic resolution-rule analysis."""
+    import re
+
+    unavailable = {
+        "schema_version": "resolution-rule-v1",
+        "status": "abstain",
+        "reason": "RESOLUTION_RULE_TOOL_UNAVAILABLE",
+        "execution_eligible": False,
+    }
+    condition = str(args.get("condition_id") or "").lower()
+    if not re.fullmatch(r"0x[0-9a-f]{64}", condition):
+        return {**unavailable, "reason": "INVALID_CONDITION_ID"}
+    params: dict[str, str] = {"condition_id": condition}
+    if args.get("as_of") is not None:
+        params["as_of"] = str(args["as_of"])
+    headers = {"Accept": "application/json"}
+    if VENUE_API_TOKEN:
+        headers["Authorization"] = f"Bearer {VENUE_API_TOKEN}"
+    try:
+        async with (
+            httpx.AsyncClient(timeout=10) as client,
+            client.stream(
+                "GET",
+                f"{VENUE_API_BASE}/api/resolution-rules/explain",
+                params=params,
+                headers=headers,
+                follow_redirects=False,
+            ) as response,
+        ):
+            if response.status_code != 200:
+                return {**unavailable, "reason": "RESOLUTION_RULE_BACKEND_UNAVAILABLE"}
+            data = bytearray()
+            async for chunk in response.aiter_bytes():
+                if len(data) + len(chunk) > 524288:
+                    return {**unavailable, "reason": "RESOLUTION_RULE_RESPONSE_TOO_LARGE"}
+                data.extend(chunk)
+        payload = json.loads(data)
+        if not isinstance(payload, dict) or payload.get("schema_version") != "resolution-rule-v1":
+            return {**unavailable, "reason": "INVALID_RESOLUTION_RULE_RESPONSE"}
+        return payload
+    except (ValueError, TypeError, httpx.HTTPError, TimeoutError):
+        return unavailable
+
+
+RESOLUTION_RULE_TOOL_SCHEMA = {
+    "name": "resolution_rule_analysis",
+    "read_only": True,
+    "version": "resolution-rule-v1",
+    "description": (
+        "Deterministic resolution rule specification, oracle/cutoff verification, "
+        "source-span citations, and explicit abstention codes; no order action."
+    ),
+    "input_schema": {
+        "type": "object",
+        "required": ["condition_id"],
+        "properties": {
+            "condition_id": {"type": "string", "pattern": "^0x[a-fA-F0-9]{64}$"},
+            "as_of": {"type": "string"},
+        },
+        "additionalProperties": False,
+    },
+}
+
+
+def _tool_resolution_rule_analysis(args):
+    return _run_async(resolution_rule_research(args))
+
+
+async def binary_valuation_research(args: dict[str, Any]) -> dict[str, Any]:
+    """Bounded POST-only bridge for deterministic binary contract valuation."""
+    unavailable = {
+        "schema_version": "binary-valuation-v1",
+        "status": "abstain",
+        "reason": "BINARY_VALUATION_TOOL_UNAVAILABLE",
+        "decision": "research_only",
+        "execution_eligible": False,
+    }
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    if VENUE_API_TOKEN:
+        headers["Authorization"] = f"Bearer {VENUE_API_TOKEN}"
+    try:
+        async with (
+            httpx.AsyncClient(timeout=10) as client,
+            client.stream(
+                "POST",
+                f"{VENUE_API_BASE}/api/valuation/binary",
+                json=args,
+                headers=headers,
+                follow_redirects=False,
+            ) as response,
+        ):
+            if response.status_code != 200:
+                return {**unavailable, "reason": "BINARY_VALUATION_BACKEND_UNAVAILABLE"}
+            data = bytearray()
+            async for chunk in response.aiter_bytes():
+                if len(data) + len(chunk) > 524288:
+                    return {**unavailable, "reason": "BINARY_VALUATION_RESPONSE_TOO_LARGE"}
+                data.extend(chunk)
+        payload = json.loads(data)
+        if not isinstance(payload, dict) or payload.get("schema_version") != "binary-valuation-v1":
+            return {**unavailable, "reason": "INVALID_BINARY_VALUATION_RESPONSE"}
+        return payload
+    except (ValueError, TypeError, httpx.HTTPError, TimeoutError):
+        return unavailable
+
+
+BINARY_VALUATION_TOOL_SCHEMA = {
+    "name": "binary_contract_valuation",
+    "read_only": True,
+    "version": "binary-valuation-v1",
+    "description": (
+        "Deterministic Decimal binary contract EV, break-even probability, "
+        "sensitivity grid, and explicit abstention; no order action."
+    ),
+    "input_schema": json.loads(
+        (Path(__file__).parent / "schemas" / "binary-valuation-request.json").read_text()
+    ),
+}
+
+
+def _tool_binary_contract_valuation(args):
+    return _run_async(binary_valuation_research(args))
+
+
 TOOLS: dict[str, Any] = {
     "binary_book": _tool_binary_book,
     "describe_book_research": lambda _: BOOK_TOOL_SCHEMA,
+    "resolution_rule_analysis": _tool_resolution_rule_analysis,
+    "describe_resolution_rule_analysis": lambda _: RESOLUTION_RULE_TOOL_SCHEMA,
+    "binary_contract_valuation": _tool_binary_contract_valuation,
+    "describe_binary_contract_valuation": lambda _: BINARY_VALUATION_TOOL_SCHEMA,
     "web_search": _tool_web_search,
     "x_indexed_web_search": _tool_x_indexed_web_search,
     # Compatibility alias: the pre-rename name resolves to the same handler,

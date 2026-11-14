@@ -1,0 +1,21 @@
+{
+  "skill": "binary-contract-valuation",
+  "version": "binary-valuation-v1",
+  "status": "implemented_detector",
+  "execution_eligible": false,
+  "owner": "backend/app/services/intelligence/binary_valuation.py",
+  "dependencies": [
+    "#15",
+    "#16",
+    "#18",
+    "#22"
+  ],
+  "gates": {
+    "live_trading_unchanged": true,
+    "credentials_required": false,
+    "abstain_on_unverified_rule": true
+  },
+  "shadow_report": "shadow-baseline.json",
+  "production_approved": false,
+  "human_approval": "not_asserted"
+}
