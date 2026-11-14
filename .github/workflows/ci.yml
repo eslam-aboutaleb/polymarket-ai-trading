@@ -167,9 +167,11 @@ jobs:
         env:
           PYTHONPATH: .:../services/shared
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: uv run --frozen pytest --no-cov tests/integration/test_native_capture_postgres.py tests/integration/test_venue_observations_postgres.py tests/integration/test_book_research_postgres.py tests/integration/test_paper_accounts_postgres.py tests/integration/test_maker_lifecycle_postgres.py tests/integration/test_executable_replay_postgres.py tests/integration/test_latency_paper_postgres.py tests/integration/test_provider_contract_postgres.py tests/integration/test_resolution_provider_postgres.py tests/integration/test_valuation_evidence_postgres.py tests/integration/test_oracle_basis_postgres.py
+        run: uv run --frozen pytest --no-cov tests/integration/test_native_capture_postgres.py tests/integration/test_venue_observations_postgres.py tests/integration/test_book_research_postgres.py tests/integration/test_paper_accounts_postgres.py tests/integration/test_maker_lifecycle_postgres.py tests/integration/test_executable_replay_postgres.py tests/integration/test_latency_paper_postgres.py tests/integration/test_provider_contract_postgres.py tests/integration/test_resolution_provider_postgres.py tests/integration/test_valuation_evidence_postgres.py tests/integration/test_oracle_basis_postgres.py tests/integration/test_event_risk_postgres.py
       - name: Reproduce public-data acceptance replay without credentials
         run: uv run --project backend --frozen python scripts/acceptance-replay-report.py "user guide/acceptance-replay-2026-11-13/dataset.json.gz" --output /tmp/acceptance-replay.json
+      - name: Reproduce event concentration diagnostic from captured public quotes
+        run: uv run --project backend --frozen python scripts/event-risk-shadow.py --output /tmp/event-risk-shadow.json
       - name: Seed disposable admin test wallet
         env:
           PYTHONPATH: ${{ github.workspace }}/backend:${{ github.workspace }}/services/shared
