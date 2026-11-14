@@ -1,0 +1,263 @@
+{
+  "$defs": {
+    "FeedObservation": {
+      "additionalProperties": false,
+      "description": "Single point-in-time observation from either spot or settlement feed.",
+      "properties": {
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "instrument": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instrument"
+        },
+        "capture_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Capture Id"
+        },
+        "source_at": {
+          "format": "date-time",
+          "title": "Source At",
+          "type": "string"
+        },
+        "received_at": {
+          "format": "date-time",
+          "title": "Received At",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "source",
+        "source_at",
+        "received_at",
+        "value"
+      ],
+      "title": "FeedObservation",
+      "type": "object"
+    },
+    "OracleSpecification": {
+      "additionalProperties": false,
+      "description": "Authoritative settlement oracle specification pinned to a rule hash.",
+      "properties": {
+        "condition_id": {
+          "pattern": "^0x[a-fA-F0-9]{64}$",
+          "title": "Condition Id",
+          "type": "string"
+        },
+        "rule_hash": {
+          "title": "Rule Hash",
+          "type": "string"
+        },
+        "rule_review_status": {
+          "enum": [
+            "verified",
+            "unverified",
+            "ambiguous",
+            "invalid"
+          ],
+          "title": "Rule Review Status",
+          "type": "string"
+        },
+        "authoritative_provider": {
+          "title": "Authoritative Provider",
+          "type": "string"
+        },
+        "eligible_instrument": {
+          "title": "Eligible Instrument",
+          "type": "string"
+        },
+        "aggregation": {
+          "default": "last",
+          "enum": [
+            "last",
+            "median",
+            "twap"
+          ],
+          "title": "Aggregation",
+          "type": "string"
+        },
+        "sampling_interval_seconds": {
+          "default": 60,
+          "exclusiveMinimum": 0,
+          "title": "Sampling Interval Seconds",
+          "type": "integer"
+        },
+        "rounding_decimals": {
+          "default": 2,
+          "maximum": 12,
+          "minimum": 0,
+          "title": "Rounding Decimals",
+          "type": "integer"
+        },
+        "cutoff_utc": {
+          "format": "date-time",
+          "title": "Cutoff Utc",
+          "type": "string"
+        },
+        "window_start_utc": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Window Start Utc"
+        },
+        "window_seconds": {
+          "default": 60,
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Window Seconds",
+          "type": "integer"
+        },
+        "rounding_mode": {
+          "default": "none",
+          "enum": [
+            "none",
+            "half_up",
+            "half_even",
+            "floor",
+            "ceiling"
+          ],
+          "title": "Rounding Mode",
+          "type": "string"
+        },
+        "fallback_provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback Provider"
+        }
+      },
+      "required": [
+        "condition_id",
+        "rule_hash",
+        "rule_review_status",
+        "authoritative_provider",
+        "eligible_instrument",
+        "cutoff_utc"
+      ],
+      "title": "OracleSpecification",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Input payload for analyzing oracle basis risk.",
+  "properties": {
+    "specification": {
+      "$ref": "#/$defs/OracleSpecification"
+    },
+    "as_of": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "As Of"
+    },
+    "strike": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        }
+      ],
+      "title": "Strike"
+    },
+    "comparator": {
+      "default": ">=",
+      "enum": [
+        ">",
+        ">=",
+        "<",
+        "<="
+      ],
+      "title": "Comparator",
+      "type": "string"
+    },
+    "spot_observations": {
+      "items": {
+        "$ref": "#/$defs/FeedObservation"
+      },
+      "maxItems": 5000,
+      "title": "Spot Observations",
+      "type": "array"
+    },
+    "settlement_observations": {
+      "items": {
+        "$ref": "#/$defs/FeedObservation"
+      },
+      "maxItems": 5000,
+      "title": "Settlement Observations",
+      "type": "array"
+    },
+    "max_alignment_skew_seconds": {
+      "default": 60,
+      "maximum": 3600,
+      "minimum": 0,
+      "title": "Max Alignment Skew Seconds",
+      "type": "integer"
+    },
+    "max_settlement_lag_seconds": {
+      "default": 300,
+      "maximum": 86400,
+      "minimum": 0,
+      "title": "Max Settlement Lag Seconds",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "specification",
+    "strike"
+  ],
+  "title": "OracleBasisRequest",
+  "type": "object"
+}

@@ -1,0 +1,19 @@
+{
+  "skill": "oracle-basis-risk",
+  "evidence_class": "implemented_detector",
+  "execution_eligible": false,
+  "dataset_sha256": "59a9fc4b0539462a5fb976e3cee021171d97da28654cff5247bbed78d746ee8c",
+  "public_report": "../../acceptance-replay-2026-11-13/report.json",
+  "public_rule_panel_count": 124,
+  "observed_exchange_rise_official_down_counterexamples": 8,
+  "counterexamples_are": "Backfilled diagnostics, not OOS bot decisions or exact Chainlink TWAP observations",
+  "authoritative_complete_series_count": 0,
+  "out_of_sample_quantile_coverage": null,
+  "coverage_abstention": "No complete authoritative TWAP history; mandatory source-unknown branch, no definitive settlement probability",
+  "production_approved": false,
+  "independent_replication": [
+    "Re-run scripts/acceptance-replay-report.py on committed raw bundle",
+    "Re-run oracle property/lineage tests and PostgreSQL API replay",
+    "Acquire separately authorized exact instrument history before predictive-coverage promotion"
+  ]
+}

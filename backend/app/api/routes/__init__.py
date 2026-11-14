@@ -45,6 +45,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         microstructure,
         news,
         observations,
+        oracle_basis,
         resolution_rules,
         venues,
         whales,
@@ -89,6 +90,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         markets,
         observations,
         microstructure,
+        oracle_basis,
         resolution_rules,
     ):
         app.include_router(module.router)

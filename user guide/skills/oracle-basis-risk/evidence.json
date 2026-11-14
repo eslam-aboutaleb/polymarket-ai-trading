@@ -1,0 +1,21 @@
+{
+  "skill": "oracle-basis-risk",
+  "version": "oracle-basis-v1",
+  "status": "implemented_detector",
+  "execution_eligible": false,
+  "owner": "backend/app/services/market_data/oracle_basis.py",
+  "dependencies": [
+    "#16",
+    "#17",
+    "#54"
+  ],
+  "gates": {
+    "live_trading_unchanged": true,
+    "credentials_required": false,
+    "abstain_on_missing_settlement": true
+  },
+  "production_approved": false,
+  "shadow_report": "shadow-baseline.json",
+  "human_approval": "not_asserted",
+  "oracle_verification": "Only server-owned immutable reference receipts plus matching recorded rule; caller/proxy/spot cannot self-approve"
+}
