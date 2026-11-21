@@ -1,3 +1,5 @@
+import ForwardAttributionStudy from "./ForwardAttributionStudy";
+import OpeningBasisSelector from "./OpeningBasisSelector";
 import { useEffect, useRef, useState } from "react";
 import {
   executionAnalyticsService,
@@ -8,9 +10,11 @@ import { getApiErrorMessage } from "../utils/apiError";
 import { isApiError } from "../utils/apiError";
 
 const money = (value: string | null) =>
-  value == null ? "Unknown" : `$${Number(value).toFixed(6)}`;
+  value == null ? "Unknown" : `${Number(value).toFixed(6)} pUSD`;
 
 export default function LiveReconciliation() {
+  const [studyId, setStudyId] = useState("");
+  const [openingStateId, setOpeningStateId] = useState("");
   const [snapshots, setSnapshots] = useState<LiveBalanceReference[]>([]);
   const [opening, setOpening] = useState("");
   const [closing, setClosing] = useState("");
@@ -42,13 +46,13 @@ export default function LiveReconciliation() {
     };
   }, []);
 
-  async function capture() {
+  async function capture(finalized = false) {
     const sequence = ++request.current;
     setBusy(true);
     setError(null);
     setReport(null);
     try {
-      const snapshot = await executionAnalyticsService.captureBalanceSnapshot();
+      const snapshot = await executionAnalyticsService.captureBalanceSnapshot(finalized);
       if (!alive.current || sequence !== request.current) return;
       setSnapshots((rows) => [snapshot, ...rows].slice(0, 20));
       setOpening((value) => value || snapshot.id);
@@ -73,12 +77,16 @@ export default function LiveReconciliation() {
       if (alive.current && sequence === request.current) setBusy(false);
     }
   }
-  async function save() {
+  async function save(verifyChain = false) {
     const sequence = ++request.current;
     setBusy(true);
     setError(null);
     try {
-      const result = await executionAnalyticsService.freezeLiveReconciliation(opening, closing);
+      const result = await executionAnalyticsService.freezeLiveReconciliation(opening, closing, {
+        verify_chain: verifyChain,
+        opening_state_report_id: openingStateId || undefined,
+        study_id: studyId || undefined,
+      });
       if (alive.current && sequence === request.current) setReport(result);
     } catch (cause) {
       if (alive.current && sequence === request.current) setError(getApiErrorMessage(cause));
@@ -102,6 +110,9 @@ export default function LiveReconciliation() {
     <section aria-label="Live account reconciliation" className="surface-panel p-5 space-y-3">
       <h3 className="font-semibold text-white">Live account reconciliation</h3>
       <p className="text-soft text-sm">
+        Native collateral and trading fees; gas, model costs and off-scope assets remain separate.
+      </p>
+      <p className="text-soft text-sm">
         Compare recorded fills with read-only balance observations. Missing costs and unexplained
         cash or token changes remain unknown. Wallet holdings come from venue-indexed discovery and
         native balance reads.
@@ -109,6 +120,11 @@ export default function LiveReconciliation() {
       <button className="btn-secondary" disabled={busy} onClick={() => void capture()}>
         Capture live balances
       </button>
+      <button className="btn-secondary" disabled={busy} onClick={() => void capture(true)}>
+        Capture finalized balances
+      </button>
+      <ForwardAttributionStudy onSelect={setStudyId} />
+      <OpeningBasisSelector openingId={opening} onSelect={setOpeningStateId} />
       <div className="flex flex-wrap gap-3">
         <label>
           Opening observation
@@ -255,6 +271,9 @@ export default function LiveReconciliation() {
               Save immutable report
             </button>
           )}
+          <button className="btn-secondary" disabled={busy} onClick={() => void save(true)}>
+            Verify finalized evidence and save
+          </button>
           <button className="btn-secondary" onClick={download}>
             Download reconciliation evidence
           </button>

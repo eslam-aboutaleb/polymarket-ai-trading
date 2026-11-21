@@ -336,6 +336,20 @@ def test_native_capture_reads_balances_only_and_never_derives_or_posts(account_d
         "/api/trades/analytics/balance-snapshots", headers={"X-Account-Id": "11"}
     )
     assert result.status_code == 200
+    payload = result.json()
+    assert (
+        readside.digest({key: value for key, value in payload.items() if key != "id"})
+        == payload["id"]
+    )
+    assert (
+        client(db)
+        .get(
+            "/api/trades/analytics/balance-snapshots/" + payload["id"],
+            headers={"X-Account-Id": "11"},
+        )
+        .json()
+        == payload
+    )
     assert Decimal(result.json()["cash_usdc"]) == 100
     assert result.json()["coverage"] == "venue_indexed_wallet_tokens"
     assert db.get(LiveBalanceSnapshot, result.json()["id"])

@@ -311,7 +311,7 @@ def reconcile_confirmed_cashflows(fills, opening, closing, *, opening_lots=None)
         instant = datetime.fromisoformat(row["matched_at"])
         if instant.tzinfo is None:
             raise ValueError("FILL_EXECUTION_TIME_UNVERIFIED")
-        return instant.astimezone(UTC), row["source_id"]
+        return instant.astimezone(UTC), tuple(row.get("execution_sequence", [row["source_id"]]))
 
     for fill in sorted(fills, key=execution_time):
         identity = (fill["order_hash"], fill["fill_id"])
@@ -329,7 +329,11 @@ def reconcile_confirmed_cashflows(fills, opening, closing, *, opening_lots=None)
             or not shares.is_finite()
             or not notional.is_finite()
             or shares <= 0
-            or not 0 < notional < shares
+            or (
+                not 0 <= notional <= shares
+                if fill.get("kind") == "SETTLEMENT"
+                else not 0 < notional < shares
+            )
         ):
             raise ValueError("INVALID_CONFIRMED_FILL")
         fee = Decimal(fill["fee_usdc"]) if fill.get("fee_usdc") is not None else None
@@ -445,7 +449,10 @@ def reconcile_confirmed_cashflows(fills, opening, closing, *, opening_lots=None)
         reasons.append("UNEXPLAINED_CASH_CHANGE")
     if any(abs(value) > Decimal("0.000001") for value in residuals.values()):
         reasons.append("UNEXPLAINED_TOKEN_CHANGE")
-    if opening.get("coverage") != "complete_wallet" or closing.get("coverage") != "complete_wallet":
+    if any(
+        observation.get("coverage") not in {"complete_wallet", "finalized_supported_asset_scope"}
+        for observation in (opening, closing)
+    ):
         reasons.append("KNOWN_APPLICATION_TOKENS_ONLY")
     if not complete_basis:
         for item in strategies.values():

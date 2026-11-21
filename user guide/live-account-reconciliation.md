@@ -1,97 +1,157 @@
 # Live accounting evidence — issue #3
 
-This extends the existing execution analytics, FIFO reconciler, UserTrade, and
-Execution Analytics screen. It adds read-only observations, attribution and saved
-evidence; it does not create another financial ledger or change trading settings.
-Issue #3 remains open for the outstanding evidence requirements listed below.
+The Execution Analytics screen captures read-only balance observations, verifies
+native trading receipts, and saves immutable attribution reports. Trading-enabled
+settings and the user's paper/live selection remain unchanged. Reports never
+submit, cancel, sign, redeem, or authorize an order.
 
-## Rollout and bounds
+## Enablement and supported scope
 
-The diagnostic flag `LIVE_ACCOUNT_RECONCILIATION_ENABLED` defaults to false. Apply
-Alembic head before enabling it. Existing trading-enabled defaults and paper/live
-selection are unchanged. Disable this flag to hide the diagnostic; preserve
-observations and saved reports for audit. Export artifacts before downgrading
-the additive v0040/v0041 tables. No financial-history backfill is performed.
+Apply Alembic head (additive migrations v0040–v0042) before enabling
+`LIVE_ACCOUNT_RECONCILIATION_ENABLED`, which defaults to false. Disable the flag to
+hide diagnostics while retaining observations. Export evidence before downgrading
+the observation, report, or study tables. No financial-history backfill occurs.
 
-Capture is limited to 2/minute, 500 application orders, 20 combined known/discovered
-tokens and a 10-second elapsed budget (in-flight SDK calls have their own timeout).
-V2 reads allow at most 10 cursor pages, 500 rows per stream and 256 KiB per response.
-Reports cap at 5,000 intent/fill audit records and 500 orders. Bounds reject rather
-than silently truncate financial evidence. All endpoints authorize the owner and
-X-Account-Id. Subaccount/shared-wallet cash capture is rejected until wallet
-allocation is proven. Analytics requests bypass the URL-only offline service-worker
-cache, and account changes clear stale screen results. No key derivation, arbitrary
-URL, signing, submit or cancel call is used.
+All routes authorize the owner and account. Shared-wallet/subaccount attribution
+is rejected without allocation evidence. Analytics bypasses the offline URL-only
+cache; account changes clear results. Snapshot and report IDs are content hashes;
+GET validates stored evidence without fetching current RPC data. Identical report
+saves are conflict-safe and idempotent. No update/delete endpoint exists.
 
-Tolerance is 0.000001 native collateral units for cash and 0.000001 token shares.
-Cash residual = closing cash minus opening cash minus net recorded trading cashflow.
-Position residual = closing shares minus opening shares minus signed confirmed fills.
-Known indexed funding is disclosed separately from trading cashflow and profit.
+The verified asset scope is Polygon 137 native pUSD collateral and the configured
+Conditional Tokens contract, with the two V2 exchanges checked against their
+on-chain collateral/CTF getters. `cash_usdc` remains a compatibility field name;
+it does not assert USDC/pUSD parity. Other assets, gas, relayer costs, model/service
+expenses and external model weights are outside this proof. The report explicitly
+keeps `full_wallet_inventory_verified=false`; supported-scope evidence must not be
+presented as total wallet profit.
 
+## Capture, verify, and continue a window
 
-The v2 contract reconstructs opening FIFO lots from all earlier confirmed gateway
-fills (bounded at 5,000 audit records). Quantity must match the opening native
-observation exactly. Historical fills confirmed after the opening watermark are
-flagged; they cannot silently repair a previously reviewed result. Entry fees are
-carried with the remaining lot and allocated once at exit. Every allocation names
-its entry and exit audit source. Reports verify the immutable order-intent identity
-before using current order rows, and reject duplicate/conflicting economic fills
-before building either totals or benchmarks. Different database timezone settings
-preserve the instant through UTC conversion.
+1. Capture a finalized opening snapshot. The configured Polygon RPC is used only
+   for allowlisted read methods. EIP-1898 calls pin balances to a canonical finalized
+   block hash. Native venue responses remain separate evidence.
+2. Keep native book/rule observations from before each decision. The
+   `arrival-midpoint-spread-v1` comparison requires both source and receipt clocks
+   before the decision, within 60 seconds. Missing/stale/future books stay unknown.
+3. Capture a finalized closing snapshot, then select **Verify finalized evidence
+   and save**. The verifier scans collateral and CTF transfers over the entire
+   block interval and checks exact bookend balance identities.
+4. For the next window, select the prior saved report as opening basis. Its closing
+   snapshot must equal the new opening. Remaining FIFO lots, entry fees, token
+   condition lineage and verified gateway identities carry forward through the
+   owned, hash-checked artifact. A new chain study can start without prior basis
+   only when opening token holdings are zero. Historical native-only diagnostics
+   can reconstruct bounded gateway history, but cannot assert chain provenance.
+5. Save/download each report and preserve the linked observations. Capture at
+   least every 12 hours; study policy rejects excessive observation gaps.
 
-The versioned `arrival-midpoint-spread-v1` benchmark uses the existing native-book
-archive and its market/rule checks. Both source and receipt clocks must precede
-the persisted decision, within 60 seconds. Adverse implementation shortfall equals
-spread cost plus the remaining execution difference; none is causal market impact
-or an extra deduction from already realized P&L. Future, stale, absent or conflicting
-books produce unknown figures. Indicative exit-bid marks use remaining verified
-basis and preserve their book/rule references. Venue-final payout metadata is
-reported separately from a chain-final redeemed cash receipt; it never credits cash.
+Capture bounds: 2/minute, 500 active application orders, 20 combined known/discovered
+tokens; native discovery has 10 pages, 500 rows/stream and 256 KiB/response. Report
+windows cap at 5,000 audit records and 500 referenced orders. Chain verification
+caps at 50,000 blocks, 50 order/transaction groups, 200 RPC calls, 1 MiB/response,
+8 MiB total and a 30-second deadline. Log pages with 1,000 entries are rejected as
+potentially truncated. Bounds reject incomplete coverage; use shorter windows.
 
-The live observation now discovers OPEN, REDEEMABLE and REDEEMABLE_LOST token
-holdings through the bounded Data API v2 cursor contract and checks discovered
-quantities against native CLOB balances. Raw response bodies and SHA-256 checksums
-are retained in the private observation. The request includes deposits/withdrawals
-explicitly when reading activity since the previous observation. Ambiguous activity,
-external trades, settlements/conversions and indexing gaps remain explicit. Known
-indexed funding and unattributed rebates are disclosed separately; they are not
-assigned to a trading strategy. This extends token discovery beyond application
-orders but is still **venue-indexed, not an atomic chain-final wallet proof**.
-The existing `cash_usdc` field is a compatibility name for native CLOB collateral
-units; no USDC/pUSD conversion or redemption equivalence is asserted.
+Actual V2 `OrderFilled` receipt fees replace unknown gateway fees only after
+order hash, wallet, token, side, size, principal, successful receipt, canonical block
+and unique log identity agree. Native match IDs are aggregated by order/transaction;
+no unsupported per-match fee split is invented. Settlement uses finalized execution
+order, separately retaining the venue match clock. Receipt replay cannot double
+count fills or consume an opening lot twice.
 
-POST `/api/trades/analytics/reconciliation-reports` accepts only owned opening and
-closing IDs and saves a content-addressed report. Repeated/concurrent identical
-saves are idempotent. GET `/api/trades/analytics/reconciliation-reports/{id}` reads
-the owned artifact and checks its content hash without recomputing current inputs.
-The v0041 migration adds only `live_attribution_reports`; export saved artifacts
-before downgrading that table. There is no update/delete route and no balance,
-trade or reservation mutation. The screen can save and download this evidence.
+Binary CTF redemptions require the payout event, condition-derived token IDs,
+winning/losing payout vector, exact burn quantities and actual collateral credit.
+Direct CTF and the known pUSD redemption adapters are supported. Ambiguous/nested
+collections, conversions or unknown adapters abstain. Venue-final metadata alone
+never credits realized cash.
 
-Every report exposes machine-readable acceptance checks. A numerical mismatch
-fails reconciliation; missing proofs remain incomplete. `verified_net_realized_pnl`
-is withheld until all required evidence and validation gates pass. Diagnostic
-results, indicative marks, modeled baselines and actual earnings are never combined.
-Forecast/model/timing/sizing contributions remain unknown without their own source
-lineage. Structured logs and counters record report status/reason codes, input hash
-and source counts without wallet credentials or balances.
+Cash/share residual tolerance is 0.000001 native units. Classified native activity
+must match the exact chain transfer to identify deposits, withdrawals or rebates.
+Funding is excluded from profit. Confirmed unallocated rebates have their own
+strategy bucket; estimates never become cash. Unknown collateral or token movements
+keep the report incomplete, including unexplained token roundtrips. Entry and exit
+fees allocate once through FIFO; strategy totals must sum to the reported net.
 
-| Issue criterion | Implementation and verification | Live evidence status |
+Every figure retains fill/intent, receipt/log, rule/book or versioned comparator
+references. Spread plus remaining execution difference equals implementation
+shortfall; it is not an additional P&L deduction or proof of causal impact.
+Indicative bid marks remain distinct from realized cash. Missing basis or costs
+withhold net P&L and release evidence rather than substituting zero.
+
+## Prospective forward study
+
+Register a policy **before** collecting the selected strategy's future decisions.
+Registration freezes source/configuration fingerprints, nonsecret configuration,
+development-event exclusions, enrollment/settlement deadlines, sample requirement,
+capital limit, observation-gap limit and drawdown bound. This is the versioned
+`prospective-paired-event-study-v2` policy. External models/services remain unattested.
+
+Every eligible future BUY intent is included. Filled entries need actual closed
+FIFO outcomes and receipt costs. Terminal zero-fill decisions remain in the paired
+control comparison; they cannot supply the minimum 20 **executed event clusters**.
+Repeated trades in one event count as one cluster. Missing terminal evidence,
+changed implementation/configuration, prior-event overlap, unavailable native
+controls, missing costs or missing observations keep evaluation incomplete.
+
+The control reuses PaperLedger and archived native depth/fee/payout rules for a
+same-time, same-capital YES buy-and-hold baseline. It is modeled counterfactual
+performance, labeled separately from actual outcomes. Each observation carries
+source references and consumes archived liquidity once. Linked reports supply the
+complete study interval. Cashflow-adjusted indicative scoped NAV supplies observed
+point drawdown, which is a lower bound between observations, not full wallet NAV.
+
+The evaluator reports event counts, seeded event-bootstrap 95% intervals and
+assumptions. These are descriptive, assume comparable independent event clusters,
+and do not correct for selecting among multiple studies. A complete positive
+interval, positive actual net and acceptable drawdown allow only
+`SHADOW_EVIDENCE_SUPPORTS_SCOPED_REVIEW`. Ties/negative evidence reject; missing data
+abstains. No result automatically enables trading or claims proven profitability.
+
+The test account can exercise paper/shadow collection without funded orders.
+Synthetic acceptance fixtures prove behavior, not actual future results. Actual
+forward acceptance requires the selected running account, archived decisions/books,
+complete finalized observations and the future settlement deadline to elapse.
+Issue #3 must remain open until that empirical evidence exists.
+
+## Acceptance and verification
+
+| Criterion | Implemented evidence | Missing-input behavior |
 | --- | --- | --- |
-| Exchange cash/positions reconcile within tolerance | Exact cash/share residuals; opening-lot quantity checks; PostgreSQL cross-window test | Incomplete until full chain-final activity/settlement and actual costs are supplied |
-| No duplicate fills | Economic identity deduplication before ledger/benchmark allocation; conflicts reject | Covered for gateway-confirmed inputs |
-| Confirmed vs estimated rebates | Separate fields; estimates excluded from cash/P&L; unallocated indexed rebates stay outside strategy totals | Actual per-fill native rebate proof remains unknown |
-| Strategy totals add consistently | Entry-strategy FIFO allocation, prorated entry/exit costs; boundary and PostgreSQL tests | Proven only for rows with complete basis/cost inputs |
-| Figures trace to fills/versioned benchmark | Intent/fill IDs, opening-lot lineage, native book/rule IDs, benchmark IDs, input hash, saved artifact | Missing archived point-in-time books explicitly abstain |
-| Missing costs unknown | Nullable costs/net/marks, no fee-rate inference, verified net withheld | Covered |
-| Forward baseline/release decision | Existing research/replay remains separate; no forward net-performance study is available | Incomplete; release abstains |
+| Cash and positions reconcile | Finalized scoped balances, complete bounded transfers, receipts and exact residuals | Incomplete/fail; never an invented residual |
+| No duplicate fills | Economic deduplication, unique logs, immutable opening FIFO handoff | Conflicts reject |
+| Rebates separated | Confirmed chain/activity credits, separate estimates and unallocated strategy | Unknown credits abstain |
+| Strategy totals additive | Exact FIFO cost allocation, funding exclusion, rebate bucket | Net withheld if costs/basis missing |
+| Figure lineage | Fill/intent and chain references; versioned native comparisons | Missing benchmark incomplete |
+| Missing costs unknown | Nullable actual costs/net, no inferred fee-rate expense | Net/release withheld |
+| Forward validation | Preregistered event-disjoint paired controls, counts/interval/drawdown | Incomplete until real observations mature |
 
-These gates deliberately do **not** mark issue #3 complete. Its empirical forward
-validation cannot be manufactured from fixtures, and chain-final settlement/cost
-provenance still coordinates with #24/#56. The numerical and failure-path tests
-prove the implemented behavior, not actual user profitability or trading readiness.
+The positive synthetic acceptance case passes every machine-readable gate, in both
+SQLite and PostgreSQL. Negative cases cover reorgs, wrong chain/wallet/exchange,
+missing transfers, duplicate logs, unsupported costs/settlements, event overlap,
+changed implementation and incomplete studies. Browser tests use a real API and
+PostgreSQL with synthetic read-only RPC receipts. They are not funded performance.
 
-Provider contracts checked November 21, 2026:
-[Data API v2 migration](https://docs.polymarket.com/migrate/data-api-v1-to-v2),
+Verify a downloaded report or snapshot offline:
+
+```sh
+python3 scripts/verify-attribution-artifact.py downloaded-report.json
+```
+
+The ID covers canonical compact sorted-key JSON without its `report_id`/`id` field,
+not the formatting of the download. Monetary/configuration decimals and timestamp
+strings preserve their hashed representation. The verifier requires no credentials.
+
+The [public contract canary](attribution-contract-canary-2026-11-22.json), collected
+November 22, 2026, verifies the finalized chain, collateral decimals and exchange
+asset getters without a wallet or order call. Reproduce it with:
+
+```sh
+backend/.venv/bin/python scripts/verify-attribution-contracts.py --output /tmp/attribution-contract-canary.json
+```
+
+Receipt ABI source is pinned to
+[ctf-exchange-v2 ccc0596](https://github.com/Polymarket/ctf-exchange-v2/tree/ccc0596074f4dfd62c944fbca4de252893b82b4b).
+Native provider references: [Data API migration](https://docs.polymarket.com/migrate/data-api-v1-to-v2),
 [wallet activity](https://docs.polymarket.com/trading/wallet-activity), and
-[fees](https://docs.polymarket.com/trading/fees). No TradingView inputs are used.
+[fees](https://docs.polymarket.com/trading/fees). No TradingView input is used.

@@ -1,17 +1,28 @@
 """Versioned, read-only financial report contracts and machine-readable acceptance gates."""
 
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter
 
 from app.services.analytics.replay.ledger import accounting
+
+_AWARE_TIME = TypeAdapter(AwareDatetime)
+
+
+def unchanged_time(value):
+    # Response validation must not change bytes covered by content-addressed IDs.
+    _AWARE_TIME.validate_python(value)
+    return value
+
+
+TimestampText = Annotated[str, AfterValidator(unchanged_time)]
 
 
 class BalanceReference(BaseModel):
     model_config = ConfigDict(extra="allow")
     id: str = Field(pattern=r"^[a-f0-9]{64}$")
-    observed_at: AwareDatetime
+    observed_at: TimestampText
 
 
 class AcceptanceCheck(BaseModel):
@@ -26,8 +37,8 @@ class AttributionReport(BaseModel):
     account_id: int
     status: Literal["reconciled", "abstain"]
     input_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
-    opening_observed_at: AwareDatetime
-    closing_observed_at: AwareDatetime
+    opening_observed_at: TimestampText
+    closing_observed_at: TimestampText
     gross_realized_pnl: str | None
     net_realized_pnl: str | None
     verified_net_realized_pnl: str | None
@@ -62,7 +73,10 @@ def acceptance_checks(result):
         abs(Decimal(value)) <= tolerance for value in result["position_residuals"].values()
     )
     wallet_ok = (
-        result["full_wallet_reconciled"]
+        (
+            result["full_wallet_reconciled"]
+            or (result.get("chain_reconciliation") or {}).get("scope_reconciled", False)
+        )
         and cash is not None
         and abs(Decimal(cash)) <= tolerance
         and position_ok
@@ -72,7 +86,10 @@ def acceptance_checks(result):
     additive = net is not None and all(value is not None for value in attributed)
     if additive:
         additive = abs(Decimal(net) - sum(map(Decimal, attributed), Decimal(0))) <= tolerance
-    benchmark_ok = all(row["status"] == "observed_comparison" for row in result["benchmarks"])
+    benchmark_ok = all(
+        row["status"] in {"observed_comparison", "settlement_receipt"}
+        for row in result["benchmarks"]
+    )
     costs_ok = (
         result["total_fees_usdc"] is not None and result["confirmed_rebates_usdc"] is not None
     )
@@ -93,7 +110,11 @@ def acceptance_checks(result):
         ),
         check("missing_costs_remain_unknown", True, ""),
         check("actual_cost_evidence", costs_ok, "ACTUAL_COSTS_UNVERIFIED"),
-        check("forward_validation", False, "NO_DISJOINT_FORWARD_EVENT_STUDY"),
+        check(
+            "forward_validation",
+            (result.get("forward_study") or {}).get("status") == "complete",
+            "NO_COMPLETE_DISJOINT_FORWARD_EVENT_STUDY",
+        ),
     ]
 
 
@@ -113,3 +134,6 @@ class FreezeAttributionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     opening_id: str = Field(pattern=r"^[a-f0-9]{64}$")
     closing_id: str = Field(pattern=r"^[a-f0-9]{64}$")
+    verify_chain: bool = False
+    opening_state_report_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    study_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")

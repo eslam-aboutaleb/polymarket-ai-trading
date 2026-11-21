@@ -443,6 +443,11 @@ def place_live_order(
             response={},
         )
         db.add(row)
+        from app.services.analytics.implementation_provenance import (
+            configuration_fingerprint,
+            implementation_fingerprint,
+        )
+
         audit(
             db,
             row,
@@ -454,6 +459,10 @@ def place_live_order(
                 "token_id": token_id,
                 "condition_id": market_id,
                 "fingerprint": fingerprint,
+                "implementation_fingerprint": implementation_fingerprint(),
+                "configuration_fingerprint": configuration_fingerprint(
+                    db, user_id, account_id, strategy
+                ),
                 "price_limit": str(price_d),
                 "shares": str(shares),
                 "notional": str(notional),

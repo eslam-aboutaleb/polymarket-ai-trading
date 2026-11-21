@@ -17,6 +17,7 @@ from app.config import get_settings
 from app.models import Base
 from app.models.users.account import Account
 from app.models.users.user import User
+from app.models.users.user_settings import UserSettings
 from app.security.rate_limit import limiter
 from app.utils.database import get_db
 
@@ -32,6 +33,7 @@ Base.metadata.create_all(engine)
 with Session(engine) as db:
     db.add(User(id=1, wallet_address="0x" + "1" * 40))
     db.flush()
+    db.add(UserSettings(user_id=1))
     db.add(Account(id=11, owner_user_id=1, name="Personal", kind="personal", is_default=True))
     db.commit()
     snapshot(db, T0, "100", {})
@@ -72,3 +74,24 @@ app.dependency_overrides[get_db] = database
 @app.get("/")
 def health():
     return {"ready": True}
+
+
+@app.post("/__test/chain")
+def seed_chain_scenario():
+    """Reset only the isolated browser schema and inject the outbound RPC boundary."""
+    from chain_attribution_fixtures import VenueRPC, seed_rpc_account
+
+    from app.services.analytics import chain_attribution, chain_evidence
+
+    rpc = VenueRPC()
+    original_reader = chain_evidence.ChainReader
+
+    class ControlledReader(original_reader):
+        def __init__(self, **kwargs):
+            kwargs["transport"] = rpc.transport()
+            super().__init__(**kwargs)
+
+    chain_attribution.ChainReader = ControlledReader
+    with Session(engine) as db:
+        seed_rpc_account(db, rpc, reset=True)
+    return {"ready": True, "classification": "synthetic_rpc_boundary_only"}
