@@ -101,7 +101,7 @@ def _risk_check(
     user_id: int | None = None,
     account_id: int | None = None,
     exclude_order_id: int | None = None,
-) -> None:
+) -> dict:
     owner_id = user_id if user_id is not None else settings.user_id
     if settings.simulation_mode or settings.trading_halted:
         raise LiveTradingBlocked("ACCOUNT_NOT_IN_LIVE_MODE")
@@ -109,9 +109,18 @@ def _risk_check(
     cooldown = settings.cooldown_until
     if cooldown and cooldown.replace(tzinfo=now.tzinfo) > now:
         raise LiveTradingBlocked("COOLDOWN_ACTIVE")
+    approval = {
+        "approved_at": now.isoformat(),
+        "requested_principal": str(notional),
+        "owner_id": owner_id,
+        "account_id": account_id,
+        "budgets": [],
+        "simulation_mode": False,
+        "trading_halted": False,
+    }
     if notional == 0:
         # Inventory-backed SELLs do not consume new purchase budgets.
-        return
+        return approval
     if (
         (settings.max_drawdown_pct or 0) > 0 or (settings.total_loss_halt_pct or 0) > 0
     ) and not settings.initial_capital:
@@ -163,12 +172,68 @@ def _risk_check(
         if exclude_order_id is not None:
             query = query.where(LiveOrder.id != exclude_order_id)
         if account_id is not None:
-            query = query.where(account_orders(db, user_id, account_id))
+            query = query.where(account_orders(db, owner_id, account_id))
         if since:
             query = query.where(LiveOrder.created_at >= since)
         spent = Decimal(str(db.scalar(query)))
         if spent + notional > Decimal(str(limit)):
             raise LiveTradingBlocked(f"LIVE_{name.upper()}_BUDGET_EXCEEDED")
+        approval["budgets"].append(
+            {
+                "name": name,
+                "limit": str(limit),
+                "reserved_before": str(spent),
+                "window_start": since.isoformat() if since else None,
+            }
+        )
+    return approval
+
+
+def _authorize_copy(db, user_id, settings, copied_from_wallet, ai_approved):
+    follow = db.scalar(
+        select(FollowedTrader).where(
+            FollowedTrader.user_id == user_id,
+            FollowedTrader.trader_wallet == (copied_from_wallet or "").lower(),
+            FollowedTrader.is_active.is_(True),
+        )
+    )
+    if not settings.copy_trading_enabled or follow is None:
+        raise LiveTradingBlocked("COPY_TRADING_NOT_ENABLED_FOR_TRADER")
+    if settings.require_ai_approval and not ai_approved:
+        raise LiveTradingBlocked("AI_APPROVAL_REQUIRED")
+
+
+def _available_balance(db, client, user_id, token_id, side, shares, price_d, exclude_order_id=None):
+    available = clob_transport.balance(client, token_id if side == "SELL" else None)
+    balance_received_at = utc_now()
+    required = shares if side == "SELL" else shares * price_d
+    if side == "BUY":
+        # Authenticated balance is a wallet balance, not proof that all
+        # application commitments have already been deducted by the venue.
+        committed = db.scalar(
+            select(func.coalesce(func.sum(LiveOrder.reserved), 0)).where(
+                LiveOrder.user_id == user_id,
+                LiveOrder.id != exclude_order_id if exclude_order_id is not None else True,
+                LiveOrder.side == "BUY",
+                LiveOrder.state.in_(("SUBMITTING", "UNKNOWN", "SUBMITTED", "PARTIALLY_FILLED")),
+            )
+        )
+        available -= Decimal(str(committed))
+    if available < required:
+        raise LiveTradingBlocked("INSUFFICIENT_AUTHENTICATED_BALANCE")
+    if side == "SELL":
+        pending = db.scalars(
+            select(LiveOrder).where(
+                LiveOrder.user_id == user_id,
+                LiveOrder.id != exclude_order_id if exclude_order_id is not None else True,
+                LiveOrder.token_id == token_id,
+                LiveOrder.side == "SELL",
+                LiveOrder.state.in_(("SUBMITTED", "PARTIALLY_FILLED")),
+            )
+        ).all()
+        if sum((row.shares for row in pending), Decimal(0)) + shares > available:
+            raise LiveTradingBlocked("SELL_INVENTORY_ALREADY_RESERVED")
+    return available, balance_received_at
 
 
 def order_result(row: LiveOrder) -> dict:
@@ -281,17 +346,7 @@ def place_live_order(
                 if account_settings is None:
                     raise LiveTradingBlocked("ACCOUNT_SETTINGS_REQUIRED")
         if strategy == "copy":
-            follow = db.scalar(
-                select(FollowedTrader).where(
-                    FollowedTrader.user_id == user_id,
-                    FollowedTrader.trader_wallet == (copied_from_wallet or "").lower(),
-                    FollowedTrader.is_active.is_(True),
-                )
-            )
-            if not settings.copy_trading_enabled or follow is None:
-                raise LiveTradingBlocked("COPY_TRADING_NOT_ENABLED_FOR_TRADER")
-            if settings.require_ai_approval and not ai_approved:
-                raise LiveTradingBlocked("AI_APPROVAL_REQUIRED")
+            _authorize_copy(db, user_id, settings, copied_from_wallet, ai_approved)
         if db.scalar(
             select(LiveOrder.id)
             .where(
@@ -301,9 +356,12 @@ def place_live_order(
             .limit(1)
         ):
             raise LiveTradingBlocked("UNRESOLVED_LIVE_ORDER")
-        _risk_check(db, settings, shares * price_d if side == "BUY" else Decimal(0))
+        wallet_approval = _risk_check(
+            db, settings, shares * price_d if side == "BUY" else Decimal(0)
+        )
+        account_approval = None
         if account_settings is not None:
-            _risk_check(
+            account_approval = _risk_check(
                 db,
                 account_settings,
                 shares * price_d if side == "BUY" else Decimal(0),
@@ -314,32 +372,15 @@ def place_live_order(
         if not stored:
             raise LiveTradingBlocked("TRADING_CREDENTIALS_REQUIRED")
         client = clob_transport.build_client(user.wallet_address, stored)
-        available = clob_transport.balance(client, token_id if side == "SELL" else None)
-        required = shares if side == "SELL" else shares * price_d
-        if side == "BUY":
-            # Authenticated balance is a wallet balance, not proof that all
-            # application commitments have already been deducted by the venue.
-            committed = db.scalar(
-                select(func.coalesce(func.sum(LiveOrder.reserved), 0)).where(
-                    LiveOrder.user_id == user_id,
-                    LiveOrder.side == "BUY",
-                    LiveOrder.state.in_(("SUBMITTING", "UNKNOWN", "SUBMITTED", "PARTIALLY_FILLED")),
-                )
-            )
-            available -= Decimal(str(committed))
-        if available < required:
-            raise LiveTradingBlocked("INSUFFICIENT_AUTHENTICATED_BALANCE")
-        if side == "SELL":
-            pending = db.scalars(
-                select(LiveOrder).where(
-                    LiveOrder.user_id == user_id,
-                    LiveOrder.token_id == token_id,
-                    LiveOrder.side == "SELL",
-                    LiveOrder.state.in_(("SUBMITTED", "PARTIALLY_FILLED")),
-                )
-            ).all()
-            if sum((row.shares for row in pending), Decimal(0)) + shares > available:
-                raise LiveTradingBlocked("SELL_INVENTORY_ALREADY_RESERVED")
+        available, balance_received_at = _available_balance(
+            db,
+            client,
+            user_id,
+            token_id,
+            side,
+            shares,
+            price_d,
+        )
         check_quote_deadline()
         authorized_shares = shares
         quote_options = {}
@@ -416,10 +457,35 @@ def place_live_order(
                 "order_type": order_type,
                 "post_only": post_only,
                 "state": "SUBMITTING",
+                "venue": "polymarket-clob-v2",
+                "chain_id": 137,
+                "expiration_policy": "fill_or_kill" if order_type == "FOK" else "until_cancelled",
+                "execution_deadline": execution_deadline.isoformat()
+                if execution_deadline
+                else None,
+                "risk_approval": {
+                    "policy_version": "conservative-principal-v1",
+                    "wallet": wallet_approval,
+                    "account": account_approval,
+                    "authenticated_available": str(available),
+                    "balance_received_at": balance_received_at.isoformat(),
+                    "source_evidence_hash": hashlib.sha256(
+                        json.dumps(execution_evidence, sort_keys=True).encode()
+                    ).hexdigest()
+                    if execution_evidence
+                    else None,
+                },
             },
         )
         db.commit()
+        # Recovery/halt workers may have changed the committed intent while the
+        # sender was between transactions. Never send using a cached projection.
+        _lock_wallet(db, user_id, running=False)
+        db.refresh(row, with_for_update=True)
         before = snapshot(row)
+        if row.state != "SUBMITTING" or row.response.get("reconciliation_required"):
+            db.commit()
+            return order_result(row)
         try:
             _lock_wallet(db, user_id)  # Recheck halt/configuration after preparation.
             require_enabled(strategy)
@@ -437,8 +503,9 @@ def place_live_order(
                     exclude_order_id=row.id,
                 )
             check_quote_deadline()
-            if strategy == "copy" and not settings.copy_trading_enabled:
-                raise LiveTradingBlocked("COPY_TRADING_DISABLED")
+            if strategy == "copy":
+                _authorize_copy(db, user_id, settings, copied_from_wallet, ai_approved)
+            _available_balance(db, client, user_id, token_id, side, shares, price_d, row.id)
         except LiveTradingBlocked as exc:
             # The exchange has not been called yet, so this rejection is certain.
             row.state, row.reserved, trade.status = "REJECTED", 0, "rejected"
@@ -669,13 +736,12 @@ def reconcile_pending_live_orders(db: Session) -> None:
     """Scheduled recovery includes uncertain sends, partial fills and restarts."""
     import logging
 
+    base = select(LiveOrder.id, LiveOrder.user_id, LiveOrder.order_hash).join(
+        UserTrade,
+        UserTrade.id == LiveOrder.trade_id,
+    )
     rows = db.execute(
-        select(LiveOrder.id, LiveOrder.user_id, LiveOrder.order_hash)
-        .join(
-            UserTrade,
-            UserTrade.id == LiveOrder.trade_id,
-        )
-        .where(
+        base.where(
             or_(
                 LiveOrder.response["reconciliation_required"].as_boolean().is_(True),
                 and_(
@@ -696,6 +762,19 @@ def reconcile_pending_live_orders(db: Session) -> None:
         .order_by(LiveOrder.updated_at, LiveOrder.id)
         .limit(100)
     ).all()
+    # Keep a separate, fair terminal lane: late fills and settlement corrections
+    # must be noticed after an earlier read marked a trade fully reconciled.
+    # A terminal backlog cannot take capacity away from uncertain live orders.
+    terminal = db.execute(
+        base.where(
+            LiveOrder.state.in_(("FILLED", "CANCELLED")),
+            UserTrade.status.in_(("executed", "cancelled")),
+            LiveOrder.response["reconciliation_required"].as_boolean().is_not(True),
+        )
+        .order_by(LiveOrder.updated_at, LiveOrder.id)
+        .limit(20)
+    ).all()
+    rows = [*rows, *terminal]
     for row_id, user_id, order_hash in rows:
         try:
             reconcile_order(db, user_id=user_id, order_hash=order_hash)

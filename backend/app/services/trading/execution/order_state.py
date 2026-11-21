@@ -1,5 +1,6 @@
 """Signed-order observation checks and transactional, append-only gateway audit."""
 
+import json
 from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import or_
@@ -30,8 +31,12 @@ def account_orders(db: Session, user_id: int, account_id: int):
 
 
 def audit(db: Session, row: LiveOrder, event_type: str, payload: dict) -> None:
-    from app.services.platform.event_log import append
+    from app.services.platform.event_log import MAX_PAYLOAD_CHARS, append
 
+    # A truncated intent is not durable approval evidence. Fail before the
+    # exchange mutation instead of accepting the general logger's truncation.
+    if len(json.dumps(payload, default=str)) > MAX_PAYLOAD_CHARS:
+        raise LiveTradingBlocked("ORDER_AUDIT_PAYLOAD_TOO_LARGE")
     if (
         append(
             db,
