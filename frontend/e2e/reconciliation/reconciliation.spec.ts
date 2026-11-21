@@ -1,6 +1,6 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, Page } from "@playwright/test";
 
-test("unknown costs remain unknown and owned evidence can be downloaded", async ({ page }) => {
+async function mountAccount(page: Page) {
   await page.addInitScript(() => {
     localStorage.setItem("polymarket_active_account", "11");
   });
@@ -9,7 +9,8 @@ test("unknown costs remain unknown and owned evidence can be downloaded", async 
     if (
       path.endsWith("/balance-snapshots") ||
       path.endsWith("/reconciliation") ||
-      path.endsWith("/reconciliation-reports")
+      path.endsWith("/reconciliation-reports") ||
+      path.startsWith("/api/trades/analytics/attribution-studies")
     )
       return route.continue();
     if (path === "/api/auth/me")
@@ -23,6 +24,10 @@ test("unknown costs remain unknown and owned evidence can be downloaded", async 
     if (path.endsWith("/trades")) return route.fulfill({ json: { trades: [] } });
     return route.fulfill({ json: { strategies: [], data_quality: {} } });
   });
+}
+
+test("unknown costs remain unknown and owned evidence can be downloaded", async ({ page }) => {
+  await mountAccount(page);
   await page.goto("/analytics/execution");
   const panel = page.getByRole("region", { name: "Live account reconciliation" });
   await expect(panel.getByLabel("Opening observation").locator("option")).toHaveCount(3);
@@ -56,4 +61,50 @@ test("unknown costs remain unknown and owned evidence can be downloaded", async 
   expect(evidence.full_wallet_reconciled).toBe(false);
   expect(evidence.fill_evidence).toHaveLength(1);
   expect(evidence.input_hash).toMatch(/^[a-f0-9]{64}$/);
+});
+
+test("finalized receipt verification reaches the real API and saves actual fee evidence", async ({
+  page,
+  request,
+}) => {
+  const seeded = await request.post("http://127.0.0.1:18139/__test/chain");
+  expect(seeded.ok()).toBeTruthy();
+  await mountAccount(page);
+  await page.goto("/analytics/execution");
+  const panel = page.getByRole("region", { name: "Live account reconciliation" });
+  await expect(panel.getByLabel("Opening observation").locator("option")).toHaveCount(3);
+  await panel.getByRole("button", { name: "Compare observations" }).click();
+  await expect(panel.getByText("Net realized P&L: Unknown", { exact: true })).toBeVisible();
+  await panel.getByRole("button", { name: "Verify finalized evidence and save" }).click();
+  await expect(panel.getByText("Reconciliation: Reconciled", { exact: true })).toBeVisible();
+  await expect(panel.getByText("Net realized P&L: 1.700000 pUSD", { exact: true })).toBeVisible();
+  await expect(panel.getByText("Confirmed fees: 0.300000 pUSD", { exact: true })).toBeVisible();
+  await panel.getByText(/Acceptance evidence/).click();
+  await expect(panel.getByText(/exchange cash and positions: pass/)).toBeVisible();
+  await expect(panel.getByText(/actual cost evidence: pass/)).toBeVisible();
+  await expect(panel.getByText(/forward validation: incomplete/)).toBeVisible();
+  await expect(
+    panel.getByText("Verified net realized P&L: Unknown", { exact: true }),
+  ).toBeVisible();
+});
+
+test("future study registration is persisted with a frozen policy", async ({ page }) => {
+  await mountAccount(page);
+  await page.goto("/analytics/execution");
+  const panel = page.getByRole("region", { name: "Live account reconciliation" });
+  await panel.getByText("Prospective benchmark study", { exact: true }).click();
+  const registered = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/trades/analytics/attribution-studies") &&
+      response.request().method() === "POST",
+  );
+  await panel.getByRole("button", { name: "Register future study" }).click();
+  const response = await registered;
+  expect(response.ok()).toBeTruthy();
+  const policy = await response.json();
+  expect(policy.study_id).toMatch(/^[a-f0-9]{64}$/);
+  expect(policy.implementation_fingerprint).toMatch(/^[a-f0-9]{64}$/);
+  expect(policy.configuration_fingerprint).toMatch(/^[a-f0-9]{64}$/);
+  expect(policy.minimum_events).toBe(20);
+  await expect(panel.getByLabel("Study for saved evidence")).toHaveValue(policy.study_id);
 });

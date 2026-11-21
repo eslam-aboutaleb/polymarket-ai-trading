@@ -498,6 +498,7 @@ class MigrationBackfillTest(unittest.TestCase):
             "emergency_halt_operations",
             "live_balance_snapshots",
             "live_attribution_reports",
+            "attribution_studies",
         }
     )
 

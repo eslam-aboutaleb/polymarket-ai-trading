@@ -283,7 +283,7 @@ def test_venue_resolution_never_becomes_redeemed_cash_or_realized_profit(account
     assert not result["chain_final_redemption_verified"]
 
 
-def test_saved_report_is_idempotent_owned_and_integrity_checked(account_db):
+def test_saved_report_is_idempotent_owned_and_integrity_checked(account_db, tmp_path):
     from app.models.analytics.live_balance_snapshot import LiveAttributionReport
 
     db = account_db
@@ -296,6 +296,12 @@ def test_saved_report_is_idempotent_owned_and_integrity_checked(account_db):
     )
     assert saved.status_code == 200
     artifact = saved.json()
+    from app.services.analytics.live_account_reconciliation import digest
+
+    assert (
+        digest({key: value for key, value in artifact.items() if key != "report_id"})
+        == artifact["report_id"]
+    )
     assert (
         http.post(
             "/api/trades/analytics/reconciliation-reports",
@@ -303,6 +309,34 @@ def test_saved_report_is_idempotent_owned_and_integrity_checked(account_db):
             headers={"X-Account-Id": "11"},
         ).json()
         == artifact
+    )
+    # Verify the actual HTTP download with the standalone, credential-free CLI.
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    verifier = Path(__file__).resolve().parents[2] / "scripts/verify-attribution-artifact.py"
+    downloaded = tmp_path / "report.json"
+    downloaded.write_text(json.dumps(artifact, indent=2))
+    assert (
+        subprocess.run(  # noqa: S603 - fixed local interpreter/script, no shell
+            [sys.executable, str(verifier), str(downloaded)], capture_output=True
+        ).returncode
+        == 0
+    )
+    downloaded.write_text(json.dumps({**artifact, "net_realized_pnl": "999"}))
+    assert (
+        subprocess.run(  # noqa: S603 - fixed local interpreter/script, no shell
+            [sys.executable, str(verifier), str(downloaded)], capture_output=True
+        ).returncode
+        == 1
+    )
+    downloaded.write_text("null")
+    assert (
+        subprocess.run(  # noqa: S603 - fixed local interpreter/script, no shell
+            [sys.executable, str(verifier), str(downloaded)], capture_output=True
+        ).returncode
+        == 1
     )
     path = "/api/trades/analytics/reconciliation-reports/" + artifact["report_id"]
     assert http.get(path, headers={"X-Account-Id": "11"}).json() == artifact

@@ -9,7 +9,7 @@ import json
 import logging
 import time
 from collections import Counter
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -47,7 +47,7 @@ def account_events(account):
     return or_(clause, AppEvent.account_id.is_(None)) if account.kind == "personal" else clause
 
 
-def capture_balance_snapshot(db, account):
+def capture_balance_snapshot(db, account, *, finalized=False):
     """Observe fixed native endpoints with existing credentials; no mutation API."""
     try:
         user = db.get(User, account.owner_user_id)
@@ -56,11 +56,30 @@ def capture_balance_snapshot(db, account):
         watermark = db.scalar(select(func.max(AppEvent.id)).where(AppEvent.user_id == user.id)) or 0
         if account.kind != "personal":
             raise ValueError("SUBACCOUNT_WALLET_ALLOCATION_UNVERIFIED")
-        orders = db.scalars(select(LiveOrder).where(LiveOrder.user_id == user.id).limit(501)).all()
-        if len(orders) > 500:
-            raise ValueError("ORDER_HISTORY_BOUND_EXCEEDED")
-        if any(order.account_id not in (None, account.id) for order in orders):
+        foreign_order = db.scalar(
+            select(LiveOrder.id)
+            .where(
+                LiveOrder.user_id == user.id,
+                LiveOrder.account_id.is_not(None),
+                LiveOrder.account_id != account.id,
+            )
+            .limit(1)
+        )
+        if foreign_order is not None:
             raise ValueError("SHARED_WALLET_ACCOUNT_ALLOCATION_UNVERIFIED")
+        orders = db.scalars(
+            select(LiveOrder)
+            .where(
+                LiveOrder.user_id == user.id,
+                or_(
+                    LiveOrder.state.not_in(("FILLED", "CANCELLED", "REJECTED")),
+                    LiveOrder.response["reconciliation_required"].as_boolean().is_(True),
+                ),
+            )
+            .limit(501)
+        ).all()
+        if len(orders) > 500:
+            raise ValueError("ACTIVE_ORDER_BOUND_EXCEEDED")
         tokens = sorted({order.token_id for order in orders})
         if len(tokens) > 20 or any(not token.isdecimal() or len(token) > 78 for token in tokens):
             raise ValueError("KNOWN_TOKEN_OBSERVATION_BOUND_EXCEEDED")
@@ -79,9 +98,16 @@ def capture_balance_snapshot(db, account):
             .order_by(LiveBalanceSnapshot.observed_at.desc())
             .limit(1)
         )
+        previous_start = aware(previous.observed_at).isoformat() if previous else None
+        if finalized and previous:
+            previous_evidence = read_snapshot(db, account, previous.id)
+            if previous_evidence.get("chain_snapshot"):
+                previous_start = datetime.fromtimestamp(
+                    int(previous_evidence["chain_snapshot"]["block"]["timestamp"], 16), UTC
+                ).isoformat()
         inventory = wallet_evidence(
             str(stored.get("funder") or user.wallet_address),
-            start=aware(previous.observed_at).isoformat() if previous else None,
+            start=previous_start,
             end=started_at.isoformat(),
             deadline=deadline,
         )
@@ -148,6 +174,12 @@ def capture_balance_snapshot(db, account):
             "active_or_unsettled_orders": active or unsettled,
             "event_watermark": watermark,
         }
+        if finalized:
+            from app.services.analytics.chain_evidence import snapshot_chain
+
+            evidence["chain_snapshot"] = snapshot_chain(
+                str(stored.get("funder") or user.wallet_address), tokens
+            )
         row = LiveBalanceSnapshot(
             id=digest(evidence),
             user_id=user.id,
@@ -197,7 +229,16 @@ def snapshot_list(db, account):
     return [{"id": row.id, "observed_at": aware(row.observed_at).isoformat()} for row in rows]
 
 
-def build_reconciliation_report(db, account, opening_id, closing_id):
+def build_reconciliation_report(
+    db,
+    account,
+    opening_id,
+    closing_id,
+    *,
+    verify_chain=False,
+    chain_transport=None,
+    opening_state=None,
+):
     opening, closing = (
         read_snapshot(db, account, identity) for identity in (opening_id, closing_id)
     )
@@ -209,26 +250,60 @@ def build_reconciliation_report(db, account, opening_id, closing_id):
     ):
         raise ValueError("INVALID_OBSERVATION_WINDOW")
     end = datetime.fromisoformat(closing["observed_at"])
-    events = db.scalars(
-        select(AppEvent)
-        .where(
-            AppEvent.user_id == account.owner_user_id,
-            account_events(account),
-            AppEvent.source == "live_gateway",
-            AppEvent.event_type.in_(("order_fill_confirmed", "order_intent_created")),
-            AppEvent.id <= closing["event_watermark"],
-            AppEvent.occurred_at <= end,
+    query = select(AppEvent).where(
+        AppEvent.user_id == account.owner_user_id,
+        account_events(account),
+        AppEvent.source == "live_gateway",
+        AppEvent.event_type.in_(("order_fill_confirmed", "order_intent_created")),
+        AppEvent.id <= closing["event_watermark"],
+        AppEvent.occurred_at <= end,
+    )
+    rolling = (
+        verify_chain
+        and opening.get("chain_snapshot")
+        and (
+            opening_state is not None
+            or all(Decimal(value) == 0 for value in opening["chain_snapshot"]["positions"].values())
         )
-        .order_by(AppEvent.id)
-        .limit(5001)
-    ).all()
+    )
+    if rolling:
+        source_start = datetime.fromtimestamp(
+            int(opening["chain_snapshot"]["block"]["timestamp"], 16), UTC
+        )
+        query = query.where(AppEvent.occurred_at >= source_start)
+    events = db.scalars(query.order_by(AppEvent.id).limit(5001)).all()
     if len(events) > 5000:
         raise ValueError("FILL_HISTORY_BOUND_EXCEEDED")
+    hashes = {event.aggregate_id for event in events if event.event_type == "order_fill_confirmed"}
+    if len(hashes) > 500:
+        raise ValueError("ORDER_HISTORY_BOUND_EXCEEDED")
+    # A standing order may have been created before the rolling accounting window.
+    missing_intents = hashes - {
+        event.aggregate_id for event in events if event.event_type == "order_intent_created"
+    }
+    if missing_intents:
+        earlier = db.scalars(
+            select(AppEvent)
+            .where(
+                AppEvent.user_id == account.owner_user_id,
+                account_events(account),
+                AppEvent.source == "live_gateway",
+                AppEvent.event_type == "order_intent_created",
+                AppEvent.aggregate_id.in_(missing_intents),
+                AppEvent.id <= closing["event_watermark"],
+                AppEvent.occurred_at <= end,
+            )
+            .limit(501)
+        ).all()
+        if len(earlier) > 500:
+            raise ValueError("ORDER_INTENT_HISTORY_CONFLICT")
+        events = sorted([*events, *earlier], key=lambda row: row.id)
     orders = db.scalars(
         select(LiveOrder)
         .where(
             LiveOrder.user_id == account.owner_user_id,
             account_orders(db, account.owner_user_id, account.id),
+            LiveOrder.order_hash.in_(hashes),
         )
         .limit(501)
     ).all()
@@ -241,7 +316,7 @@ def build_reconciliation_report(db, account, opening_id, closing_id):
         settlement_observation,
     )
 
-    fills, history, reasons, benchmarks = [], [], [], []
+    fills, history, reasons, benchmarks, collected = [], [], [], [], []
     intents, fill_identities = {}, {}
     for event in events:
         if event.event_type == "order_intent_created":
@@ -295,6 +370,9 @@ def build_reconciliation_report(db, account, opening_id, closing_id):
         fill = {
             "source_id": event.id,
             "intent_source_id": intent.id,
+            "decision_at": aware(intent.occurred_at).isoformat(),
+            "implementation_fingerprint": identity.get("implementation_fingerprint"),
+            "configuration_fingerprint": identity.get("configuration_fingerprint"),
             "condition_id": identity["condition_id"],
             "order_hash": order.order_hash,
             "fill_id": payload["trade_id"],
@@ -316,30 +394,76 @@ def build_reconciliation_report(db, account, opening_id, closing_id):
                 raise ValueError("CONFLICTING_FILL_IDENTITY")
             continue
         fill_identities[economic_identity] = content
+        collected.append(fill)
+        if order.response.get("reconciliation_required"):
+            reasons.append("CURRENT_ORDER_EVIDENCE_QUARANTINED")
+    chain = None
+    if verify_chain:
+        from app.services.analytics.chain_attribution import verify_window
+
+        chain = verify_window(
+            opening,
+            closing,
+            collected,
+            transport=chain_transport,
+            prior_state=opening_state.get("chain_reconciliation") if opening_state else None,
+        )
+        opening, closing, collected = chain["opening"], chain["closing"], chain["fills"]
+        reasons.extend(chain["reasons"])
+    for fill in collected:
+        matched_at = datetime.fromisoformat(fill["matched_at"])
         if matched_at <= datetime.fromisoformat(opening["observed_at"]):
-            if event.id > opening["event_watermark"]:
+            if not chain and fill["source_id"] > opening["event_watermark"]:
                 reasons.append("LATE_CONFIRMED_OPENING_FILL")
             history.append(fill)
         else:
-            if event.id <= opening["event_watermark"]:
+            if not chain and fill["source_id"] <= opening["event_watermark"]:
                 reasons.append("OPENING_WATERMARK_TIME_CONFLICT")
             fills.append(fill)
+            if fill.get("kind") == "SETTLEMENT":
+                benchmarks.append(
+                    {
+                        "version": "ctf-binary-redemption-credit-v1",
+                        "source_id": fill["source_id"],
+                        "status": "settlement_receipt",
+                        "benchmark_id": digest(fill["chain_redemption_evidence"]),
+                        "capture_id": None,
+                        "implementation_shortfall": None,
+                        "spread_cost": None,
+                        "execution_difference": None,
+                        "reason": None,
+                        "profitability_claim": False,
+                    }
+                )
+                continue
             benchmarks.append(
                 benchmark_fill(
                     db,
                     SimpleNamespace(
-                        token_id=order.token_id,
-                        side=order.side,
-                        created_at=aware(intent.occurred_at),
+                        token_id=fill["token_id"],
+                        side=fill["side"],
+                        created_at=datetime.fromisoformat(fill["decision_at"]),
                     ),
                     fill,
-                    condition_id=identity["condition_id"],
+                    condition_id=fill["condition_id"],
                 )
             )
-        if order.response.get("reconciliation_required"):
-            reasons.append("CURRENT_ORDER_EVIDENCE_QUARANTINED")
     empty = {"cash_usdc": "0", "positions": {}, "coverage": "complete_wallet"}
-    past = reconcile_confirmed_cashflows(history, empty, empty)
+    flat_opening = chain and all(
+        Decimal(quantity) == 0 for quantity in opening["positions"].values()
+    )
+    past = reconcile_confirmed_cashflows([] if flat_opening else history, empty, empty)
+    if opening_state is not None:
+        if (
+            not chain
+            or opening_state["closing_snapshot_id"] != opening_id
+            or not (opening_state.get("chain_reconciliation") or {}).get("scope_reconciled")
+            or opening_state["chain_reconciliation"]["closing"]["chain_snapshot"]["block"]["hash"]
+            != opening["chain_snapshot"]["block"]["hash"]
+        ):
+            raise ValueError("OPENING_STATE_CHAIN_LINEAGE_MISMATCH")
+        past["closing_lots"] = opening_state["closing_lots"]
+        past["reasons"] = []
     opening_lots = past["closing_lots"]
     try:
         result = reconcile_confirmed_cashflows(fills, opening, closing, opening_lots=opening_lots)
@@ -357,6 +481,11 @@ def build_reconciliation_report(db, account, opening_id, closing_id):
     opening_mark = mark_observation(db, opening, opening_lots)
     closing_mark = mark_observation(db, closing, result["closing_lots"])
     settlement = settlement_observation(db, closing)
+    if chain:
+        settlement.update(
+            chain_final_redemption_verified=bool(chain["redemption_proofs"]),
+            finalized_redemptions=chain["redemption_proofs"],
+        )
     mark_change = (
         closing_mark["unrealized_pnl"] - opening_mark["unrealized_pnl"]
         if all(mark["unrealized_pnl"] is not None for mark in (opening_mark, closing_mark))
@@ -370,6 +499,7 @@ def build_reconciliation_report(db, account, opening_id, closing_id):
     }
     result.update(
         **benchmark_totals,
+        expense_scope="native_collateral_trading_only; other_costs_and_assets_unverified",
         model_costs=None,
         forecast_attribution=None,
         timing_attribution=None,
@@ -418,7 +548,55 @@ def build_reconciliation_report(db, account, opening_id, closing_id):
             cash_residual_usdc=None,
         )
         result["reasons"] = sorted(set(result["reasons"] + reasons))
+    if chain:
+        external_cash = sum(
+            (
+                Decimal(row["cashflow"])
+                for row in chain["external_cashflows"]
+                if row["kind"] != "UNCLASSIFIED"
+            ),
+            Decimal(0),
+        )
+        rebate_cash = sum(
+            (
+                Decimal(row["cashflow"])
+                for row in chain["external_cashflows"]
+                if row["kind"] in {"MAKER_REBATE", "TAKER_REBATE"}
+            ),
+            Decimal(0),
+        )
+        result["confirmed_unallocated_rebate_cash"] = rebate_cash
+        if rebate_cash:
+            if result["net_realized_pnl"] is not None:
+                result["net_realized_pnl"] += rebate_cash
+            if result["confirmed_rebates_usdc"] is not None:
+                result["confirmed_rebates_usdc"] += rebate_cash
+            result["strategies"]["unattributed_rebates"] = {
+                "gross_realized": Decimal(0),
+                "allocated_costs": -rebate_cash,
+                "net_realized": rebate_cash,
+                "fill_count": 0,
+            }
+        result["classified_external_cashflow"] = external_cash
+        result["unattributed_external_cashflow"] = sum(
+            (
+                Decimal(row["cashflow"])
+                for row in chain["external_cashflows"]
+                if row["kind"] == "UNCLASSIFIED"
+            ),
+            Decimal(0),
+        )
+        if result["cash_residual_usdc"] is not None:
+            result["cash_residual_usdc"] -= external_cash
+            if result["cash_residual_usdc"] == 0:
+                result["reasons"] = [
+                    reason for reason in result["reasons"] if reason != "UNEXPLAINED_CASH_CHANGE"
+                ]
+        if not result["reasons"]:
+            result["status"] = "reconciled"
     result.update(
+        opening_state_report_id=opening_state.get("report_id") if opening_state else None,
+        chain_reconciliation=chain,
         algorithm_version="fifo-attribution-v2.1",
         fill_set_version=digest({"history": history, "period": fills}),
         account_id=account.id,
@@ -439,6 +617,10 @@ def build_reconciliation_report(db, account, opening_id, closing_id):
                 "closing_mark": closing_mark,
                 "reasons": result["reasons"],
                 "version": VERSION,
+                "chain_reconciliation": chain,
+                "opening_state_report_id": opening_state.get("report_id")
+                if opening_state
+                else None,
             }
         ),
         fill_evidence=fills,

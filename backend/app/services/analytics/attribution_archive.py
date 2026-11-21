@@ -29,8 +29,48 @@ def read_report(db, account, report_id):
     return {"report_id": row.id, **report}
 
 
-def freeze_report(db, account, opening_id, closing_id):
-    report = build_reconciliation_report(db, account, opening_id, closing_id)
+def freeze_report(
+    db,
+    account,
+    opening_id,
+    closing_id,
+    *,
+    verify_chain=False,
+    opening_state_report_id=None,
+    study_id=None,
+):
+    opening_state = (
+        read_report(db, account, opening_state_report_id) if opening_state_report_id else None
+    )
+    report = build_reconciliation_report(
+        db,
+        account,
+        opening_id,
+        closing_id,
+        verify_chain=verify_chain,
+        opening_state=opening_state,
+    )
+    if study_id:
+        from app.services.analytics.attribution_contracts import acceptance_checks
+        from app.services.analytics.attribution_studies import evaluate_study
+
+        report["forward_study"] = evaluate_study(db, account, study_id, report)
+        report["confidence"].update(
+            forward_event_count=report["forward_study"]["event_count"],
+            confidence_interval=report["forward_study"]["confidence_interval"],
+            release_decision=report["forward_study"]["release_decision"],
+        )
+        report["input_hash"] = digest(
+            {
+                "attribution_input": report["input_hash"],
+                "study_input": report["forward_study"]["input_hash"],
+            }
+        )
+        report["acceptance"] = acceptance_checks(report)
+        report["acceptance_complete"] = all(row["status"] == "pass" for row in report["acceptance"])
+        report["verified_net_realized_pnl"] = (
+            report["net_realized_pnl"] if report["acceptance_complete"] else None
+        )
     identity = digest(report)
     row = LiveAttributionReport(
         id=identity,

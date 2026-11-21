@@ -142,7 +142,7 @@ export interface LiveReconciliationReport {
   input_hash: string;
   report_id?: string;
   reasons: string[];
-  source_ids: number[];
+  source_ids: (number | string)[];
   net_realized_pnl: string | null;
   total_fees_usdc: string | null;
   confirmed_rebates_usdc: string | null;
@@ -157,11 +157,11 @@ export interface LiveReconciliationReport {
   acceptance_complete: boolean;
   acceptance: { criterion: string; status: "pass" | "incomplete" | "fail"; reason: string }[];
   position_residuals: Record<string, string>;
-  history_source_ids: number[];
+  history_source_ids: (number | string)[];
   benchmarks: {
     benchmark_id: string;
-    source_id: number;
-    status: "observed_comparison" | "abstain";
+    source_id: number | string;
+    status: "observed_comparison" | "abstain" | "settlement_receipt";
     capture_id: string | null;
     implementation_shortfall: string | null;
     spread_cost: string | null;
@@ -184,21 +184,54 @@ export interface LiveReconciliationReport {
 
 // ── Service ─────────────────────────────────────────────────
 
+export interface AttributionStudy {
+  study_id: string;
+  strategy: string;
+  registered_at: string;
+  enrollment_end: string;
+  settlement_deadline: string;
+  minimum_events: number;
+  implementation_fingerprint: string | null;
+}
+
 export const executionAnalyticsService = {
+  async getAttributionStudies(): Promise<AttributionStudy[]> {
+    return apiClient.get<AttributionStudy[]>("/api/trades/analytics/attribution-studies");
+  },
+  async registerAttributionStudy(body: {
+    strategy: string;
+    enrollment_end: string;
+    settlement_deadline: string;
+  }): Promise<AttributionStudy> {
+    return apiClient.post<AttributionStudy>("/api/trades/analytics/attribution-studies", body);
+  },
+  async getOpeningBasisReports(
+    closing_snapshot_id: string,
+  ): Promise<{ report_id: string; created_at: string }[]> {
+    return apiClient.get<{ report_id: string; created_at: string }[]>(
+      "/api/trades/analytics/reconciliation-reports",
+      { params: { closing_snapshot_id } },
+    );
+  },
   async freezeLiveReconciliation(
     opening_id: string,
     closing_id: string,
+    options: { verify_chain?: boolean; opening_state_report_id?: string; study_id?: string } = {},
   ): Promise<LiveReconciliationReport> {
     return apiClient.post<LiveReconciliationReport>(
       "/api/trades/analytics/reconciliation-reports",
-      { opening_id, closing_id },
+      { opening_id, closing_id, ...options },
     );
   },
   async getBalanceSnapshots(): Promise<LiveBalanceReference[]> {
     return apiClient.get<LiveBalanceReference[]>("/api/trades/analytics/balance-snapshots");
   },
-  async captureBalanceSnapshot(): Promise<LiveBalanceReference> {
-    return apiClient.post<LiveBalanceReference>("/api/trades/analytics/balance-snapshots");
+  async captureBalanceSnapshot(finalized = false): Promise<LiveBalanceReference> {
+    return apiClient.post<LiveBalanceReference>(
+      "/api/trades/analytics/balance-snapshots",
+      undefined,
+      { params: { finalized } },
+    );
   },
   async getLiveReconciliation(
     opening_id: string,
