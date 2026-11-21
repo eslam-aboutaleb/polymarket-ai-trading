@@ -203,3 +203,33 @@ def test_redis_outage_cannot_bypass_the_durable_circuit_breaker(gateway, monkeyp
         place(db)
     submit.assert_not_called()
     redis.assert_not_called()  # SQL authority has no fail-open Redis fallback.
+
+
+@pytest.mark.parametrize("fault", ["deadline", "release_flag"])
+def test_final_balance_refresh_cannot_outlive_quote_authority(gateway, monkeypatch, fault):
+    from datetime import timedelta
+
+    db, _, _, submit = gateway
+    flags = gateway[2]
+    clock = [utc_now()]
+    calls = [0]
+    monkeypatch.setattr(live, "utc_now", lambda: clock[0])
+
+    def balance(*_):
+        calls[0] += 1
+        if calls[0] == 2:
+            if fault == "deadline":
+                clock[0] += timedelta(seconds=2)
+            else:
+                flags.live_trading_enabled = False
+        return Decimal(1000)
+
+    monkeypatch.setattr(clob_transport, "balance", balance)
+    result = place(db, strategy="latency_arb", execution_deadline=clock[0] + timedelta(seconds=1))
+    assert result["status"] == "rejected"
+    expected = (
+        "EXECUTABLE_QUOTE_EXPIRED_OR_MISSING" if fault == "deadline" else "LIVE_TRADING_DISABLED"
+    )
+    assert result["error"] == expected
+    assert db.scalar(select(LiveOrder)).reserved == 0
+    submit.assert_not_called()

@@ -234,3 +234,50 @@ def test_halt_acknowledgement_waits_for_inflight_submission(pg_gateway):
     with pytest.raises(LiveTradingBlocked, match="HALTED"):
         place(engine, key="after-halt")
     submit.assert_called_once()
+
+
+def test_copy_permission_is_locked_until_submission_result_commits(pg_gateway, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    from app.models.trading.followed_trader import FollowedTrader
+
+    engine, _, _, submit = pg_gateway
+    wallet = "0x" + "2" * 40
+    with Session(engine) as db:
+        settings = db.scalar(select(UserSettings))
+        settings.copy_trading_enabled = True
+        settings.require_ai_approval = False
+        db.add(FollowedTrader(user_id=1, trader_wallet=wallet, is_active=True))
+        db.commit()
+    monkeypatch.setattr(
+        live,
+        "get_settings",
+        lambda: SimpleNamespace(live_trading_enabled=True, live_copy_trading_enabled=True),
+    )
+    original = submit.side_effect
+    observation = {}
+
+    def probe_grant(*args):
+        with Session(engine) as concurrent:
+            try:
+                concurrent.scalar(select(FollowedTrader).with_for_update(nowait=True))
+                observation["locked"] = False
+            except OperationalError as exc:
+                observation["locked"] = getattr(exc.orig, "pgcode", None) == "55P03"
+        return original(*args)
+
+    submit.side_effect = probe_grant
+    with Session(engine) as db:
+        result = live.place_live_order(
+            db,
+            user_id=1,
+            token_id="123",
+            side="BUY",
+            price=0.5,
+            size=10,
+            idempotency_key="copy-grant",
+            strategy="copy",
+            copied_from_wallet=wallet,
+        )
+    assert result["success"] and observation["locked"]
+    submit.assert_called_once()
