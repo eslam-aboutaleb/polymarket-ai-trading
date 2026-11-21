@@ -64,6 +64,9 @@ def test_settlement_uses_only_owned_confirmed_fills_and_deduplicates_ids():
         "notional": Decimal("4.80"),
         "price": Decimal("0.48"),
         "filled_at": None,
+        "fills": [
+            {"trade_id": "trade", "transaction_hash": "tx", "shares": "10", "notional": "4.8"}
+        ],
     }
     client.get_trades.assert_called_once()
     assert clob_transport.settled_fills(client, "foreign-order", ["trade"]) is None
@@ -126,3 +129,44 @@ def test_expired_latency_quote_cannot_sign_after_sdk_metadata_fetch():
             execution_deadline=datetime.now(UTC) - timedelta(seconds=1),
         )
     client.create_order.assert_not_called()
+
+
+@pytest.mark.parametrize("fault", ["duplicate", "bad-price", "bad-size", "bad-row"])
+def test_conflicting_or_malformed_fill_receipts_abstain(fault):
+    client = MagicMock()
+    trade = {
+        "id": "trade",
+        "status": "CONFIRMED",
+        "transaction_hash": "tx",
+        "taker_order_id": "owned",
+        "size": "10",
+        "price": ".48",
+    }
+    rows = [trade]
+    if fault == "duplicate":
+        rows.append({**trade, "price": ".49"})
+    elif fault == "bad-price":
+        trade["price"] = "invalid"
+    elif fault == "bad-size":
+        trade["size"] = "Infinity"
+    else:
+        rows = [None]
+    client.get_trades.return_value = rows
+    assert clob_transport.settled_fills(client, "owned", ["trade"]) is None
+
+
+def test_bounded_trade_identity_inputs_do_not_reach_remote_client():
+    client = MagicMock()
+    for ids in ["trade", [None], ["x" * 201], [str(i) for i in range(1001)]]:
+        assert clob_transport.settled_fills(client, "owned", ids) is None
+    client.get_trades.assert_not_called()
+
+
+def test_receipt_deadline_abstains_before_additional_remote_work(monkeypatch):
+    clock = iter([0, 11])
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(clob_transport, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+    client = MagicMock()
+    assert clob_transport.settled_fills(client, "owned", ["trade"]) is None
+    client.get_trades.assert_not_called()

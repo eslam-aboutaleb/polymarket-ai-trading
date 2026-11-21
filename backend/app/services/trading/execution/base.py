@@ -179,7 +179,12 @@ class ClobExecutionEngine:
         from app.services.trading.execution.live import reconcile_order
 
         result = await run_blocking_execution(
-            reconcile_order, self.db, user_id=self.user_id, order_hash=order_id, cancel=True
+            reconcile_order,
+            self.db,
+            user_id=self.user_id,
+            order_hash=order_id,
+            cancel=True,
+            account_id=kwargs.get("account_id"),
         )
         return result["status"] == "cancelled"
 
