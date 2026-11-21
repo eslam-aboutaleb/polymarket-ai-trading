@@ -159,3 +159,18 @@ def test_submission_inventory_cannot_grow_without_security_review():
         # in test_live_gateway.py; legacy submission methods remain frozen.
         "services/trading/execution/clob_transport.py",
     }, "A live submission path changed; review its release barrier and add bypass tests"
+
+
+def test_cancellation_mutations_have_one_transport_boundary():
+    app_dir = Path(__file__).resolve().parents[2] / "app"
+    found = set()
+    methods = {"cancel_order", "cancel_orders", "cancel_all", "cancel_market_orders"}
+    for path in app_dir.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in methods
+            ):
+                found.add(str(path.relative_to(app_dir)))
+    assert found == {"services/trading/execution/clob_transport.py"}
