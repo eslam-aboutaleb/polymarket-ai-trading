@@ -9,9 +9,9 @@ fills: unverified P&L must never replenish live spending authority.
 import hashlib
 import json
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_CEILING, Decimal, InvalidOperation
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -24,7 +24,16 @@ from app.models.users.account_settings import AccountSettings
 from app.models.users.user import User
 from app.models.users.user_settings import UserSettings
 from app.security.credential_store import load_wallet_credentials
+from app.services.analytics.replay.ledger import accounting
 from app.services.trading.execution import clob_transport
+from app.services.trading.execution.order_state import (
+    account_orders,
+    audit,
+    record_transition,
+    snapshot,
+    unresolved_orders,
+    validate_observation,
+)
 from app.services.trading.live_trading_policy import LiveTradingBlocked
 from app.utils.time import utc_now
 
@@ -154,7 +163,7 @@ def _risk_check(
         if exclude_order_id is not None:
             query = query.where(LiveOrder.id != exclude_order_id)
         if account_id is not None:
-            query = query.where(LiveOrder.account_id == account_id)
+            query = query.where(account_orders(db, user_id, account_id))
         if since:
             query = query.where(LiveOrder.created_at >= since)
         spent = Decimal(str(db.scalar(query)))
@@ -174,9 +183,12 @@ def order_result(row: LiveOrder) -> dict:
         "error": row.response.get("error"),
         "settled": bool(row.response.get("settled")),
         "filled_notional": row.response.get("filled_notional"),
+        "account_id": row.account_id,
+        "reconciliation_required": bool(row.response.get("reconciliation_required")),
     }
 
 
+@accounting
 def place_live_order(
     db: Session,
     *,
@@ -284,7 +296,7 @@ def place_live_order(
             select(LiveOrder.id)
             .where(
                 LiveOrder.user_id == user_id,
-                LiveOrder.state.in_(("SUBMITTING", "UNKNOWN")),
+                unresolved_orders(),
             )
             .limit(1)
         ):
@@ -304,6 +316,17 @@ def place_live_order(
         client = clob_transport.build_client(user.wallet_address, stored)
         available = clob_transport.balance(client, token_id if side == "SELL" else None)
         required = shares if side == "SELL" else shares * price_d
+        if side == "BUY":
+            # Authenticated balance is a wallet balance, not proof that all
+            # application commitments have already been deducted by the venue.
+            committed = db.scalar(
+                select(func.coalesce(func.sum(LiveOrder.reserved), 0)).where(
+                    LiveOrder.user_id == user_id,
+                    LiveOrder.side == "BUY",
+                    LiveOrder.state.in_(("SUBMITTING", "UNKNOWN", "SUBMITTED", "PARTIALLY_FILLED")),
+                )
+            )
+            available -= Decimal(str(committed))
         if available < required:
             raise LiveTradingBlocked("INSUFFICIENT_AUTHENTICATED_BALANCE")
         if side == "SELL":
@@ -333,8 +356,8 @@ def place_live_order(
             shares <= 0
             or shares > authorized_shares
             or notional <= 0
-            or notional > required
-            and side == "BUY"
+            or (side == "BUY" and notional > shares * price_d)
+            or (side == "SELL" and notional < shares * price_d)
         ):
             raise ValueError("Signed order amounts exceed the authorized order")
         trade = UserTrade(
@@ -376,27 +399,27 @@ def place_live_order(
             response={},
         )
         db.add(row)
-        from app.services.platform.event_log import append
-
-        audit = append(
+        audit(
             db,
-            event_type="order_intent_created",
-            aggregate_type="order",
-            aggregate_id=order_hash,
-            user_id=user_id,
-            account_id=account_id,
-            payload={
+            row,
+            "order_intent_created",
+            {
                 "trade_id": trade.id,
                 "strategy": strategy,
                 "side": side,
+                "token_id": token_id,
+                "condition_id": market_id,
+                "fingerprint": fingerprint,
+                "price_limit": str(price_d),
+                "shares": str(shares),
                 "notional": str(notional),
+                "order_type": order_type,
+                "post_only": post_only,
                 "state": "SUBMITTING",
             },
-            source="live_gateway",
         )
-        if audit is None:
-            raise LiveTradingBlocked("DURABLE_ORDER_AUDIT_REQUIRED")
         db.commit()
+        before = snapshot(row)
         try:
             _lock_wallet(db, user_id)  # Recheck halt/configuration after preparation.
             require_enabled(strategy)
@@ -420,6 +443,7 @@ def place_live_order(
             # The exchange has not been called yet, so this rejection is certain.
             row.state, row.reserved, trade.status = "REJECTED", 0, "rejected"
             row.response = {"error": str(exc)}
+            record_transition(db, row, before)
             db.commit()
             return order_result(row)
         try:
@@ -437,18 +461,20 @@ def place_live_order(
                 for k in ("status", "orderID", "errorMsg", "success")
                 if k in response
             }
-            if response.get("success") is False or response.get("errorMsg"):
+            rejected = response.get("success") is False or bool(response.get("errorMsg"))
+            if rejected and not response.get("orderID"):
                 row.state, row.reserved, trade.status = "REJECTED", 0, "rejected"
                 row.response = {
                     "error": str(response.get("errorMsg") or "Exchange rejected order")[:500]
                 }
-            elif response.get("orderID") == order_hash:
+            elif not rejected and response.get("orderID") == order_hash:
                 row.state, trade.status = "SUBMITTED", "pending"
             else:
                 row.state = "UNKNOWN"
                 row.response = {
                     "error": "Unverified exchange acknowledgement; reconciliation required"
                 }
+        record_transition(db, row, before)
         db.commit()
         return order_result(row)
     except Exception:
@@ -456,73 +482,167 @@ def place_live_order(
         raise
 
 
-def reconcile_order(db: Session, *, user_id: int, order_hash: str, cancel: bool = False) -> dict:
-    """Query one owned order. Absence/404 never proves it did not execute."""
-    try:
-        user = _lock_wallet(db, user_id, running=False)
-        row = db.scalar(
-            select(LiveOrder)
-            .where(
-                LiveOrder.user_id == user_id,
-                LiveOrder.order_hash == order_hash,
-            )
-            .with_for_update()
+@accounting
+def reconcile_order(
+    db: Session,
+    *,
+    user_id: int,
+    order_hash: str,
+    cancel: bool = False,
+    account_id: int | None = None,
+) -> dict:
+    """Reconcile an owned signed order; absence never proves non-execution."""
+
+    def owned_order():
+        query = select(LiveOrder).where(
+            LiveOrder.user_id == user_id,
+            LiveOrder.order_hash == order_hash,
         )
+        if account_id is not None:
+            query = query.where(account_orders(db, user_id, account_id))
+        row = db.scalar(query.with_for_update().execution_options(populate_existing=True))
         if row is None:
             raise ValueError("Live order not found")
+        return row
+
+    try:
+        user = _lock_wallet(db, user_id, running=False)
+        row = owned_order()
         stored = load_wallet_credentials(user.wallet_address)
         if not stored:
             raise LiveTradingBlocked("TRADING_CREDENTIALS_REQUIRED")
         client = clob_transport.build_client(user.wallet_address, stored)
-        if cancel:
-            clob_transport.cancel(client, order_hash)
-        observation = client.get_order(order_hash)
-        if not isinstance(observation, dict) or observation.get("id") != order_hash:
-            raise LiveTradingBlocked("EXCHANGE_ORDER_STATE_UNVERIFIED")
-        matched = Decimal(str(observation["size_matched"]))
-        original = Decimal(str(observation["original_size"]))
-        if (
-            not matched.is_finite()
-            or not original.is_finite()
-            or matched < 0
-            or original <= 0
-            or matched > original
-        ):
-            raise ValueError("Invalid exchange order quantities")
-        status = str(observation["status"]).upper()
+        if cancel and row.state not in {"FILLED", "CANCELLED", "REJECTED"}:
+            audit(db, row, "order_cancel_requested", snapshot(row))
+            db.commit()
+            _lock_wallet(db, user_id, running=False)
+            row = owned_order()
+            if row.state not in {"FILLED", "CANCELLED", "REJECTED"}:
+                try:
+                    clob_transport.cancel(client, order_hash)
+                except Exception:
+                    audit(db, row, "order_cancel_unknown", snapshot(row))
+        before = snapshot(row)
         trade = db.get(UserTrade, row.trade_id)
-        if status in ("CANCELED", "CANCELLED"):
-            row.state = "CANCELLED"
-            # Charge filled principal; only the cancelled remainder is released.
-            row.reserved = row.notional * matched / original if row.side == "BUY" else 0
-            trade.status = "cancelled" if matched == 0 else "partially_filled"
-        elif matched == original and status == "MATCHED":
-            row.state = "FILLED"
-            # Matching does not prove settlement or a fill price. The trade
-            # reconciler must observe fills before recognizing P&L.
-            trade.status = "pending"
-        elif status in ("LIVE", "MATCHED", "DELAYED"):
-            row.state = "PARTIALLY_FILLED" if matched else "SUBMITTED"
-            trade.status = "pending"
-        else:
-            raise LiveTradingBlocked("EXCHANGE_ORDER_STATE_UNVERIFIED")
-        settled = (
-            clob_transport.settled_fills(
-                client,
-                order_hash,
-                observation.get("associate_trades") or [],
+        try:
+            observation = client.get_order(order_hash)
+            matched, state = validate_observation(row, observation)
+            if trade.filled_size is not None and matched < Decimal(str(trade.filled_size)):
+                raise LiveTradingBlocked("EXCHANGE_ORDER_QUANTITY_CONFLICT")
+            settled = (
+                clob_transport.settled_fills(
+                    client,
+                    order_hash,
+                    observation.get("associate_trades") or [],
+                )
+                if matched
+                else None
             )
-            if matched
-            else None
-        )
-        if settled and settled["shares"] == matched:
+            if settled is not None:
+                values = [settled[key] for key in ("shares", "notional", "price")]
+                if (
+                    any(not isinstance(v, Decimal) or not v.is_finite() for v in values)
+                    or settled["shares"] != matched
+                    or settled["notional"] <= 0
+                    or not 0 < settled["price"] < 1
+                    or (
+                        row.side == "BUY"
+                        and settled["notional"] > row.notional * matched / row.shares
+                    )
+                    or (
+                        row.side == "SELL"
+                        and settled["notional"] < row.notional * matched / row.shares
+                    )
+                ):
+                    raise LiveTradingBlocked("EXCHANGE_FILL_ECONOMICS_CONFLICT")
+                prior = row.response.get("filled_notional_exact")
+                if prior is not None and (
+                    settled["notional"] < Decimal(prior)
+                    or (
+                        matched == Decimal(str(row.response.get("confirmed_shares", 0)))
+                        and settled["notional"] != Decimal(prior)
+                    )
+                ):
+                    raise LiveTradingBlocked("EXCHANGE_FILL_ECONOMICS_CONFLICT")
+                timestamp = settled.get("filled_at")
+                created = row.created_at.replace(tzinfo=utc_now().tzinfo)
+                if (
+                    timestamp is None
+                    or timestamp.tzinfo is None
+                    or timestamp > utc_now()
+                    or timestamp < created.replace(microsecond=0)
+                ):
+                    raise LiveTradingBlocked("EXCHANGE_FILL_TIMESTAMP_UNVERIFIED")
+                fills = settled.get("fills")
+                if not isinstance(fills, list) or not 0 < len(fills) <= 1000:
+                    raise LiveTradingBlocked("EXCHANGE_FILL_IDENTITIES_UNVERIFIED")
+                confirmed_ids = [fill["trade_id"] for fill in fills]
+                if len(set(confirmed_ids)) != len(confirmed_ids) or not set(
+                    row.response.get("confirmed_trade_ids", [])
+                ).issubset(confirmed_ids):
+                    raise LiveTradingBlocked("EXCHANGE_FILL_IDENTITIES_CONFLICT")
+                receipts = {fill["trade_id"]: fill for fill in fills}
+                if any(
+                    receipts.get(prior["trade_id"]) != prior
+                    for prior in row.response.get("confirmed_fills", [])
+                ):
+                    raise LiveTradingBlocked("EXCHANGE_FILL_IDENTITIES_CONFLICT")
+            elif row.response.get("settled") or trade.status == "executed":
+                raise LiveTradingBlocked("CONFIRMED_FILL_EVIDENCE_UNAVAILABLE")
+        except Exception as exc:
+            reason = (
+                str(exc)
+                if isinstance(exc, LiveTradingBlocked)
+                else "EXCHANGE_ORDER_STATE_UNVERIFIED"
+            )
+            row.response = {**row.response, "reconciliation_required": True, "error": reason}
+            # A previously released remainder is uncertain again. Charge the
+            # full signed principal until a consistent observation resolves it.
+            if row.side == "BUY":
+                row.reserved = max(row.reserved, row.notional)
+            if not before["reconciliation_required"]:
+                audit(db, row, "order_observation_rejected", {"reason": reason, "retained": before})
+            db.commit()
+            raise LiveTradingBlocked(reason) from exc
+
+        row.state = state
+        if state == "CANCELLED":
+            row.reserved = (
+                (row.notional * matched / row.shares).quantize(
+                    Decimal("1e-12"), rounding=ROUND_CEILING
+                )
+                if row.side == "BUY"
+                else 0
+            )
+            trade.status = "cancelled" if matched == 0 else "partially_filled"
+        elif trade.status != "executed":
+            trade.status = "pending"
+        response = {
+            **row.response,
+            "status": str(observation["status"]).upper(),
+            "size_matched": str(matched),
+            "reconciliation_required": False,
+            "error": None,
+        }
+        if settled is not None:
+            previous_ids = set(row.response.get("confirmed_trade_ids", []))
+            for fill in settled["fills"]:
+                if fill["trade_id"] not in previous_ids:
+                    audit(db, row, "order_fill_confirmed", fill)
             trade.filled_size = float(settled["shares"])
             trade.filled_price = float(settled["price"])
             trade.amount = float(settled["notional"])
             trade.price = float(settled["price"])
-            trade.executed_at = settled.get("filled_at") or trade.executed_at
-            if matched == original or row.state == "CANCELLED":
+            trade.executed_at = settled["filled_at"]
+            if matched == row.shares or state == "CANCELLED":
                 trade.status = "executed"
+            response.update(
+                confirmed_trade_ids=sorted(confirmed_ids),
+                confirmed_fills=sorted(settled["fills"], key=lambda fill: fill["trade_id"]),
+                confirmed_shares=str(settled["shares"]),
+                filled_notional_exact=str(settled["notional"]),
+                filled_notional=float(settled["notional"]),
+            )
             from app.models.trading.stop_loss import StopLossOrder
             from app.models.trading.take_profit import TakeProfitOrder
 
@@ -535,13 +655,9 @@ def reconcile_order(db: Session, *, user_id: int, order_hash: str, cancel: bool 
                 )
                 if conditional is not None:
                     conditional.executed_price = float(settled["price"])
-            # No invented fee or P&L. Principal remains reserved after fills.
-        row.response = {
-            "status": status,
-            "size_matched": str(matched),
-            "settled": trade.status == "executed",
-            "filled_notional": float(settled["notional"]) if settled else None,
-        }
+        response["settled"] = trade.status == "executed"
+        row.response = response
+        record_transition(db, row, before)
         db.commit()
         return order_result(row)
     except Exception:
@@ -560,10 +676,22 @@ def reconcile_pending_live_orders(db: Session) -> None:
             UserTrade.id == LiveOrder.trade_id,
         )
         .where(
-            LiveOrder.state.in_(
-                ("SUBMITTING", "UNKNOWN", "SUBMITTED", "PARTIALLY_FILLED", "FILLED", "CANCELLED")
+            or_(
+                LiveOrder.response["reconciliation_required"].as_boolean().is_(True),
+                and_(
+                    LiveOrder.state.in_(
+                        (
+                            "SUBMITTING",
+                            "UNKNOWN",
+                            "SUBMITTED",
+                            "PARTIALLY_FILLED",
+                            "FILLED",
+                            "CANCELLED",
+                        )
+                    ),
+                    UserTrade.status.in_(("unknown", "pending", "partially_filled")),
+                ),
             ),
-            UserTrade.status.in_(("unknown", "pending", "partially_filled")),
         )
         .order_by(LiveOrder.updated_at, LiveOrder.id)
         .limit(100)
