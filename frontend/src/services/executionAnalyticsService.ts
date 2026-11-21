@@ -21,9 +21,10 @@ export interface ExecutionStrategyStats {
   fill_rate: number | null;
   avg_slippage_bps: number | null;
   median_slippage_bps: number | null;
-  total_fees: number;
+  total_fees: number | null;
+  known_fees?: number;
   gross_realized_pnl: number;
-  net_realized_pnl: number;
+  net_realized_pnl: number | null;
   fee_drag_ratio: number | null;
   win_rate: number | null;
   avg_win: number | null;
@@ -108,8 +109,9 @@ export interface StrategyBreakdownRow {
   losses: number;
   win_rate: number | null;
   gross_realized_pnl: number;
-  net_realized_pnl: number;
-  total_fees: number;
+  net_realized_pnl: number | null;
+  total_fees: number | null;
+  known_fees?: number;
   avg_slippage_bps: number | null;
   edge_score: number | null;
 }
@@ -129,9 +131,42 @@ export interface ExecutionAnalyticsQuery {
   window_days?: number;
 }
 
+export interface LiveBalanceReference {
+  id: string;
+  observed_at: string;
+}
+export interface LiveReconciliationReport {
+  schema_version: "live-attribution-v1";
+  status: "reconciled" | "abstain";
+  account_id: number;
+  input_hash: string;
+  reasons: string[];
+  source_ids: number[];
+  net_realized_pnl: string | null;
+  total_fees_usdc: string | null;
+  confirmed_rebates_usdc: string | null;
+  estimated_rebates_usdc: string;
+  cash_residual_usdc: string | null;
+  full_wallet_reconciled: false;
+}
+
 // ── Service ─────────────────────────────────────────────────
 
 export const executionAnalyticsService = {
+  async getBalanceSnapshots(): Promise<LiveBalanceReference[]> {
+    return apiClient.get<LiveBalanceReference[]>("/api/trades/analytics/balance-snapshots");
+  },
+  async captureBalanceSnapshot(): Promise<LiveBalanceReference> {
+    return apiClient.post<LiveBalanceReference>("/api/trades/analytics/balance-snapshots");
+  },
+  async getLiveReconciliation(
+    opening_id: string,
+    closing_id: string,
+  ): Promise<LiveReconciliationReport> {
+    return apiClient.get<LiveReconciliationReport>("/api/trades/analytics/reconciliation", {
+      params: { opening_id, closing_id },
+    });
+  },
   async getSummary(query: ExecutionAnalyticsQuery = {}): Promise<ExecutionSummaryResponse> {
     return apiClient.get<ExecutionSummaryResponse>("/api/trades/analytics/summary", {
       params: query,

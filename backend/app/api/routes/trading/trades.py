@@ -1227,9 +1227,10 @@ class ExecutionStrategyStats(BaseModel):
     fill_rate: float | None = None
     avg_slippage_bps: float | None = None
     median_slippage_bps: float | None = None
-    total_fees: float = 0.0
+    total_fees: float | None = None
+    known_fees: float = 0.0
     gross_realized_pnl: float = 0.0
-    net_realized_pnl: float = 0.0
+    net_realized_pnl: float | None = None
     fee_drag_ratio: float | None = None
     win_rate: float | None = None
     avg_win: float | None = None
@@ -1308,6 +1309,7 @@ async def get_execution_analytics_summary(
     window_days: int = Query(default=30, ge=1, le=365),
     current_user: dict = Depends(get_current_user_from_token),
     db: Session = Depends(get_db),
+    x_account_id: Annotated[str | None, Header(alias="X-Account-Id")] = None,
 ):
     """Execution-quality summary (slippage, fee drag, fill rate) per strategy.
 
@@ -1318,7 +1320,10 @@ async def get_execution_analytics_summary(
     from app.services.analytics.execution_analytics import get_execution_summary
 
     user_id = current_user.get("user_id")
-    summary = get_execution_summary(db, user_id, window_days=window_days)
+    account_id = (
+        get_strict_account(x_account_id, current_user, db).id if x_account_id is not None else None
+    )
+    summary = get_execution_summary(db, user_id, window_days=window_days, account_id=account_id)
     return ExecutionSummaryResponse(**summary)
 
 
@@ -1327,12 +1332,16 @@ async def get_execution_edge_scores(
     window_days: int = Query(default=30, ge=1, le=365),
     current_user: dict = Depends(get_current_user_from_token),
     db: Session = Depends(get_db),
+    x_account_id: Annotated[str | None, Header(alias="X-Account-Id")] = None,
 ):
     """Edge Score per strategy, normalized to 0–100 (50 = break-even)."""
     from app.services.analytics.execution_analytics import get_edge_scores
 
     user_id = current_user.get("user_id")
-    rows = get_edge_scores(db, user_id, window_days=window_days)
+    account_id = (
+        get_strict_account(x_account_id, current_user, db).id if x_account_id is not None else None
+    )
+    rows = get_edge_scores(db, user_id, window_days=window_days, account_id=account_id)
     return EdgeScoreResponse(
         user_id=user_id,
         window_days=window_days,
@@ -1356,8 +1365,9 @@ class StrategyBreakdownRow(BaseModel):
     losses: int = 0
     win_rate: float | None = None
     gross_realized_pnl: float = 0.0
-    net_realized_pnl: float = 0.0
-    total_fees: float = 0.0
+    net_realized_pnl: float | None = None
+    total_fees: float | None = None
+    known_fees: float = 0.0
     avg_slippage_bps: float | None = None
     edge_score: float | None = None
 
@@ -1375,6 +1385,7 @@ async def get_strategy_breakdown(
     window_days: int = Query(default=30, ge=1, le=365),
     current_user: dict = Depends(get_current_user_from_token),
     db: Session = Depends(get_db),
+    x_account_id: Annotated[str | None, Header(alias="X-Account-Id")] = None,
 ):
     """Per-strategy realized P&L attribution (plan 03 Phase A).
 
@@ -1386,7 +1397,10 @@ async def get_strategy_breakdown(
     from app.services.analytics.execution_analytics import get_strategy_breakdown
 
     user_id = current_user.get("user_id")
-    payload = get_strategy_breakdown(db, user_id, window_days=window_days)
+    account_id = (
+        get_strict_account(x_account_id, current_user, db).id if x_account_id is not None else None
+    )
+    payload = get_strategy_breakdown(db, user_id, window_days=window_days, account_id=account_id)
     return StrategyBreakdownResponse(
         user_id=user_id,
         window_days=payload["window_days"],
@@ -1402,6 +1416,7 @@ async def get_execution_trade_details(
     limit: int = Query(default=50, ge=1, le=200),
     current_user: dict = Depends(get_current_user_from_token),
     db: Session = Depends(get_db),
+    x_account_id: Annotated[str | None, Header(alias="X-Account-Id")] = None,
 ):
     """Per-trade execution detail (expected vs actual fill), newest first."""
     from app.services.analytics.execution_analytics import (
@@ -1415,7 +1430,10 @@ async def get_execution_trade_details(
             detail=f"Unknown strategy '{strategy}'. Valid: {', '.join(STRATEGY_SOURCES)}",
         )
     user_id = current_user.get("user_id")
-    trades = get_trade_details(db, user_id, strategy=strategy, limit=limit)
+    account_id = (
+        get_strict_account(x_account_id, current_user, db).id if x_account_id is not None else None
+    )
+    trades = get_trade_details(db, user_id, strategy=strategy, limit=limit, account_id=account_id)
     return ExecutionTradesResponse(
         user_id=user_id,
         strategy=strategy,

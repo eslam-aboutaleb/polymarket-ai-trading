@@ -700,7 +700,15 @@ def reconcile_order(
             previous_ids = set(row.response.get("confirmed_trade_ids", []))
             for fill in settled["fills"]:
                 if fill["trade_id"] not in previous_ids:
-                    audit(db, row, "order_fill_confirmed", fill)
+                    audit(
+                        db,
+                        row,
+                        "order_fill_confirmed",
+                        {
+                            **fill,
+                            "matched_at": settled.get("fill_timestamps", {}).get(fill["trade_id"]),
+                        },
+                    )
             trade.filled_size = float(settled["shares"])
             trade.filled_price = float(settled["price"])
             trade.amount = float(settled["notional"])

@@ -496,6 +496,7 @@ class MigrationBackfillTest(unittest.TestCase):
             "app_events",
             "trading_control_states",
             "emergency_halt_operations",
+            "live_balance_snapshots",
         }
     )
 

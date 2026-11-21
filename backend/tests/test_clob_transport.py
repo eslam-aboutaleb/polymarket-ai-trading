@@ -64,6 +64,7 @@ def test_settlement_uses_only_owned_confirmed_fills_and_deduplicates_ids():
         "notional": Decimal("4.80"),
         "price": Decimal("0.48"),
         "filled_at": None,
+        "fill_timestamps": {},
         "fills": [
             {"trade_id": "trade", "transaction_hash": "tx", "shares": "10", "notional": "4.8"}
         ],
