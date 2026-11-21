@@ -133,6 +133,18 @@ def account_db(monkeypatch):
     db.commit()
     monkeypatch.setattr(get_settings(), "live_account_reconciliation_enabled", True)
     monkeypatch.setattr(limiter, "enabled", False)
+    monkeypatch.setattr(
+        readside,
+        "wallet_evidence",
+        lambda *args, **kwargs: {
+            "positions": {},
+            "activity": [],
+            "activity_from": None,
+            "activity_to": None,
+            "receipts": [],
+            "chain_finality": "unverified",
+        },
+    )
     yield db
     db.close()
     engine.dispose()
@@ -199,6 +211,26 @@ def seed_fill(db, *, timestamp=True):
         response={"settled": True},
     )
     db.add(order)
+    db.add(
+        AppEvent(
+            user_id=1,
+            account_id=11,
+            aggregate_type="order",
+            aggregate_id="order-1",
+            source="live_gateway",
+            event_type="order_intent_created",
+            occurred_at=T0,
+            payload_json=json.dumps(
+                {
+                    "token_id": "123",
+                    "side": "BUY",
+                    "strategy": "manual",
+                    "condition_id": "condition",
+                }
+            ),
+        )
+    )
+    db.flush()
     payload = {"trade_id": "venue-fill", "transaction_hash": "tx", "shares": "10", "notional": "4"}
     if timestamp:
         payload["matched_at"] = (T0 + timedelta(seconds=1)).isoformat()
@@ -305,7 +337,7 @@ def test_native_capture_reads_balances_only_and_never_derives_or_posts(account_d
     )
     assert result.status_code == 200
     assert Decimal(result.json()["cash_usdc"]) == 100
-    assert result.json()["coverage"] == "known_application_tokens"
+    assert result.json()["coverage"] == "venue_indexed_wallet_tokens"
     assert db.get(LiveBalanceSnapshot, result.json()["id"])
     forbidden.assert_not_called()
     native.create_or_derive_api_key.assert_not_called()
@@ -382,3 +414,40 @@ def test_recorded_analytics_are_scoped_and_foreign_accounts_rejected(account_db)
     assert len(get_trade_details(account_db, 1, account_id=12)) == 1
     with pytest.raises(ValueError, match="Account unavailable"):
         get_execution_summary(account_db, 1, account_id=21)
+
+
+@pytest.mark.parametrize("indexed_quantity,expected_status", [("2", 200), ("3", 503)])
+def test_discovered_external_tokens_are_checked_against_native_balances(
+    account_db, monkeypatch, indexed_quantity, expected_status
+):
+    native = MagicMock()
+    native.get_balance_allowance.side_effect = [
+        {"balance": "100000000"},
+        {"balance": "2000000"},
+        {"balance": "100000000"},
+    ]
+    monkeypatch.setattr(
+        readside, "load_wallet_credentials", lambda _: {"clob_creds": {"api_key": "read"}}
+    )
+    monkeypatch.setattr(clob_transport, "build_client", lambda *_: native)
+    monkeypatch.setattr(
+        readside,
+        "wallet_evidence",
+        lambda *args, **kwargs: {
+            "positions": {"999": indexed_quantity},
+            "activity": [],
+            "activity_from": None,
+            "activity_to": None,
+            "receipts": [],
+            "chain_finality": "unverified",
+        },
+    )
+    result = client(account_db).post(
+        "/api/trades/analytics/balance-snapshots", headers={"X-Account-Id": "11"}
+    )
+    assert result.status_code == expected_status
+    if expected_status == 200:
+        assert Decimal(result.json()["positions"]["999"]) == 2
+        assert native.get_balance_allowance.call_args_list[1].args[0].token_id == "999"
+    else:
+        assert account_db.query(LiveBalanceSnapshot).count() == 0

@@ -73,6 +73,19 @@ export default function LiveReconciliation() {
       if (alive.current && sequence === request.current) setBusy(false);
     }
   }
+  async function save() {
+    const sequence = ++request.current;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await executionAnalyticsService.freezeLiveReconciliation(opening, closing);
+      if (alive.current && sequence === request.current) setReport(result);
+    } catch (cause) {
+      if (alive.current && sequence === request.current) setError(getApiErrorMessage(cause));
+    } finally {
+      if (alive.current && sequence === request.current) setBusy(false);
+    }
+  }
   function download() {
     if (!report) return;
     const url = URL.createObjectURL(
@@ -90,7 +103,8 @@ export default function LiveReconciliation() {
       <h3 className="font-semibold text-white">Live account reconciliation</h3>
       <p className="text-soft text-sm">
         Compare recorded fills with read-only balance observations. Missing costs and unexplained
-        cash or token changes remain unknown. Observations cover application-traded tokens.
+        cash or token changes remain unknown. Wallet holdings come from venue-indexed discovery and
+        native balance reads.
       </p>
       <button className="btn-secondary" disabled={busy} onClick={() => void capture()}>
         Capture live balances
@@ -153,7 +167,11 @@ export default function LiveReconciliation() {
       {report && (
         <div className="space-y-2" aria-live="polite">
           <p>Reconciliation: {report.status === "reconciled" ? "Reconciled" : "Incomplete"}</p>
+          <p>Gross realized P&amp;L: {money(report.gross_realized_pnl)}</p>
           <p>Net realized P&amp;L: {money(report.net_realized_pnl)}</p>
+          <p>Verified net realized P&amp;L: {money(report.verified_net_realized_pnl)}</p>
+          <p>Indicative unrealized P&amp;L: {money(report.unrealized_pnl)}</p>
+          <p>Indicative mark contribution: {money(report.mark_contribution)}</p>
           <p>Unexplained cash change: {money(report.cash_residual_usdc)}</p>
           <p>Confirmed fees: {money(report.total_fees_usdc)}</p>
           <p>
@@ -165,7 +183,78 @@ export default function LiveReconciliation() {
               <li key={reason}>{reason.replace(/_/g, " ").toLowerCase()}</li>
             ))}
           </ul>
-          <p>{report.source_ids.length} confirmed fill references</p>
+          <p>
+            {report.source_ids.length} confirmed fill references; {report.history_source_ids.length}{" "}
+            opening-history references
+          </p>
+          <details>
+            <summary>
+              Acceptance evidence (
+              {report.acceptance.filter((check) => check.status === "pass").length}/
+              {report.acceptance.length} passed)
+            </summary>
+            <ul>
+              {report.acceptance.map((check) => (
+                <li key={check.criterion}>
+                  {check.criterion.replace(/_/g, " ")}: {check.status} —{" "}
+                  {check.reason.replace(/_/g, " ").toLowerCase()}
+                </li>
+              ))}
+            </ul>
+            <p>
+              Release decision:{" "}
+              {report.confidence.release_decision.replace(/_/g, " ").toLowerCase()}
+            </p>
+          </details>
+          <details>
+            <summary>Position residuals</summary>
+            {Object.entries(report.position_residuals).map(([token, quantity]) => (
+              <p key={token} className="break-all">
+                Token {token}: {quantity} shares
+              </p>
+            ))}
+          </details>
+          <details>
+            <summary>Point-in-time benchmarks</summary>
+            <p>
+              Policy: {report.benchmark_version}. Price differences include latency and market
+              movement; these are not causal impact or realized returns.
+            </p>
+            {report.benchmarks.slice(0, 10).map((row) => (
+              <div key={row.benchmark_id} className="border-t border-border py-2">
+                <p>
+                  Fill reference {row.source_id}:{" "}
+                  {row.status === "abstain" ? "Unavailable" : "Observed comparison"}
+                </p>
+                <p>
+                  Implementation shortfall: {money(row.implementation_shortfall)}; spread:{" "}
+                  {money(row.spread_cost)}; remaining execution difference:{" "}
+                  {money(row.execution_difference)}
+                </p>
+                {row.reason && <p>{row.reason.replace(/_/g, " ").toLowerCase()}</p>}
+                {row.capture_id && <p className="break-all">Book: {row.capture_id}</p>}
+              </div>
+            ))}
+            <p>Download evidence for all benchmarks and cost allocations.</p>
+          </details>
+          <details>
+            <summary>External funding and activity</summary>
+            <p>Source quality: {report.external_flows.quality.replace(/_/g, " ")}</p>
+            <p>
+              Funding cashflow: {money(report.external_flows.funding_cashflow)}; unattributed
+              rebates: {money(report.external_flows.unattributed_rebates)}
+            </p>
+            {report.external_flows.reasons.map((reason) => (
+              <p key={reason}>{reason.replace(/_/g, " ").toLowerCase()}</p>
+            ))}
+          </details>
+          {report.report_id ? (
+            <p className="break-all">Saved report: {report.report_id}</p>
+          ) : (
+            <button className="btn-secondary" disabled={busy} onClick={() => void save()}>
+              Save immutable report
+            </button>
+          )}
           <button className="btn-secondary" onClick={download}>
             Download reconciliation evidence
           </button>

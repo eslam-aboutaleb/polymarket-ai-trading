@@ -142,6 +142,9 @@ from app.models.trading.paper_execution_intent import PaperExecutionIntent  # no
 
 __all__ += ["PaperExecutionIntent"]
 
-from app.models.analytics.live_balance_snapshot import LiveBalanceSnapshot  # noqa: F401,E402
+from app.models.analytics.live_balance_snapshot import (  # noqa: F401,E402
+    LiveAttributionReport,
+    LiveBalanceSnapshot,
+)
 
-__all__ += ["LiveBalanceSnapshot"]
+__all__ += ["LiveBalanceSnapshot", "LiveAttributionReport"]

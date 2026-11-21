@@ -258,7 +258,7 @@ def reconciliation_summary(db: Session, user_id: int) -> dict[str, Any]:
 
 
 @accounting
-def reconcile_confirmed_cashflows(fills, opening, closing):
+def reconcile_confirmed_cashflows(fills, opening, closing, *, opening_lots=None):
     """Read-only exact FIFO attribution between immutable balance observations.
 
     Uses the same consume_fifo primitive as the legacy projection. Missing costs,
@@ -272,6 +272,30 @@ def reconcile_confirmed_cashflows(fills, opening, closing):
         if any(not value.is_finite() or value < 0 for value in values):
             raise ValueError("INVALID_BALANCE_OBSERVATION")
     lots, strategies, seen, sources = {}, {}, {}, []
+    ledger_rows, realized_allocations = [], []
+    if opening_lots is not None:
+        for token, entries in opening_lots.items():
+            lots[token] = [
+                OpenLot(
+                    item["entry_source_id"],
+                    Decimal(item["shares"]),
+                    Decimal(item["entry_price"]),
+                    item["strategy"],
+                    Decimal(item["net_cost_per_share"])
+                    if item["net_cost_per_share"] is not None
+                    else None,
+                )
+                for item in entries
+            ]
+        expected = {
+            token: sum((lot.remaining_shares for lot in entries), Decimal(0))
+            for token, entries in lots.items()
+        }
+        actual = {token: Decimal(quantity) for token, quantity in opening["positions"].items()}
+        if any(
+            expected.get(token, 0) != actual.get(token, 0) for token in set(expected) | set(actual)
+        ):
+            raise ValueError("OPENING_LOT_QUANTITY_MISMATCH")
     reasons = []
     cashflow = Decimal(0)
     fees_known = rebates_known = True
@@ -279,7 +303,7 @@ def reconcile_confirmed_cashflows(fills, opening, closing):
     quantity_changes = {}
     gross = Decimal(0)
     complete_basis = True
-    if any(Decimal(value) != 0 for value in opening["positions"].values()):
+    if opening_lots is None and any(Decimal(value) != 0 for value in opening["positions"].values()):
         reasons.append("OPENING_COST_BASIS_UNVERIFIED")
         complete_basis = False
 
@@ -330,6 +354,21 @@ def reconcile_confirmed_cashflows(fills, opening, closing):
         signed = 1 if side == "BUY" else -1
         quantity_changes[token] = quantity_changes.get(token, Decimal(0)) + signed * shares
         cashflow += -signed * notional
+        ledger_rows.append(
+            {
+                "source_id": fill["source_id"],
+                "fill_id": fill["fill_id"],
+                "order_hash": fill["order_hash"],
+                "token_id": token,
+                "side": side,
+                "strategy": strategy,
+                "gross_cashflow": -signed * notional,
+                "fee_usdc": fee,
+                "confirmed_rebate_usdc": rebate,
+                "net_cashflow": -signed * notional - cost if cost is not None else None,
+                "quantity_change": signed * shares,
+            }
+        )
         bucket = strategies.setdefault(
             strategy,
             {
@@ -359,7 +398,22 @@ def reconcile_confirmed_cashflows(fills, opening, closing):
                 complete_basis = False
                 reasons.append("UNMATCHED_SELL_QUANTITY")
             for item in allocations:
-                entry = strategies[item["strategy"]]
+                entry = strategies.setdefault(
+                    item["strategy"],
+                    {
+                        "gross_realized": Decimal(0),
+                        "allocated_costs": Decimal(0),
+                        "net_realized": Decimal(0),
+                        "fill_count": 0,
+                    },
+                )
+                realized_allocations.append(
+                    {
+                        **item,
+                        "exit_source_id": fill["source_id"],
+                        "exit_fee": cost * item["shares"] / shares if cost is not None else None,
+                    }
+                )
                 entry["gross_realized"] += item["gross_pnl"]
                 if item["entry_fee"] is None or cost is None:
                     entry["net_realized"] = None
@@ -405,7 +459,23 @@ def reconcile_confirmed_cashflows(fills, opening, closing):
         else None
     )
     return {
-        "schema_version": "live-attribution-v1",
+        "schema_version": "live-attribution-v2",
+        "ledger_rows": ledger_rows,
+        "realized_allocations": realized_allocations,
+        "closing_lots": {
+            token: [
+                {
+                    "entry_source_id": lot.trade_id,
+                    "shares": lot.remaining_shares,
+                    "entry_price": lot.entry_price,
+                    "strategy": lot.strategy,
+                    "net_cost_per_share": lot.fee_per_share,
+                }
+                for lot in entries
+            ]
+            for token, entries in lots.items()
+            if entries
+        },
         "execution_eligible": False,
         "status": "reconciled" if not reasons else "abstain",
         "reasons": sorted(set(reasons)),
