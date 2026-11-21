@@ -14,3 +14,15 @@ class LiveBalanceSnapshot(Base):
     observed_at = Column(DateTime(timezone=True), nullable=False, index=True)
     captured_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
     evidence_json = Column(Text, nullable=False)
+
+
+class LiveAttributionReport(Base):
+    """Write-once diagnostic artifact, not an authority to credit or spend money."""
+
+    __tablename__ = "live_attribution_reports"
+    id = Column(String(64), primary_key=True)
+    input_hash = Column(String(64), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    report_json = Column(Text, nullable=False)

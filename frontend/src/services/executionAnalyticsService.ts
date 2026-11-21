@@ -136,10 +136,11 @@ export interface LiveBalanceReference {
   observed_at: string;
 }
 export interface LiveReconciliationReport {
-  schema_version: "live-attribution-v1";
+  schema_version: "live-attribution-v2";
   status: "reconciled" | "abstain";
   account_id: number;
   input_hash: string;
+  report_id?: string;
   reasons: string[];
   source_ids: number[];
   net_realized_pnl: string | null;
@@ -147,12 +148,52 @@ export interface LiveReconciliationReport {
   confirmed_rebates_usdc: string | null;
   estimated_rebates_usdc: string;
   cash_residual_usdc: string | null;
-  full_wallet_reconciled: false;
+  full_wallet_reconciled: boolean;
+  gross_realized_pnl: string | null;
+  verified_net_realized_pnl: string | null;
+  unrealized_pnl: string | null;
+  mark_contribution: string | null;
+  benchmark_version: string;
+  acceptance_complete: boolean;
+  acceptance: { criterion: string; status: "pass" | "incomplete" | "fail"; reason: string }[];
+  position_residuals: Record<string, string>;
+  history_source_ids: number[];
+  benchmarks: {
+    benchmark_id: string;
+    source_id: number;
+    status: "observed_comparison" | "abstain";
+    capture_id: string | null;
+    implementation_shortfall: string | null;
+    spread_cost: string | null;
+    execution_difference: string | null;
+    reason: string | null;
+  }[];
+  external_flows: {
+    quality: string;
+    funding_cashflow: string | null;
+    unattributed_rebates: string | null;
+    other_income: string | null;
+    reasons: string[];
+  };
+  confidence: {
+    release_decision: string;
+    comparable_sample_count: number;
+    forward_event_count: number;
+  };
 }
 
 // ── Service ─────────────────────────────────────────────────
 
 export const executionAnalyticsService = {
+  async freezeLiveReconciliation(
+    opening_id: string,
+    closing_id: string,
+  ): Promise<LiveReconciliationReport> {
+    return apiClient.post<LiveReconciliationReport>(
+      "/api/trades/analytics/reconciliation-reports",
+      { opening_id, closing_id },
+    );
+  },
   async getBalanceSnapshots(): Promise<LiveBalanceReference[]> {
     return apiClient.get<LiveBalanceReference[]>("/api/trades/analytics/balance-snapshots");
   },
