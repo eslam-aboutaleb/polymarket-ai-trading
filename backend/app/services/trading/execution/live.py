@@ -191,11 +191,14 @@ def _risk_check(
 
 def _authorize_copy(db, user_id, settings, copied_from_wallet, ai_approved):
     follow = db.scalar(
-        select(FollowedTrader).where(
+        select(FollowedTrader)
+        .where(
             FollowedTrader.user_id == user_id,
             FollowedTrader.trader_wallet == (copied_from_wallet or "").lower(),
             FollowedTrader.is_active.is_(True),
         )
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if not settings.copy_trading_enabled or follow is None:
         raise LiveTradingBlocked("COPY_TRADING_NOT_ENABLED_FOR_TRADER")
@@ -506,6 +509,8 @@ def place_live_order(
             if strategy == "copy":
                 _authorize_copy(db, user_id, settings, copied_from_wallet, ai_approved)
             _available_balance(db, client, user_id, token_id, side, shares, price_d, row.id)
+            require_enabled(strategy)
+            check_quote_deadline()  # Balance I/O must not outlive the quote's authority.
         except LiveTradingBlocked as exc:
             # The exchange has not been called yet, so this rejection is certain.
             row.state, row.reserved, trade.status = "REJECTED", 0, "rejected"

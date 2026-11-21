@@ -121,7 +121,9 @@ reservations and window boundaries, authenticated available balance and receipt
 time, venue/chain, signed quantities/hash, expiration policy, deadline, and a
 source-evidence digest when provided. Audit payloads exceeding the log's bound
 fail closed rather than silently truncating approval evidence. Final authorization
-and balance are rechecked after the sender reacquires locks. An intent changed or
+and balance are rechecked after the sender reacquires locks. Copy grants are
+row-locked through the send, and the master/strategy flags and quote deadline are
+checked again after balance I/O, immediately before submission. An intent changed or
 quarantined by a recovery worker between transactions is reloaded and never sent
 from the stale cached projection.
 
