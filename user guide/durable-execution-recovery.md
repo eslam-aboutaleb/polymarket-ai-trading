@@ -39,7 +39,7 @@ risk budgets; this work does not implement a reusable cash/P&L ledger.
 ## Transactions and audit
 
 `order_intent_created` records the fingerprint, signed amounts, limit, order type,
-condition/token, account and strategy. `order_state_changed` records before/after
+condition/token, account, strategy and bounded risk-approval snapshot. `order_state_changed` records before/after
 state, reservation, fill watermark and reconciliation status in `AppEvent` on the
 same transaction as the state change. `order_cancel_requested` commits before the
 exchange cancellation; an ambiguous cancellation acknowledgement is followed by an
@@ -94,14 +94,76 @@ code does not enforce the reconciliation flag, so do not run an older live gatew
 against quarantined records. Reconcile through the reviewed version before any
 separate release decision.
 
-## Remaining release work
+## Separate financial and release work
 
-Issue #26 stays open pending a full production acceptance review of all mutation
-paths, signed-intent/risk-approval provenance, recovery behavior against supported
-venue responses and independent operational release criteria. The configured
-budgets conservatively bound principal; they are not reconciled live cash or a
-complete portfolio ledger. Fill finality/fee/balance reconciliation, terminal-order
-corrections and external wallet activity still need end-to-end acceptance. #24,
-#56 and #3 own settlement/redemption and complete accounting/attribution. Passing
-these fault-injection tests is execution evidence, not strategy validation or
-permission to use real money.
+The configured budgets conservatively bound principal; they are not reconciled
+live cash or a complete portfolio ledger. #24, #56 and #3 own settlement,
+redemption, fees and complete accounting/attribution, including external wallet
+activity. These remain separate from CLOB gateway acceptance. No profitability,
+independently verified production venue history or financial reconciliation is
+claimed by the gateway tests.
+
+## Issue #26 acceptance review
+
+The current issue predates the existing live adapter. This review verifies the
+CLOB execution boundary and its conservative principal reservations, not a new
+production release or the separate settlement/P&L features.
+
+| Issue acceptance criterion | Implementation and verification |
+| --- | --- |
+| Every venue mutation has authorization and centralized durable recording | Normal submissions use `place_live_order`: SQL owner/control locks, wallet/account risk checks, fresh authenticated balance, stable key and signed hash, committed intent and risk snapshot precede POST. Normal cancellation uses `reconcile_order`; emergency cancellation uses the committed `EmergencyHaltOperation` outbox. AST mutation inventories and real legacy-gate tests fence the old direct SDK paths. |
+| Negative tests cover unknown ACK, restart, duplicate/partial fills, cancel race, accounts, replayed keys and circuit breaker | `test_live_gateway.py`, `test_live_gateway_recovery.py`, `test_issue26_acceptance.py`, `test_clob_transport.py` and the PostgreSQL gateway/halt suites exercise these cases. Additional controls cover 429/500/expired credentials, before-commit/after-send process death, Redis outage, revoked follow/AI permission, signing-time balance change, cached sender projection and late terminal fills. |
+| Existing legacy release barrier remains effective | `test_live_execution_freeze.py` exercises the actual barrier with both enabled and disabled flags and patches the SDK constructors to prove rejection before signing. No change is made to `live_trading_policy.py`. |
+| Completing the issue activates no new live path or actual trade | Master/strategy settings, Compose and example environments are unchanged. Paper/simulation cannot call the live transport. All fault tests use disposable databases and fake venue transport; actual signature tests use only the existing offline fixture key. No funded transaction is part of acceptance. |
+
+The committed intent includes versioned wallet/account budget approvals, prior
+reservations and window boundaries, authenticated available balance and receipt
+time, venue/chain, signed quantities/hash, expiration policy, deadline, and a
+source-evidence digest when provided. Audit payloads exceeding the log's bound
+fail closed rather than silently truncating approval evidence. Final authorization
+and balance are rechecked after the sender reacquires locks. An intent changed or
+quarantined by a recovery worker between transactions is reloaded and never sent
+from the stale cached projection.
+
+The recovery pass reserves up to 100 slots for uncertain/pending orders plus 20
+separate round-robin slots for terminal observations. Late fills/corrections are
+therefore still observed after an earlier confirmation, without terminal history
+taking away the pending-order recovery slots. Terminal rollback or replaced fill
+identity quarantines the wallet rather than deleting recorded execution.
+
+### Mutation call graph
+
+```mermaid
+flowchart TD
+    Manual[Manual execute and cash-out] --> Gateway
+    External[Scoped external API key] --> Gateway
+    Copy[Copy trading and inverse reversals] --> Gateway
+    Maker[Market maker and latency strategy] --> Gateway
+    Exits[Stop loss and take profit] --> Gateway
+    Engine[Registered live adapter] --> Gateway
+    Gateway[place_live_order] --> Gate[SQL owner, account, control and risk checks]
+    Gate --> Balance[Authenticated balance and inventory]
+    Balance --> Sign[Version-pinned CLOB signing]
+    Sign --> Intent[Commit signed intent, approval and reservation]
+    Intent --> Refresh[Reload intent and recheck authority and balance]
+    Refresh --> Post[clob_transport.submit]
+    Post --> Unknown[Unknown outcomes retain reservation; query hash, never resend]
+    OwnedCancel[Owner and account cancel request] --> Reconcile[reconcile_order]
+    Reconcile --> CancelIntent[Commit cancellation request]
+    CancelIntent --> Cancel[clob_transport.cancel]
+    Halt[User or administrator halt] --> Outbox[Commit halt and cancellation outbox]
+    Outbox --> HaltWorker[Cancellation-only worker]
+    HaltWorker --> Cancel
+    Cancel --> Observe[Authenticated order and confirmed fill observations]
+    Unknown --> Observe
+    Observe --> Audit[Atomic state and fill audit; conservative reservations]
+    Legacy[Legacy direct strategy helpers] --> Barrier[Permanent legacy release barrier]
+```
+
+Requested/risk-approved/signed preparation is represented by the immutable intent
+and approval payload. The compatible order projection uses `SUBMITTING` for the
+persisted pre-POST intent, `UNKNOWN` for submit-unknown, `SUBMITTED` for matching
+acknowledgement, `PARTIALLY_FILLED`, `FILLED`, `CANCELLED` and `REJECTED`. The
+reconciliation flag is an independent quarantine: it does not rewrite an already
+observed terminal state. Keeping the established API vocabulary avoids inventing
+incompatible state labels for existing clients.
