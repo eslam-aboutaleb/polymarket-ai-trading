@@ -1,0 +1,16 @@
+"""Immutable, account-owned observations; never a spendable balance authority."""
+
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+
+from app.models.base import Base
+from app.utils.time import utc_now
+
+
+class LiveBalanceSnapshot(Base):
+    __tablename__ = "live_balance_snapshots"
+    id = Column(String(64), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    observed_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    captured_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    evidence_json = Column(Text, nullable=False)
