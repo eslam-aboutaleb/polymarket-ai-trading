@@ -141,10 +141,10 @@ class MarketMakerPaperModeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(market_maker_service, "SessionLocal", return_value=db),
             patch.object(market_maker_service, "_fetch_order_book", fetch_book),
             patch.object(market_maker_service, "_fetch_midpoint", fetch_midpoint),
-            patch.object(market_maker_service, "_cancel_all_orders", cancel_all),
+            patch("app.services.trading.execution.clob_transport.cancel", cancel_all),
             patch.object(market_maker_service, "_place_maker_order", place_order),
             patch.object(market_maker_service, "_get_open_orders", get_open_orders),
-            patch.object(market_maker_service, "_cancel_order", cancel_order),
+            patch("app.services.trading.execution.clob_transport.submit", cancel_order),
             patch("app.services.trading.execution.live.load_wallet_credentials", load_creds),
             patch("py_clob_client.client.ClobClient", clob_cls),
             patch(

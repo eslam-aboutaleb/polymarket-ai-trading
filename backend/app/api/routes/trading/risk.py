@@ -1,8 +1,8 @@
 """Stage-0 risk controls. Financial authority stays unavailable until reconciled."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -10,6 +10,7 @@ from app.api.routes.auth.auth import get_current_user_from_token
 from app.config import get_settings
 from app.models.trading.trading_control import TradingControlState
 from app.models.users.user import User
+from app.services.trading.execution.order_state import account_orders, unresolved_orders
 from app.services.trading.trading_halt_service import read_control, request_halt
 from app.utils.database import get_db
 from app.utils.time import utc_now
@@ -33,6 +34,21 @@ def risk_summary(
     settings = (
         db.query(UserSettings).filter(UserSettings.user_id == current_user["user_id"]).one_or_none()
     )
+    from sqlalchemy import select
+
+    from app.models.trading.live_order import LiveOrder
+
+    unresolved = (
+        db.scalar(
+            select(LiveOrder.id)
+            .where(
+                LiveOrder.user_id == current_user["user_id"],
+                unresolved_orders(),
+            )
+            .limit(1)
+        )
+        is not None
+    )
     ready = bool(
         config.live_trading_enabled
         and global_control["state"] == "RUNNING"
@@ -40,7 +56,13 @@ def risk_summary(
         and settings
         and not settings.simulation_mode
         and not settings.trading_halted
+        and not unresolved
     )
+    blocker = None
+    if unresolved:
+        blocker = "RECONCILIATION_REQUIRED"
+    elif not ready:
+        blocker = "LIVE_FLAGS_AND_ACCOUNT_ACTIVATION_REQUIRED"
     return {
         "global": global_control,
         "wallet": wallet_control,
@@ -51,7 +73,7 @@ def risk_summary(
         "simulation_mode": bool(settings and settings.simulation_mode),
         "initial_capital": settings.initial_capital if settings else None,
         "financial_state": "CONSERVATIVE_PRINCIPAL_BUDGETS",
-        "release_blocker": None if ready else "LIVE_FLAGS_AND_ACCOUNT_ACTIVATION_REQUIRED",
+        "release_blocker": blocker,
     }
 
 
@@ -108,7 +130,7 @@ def recovery_request(
         .select_from(LiveOrder)
         .where(
             LiveOrder.user_id == current_user["user_id"],
-            LiveOrder.state.in_(("UNKNOWN", "SUBMITTING")),
+            unresolved_orders(),
         )
     )
     return {
@@ -150,7 +172,7 @@ def activate_live_trading(
         actor = _lock_wallet(db, user_id, running=False)
         if body.scope == "global" and not actor.is_admin:
             raise HTTPException(403, "Global activation requires an administrator")
-        unresolved = select(LiveOrder.id).where(LiveOrder.state.in_(("UNKNOWN", "SUBMITTING")))
+        unresolved = select(LiveOrder.id).where(unresolved_orders())
         halts = select(EmergencyHaltOperation.id).where(EmergencyHaltOperation.state == "PENDING")
         if body.scope == "user":
             unresolved = unresolved.where(LiveOrder.user_id == user_id)
@@ -208,21 +230,20 @@ def activate_live_trading(
 
 @router.get("/orders")
 def live_orders(
-    current_user: dict = Depends(get_current_user_from_token), db: Session = Depends(get_db)
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+    x_account_id: Annotated[str | None, Header(alias="X-Account-Id")] = None,
 ):
     from sqlalchemy import select
 
     from app.models.trading.live_order import LiveOrder
     from app.services.trading.execution.live import order_result
 
-    rows = db.scalars(
-        select(LiveOrder)
-        .where(
-            LiveOrder.user_id == current_user["user_id"],
-        )
-        .order_by(LiveOrder.id.desc())
-        .limit(100)
-    ).all()
+    account_id = _order_account(db, current_user, x_account_id)
+    query = select(LiveOrder).where(LiveOrder.user_id == current_user["user_id"])
+    if account_id is not None:
+        query = query.where(account_orders(db, current_user["user_id"], account_id))
+    rows = db.scalars(query.order_by(LiveOrder.id.desc()).limit(100)).all()
     return [order_result(row) for row in rows]
 
 
@@ -231,8 +252,14 @@ def reconcile_live_order(
     order_hash: str,
     current_user: dict = Depends(get_current_user_from_token),
     db: Session = Depends(get_db),
+    x_account_id: Annotated[str | None, Header(alias="X-Account-Id")] = None,
 ):
-    return _reconcile(db, current_user["user_id"], order_hash)
+    return _reconcile(
+        db,
+        current_user["user_id"],
+        order_hash,
+        account_id=_order_account(db, current_user, x_account_id),
+    )
 
 
 @router.post("/orders/{order_hash}/cancel")
@@ -240,16 +267,35 @@ def cancel_live_order(
     order_hash: str,
     current_user: dict = Depends(get_current_user_from_token),
     db: Session = Depends(get_db),
+    x_account_id: Annotated[str | None, Header(alias="X-Account-Id")] = None,
 ):
-    return _reconcile(db, current_user["user_id"], order_hash, cancel=True)
+    return _reconcile(
+        db,
+        current_user["user_id"],
+        order_hash,
+        cancel=True,
+        account_id=_order_account(db, current_user, x_account_id),
+    )
 
 
-def _reconcile(db: Session, user_id: int, order_hash: str, cancel: bool = False):
+def _order_account(db, current_user, header):
+    if header is None:
+        return None  # Existing risk controls intentionally operate on the wallet.
+    from app.api.deps import get_strict_account
+
+    return get_strict_account(header, current_user, db).id
+
+
+def _reconcile(
+    db: Session, user_id: int, order_hash: str, cancel: bool = False, account_id: int | None = None
+):
     from app.services.trading.execution.live import reconcile_order
     from app.services.trading.live_trading_policy import LiveTradingBlocked
 
     try:
-        return reconcile_order(db, user_id=user_id, order_hash=order_hash, cancel=cancel)
+        return reconcile_order(
+            db, user_id=user_id, order_hash=order_hash, cancel=cancel, account_id=account_id
+        )
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
     except LiveTradingBlocked as exc:

@@ -10,13 +10,13 @@ original result instead of placing a second order.
 import asyncio
 import json
 import logging
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_plan
+from app.api.deps import get_strict_account, require_plan
 from app.api.routes.auth.auth import get_current_user_from_token, get_optional_user_from_token
 from app.models.notifications.notification_followed_trader import NotificationFollowedTrader
 from app.models.trading.followed_trader import FollowedTrader
@@ -361,6 +361,7 @@ async def execute_trade(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     current_user: dict = Depends(get_current_user_from_token),
     db: Session = Depends(get_db),
+    x_account_id: Annotated[str | None, Header(alias="X-Account-Id")] = None,
 ):
     """Submit a real order with durable identity and authenticated risk checks."""
     from decimal import ROUND_DOWN, Decimal
@@ -374,6 +375,11 @@ async def execute_trade(
             raise LiveTradingBlocked("DURABLE_EXECUTION_CONTEXT_REQUIRED")
         if not idempotency_key:
             raise HTTPException(422, "Idempotency-Key is required for a live order")
+        account_id = (
+            get_strict_account(x_account_id, current_user, db).id
+            if x_account_id is not None
+            else None
+        )
         # Existing manual API: buys are collateral notional, sells are shares.
         shares = Decimal(str(body.size))
         if body.side == "BUY":
@@ -390,6 +396,7 @@ async def execute_trade(
             size=float(shares),
             idempotency_key=idempotency_key,
             strategy="manual",
+            account_id=account_id,
             order_type="FOK" if body.side == "SELL" else "GTC",
         )
     except LiveTradingBlocked as exc:
@@ -414,6 +421,7 @@ async def cash_out_position(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     current_user: dict = Depends(get_current_user_from_token),
     db: Session = Depends(get_db),
+    x_account_id: Annotated[str | None, Header(alias="X-Account-Id")] = None,
 ):
     """
     Cash out (sell) an existing position at a specified price.
@@ -426,6 +434,7 @@ async def cash_out_position(
         idempotency_key=idempotency_key,
         current_user=current_user,
         db=db,
+        x_account_id=x_account_id,
     )
 
 

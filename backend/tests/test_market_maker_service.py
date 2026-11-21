@@ -7,8 +7,8 @@ Two layers are covered:
   namespace, so every branch (band-count ceiling, price-bound pruning,
   collateral caps, the AMM curve's ``share_delta`` gate, the
   ``num_bands or 5`` default) is asserted on exact order lists.
-* **I/O boundary helpers** — ``_fetch_midpoint``, ``_get_open_orders``,
-  ``_cancel_order``, ``_cancel_all_orders`` and ``_place_maker_order`` talk to
+* **I/O boundary helpers** — ``_fetch_midpoint``, ``_get_open_orders`` and
+  the frozen legacy placement helper use
   httpx / ``py_clob_client`` / the credential store. Every one of them is
   driven with fakes so no socket, chain node or key is ever touched, and the
   tests assert the exact request the module would have sent.
@@ -498,66 +498,6 @@ class GetOpenOrdersTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await market_maker_service._get_open_orders("0xpk", "token-yes"), [])
 
 
-class CancelOrderTests(unittest.IsolatedAsyncioTestCase):
-    async def test_successful_cancel_returns_true(self):
-        clob = _fake_clob()
-
-        with patch("py_clob_client.client.ClobClient", return_value=clob) as clob_cls:
-            result = await market_maker_service._cancel_order("0xpk", "order-9")
-
-        self.assertIs(result, True)
-        clob_cls.assert_called_once_with(host=CLOB_API, chain_id=137, key="0xpk", signature_type=1)
-        clob.cancel.assert_called_once_with("order-9")
-
-    async def test_failure_returns_false(self):
-        clob = _fake_clob()
-        clob.cancel.side_effect = RuntimeError("order unknown")
-
-        with patch("py_clob_client.client.ClobClient", return_value=clob):
-            result = await market_maker_service._cancel_order("0xpk", "order-9")
-
-        self.assertIs(result, False)
-
-
-class CancelAllOrdersTests(unittest.IsolatedAsyncioTestCase):
-    async def test_counts_only_confirmed_cancels(self):
-        open_orders = [
-            {"id": "a"},
-            {"order_id": "b"},
-            {"nothing": "useful"},
-            {"id": "c"},
-        ]
-        cancel = AsyncMock(side_effect=[True, True, False])
-
-        with (
-            patch.object(
-                market_maker_service,
-                "_get_open_orders",
-                new=AsyncMock(return_value=open_orders),
-            ) as get_orders,
-            patch.object(market_maker_service, "_cancel_order", new=cancel),
-        ):
-            cancelled = await market_maker_service._cancel_all_orders("0xpk", "token-yes")
-
-        get_orders.assert_awaited_once_with("0xpk", "token-yes")
-        self.assertEqual(cancelled, 2)
-        self.assertEqual(
-            [call.args for call in cancel.await_args_list],
-            [("0xpk", "a"), ("0xpk", "b"), ("0xpk", "c")],
-        )
-
-    async def test_no_open_orders_cancels_nothing(self):
-        cancel = AsyncMock()
-
-        with (
-            patch.object(market_maker_service, "_get_open_orders", new=AsyncMock(return_value=[])),
-            patch.object(market_maker_service, "_cancel_order", new=cancel),
-        ):
-            self.assertEqual(await market_maker_service._cancel_all_orders("0xpk", "token-yes"), 0)
-
-        cancel.assert_not_awaited()
-
-
 # ─────────────── order placement ───────────────
 
 
@@ -733,11 +673,9 @@ class PlaceMakerOrderTests(unittest.IsolatedAsyncioTestCase):
 class SyncMarketMakerTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.fetch_midpoint = AsyncMock(return_value=0.5)
-        self.cancel_all = AsyncMock(return_value=0)
         self.place_order = AsyncMock(return_value="order-1")
         for name, mock in (
             ("_fetch_midpoint", self.fetch_midpoint),
-            ("_cancel_all_orders", self.cancel_all),
             ("_place_maker_order", self.place_order),
             ("load_wallet_credentials", MagicMock(return_value={"private_key": "0xpk"})),
         ):
@@ -810,7 +748,6 @@ class SyncMarketMakerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, {"error": "no midpoint"})
         self.assertEqual(config.last_error, "Could not fetch midpoint")
-        self.cancel_all.assert_not_awaited()
         db.close.assert_called_once_with()
 
     async def test_bands_cycle_submits_post_only_through_gateway(self):
@@ -822,7 +759,6 @@ class SyncMarketMakerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(call.kwargs["post_only"] for call in self.gateway.call_args_list))
         self.assertEqual(config.total_orders_placed, 2)
         self.assertEqual(config.total_volume_usdc, 0)
-        self.cancel_all.assert_not_awaited()
 
     async def test_amm_strategy_uses_amm_calculator(self):
         config = _config(strategy="amm", num_bands=1)
@@ -973,13 +909,11 @@ class MakerLoopTests(unittest.IsolatedAsyncioTestCase):
     async def test_disabled_config_stops_loop_and_marks_idle(self):
         config = _config(enabled=False)
         db = _session([config, config, _user()])
-        cancel_all = AsyncMock(return_value=4)
         sync = AsyncMock()
 
         with (
             patch.object(market_maker_service, "SessionLocal", return_value=db),
             patch.object(market_maker_service, "_sync_market_maker", new=sync),
-            patch.object(market_maker_service, "_cancel_all_orders", new=cancel_all),
             patch(
                 "app.services.trading.execution.live.load_wallet_credentials",
                 return_value={"private_key": "0xpk"},
@@ -988,7 +922,6 @@ class MakerLoopTests(unittest.IsolatedAsyncioTestCase):
             await market_maker_service._maker_loop(1)
 
         sync.assert_not_awaited()
-        cancel_all.assert_not_awaited()
         self.assertEqual(config.status, "idle")
         self.assertEqual(config.current_open_orders, 0)
         db.commit.assert_called_once_with()
@@ -1008,22 +941,18 @@ class MakerLoopTests(unittest.IsolatedAsyncioTestCase):
     async def test_cleanup_without_user_still_marks_idle(self):
         config = _config(enabled=False)
         db = _session([config, config, None])
-        cancel_all = AsyncMock()
 
         with (
             patch.object(market_maker_service, "SessionLocal", return_value=db),
-            patch.object(market_maker_service, "_cancel_all_orders", new=cancel_all),
         ):
             await market_maker_service._maker_loop(1)
 
-        cancel_all.assert_not_awaited()
         self.assertEqual(config.status, "idle")
         db.commit.assert_called_once_with()
 
     async def test_cleanup_survives_credential_failure(self):
         config = _config(enabled=False)
         db = _session([config, config, _user()])
-        cancel_all = AsyncMock()
 
         with (
             patch.object(market_maker_service, "SessionLocal", return_value=db),
@@ -1031,11 +960,9 @@ class MakerLoopTests(unittest.IsolatedAsyncioTestCase):
                 "app.services.trading.execution.live.load_wallet_credentials",
                 side_effect=RuntimeError("keystore down"),
             ),
-            patch.object(market_maker_service, "_cancel_all_orders", new=cancel_all),
         ):
             await market_maker_service._maker_loop(1)
 
-        cancel_all.assert_not_awaited()
         self.assertEqual(config.status, "idle")
         db.commit.assert_called_once_with()
 
@@ -1055,18 +982,15 @@ class MakerLoopTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancellation_during_sync_breaks_loop(self):
         config = _config(enabled=True, sync_interval_seconds=1)
         db = _session([config, config, None])
-        cancel_all = AsyncMock()
         sync = AsyncMock(side_effect=asyncio.CancelledError)
 
         with (
             patch.object(market_maker_service, "SessionLocal", return_value=db),
             patch.object(market_maker_service, "_sync_market_maker", new=sync),
-            patch.object(market_maker_service, "_cancel_all_orders", new=cancel_all),
         ):
             await market_maker_service._maker_loop(1)
 
         sync.assert_awaited_once_with(1)
-        cancel_all.assert_not_awaited()
         self.assertEqual(config.status, "idle")
 
     async def test_cancellation_during_interval_sleep_releases_the_lock(self):
