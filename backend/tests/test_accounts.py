@@ -499,6 +499,9 @@ class MigrationBackfillTest(unittest.TestCase):
             "live_balance_snapshots",
             "live_attribution_reports",
             "attribution_studies",
+            "redemption_intents",
+            "redemption_wallet_leases",
+            "redemption_observations",
         }
     )
 
