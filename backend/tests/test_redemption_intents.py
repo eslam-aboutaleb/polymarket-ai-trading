@@ -370,3 +370,53 @@ def test_external_redemption_invalidates_frozen_entitlement_before_signing(
         assert rpc.nonce_reads == 0 and rpc.broadcasts == []
     finally:
         native.close()
+
+
+@pytest.mark.parametrize("failed_commit,expected_sends", [(3, 0), (4, 1)])
+def test_persistence_failure_never_causes_an_unsafe_retry(
+    redemption_db, synthetic_release, monkeypatch, failed_commit, expected_sends
+):
+    db, rpc = redemption_db, FundedRedemptionRPC()
+    native = rpc.native()
+    account = db.get(Account, 11)
+    try:
+        row = intent(db, native)
+        commit = db.commit
+        calls = 0
+
+        def fault():
+            nonlocal calls
+            calls += 1
+            if calls == failed_commit:
+                raise RuntimeError("synthetic database outage")
+            commit()
+
+        monkeypatch.setattr(db, "commit", fault)
+        workflow.submit_intent(db, account, row.id, chain=native)
+        assert row.state == "unknown" and row.nonce == 7
+        assert len(rpc.broadcasts) == expected_sends
+        workflow.submit_intent(db, account, row.id, chain=native)
+        assert len(rpc.broadcasts) == expected_sends and rpc.nonce_reads == 1
+    finally:
+        native.close()
+
+
+def test_halt_after_signing_prevents_first_broadcast(redemption_db, synthetic_release, monkeypatch):
+    db, rpc = redemption_db, FundedRedemptionRPC()
+    native = rpc.native()
+    try:
+        row = intent(db, native)
+        sign = native.sign
+
+        def sign_then_halt(tx, key):
+            result = sign(tx, key)
+            db.query(UserSettings).filter_by(user_id=1).one().trading_halted = True
+            db.commit()
+            return result
+
+        monkeypatch.setattr(native, "sign", sign_then_halt)
+        workflow.submit_intent(db, db.get(Account, 11), row.id, chain=native)
+        assert row.transaction_hash and row.state == "unknown"
+        assert rpc.broadcasts == []
+    finally:
+        native.close()
