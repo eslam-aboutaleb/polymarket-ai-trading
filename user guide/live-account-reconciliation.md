@@ -88,7 +88,13 @@ capital limit, observation-gap limit and drawdown bound. This is the versioned
 `prospective-paired-event-study-v2` policy. External models/services remain unattested.
 
 Every eligible future BUY intent is included. Filled entries need actual closed
-FIFO outcomes and receipt costs. Terminal zero-fill decisions remain in the paired
+FIFO outcomes and receipt costs. Each actual entry and every allocated exit must
+execute by the preregistered settlement deadline; an exit also cannot precede its
+entry. The verifier resolves every allocation to its source SELL fill. Later
+profitable exits cannot extend the study horizon or qualify its release result.
+Terminal zero-fill decisions require an explicit matched size of zero and a
+cancellation/rejection recorded at or after the decision and by the same deadline.
+Missing sizes never mean known zero. Terminal zero-fill decisions remain in the paired
 control comparison; they cannot supply the minimum 20 **executed event clusters**.
 Repeated trades in one event count as one cluster. Missing terminal evidence,
 changed implementation/configuration, prior-event overlap, unavailable native
