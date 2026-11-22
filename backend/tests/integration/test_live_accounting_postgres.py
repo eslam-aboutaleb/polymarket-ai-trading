@@ -136,7 +136,10 @@ def test_upgrade_roundtrip_and_rollback_preserve_existing_account_history():
         admin.dispose()
 
 
-def test_postgres_prospective_study_and_all_functional_acceptance_gates(monkeypatch):
+@pytest.mark.parametrize(
+    "scenario", ["complete", "late-exit", "missing-size", "before-decision", "after-deadline"]
+)
+def test_postgres_prospective_study_and_all_functional_acceptance_gates(monkeypatch, scenario):
     """Synthetic forward fixtures exercise PostgreSQL, not actual profitability."""
     url = os.getenv("TEST_DATABASE_URL")
     if not url:
@@ -161,7 +164,20 @@ def test_postgres_prospective_study_and_all_functional_acceptance_gates(monkeypa
                 test_complete_disjoint_forward_acceptance as exercise_study,
             )
 
-            exercise_study(db, monkeypatch)
+            if scenario == "complete":
+                exercise_study(db, monkeypatch)
+            elif scenario == "late-exit":
+                from test_attribution_studies import (
+                    test_study_enforces_execution_window as check_window,
+                )
+
+                check_window(db, monkeypatch, scenario)
+            else:
+                from test_attribution_studies import (
+                    test_zero_fill_requires_explicit_terminal_proof as check_terminal,
+                )
+
+                check_terminal(db, monkeypatch, scenario)
     finally:
         engine.dispose()
         with admin.begin() as connection:

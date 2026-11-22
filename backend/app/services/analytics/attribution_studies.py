@@ -358,6 +358,7 @@ def evaluate_study(db, account, study_id, report):
     for row in report["realized_allocations"]:
         allocations.setdefault(row["entry_id"], []).append(row)
     fills = report["history_evidence"] + report["fill_evidence"]
+    fills_by_source = {fill["source_id"]: fill for fill in fills}
     consumed, selected_ids, selected_events = {}, [], set()
     decisions = []
     development_events = set(policy["development_events"])
@@ -409,14 +410,17 @@ def evaluate_study(db, account, study_id, report):
                         AppEvent.source == "live_gateway",
                         AppEvent.aggregate_id == row.aggregate_id,
                         AppEvent.event_type == "order_state_changed",
+                        AppEvent.occurred_at >= row.occurred_at,
                         AppEvent.occurred_at <= deadline,
                     )
                     .limit(100)
                 ).all()
                 terminal = [json.loads(item.payload_json).get("after", {}) for item in transitions]
                 if not any(
-                    item.get("state") in {"REJECTED", "CANCELLED"}
-                    and Decimal(str(item.get("size_matched", 0))) == 0
+                    isinstance(item, dict)
+                    and item.get("state") in {"REJECTED", "CANCELLED"}
+                    and item.get("size_matched") is not None
+                    and Decimal(str(item["size_matched"])) == 0
                     for item in terminal
                 ):
                     raise EvidenceUnavailable("NO_FILL_DECISION_TERMINAL_EVIDENCE_MISSING")
@@ -458,7 +462,17 @@ def evaluate_study(db, account, study_id, report):
                     }
                 )
             for fill in sorted(entries, key=lambda item: (item["matched_at"], item["fill_id"])):
+                entry_at = datetime.fromisoformat(fill["matched_at"])
+                if not aware(row.occurred_at) <= entry_at <= deadline:
+                    raise EvidenceUnavailable("PROSPECTIVE_ENTRY_OUTSIDE_SETTLEMENT_WINDOW")
                 closed = allocations.get(fill["source_id"], [])
+                for allocation in closed:
+                    exit_fill = fills_by_source.get(allocation["exit_source_id"])
+                    if exit_fill is None or exit_fill["side"] != "SELL":
+                        raise EvidenceUnavailable("PROSPECTIVE_EXIT_TIME_UNVERIFIED")
+                    exit_at = datetime.fromisoformat(exit_fill["matched_at"])
+                    if not entry_at <= exit_at <= deadline:
+                        raise EvidenceUnavailable("PROSPECTIVE_EXIT_OUTSIDE_SETTLEMENT_WINDOW")
                 if sum((Decimal(item["shares"]) for item in closed), Decimal(0)) != Decimal(
                     fill["shares"]
                 ):

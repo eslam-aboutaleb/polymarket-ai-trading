@@ -297,9 +297,10 @@ def test_configuration_fingerprint_tracks_parameters_not_runtime_counters(accoun
     assert configuration_fingerprint(db, 1, 11, "market_maker") != original
 
 
-def test_no_fill_decision_requires_terminal_evidence_and_does_not_inflate_event_count(
-    account_db, monkeypatch
-):
+@pytest.mark.parametrize(
+    "terminal_fault", [None, "missing-size", "before-decision", "after-deadline"]
+)
+def test_zero_fill_requires_explicit_terminal_proof(account_db, monkeypatch, terminal_fault):
     registered, report, _ = fixture_study(account_db, monkeypatch)
     decision = T0 + timedelta(minutes=20)
     condition, token = capture_condition(account_db, 30, decision)
@@ -330,6 +331,14 @@ def test_no_fill_decision_requires_terminal_evidence_and_does_not_inflate_event_
         account_db, account_db.get(Account, 11), registered["study_id"], report
     )
     assert "NO_FILL_DECISION_TERMINAL_EVIDENCE_MISSING" in missing["reasons"]
+    terminal = {"state": "CANCELLED", "size_matched": "0"}
+    terminal_at = decision + timedelta(seconds=10)
+    if terminal_fault == "missing-size":
+        terminal.pop("size_matched")
+    elif terminal_fault == "before-decision":
+        terminal_at = decision - timedelta(seconds=1)
+    elif terminal_fault == "after-deadline":
+        terminal_at = T0 + timedelta(hours=3)
     account_db.add(
         AppEvent(
             user_id=1,
@@ -338,15 +347,58 @@ def test_no_fill_decision_requires_terminal_evidence_and_does_not_inflate_event_
             aggregate_type="order",
             aggregate_id="zero-fill",
             event_type="order_state_changed",
-            occurred_at=decision + timedelta(seconds=10),
-            payload_json=json.dumps({"after": {"state": "CANCELLED", "size_matched": "0"}}),
+            occurred_at=terminal_at,
+            payload_json=json.dumps({"after": terminal}),
         )
     )
     account_db.commit()
     result = studies.evaluate_study(
         account_db, account_db.get(Account, 11), registered["study_id"], report
     )
+    if terminal_fault:
+        assert result["status"] == "incomplete"
+        assert "NO_FILL_DECISION_TERMINAL_EVIDENCE_MISSING" in result["reasons"]
+        assert result["zero_fill_decisions"] == []
+        return
     assert result["status"] == "complete", result["reasons"]
     assert result["eligible_entry_decision_count"] == 21 and result["event_count"] == 21
     assert result["executed_event_count"] == 20
     assert len(result["zero_fill_decisions"]) == 1
+
+
+@pytest.mark.parametrize("fault", ["late-exit", "early-exit", "missing-exit", "late-entry"])
+def test_study_enforces_execution_window(account_db, monkeypatch, fault):
+    registered, report, clock = fixture_study(account_db, monkeypatch)
+    entry, exit_fill = report["fill_evidence"][:2]
+    if fault == "late-exit":
+        exit_fill["matched_at"] = (T0 + timedelta(hours=3)).isoformat()
+    elif fault == "early-exit":
+        exit_fill["matched_at"] = T0.isoformat()
+    elif fault == "missing-exit":
+        report["fill_evidence"].remove(exit_fill)
+    else:
+        entry["matched_at"] = (T0 + timedelta(hours=3)).isoformat()
+    report["closing_observed_at"] = (T0 + timedelta(hours=3, seconds=1)).isoformat()
+    clock[0] = T0 + timedelta(hours=3, seconds=2)
+    result = studies.evaluate_study(
+        account_db, account_db.get(Account, 11), registered["study_id"], report
+    )
+    expected = (
+        "PROSPECTIVE_ENTRY_OUTSIDE_SETTLEMENT_WINDOW"
+        if fault == "late-entry"
+        else "PROSPECTIVE_EXIT_TIME_UNVERIFIED"
+        if fault == "missing-exit"
+        else "PROSPECTIVE_EXIT_OUTSIDE_SETTLEMENT_WINDOW"
+    )
+    assert expected in result["reasons"]
+    assert result["status"] == "incomplete"
+    assert result["release_decision"] == "ABSTAIN_PENDING_FORWARD_EVIDENCE"
+
+
+def test_study_accepts_exit_at_exact_preregistered_deadline(account_db, monkeypatch):
+    registered, report, _ = fixture_study(account_db, monkeypatch)
+    report["fill_evidence"][1]["matched_at"] = (T0 + timedelta(hours=2)).isoformat()
+    result = studies.evaluate_study(
+        account_db, account_db.get(Account, 11), registered["study_id"], report
+    )
+    assert result["status"] == "complete", result["reasons"]
