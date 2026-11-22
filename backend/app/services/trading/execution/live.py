@@ -443,6 +443,11 @@ def place_live_order(
             response={},
         )
         db.add(row)
+        from app.services.analytics.implementation_provenance import (
+            configuration_fingerprint,
+            implementation_fingerprint,
+        )
+
         audit(
             db,
             row,
@@ -454,6 +459,10 @@ def place_live_order(
                 "token_id": token_id,
                 "condition_id": market_id,
                 "fingerprint": fingerprint,
+                "implementation_fingerprint": implementation_fingerprint(),
+                "configuration_fingerprint": configuration_fingerprint(
+                    db, user_id, account_id, strategy
+                ),
                 "price_limit": str(price_d),
                 "shares": str(shares),
                 "notional": str(notional),
@@ -700,7 +709,15 @@ def reconcile_order(
             previous_ids = set(row.response.get("confirmed_trade_ids", []))
             for fill in settled["fills"]:
                 if fill["trade_id"] not in previous_ids:
-                    audit(db, row, "order_fill_confirmed", fill)
+                    audit(
+                        db,
+                        row,
+                        "order_fill_confirmed",
+                        {
+                            **fill,
+                            "matched_at": settled.get("fill_timestamps", {}).get(fill["trade_id"]),
+                        },
+                    )
             trade.filled_size = float(settled["shares"])
             trade.filled_price = float(settled["price"])
             trade.amount = float(settled["notional"])

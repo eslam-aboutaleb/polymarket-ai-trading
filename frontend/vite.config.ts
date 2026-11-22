@@ -96,6 +96,11 @@ export default defineConfig(({ command, mode }) => {
           globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
           runtimeCaching: [
             {
+              // Account headers must never share a URL-only offline cache.
+              urlPattern: /\/api\/trades\/analytics(?:\/|$)/,
+              handler: "NetworkOnly",
+            },
+            {
               // In production the app calls its own origin (`/api/...`, proxied
               // by nginx), so this must match relative URLs too — an
               // https-only regex would never hit.

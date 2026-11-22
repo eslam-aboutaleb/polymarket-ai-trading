@@ -124,6 +124,7 @@ def _collect_settled_fills(client, order_hash, trade_ids, params_type, deadline)
     notional = Decimal(0)
     timestamps = []
     fills = []
+    fill_timestamps = {}
     for trade_id in trade_ids:
         if time.monotonic() >= deadline:
             return None
@@ -153,6 +154,7 @@ def _collect_settled_fills(client, order_hash, trade_ids, params_type, deadline)
                 timestamp = None
             if timestamp is not None:
                 timestamps.append(timestamp)
+                fill_timestamps[trade_id] = timestamp.isoformat()
             if trade.get("taker_order_id") == order_hash:
                 pieces = [(trade["size"], trade["price"])]
             else:
@@ -187,4 +189,5 @@ def _collect_settled_fills(client, order_hash, trade_ids, params_type, deadline)
         "price": notional / shares,
         "filled_at": max(timestamps) if len(timestamps) == len(trade_ids) else None,
         "fills": fills,
+        "fill_timestamps": fill_timestamps,
     }

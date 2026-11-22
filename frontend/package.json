@@ -24,6 +24,7 @@
     "test:executable": "playwright test --config playwright.executable.config.ts",
     "test:latency-paper": "playwright test --config playwright.latency-paper.config.ts",
     "test:provider": "playwright test --config playwright.provider.config.ts",
+    "test:reconciliation": "playwright test --config playwright.reconciliation.config.ts",
     "test:session": "playwright test --config playwright.session.config.ts"
   },
   "dependencies": {
