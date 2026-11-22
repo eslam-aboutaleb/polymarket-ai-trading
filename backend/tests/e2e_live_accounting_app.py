@@ -3,9 +3,10 @@
 import atexit
 import os
 from datetime import timedelta
+from decimal import Decimal
 from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
@@ -77,13 +78,25 @@ def health():
 
 
 @app.post("/__test/chain")
-def seed_chain_scenario():
+def seed_chain_scenario(
+    deposit_usdc: Decimal = Query(Decimal(0), ge=0, le=1_000_000, decimal_places=6),
+    classify_deposit: bool = True,
+):
     """Reset only the isolated browser schema and inject the outbound RPC boundary."""
-    from chain_attribution_fixtures import VenueRPC, seed_rpc_account
+    from chain_attribution_fixtures import OTHER, WALLET, VenueRPC, cash, seed_rpc_account
 
     from app.services.analytics import chain_attribution, chain_evidence
 
     rpc = VenueRPC()
+    activity = []
+    if deposit_usdc:
+        transaction = "0x" + "e" * 64
+        rpc.logs.append(cash(OTHER, WALLET, str(deposit_usdc), 15, transaction, 0))
+        rpc.closing_cash += int(deposit_usdc * 1_000_000)
+        if classify_deposit:
+            activity.append(
+                {"type": "DEPOSIT", "transaction_hash": transaction, "usdc_size": str(deposit_usdc)}
+            )
     original_reader = chain_evidence.ChainReader
 
     class ControlledReader(original_reader):
@@ -93,5 +106,9 @@ def seed_chain_scenario():
 
     chain_attribution.ChainReader = ControlledReader
     with Session(engine) as db:
-        seed_rpc_account(db, rpc, reset=True)
-    return {"ready": True, "classification": "synthetic_rpc_boundary_only"}
+        seed_rpc_account(db, rpc, reset=True, activity=activity)
+    return {
+        "ready": True,
+        "classification": "synthetic_rpc_boundary_only",
+        "synthetic_deposit_usdc": str(deposit_usdc),
+    }

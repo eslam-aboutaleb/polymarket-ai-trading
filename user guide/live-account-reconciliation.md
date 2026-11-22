@@ -161,3 +161,23 @@ Receipt ABI source is pinned to
 Native provider references: [Data API migration](https://docs.polymarket.com/migrate/data-api-v1-to-v2),
 [wallet activity](https://docs.polymarket.com/trading/wallet-activity), and
 [fees](https://docs.polymarket.com/trading/fees). No TradingView input is used.
+
+## Mock funded-account regression
+
+The test-only API harness also simulates funded balances and deposit receipts.
+It runs in a disposable PostgreSQL schema with a controlled RPC transport; these
+records never enter the running paper accounts or an exchange wallet. The ordinary
+application has no `/__test/chain` route and no mock-funding endpoint.
+
+The funded scenario starts with 100 synthetic collateral units, adds a classified
+900-unit deposit, and exercises the existing buy/sell receipt parser. Gross trade
+profit is 2, receipt fees total 0.3, and closing mock cash is 1,001.7. Net trading
+P&L is **1.7**, not 901.7; funding contributes zero profit and the cash residual is
+zero. A companion scenario omits deposit classification: the 900-unit flow remains
+unattributed, net verification abstains, and acceptance cannot pass.
+
+Run `npm run test:reconciliation` from `frontend` with `TEST_DATABASE_URL` pointing
+to disposable PostgreSQL. Both scenarios attach JSON evidence explicitly labeled
+`synthetic_mock_funded_account_not_real_money`. Forward validation remains incomplete
+in these reports. Mock receipts test financial identities and failure behavior;
+they do not establish actual exchange costs, earnings or funded-trading readiness.
