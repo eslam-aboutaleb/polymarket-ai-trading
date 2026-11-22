@@ -1,4 +1,5 @@
 import { test, expect, Page } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
 
 async function mountAccount(page: Page) {
   await page.addInitScript(() => {
@@ -108,3 +109,68 @@ test("future study registration is persisted with a frozen policy", async ({ pag
   expect(policy.minimum_events).toBe(20);
   await expect(panel.getByLabel("Study for saved evidence")).toHaveValue(policy.study_id);
 });
+
+for (const classified of [true, false]) {
+  test(`mock funded account keeps ${classified ? "known funding out of profit" : "unknown funding unverified"}`, async ({
+    page,
+    request,
+  }) => {
+    const seeded = await request.post(
+      `http://127.0.0.1:18139/__test/chain?deposit_usdc=900&classify_deposit=${classified}`,
+    );
+    expect(seeded.ok()).toBeTruthy();
+    expect((await seeded.json()).classification).toBe("synthetic_rpc_boundary_only");
+    await mountAccount(page);
+    await page.goto("/analytics/execution");
+    const panel = page.getByRole("region", { name: "Live account reconciliation" });
+    await expect(panel.getByLabel("Opening observation").locator("option")).toHaveCount(3);
+    await panel.getByRole("button", { name: "Compare observations" }).click();
+    await expect(panel.getByText("Net realized P&L: Unknown", { exact: true })).toBeVisible();
+    const saved = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/reconciliation-reports") &&
+        response.request().method() === "POST",
+    );
+    await panel.getByRole("button", { name: "Verify finalized evidence and save" }).click();
+    const response = await saved;
+    expect(response.ok()).toBeTruthy();
+    const evidence = await response.json();
+    const evidencePath = test.info().outputPath("mock-funded-account-evidence.json");
+    await writeFile(
+      evidencePath,
+      JSON.stringify(
+        {
+          classification: "synthetic_mock_funded_account_not_real_money",
+          deposit_classified: classified,
+          report: evidence,
+        },
+        null,
+        2,
+      ),
+    );
+    await test.info().attach("mock-funded-account-evidence", {
+      path: evidencePath,
+      contentType: "application/json",
+    });
+    expect(Number(evidence.chain_reconciliation.opening.cash_usdc)).toBe(100);
+    expect(Number(evidence.chain_reconciliation.closing.cash_usdc)).toBe(1001.7);
+    expect(evidence.verified_net_realized_pnl).toBeNull();
+    expect(evidence.acceptance_complete).toBe(false);
+    if (classified) {
+      expect(Number(evidence.classified_external_cashflow)).toBe(900);
+      expect(Number(evidence.net_realized_pnl)).toBe(1.7);
+      expect(Number(evidence.total_fees_usdc)).toBe(0.3);
+      expect(Number(evidence.cash_residual_usdc)).toBe(0);
+      expect(evidence.chain_reconciliation.scope_reconciled).toBe(true);
+      await expect(
+        panel.getByText("Net realized P&L: 1.700000 pUSD", { exact: true }),
+      ).toBeVisible();
+    } else {
+      expect(Number(evidence.unattributed_external_cashflow)).toBe(900);
+      expect(evidence.chain_reconciliation.scope_reconciled).toBe(false);
+      expect(evidence.net_realized_pnl).toBeNull();
+      expect(evidence.reasons).toContain("UNCLASSIFIED_EXTERNAL_COLLATERAL_FLOW");
+      await expect(panel.getByText("Net realized P&L: Unknown", { exact: true })).toBeVisible();
+    }
+  });
+}
