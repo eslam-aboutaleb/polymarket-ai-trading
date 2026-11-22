@@ -16,6 +16,8 @@ COPY pyproject.toml uv.lock ./
 COPY app ./app
 COPY database ./database
 COPY proto ./proto
+COPY alembic.ini ./
+COPY migrations ./migrations
 
 # Install dependencies (locked)
 RUN uv sync --frozen --no-dev
@@ -25,7 +27,9 @@ RUN uv run --frozen --no-dev python3 -m grpc_tools.protoc \
     -Iproto \
     --python_out=app/grpc_clients \
     --grpc_python_out=app/grpc_clients \
-    proto/analysis.proto
+    proto/analysis.proto && \
+    sed -i 's/^import analysis_pb2/from app.grpc_clients import analysis_pb2/' \
+    app/grpc_clients/analysis_pb2_grpc.py
 
 # Run migrations and start server
 CMD ["sh", "-c", "uv run --frozen --no-dev alembic upgrade head && uv run --frozen --no-dev uvicorn app.main:app --host 0.0.0.0 --port 8002"]
