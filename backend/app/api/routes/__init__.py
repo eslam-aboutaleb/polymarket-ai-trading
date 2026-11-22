@@ -59,7 +59,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         ws_v1,
     )
     from app.api.routes.platform import settings as settings_routes
-    from app.api.routes.portfolio import event_risk, portfolio, risk_report
+    from app.api.routes.portfolio import event_risk, portfolio, redemption_intents, risk_report
     from app.api.routes.trading import (
         backtesting,
         executable_replay,
@@ -83,6 +83,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         experiments,
         valuation,
         portfolio,
+        redemption_intents,
         event_risk,
         risk_report,
         risk,
