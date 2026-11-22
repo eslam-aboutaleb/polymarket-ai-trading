@@ -344,6 +344,14 @@ jobs:
           docker run --rm polymarket-ci:${{ matrix.service }}
           /app/.venv/bin/python -c "import llm_gateway_sdk; assert llm_gateway_sdk.__version__ == '0.1.0'"
 
+      - name: Verify packaged backend entrypoints without host source mounts
+        if: matrix.service == 'backend'
+        run: >-
+          docker run --rm --entrypoint /app/.venv/bin/python polymarket-ci:backend
+          -c "from pathlib import Path; from app.grpc_clients import analysis_pb2_grpc;
+          assert Path('alembic.ini').is_file(); assert Path('migrations/env.py').is_file();
+          assert Path('migrations/versions/20261122_0042_attribution_studies.py').is_file()"
+
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 25
