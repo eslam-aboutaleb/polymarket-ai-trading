@@ -14,16 +14,18 @@ import logging
 import math
 from collections import OrderedDict
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from time import time
 from typing import Any
 
+import httpx
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models.analytics.assessment import NULL_PROBABILITY_REASON, Assessment
 from app.models.trading.followed_trader import FollowedTrader
+from app.models.trading.trade_history import TradeHistory
 from app.models.trading.user_trade import UserTrade
 from app.models.users.user_settings import RiskMode, UserSettings
 from app.repositories.trading.bots import TradingBotRepository
@@ -34,6 +36,7 @@ from app.services.market_data.polymarket_service import (
     get_polymarket_service,
 )
 from app.services.trading import kelly_service
+from app.services.trading.copy_quote import fresh_copy_quote
 from app.services.trading.execution.async_io import run_blocking_execution
 from app.services.trading.pre_trade_gate import (
     _to_float,
@@ -80,6 +83,11 @@ COPY_WALLET_FIXED_SNAPSHOT = "fixed_snapshot_amount"
 # stop-loss sell never fills more than 5% below the reference price.
 # price <= 0 means unrestricted (emergency stop).
 SELL_SLIPPAGE_GUARD = 0.05  # 5%
+BUY_SLIPPAGE_GUARD = 0.05  # 5%
+
+# Maximum age of a source trade to be eligible for copy execution.
+# Trades older than this threshold are considered stale and rejected.
+MAX_COPY_TRADE_AGE_SECONDS = 60.0  # 60s
 
 # Polygon RPC endpoints (for on-chain proxy address lookup)
 _POLYGON_RPCS = [
@@ -1032,15 +1040,19 @@ async def execute_copy_trade(
     assessment: dict[str, Any] | None = None,
     idempotency_key: str | None = None,
     account_id: int | None = None,
+    source_timestamp: datetime | None = None,
+    live_price: float | None = None,
+    max_slippage: float | None = None,
 ) -> dict[str, Any]:
     """
     Execute (or reject) a copy trade for a user.
 
     Steps:
+      0. Validate price bounds, freshness, and live market price deviation.
       1. Load user settings + verify copy-trading is enabled.
       2. Calculate trade size based on risk mode.
       3. If require_ai_approval and assessment says "avoid", skip.
-      4. Place order on Polymarket (idempotent on the key).
+      4. Place order on Polymarket (idempotent on the key, with slippage guard on FOK sells).
       5. Record in user_trades table.
 
     `idempotency_key` defaults to the source trade identity, so
@@ -1049,6 +1061,87 @@ async def execute_copy_trade(
 
     Returns a summary dict.
     """
+    # 0 – Validate price bounds
+    if not 0 < price < 1:
+        return {"executed": False, "status": "rejected", "reason": "Invalid source price"}
+
+    slippage_guard = (
+        max_slippage
+        if max_slippage is not None
+        else (SELL_SLIPPAGE_GUARD if side.upper() == "SELL" else BUY_SLIPPAGE_GUARD)
+    )
+
+    # Validate price freshness against source trade timestamp
+    trade_ts: datetime | None = source_timestamp
+    if trade_history_id is not None:
+        source_trade = None
+        if hasattr(db, "get"):
+            with suppress(Exception):
+                source_trade = db.get(TradeHistory, trade_history_id)
+        if source_trade is None and hasattr(db, "query"):
+            with suppress(Exception):
+                source_trade = (
+                    db.query(TradeHistory).filter(TradeHistory.id == trade_history_id).first()
+                )
+        if isinstance(source_trade, TradeHistory) and (
+            source_trade.market_id != market_id
+            or source_trade.wallet_address.lower() != trader_wallet.lower()
+            or source_trade.order_type.upper() != side.upper()
+            or source_trade.price != price
+        ):
+            return {
+                "executed": False,
+                "status": "rejected",
+                "reason": "Source trade does not match the requested copy",
+            }
+        if source_trade is not None and getattr(source_trade, "timestamp", None):
+            trade_ts = source_trade.timestamp
+
+    if trade_ts is not None:
+        if trade_ts.tzinfo is None:
+            trade_ts = trade_ts.replace(tzinfo=UTC)
+        age = (utc_now() - trade_ts).total_seconds()
+        if not 0 <= age <= MAX_COPY_TRADE_AGE_SECONDS:
+            logger.warning(
+                "Copy trade rejected for user %d: source trade #%s is stale (age=%.1fs, max=%.1fs)",
+                user_id,
+                trade_history_id,
+                age,
+                MAX_COPY_TRADE_AGE_SECONDS,
+            )
+            return {
+                "executed": False,
+                "status": "rejected",
+                "reason": (
+                    f"Source trade price is stale ({age:.1f}s old, "
+                    f"max {MAX_COPY_TRADE_AGE_SECONDS}s)"
+                ),
+            }
+
+    # Validate against current market price if provided
+    if live_price is not None and live_price > 0:
+        if side.upper() == "SELL":
+            sell_floor = price * (1.0 - slippage_guard)
+            if live_price < sell_floor:
+                return {
+                    "executed": False,
+                    "status": "rejected",
+                    "reason": (
+                        f"Market price ({live_price:.4f}) dropped below "
+                        f"sell floor ({sell_floor:.4f})"
+                    ),
+                }
+        elif side.upper() == "BUY":
+            buy_ceiling = price * (1.0 + slippage_guard)
+            if live_price > buy_ceiling:
+                return {
+                    "executed": False,
+                    "status": "rejected",
+                    "reason": (
+                        f"Market price ({live_price:.4f}) exceeded buy ceiling ({buy_ceiling:.4f})"
+                    ),
+                }
+
     # 1 – Load settings
     bot_repository = TradingBotRepository(db)
     order_repository = TradingOrderRepository(db)
@@ -1263,6 +1356,7 @@ async def execute_copy_trade(
             account_id=account_id,
             intent_key=paper_key,
             source_identity=source_identity,
+            copy_slippage=slippage_guard,
         )
         if result.get("trade_id"):
             trade = db.get(UserTrade, result["trade_id"])
@@ -1287,8 +1381,6 @@ async def execute_copy_trade(
         return _paper_copy_response(result)
 
     # Real copy trading uses the durable gateway, never the frozen legacy signer.
-    from decimal import ROUND_DOWN
-
     from app.services.trading.execution.live import place_live_order
     from app.services.trading.live_trading_policy import LiveTradingBlocked
 
@@ -1297,20 +1389,21 @@ async def execute_copy_trade(
     )
     if not idem_key:
         return {"executed": False, "status": "rejected", "reason": "Source trade identity required"}
-    if not 0 < price < 1:
-        return {"executed": False, "status": "rejected", "reason": "Invalid source price"}
-    shares = (Decimal(str(trade_size)) / Decimal(str(price))).quantize(
-        Decimal("0.01"),
-        rounding=ROUND_DOWN,
-    )
+    if trade_ts is None:
+        return {"executed": False, "status": "rejected", "reason": "Source timestamp required"}
+
     try:
+        order_limit_price, shares, quote_deadline, evidence = await fresh_copy_quote(
+            market_id, token_id, side.upper(), price, slippage_guard, trade_size
+        )
+        source_deadline = trade_ts + timedelta(seconds=MAX_COPY_TRADE_AGE_SECONDS)
         result = await run_blocking_execution(
             place_live_order,
             db,
             user_id=user_id,
             token_id=token_id,
             side=side.upper(),
-            price=price,
+            price=float(order_limit_price),
             size=float(shares),
             idempotency_key=idem_key,
             strategy="copy",
@@ -1318,10 +1411,29 @@ async def execute_copy_trade(
             copied_from_wallet=trader_wallet.lower(),
             source_trade_history_id=trade_history_id,
             ai_approved=bool(assessment),
-            order_type="FOK" if side.upper() == "SELL" else "GTC",
+            order_type="FOK",
+            execution_deadline=min(quote_deadline, source_deadline),
+            execution_evidence=evidence,
         )
-    except (LiveTradingBlocked, ValueError) as exc:
+    except (LiveTradingBlocked, ValueError, httpx.HTTPError, KeyError, ArithmeticError) as exc:
         return {"executed": False, "status": "rejected", "reason": str(exc)}
+
+    # Ensure expected_price on UserTrade retains the followed trader's source price
+    # so slippage analytics accurately measure deviation from the source trade
+    if result.get("trade_id"):
+        trade = None
+        if hasattr(db, "get"):
+            with suppress(Exception):
+                trade = db.get(UserTrade, result["trade_id"])
+        if trade is None and hasattr(db, "query"):
+            with suppress(Exception):
+                trade = db.query(UserTrade).filter(UserTrade.id == result["trade_id"]).first()
+        if trade is not None:
+            trade.expected_price = price
+            trade.expected_size = trade_size
+            with suppress(Exception):
+                db.commit()
+
     # Submission and simulation are not realized wins. Streaks belong to P&L reconciliation.
     return {**result, "executed": result["success"]}
 
