@@ -695,6 +695,12 @@ async def _process_new_trade(wallet: str, trade_data: dict):
                 source_trade_history_id=th.id,
             )
 
+        # The history fallback records receipt time for display. Copy execution
+        # requires the source event time to distinguish a fresh trade from a replay.
+        if ts is None:
+            logger.debug("Skipping copy for trade %s without source time", th.id)
+            return
+
         # Find all users following this trader
         followers = TradingOrderRepository(db).list_active_follows_for_wallet(wallet)
 

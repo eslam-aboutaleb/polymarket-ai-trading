@@ -292,3 +292,34 @@ def test_unsupported_native_tick_is_unknown_and_cannot_partially_book(db):
     row.content_hash = digest(raw)
     assert order(session)["reason"] == "VENUE_SIZE_RULES_UNKNOWN"
     assert session.query(PaperJournalEvent).count() == 0
+
+
+def test_copy_price_guard_prevents_paper_fill_after_adverse_move(db):
+    session, clock = db
+    result = paper.submit_paper_order(
+        session,
+        user_id=1,
+        account_id=1,
+        token_id="11",
+        side="BUY",
+        amount=Decimal("10"),
+        strategy="copy",
+        intent_key="moved-copy",
+        source_identity={"source_price": ".30"},
+        copy_slippage=".05",
+    )
+    assert result["status"] == "unfilled"
+    clock[0] += timedelta(seconds=6)
+    result = paper.submit_paper_order(
+        session,
+        user_id=1,
+        account_id=1,
+        token_id="11",
+        side="BUY",
+        amount=Decimal("10"),
+        strategy="copy",
+        intent_key="stale-copy",
+        source_identity={"source_price": ".40"},
+        copy_slippage=".05",
+    )
+    assert result["reason"] == "COPY_BOOK_STALE"
