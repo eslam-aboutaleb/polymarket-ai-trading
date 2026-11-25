@@ -83,8 +83,11 @@ class SymbolState:
 
     def record_kline(self, kline: Kline) -> None:
         """Apply a kline update, rotating closed klines into history."""
-        self.last_price = kline.close
-        self.last_event_time_ms = kline.event_time_ms
+        # The 1m kline stream only pushes one update every ~2s. Never let a
+        # (older) kline update overwrite a fresher trade tick.
+        if kline.event_time_ms >= self.last_event_time_ms:
+            self.last_price = kline.close
+            self.last_event_time_ms = kline.event_time_ms
         self.last_message_at = datetime.now(UTC).timestamp()
         if kline.is_closed:
             self.closed_klines.append(kline)
@@ -93,6 +96,14 @@ class SymbolState:
             self.current_kline = None
         else:
             self.current_kline = kline
+
+    def record_trade(self, price: float, event_time_ms: int) -> None:
+        """Apply a trade tick (price + event time) from the @trade stream."""
+        if price <= 0.0 or event_time_ms < self.last_event_time_ms:
+            return
+        self.last_price = price
+        self.last_event_time_ms = event_time_ms
+        self.last_message_at = datetime.now(UTC).timestamp()
 
 
 _state: dict[str, SymbolState] = {symbol: SymbolState(symbol=symbol) for symbol in SYMBOLS}
@@ -106,9 +117,17 @@ def _stream_name(symbol: str) -> str:
     return f"{symbol.lower()}@kline_{KLINE_INTERVAL}"
 
 
+def _trade_stream_name(symbol: str) -> str:
+    return f"{symbol.lower()}@trade"
+
+
 def combined_streams_url(symbols: tuple[str, ...] = SYMBOLS) -> str:
     """Combined-streams URL for the given symbols."""
-    streams = "/".join(_stream_name(symbol) for symbol in symbols)
+    # kline_1m gives closed-candle history and window opens, but only pushes
+    # one update every ~2s, so the live price comes from the @trade stream.
+    streams = "/".join(
+        name for symbol in symbols for name in (_stream_name(symbol), _trade_stream_name(symbol))
+    )
     return f"{BINANCE_WS_URL}?streams={streams}"
 
 
@@ -142,6 +161,15 @@ def handle_message(raw: str | bytes) -> SymbolState | None:
         logger.debug("Unparseable Binance frame")
         return None
     data = payload.get("data") if isinstance(payload, dict) else None
+    if isinstance(data, dict) and data.get("e") == "trade":
+        trade_state = _state.get(str(data.get("s") or ""))
+        if trade_state is None:
+            return None
+        price = _to_float(data.get("p"))
+        if price <= 0.0:
+            return None
+        trade_state.record_trade(price, _to_int(data.get("E")))
+        return trade_state
     if not isinstance(data, dict) or data.get("e") != "kline":
         return None
     kline = data.get("k")
