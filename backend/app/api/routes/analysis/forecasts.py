@@ -202,6 +202,9 @@ def evidence(
         "forecast_id": forecast_id,
         "evidence_snapshot_id": snapshot.snapshot_id,
         "rule_hash": row.rule_hash,
+        "forecast_probability": row.ai_probability,
+        "market_price": row.market_price_at_assessment,
+        "calibrator_version": row.calibrator_version,
         "prediction_instant": row.prediction_instant.isoformat()
         if row.prediction_instant
         else None,
