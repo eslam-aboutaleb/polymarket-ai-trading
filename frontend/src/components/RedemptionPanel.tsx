@@ -12,6 +12,7 @@ const states: Record<string, string> = {
   confirmed: "Finalized receipt verified",
   failed: "Failed — cash not recognized",
   reorged: "Receipt invalidated — review required",
+  replaced: "Nonce used by a different transaction — not redeemed, review required",
 };
 
 export default function RedemptionPanel() {

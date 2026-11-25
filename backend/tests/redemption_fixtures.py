@@ -37,6 +37,7 @@ class FundedRedemptionRPC(VenueRPC):
         self.redeemed = False
         self.tx_hash = None
         self.nonce_reads = 0
+        self.finalized_nonce_count = 7
         self.signals = []
         self.broadcasts = []
         self.fail_broadcast = False
@@ -70,6 +71,8 @@ class FundedRedemptionRPC(VenueRPC):
             response = block(self.final_number)
         elif method == "eth_getTransactionReceipt":
             response = self.receipt
+        elif method == "eth_getTransactionCount":
+            response = hex(self.finalized_nonce_count)
         elif method == "eth_call":
             selector = params[0]["data"][2:10]
             if selector == keccak(text="payoutDenominator(bytes32)")[:4].hex():

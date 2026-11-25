@@ -186,6 +186,20 @@ class NativeRedemption:
         tx_hash = hex32(intent.transaction_hash)
         raw = reader.call("eth_getTransactionReceipt", [tx_hash])
         if raw is None:
+            # A missing receipt is ambiguous while the nonce is still free (the
+            # transaction may sit in a mempool). Once the wallet nonce is consumed
+            # at the finalized height without our hash landing, a different
+            # transaction owns it: the intent is replaced, never retried here.
+            consumed = int(
+                reader.call("eth_getTransactionCount", [address(intent.wallet), final["number"]]),
+                16,
+            )
+            if intent.nonce is not None and consumed > intent.nonce:
+                return {
+                    "state": "replaced",
+                    "reason": "REDEMPTION_NONCE_CONSUMED_BY_DIFFERENT_TRANSACTION",
+                    "finalized_nonce_count": consumed,
+                }
             return {"state": "unknown", "reason": "REDEMPTION_RECEIPT_UNAVAILABLE"}
         if hex32(raw["transactionHash"]) != tx_hash:
             raise ValueError("REDEMPTION_RECEIPT_HASH_MISMATCH")

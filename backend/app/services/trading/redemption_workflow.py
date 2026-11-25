@@ -428,7 +428,7 @@ def reconcile_intent(db, account, intent_id, *, chain=None):
         control.reason = "REDEMPTION_FINALITY_REVIEW_REQUIRED"
         control.version = (control.version or 0) + 1
         # Do not automatically clear this halt if a later RPC observation recovers.
-    if row.state in {"confirmed", "failed"}:
+    if row.state in {"confirmed", "failed", "replaced"}:
         _release_lease(db, row)
     db.commit()
     return row
