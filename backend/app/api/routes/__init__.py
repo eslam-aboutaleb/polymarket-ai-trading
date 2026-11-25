@@ -36,7 +36,14 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
     The debug router is the only feature-gated router and stays in its
     original position in the sequence.
     """
-    from app.api.routes.analysis import analysis, calibration, experiments, orchestration, valuation
+    from app.api.routes.analysis import (
+        analysis,
+        calibration,
+        experiments,
+        opportunities,
+        orchestration,
+        valuation,
+    )
     from app.api.routes.auth import accounts, auth, credentials
     from app.api.routes.billing import billing
     from app.api.routes.markets import (
@@ -122,6 +129,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         notifications,
         latency_arb,
         orchestration,
+        opportunities,
         venues,
         billing,
     ):
