@@ -34,6 +34,9 @@ class LatencyArbConfigResponse(BaseModel):
     late_entry: bool
     daily_loss_limit: float
     alert_on_opportunity: bool
+    # Set when the daily loss limit is below one trade's notional, so one
+    # losing trade would halt the strategy for the rest of the UTC day.
+    risk_warning: str | None = None
 
 
 class LatencyArbConfigUpdate(BaseModel):
@@ -127,6 +130,17 @@ class TradesResponse(BaseModel):
     offset: int
 
 
+def _risk_warning(config) -> str | None:
+    limit = float(config.daily_loss_limit)
+    notional = float(config.max_notional)
+    if limit < notional:
+        return (
+            f"Daily loss limit (${limit:g}) is below the max trade size (${notional:g}): "
+            "a single losing trade will pause the strategy for the rest of the UTC day."
+        )
+    return None
+
+
 def _config_to_response(config) -> LatencyArbConfigResponse:
     return LatencyArbConfigResponse(
         enabled=bool(config.enabled),
@@ -137,6 +151,7 @@ def _config_to_response(config) -> LatencyArbConfigResponse:
         late_entry=bool(config.late_entry),
         daily_loss_limit=float(config.daily_loss_limit),
         alert_on_opportunity=bool(config.alert_on_opportunity),
+        risk_warning=_risk_warning(config),
     )
 
 
