@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from fractions import Fraction
+from itertools import product
 from typing import Any
 
 SCHEMA_VERSION = "event-logic-v1"
@@ -205,3 +206,226 @@ class EventConstraintGraph:
             "upper": hi,
             "dependence": "unknown" if lo != hi else "implied",
         }
+
+
+# ---- exact LP over joint worlds -----------------------------------------------------
+MAX_EVENTS = 10  # 2**10 joint worlds keeps the exact simplex bounded and fast.
+
+
+def _pivot(tab, basis, row, col):
+    pivot = tab[row][col]
+    tab[row] = [v / pivot for v in tab[row]]
+    for i, other in enumerate(tab):
+        if i != row and other[col] != 0:
+            factor = other[col]
+            tab[i] = [a - factor * b for a, b in zip(other, tab[row], strict=True)]
+    basis[row] = col
+
+
+def _run_simplex(tab, basis, cost, limit):
+    """Bland's rule: terminates on degenerate problems. Minimises cost over columns < limit."""
+    while True:
+        entering = None
+        for j in range(limit):
+            reduced = cost[j] - sum(
+                (cost[basis[i]] * tab[i][j] for i in range(len(tab)) if cost[basis[i]] != 0), ZERO
+            )
+            if reduced < 0:
+                entering = j
+                break
+        if entering is None:
+            return
+        best = None
+        for i in range(len(tab)):
+            if tab[i][entering] > 0:
+                ratio = tab[i][-1] / tab[i][entering]
+                if (
+                    best is None
+                    or ratio < best[0]
+                    or (ratio == best[0] and basis[i] < basis[best[1]])
+                ):
+                    best = (ratio, i)
+        if best is None:  # unreachable: variables are bounded by sum(q)=1
+            raise ArithmeticError("unbounded program")
+        _pivot(tab, basis, best[1], entering)
+
+
+def solve_lp(a_matrix, b_vector, objective):
+    """Exact two-phase simplex: minimise objective.x s.t. A x = b, x >= 0.
+
+    Returns ``None`` if infeasible, else the exact optimal value (Fraction).
+    """
+    m, n = len(a_matrix), len(a_matrix[0])
+    tab = []
+    for i in range(m):
+        row = [Fraction(v) for v in a_matrix[i]]
+        rhs = Fraction(b_vector[i])
+        if rhs < 0:
+            row, rhs = [-v for v in row], -rhs
+        tab.append(row + [ONE if k == i else ZERO for k in range(m)] + [rhs])
+    basis = [n + i for i in range(m)]
+    phase1 = [ZERO] * n + [ONE] * m
+    _run_simplex(tab, basis, phase1 + [ZERO], n + m)
+    if sum((phase1[basis[i]] * tab[i][-1] for i in range(m)), ZERO) > 0:
+        return None
+    keep = []
+    for i in range(m):
+        if basis[i] >= n:
+            col = next((j for j in range(n) if tab[i][j] != 0), None)
+            if col is None:
+                continue  # redundant equality row
+            _pivot(tab, basis, i, col)
+        keep.append(i)
+    tab, basis = [tab[i] for i in keep], [basis[i] for i in keep]
+    cost = [Fraction(v) for v in objective] + [ZERO] * m + [ZERO]
+    _run_simplex(tab, basis, cost, n)
+    return sum((cost[basis[i]] * tab[i][-1] for i in range(len(tab))), ZERO)
+
+
+# ---- relation-aware joint model ---------------------------------------------------------
+RELATION_TYPES = {
+    "implies",
+    "prerequisite",
+    "complement",
+    "exclusive_group",
+    "thresholds",
+    "identical",
+}
+
+
+@dataclass(frozen=True)
+class Relation:
+    """A typed relation that is only usable with approved rule evidence."""
+
+    kind: str
+    events: tuple[str, ...]
+    exhaustive: bool = False
+    evidence_hash: str | None = None
+    approved: bool = False
+    pinned_rule_hashes: tuple[tuple[str, str], ...] = ()
+
+    def label(self) -> str:
+        return f"{self.kind}:{'|'.join(self.events)}"
+
+
+def _allowed(rel: Relation, world: dict[str, bool]) -> bool:
+    ev = rel.events
+    if rel.kind in {"implies", "prerequisite"}:
+        return not world[ev[0]] or world[ev[1]]  # prerequisite(a, b): a requires b
+    if rel.kind == "complement":
+        return world[ev[0]] != world[ev[1]]
+    if rel.kind == "identical":
+        return world[ev[0]] == world[ev[1]]
+    if rel.kind == "thresholds":  # ordered low -> high: each higher event implies the lower
+        return all(not world[ev[i + 1]] or world[ev[i]] for i in range(len(ev) - 1))
+    if rel.kind == "exclusive_group":
+        n_true = sum(world[e] for e in ev)
+        return n_true <= 1 and (not rel.exhaustive or n_true == 1)
+    raise ValueError("unknown relation")
+
+
+class JointModel:
+    """Feasible joint distributions over binary events given marginals and relations.
+
+    Marginals are equality constraints, relations remove impossible worlds. Nothing is
+    normalised, no independence is assumed: questions about unconstrained overlap return
+    the exact LP range.
+    """
+
+    def __init__(self, marginals: dict[str, Fraction], relations: list[Relation]):
+        if not 0 < len(marginals) <= MAX_EVENTS:
+            raise ValueError("TOO_MANY_OR_NO_EVENTS")
+        self.names = tuple(marginals)
+        self.marginals = dict(marginals)
+        self.relations = list(relations)
+
+    def _worlds(self, relations):
+        out = []
+        for values in product((False, True), repeat=len(self.names)):
+            world = dict(zip(self.names, values, strict=True))
+            if all(_allowed(r, world) for r in relations):
+                out.append(world)
+        return out
+
+    def _program(self, relations, marginal_names):
+        worlds = self._worlds(relations)
+        if not worlds:
+            return worlds, None, None
+        a = [[ONE] * len(worlds)]
+        b = [ONE]
+        for name in marginal_names:
+            a.append([ONE if w[name] else ZERO for w in worlds])
+            b.append(self.marginals[name])
+        return worlds, a, b
+
+    def feasible(self, relations=None, marginal_names=None) -> bool:
+        rels = self.relations if relations is None else relations
+        names = self.names if marginal_names is None else marginal_names
+        worlds, a, b = self._program(rels, names)
+        if not worlds:
+            return False
+        return solve_lp(a, b, [ZERO] * len(worlds)) is not None
+
+    def minimal_conflict(self) -> list[str]:
+        """Deletion filter: a minimal subset of constraints that is jointly infeasible."""
+        items = [("marginal", n) for n in self.names] + [
+            ("relation", i) for i in range(len(self.relations))
+        ]
+        for item in list(items):
+            trial = [x for x in items if x != item]
+            rels = [self.relations[i] for k, i in trial if k == "relation"]
+            names = [i for k, i in trial if k == "marginal"]
+            if not self.feasible(rels, names):
+                items = trial
+        return [f"marginal:{i}" if k == "marginal" else self.relations[i].label() for k, i in items]
+
+    def bounds(self, expr) -> tuple[Fraction, Fraction] | None:
+        """Exact [min, max] of P(expr) over every feasible joint, or None if infeasible."""
+        worlds, a, b = self._program(self.relations, self.names)
+        if not worlds:
+            return None
+        c = [ONE if evaluate(expr, w) else ZERO for w in worlds]
+        lo = solve_lp(a, b, c)
+        if lo is None:
+            return None
+        hi = -solve_lp(a, b, [-v for v in c])
+        return lo, hi
+
+
+# ---- Bayes updating with explicit provenance -----------------------------------------------
+def bayes_update(
+    prior, like_given_h, like_given_not_h, *, provenance, sample_size, calibrated, min_samples=30
+) -> dict[str, Any]:
+    """Posterior RANGE from likelihood intervals; abstains unless provenance is defensible.
+
+    Likelihoods must be supplied (never defaulted), come from observed or historical
+    data (a subjective forecast is not a likelihood), be calibrated, and rest on at
+    least ``min_samples`` observations.
+    """
+    reasons = []
+    if provenance not in {"observed", "historical"}:
+        reasons.append("LIKELIHOOD_PROVENANCE_UNDEFINED")
+    if not calibrated:
+        reasons.append("LIKELIHOOD_NOT_CALIBRATED")
+    if (
+        not isinstance(sample_size, int)
+        or isinstance(sample_size, bool)
+        or sample_size < min_samples
+    ):
+        reasons.append("LIKELIHOOD_SAMPLE_TOO_SMALL")
+    if reasons:
+        return {"status": "abstain", "reasons": reasons, "posterior": None}
+    pr = _p(prior)
+    h_lo, h_hi = (_p(v) for v in like_given_h)
+    n_lo, n_hi = (_p(v) for v in like_given_not_h)
+    if h_lo > h_hi or n_lo > n_hi:
+        return {"status": "abstain", "reasons": ["LIKELIHOOD_INTERVAL_INVERTED"], "posterior": None}
+
+    def post(lh, ln):
+        den = pr * lh + (ONE - pr) * ln
+        return None if den == 0 else pr * lh / den
+
+    lo, hi = post(h_lo, n_hi), post(h_hi, n_lo)
+    if lo is None or hi is None:
+        return {"status": "abstain", "reasons": ["EVIDENCE_PROBABILITY_ZERO"], "posterior": None}
+    return {"status": "ok", "reasons": [], "posterior": (lo, hi), "assumes_independence": False}
