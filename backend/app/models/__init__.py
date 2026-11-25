@@ -34,6 +34,7 @@ from app.models.notifications.notification_followed_trader import NotificationFo
 from app.models.notifications.user_notification_preference import UserNotificationPreference
 from app.models.platform.app_event import AppEvent
 from app.models.platform.audit_log import AdminAuditLog
+from app.models.trading.execution_shortfall import ExecutionShortfall
 from app.models.trading.followed_trader import FollowedTrader
 from app.models.trading.inverse_bot_action import InverseBotAction
 from app.models.trading.inverse_bot_position import InverseBotPosition
@@ -64,6 +65,7 @@ from app.models.users.user_settings import UserSettings
 __all__ = [
     "Base",
     "LiveOrder",
+    "ExecutionShortfall",
     "MarketObservation",
     "VenueObservation",
     "ObservationDataset",

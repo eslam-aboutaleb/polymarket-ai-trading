@@ -135,6 +135,10 @@ class Settings(BaseSettings):
     execution_mode: str = "approval"  # auto or approval
     max_position_size: float = 1000.0  # Max USDC per trade
     stop_loss_check_interval_seconds: int = 10
+    # Issue #157: faster polling while an active order sits on a 5/15-minute Up-or-Down market.
+    stop_loss_check_interval_short_markets_seconds: int | None = Field(default=None, ge=1)
+    # Issue #157: limit-then-take execution. Off by default; default behavior is unchanged.
+    limit_then_take_enabled: bool = False
     trade_poll_max_concurrency: int = 50
     trade_poll_http_max_connections: int = 200
     trade_poll_http_keepalive_connections: int = 50
