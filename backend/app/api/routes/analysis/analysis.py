@@ -37,7 +37,10 @@ from app.services.intelligence.market_context import (
     fetch_market_context,
 )
 from app.services.intelligence.market_deep_dive import analysis_runs
-from app.services.intelligence.market_deep_dive.assembler import run_structured_analysis
+from app.services.intelligence.market_deep_dive.assembler import (
+    SocialConfig,
+    run_structured_analysis,
+)
 from app.services.intelligence.market_deep_dive.context_builder import TokenSelectionError
 from app.services.intelligence.market_deep_dive.schemas import DeepDiveRequest
 from app.services.intelligence.market_research import (
@@ -45,6 +48,7 @@ from app.services.intelligence.market_research import (
     missing_input_research,
     research_prompt,
 )
+from app.services.intelligence.social_evidence.quota import SocialQuota
 from app.services.intelligence.user_preferences import get_user_settings
 from app.services.market_data.market_observations import append_observation, observation_history
 from app.services.market_data.polymarket_service import get_polymarket_service
@@ -449,7 +453,17 @@ async def _structured_events(
     async def client_factory():
         return await get_analysis_client_for_user(user_id, db)
 
-    async with deep_dive_venue() as venue:
+    social = None
+    if settings.social_evidence_mode != "off":
+        token = settings.x_api_bearer_token
+        social = SocialConfig(
+            mode=settings.social_evidence_mode,
+            quota=_social_quota(),
+            bearer_token=token.get_secret_value() if token else None,
+        )
+    async with deep_dive_venue() as venue, httpx.AsyncClient() as social_http:
+        if social is not None:
+            social.client = social_http
         agen = run_structured_analysis(
             deep_dive,
             venue=venue,
@@ -458,12 +472,25 @@ async def _structured_events(
             user_id=user_id,
             research_timeout=settings.grpc_timeout * 2,
             retention_days=settings.analysis_run_retention_days,
+            social=social,
         )
         try:
             async for event in agen:
                 yield event
         finally:
             await agen.aclose()
+
+
+_SOCIAL_QUOTA: SocialQuota | None = None
+
+
+def _social_quota() -> SocialQuota:
+    global _SOCIAL_QUOTA
+    if _SOCIAL_QUOTA is None:
+        _SOCIAL_QUOTA = SocialQuota(
+            settings.social_user_hourly_quota, settings.social_user_daily_quota
+        )
+    return _SOCIAL_QUOTA
 
 
 def _structured_http_error(exc: Exception) -> HTTPException:
