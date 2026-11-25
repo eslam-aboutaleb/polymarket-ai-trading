@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     paper_maker_queue_ahead: Decimal | None = Field(default=None, ge=0, le=1000000000)
     native_capture_enabled: bool = False
     follower_replay_enabled: bool = False
+    # Copy-trade skip rule (#158): skip when the price has moved against the follower by
+    # more than this fraction of the estimated edge since the leader's fill.
+    copy_skip_edge_fraction: float = Field(default=0.5, ge=0, le=10)
 
     # API Configuration
     api_title: str = "Polymarket AI Trading API"
