@@ -42,6 +42,7 @@ import OpsCenter from "./components/OpsCenter";
 import LatencyArb from "./components/LatencyArb";
 import VenuesPage from "./pages/VenuesPage";
 import { authService } from "./services/authService";
+import WebMcpController from "./integrations/webmcp/WebMcpController";
 
 function SessionLoadingScreen() {
   return (
@@ -119,6 +120,7 @@ function App() {
 
   return (
     <ToastProvider>
+      <WebMcpController />
       <LoginModalProvider>
         <BrowserRouter>
           <div className="app-shell">
