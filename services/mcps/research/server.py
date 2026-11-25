@@ -733,6 +733,10 @@ def _tool_oracle_basis_risk(args):
     return _run_async(_structured_skill_research("oracle_basis_risk", args))
 
 
+def _tool_maker_economics(args):
+    return _run_async(_structured_skill_research("maker_economics", args))
+
+
 def _tool_event_correlation_risk(args):
     return _run_async(_structured_skill_research("event_correlation_risk", args))
 
@@ -771,6 +775,27 @@ BINARY_VALUATION_TOOL_SCHEMA = {
 }
 
 
+MAKER_ECONOMICS_TOOL_SCHEMA = {
+    "name": "maker_economics",
+    "read_only": True,
+    "version": "maker-economics-v1",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "account_id": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+            "config_id": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        },
+        "required": ["config_id"],
+        "additionalProperties": False,
+    },
+    "description": (
+        "Recorded maker quote economics: realized vs modeled P&L, effective spread, "
+        "post-fill markouts, adverse selection, nonfills and a kill-switch recommendation. "
+        "Modeled fills are never reported as realized; no order, signing or cancel action."
+    ),
+}
+
+
 ORACLE_BASIS_TOOL_SCHEMA = {
     "name": "oracle_basis_risk",
     "read_only": True,
@@ -804,6 +829,7 @@ async def _structured_skill_research(tool, args):
     contracts = {
         "binary_contract_valuation": ("POST", "/api/valuation/binary", "binary-valuation-v1"),
         "oracle_basis_risk": ("POST", "/api/oracle-basis/analyze", "oracle-basis-v1"),
+        "maker_economics": ("GET", "/api/market-maker/economics", "maker-economics-v1"),
         "event_correlation_risk": (
             "POST",
             "/api/risk/event-correlation/analyze",
@@ -829,8 +855,18 @@ async def _structured_skill_research(tool, args):
         headers["Authorization"] = f"Bearer {VENUE_API_TOKEN}"
     kwargs = {}
     if method == "GET":
-        if set(args) - {"account_id"}:
+        allowed = {"account_id", "config_id"} if tool == "maker_economics" else {"account_id"}
+        if set(args) - allowed:
             return unavailable
+        if tool == "maker_economics":
+            config = args.get("config_id")
+            if (
+                isinstance(config, bool)
+                or not isinstance(config, int)
+                or not 0 < config <= 2147483647
+            ):
+                return unavailable
+            kwargs["params"] = {"config_id": config}
         if "account_id" in args:
             account = args["account_id"]
             if (
@@ -876,6 +912,8 @@ TOOLS: dict[str, Any] = {
     "binary_contract_valuation": _tool_binary_contract_valuation,
     "describe_binary_contract_valuation": lambda _: BINARY_VALUATION_TOOL_SCHEMA,
     "oracle_basis_risk": _tool_oracle_basis_risk,
+    "maker_economics": _tool_maker_economics,
+    "describe_maker_economics": lambda _: MAKER_ECONOMICS_TOOL_SCHEMA,
     "describe_oracle_basis_risk": lambda _: ORACLE_BASIS_TOOL_SCHEMA,
     "event_correlation_risk": _tool_event_correlation_risk,
     "recorded_event_correlation_risk": _tool_recorded_event_risk,
