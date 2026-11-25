@@ -62,6 +62,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
     from app.api.routes.portfolio import event_risk, portfolio, risk_report
     from app.api.routes.trading import (
         backtesting,
+        copy_intelligence,
         executable_replay,
         follower_replay,
         inverse_bot,
@@ -113,6 +114,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         backtesting,
         executable_replay,
         follower_replay,
+        copy_intelligence,
         binance_signals,
         news,
         health,
