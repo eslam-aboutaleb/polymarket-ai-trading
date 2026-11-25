@@ -869,7 +869,28 @@ class TradingAnalysisChain:
         recent_trades_json: str = "[]",
     ) -> dict[str, Any]:
         """Full trader profile analysis with internet research."""
-        # Web research on the trader
+        research_context = self.trader_research(wallet_address, display_name)
+        messages = self.trader_messages(
+            wallet_address,
+            display_name,
+            total_pnl,
+            win_rate,
+            trade_count,
+            markets_traded,
+            recent_trades_json,
+            research_context,
+        )
+        llm = self._get_task_llm("trader_profile")
+        response = await llm.ainvoke(messages)
+
+        return {
+            "analysis": response.content,
+            "research_context": research_context,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+    def trader_research(self, wallet_address: str, display_name: str = "") -> str:
+        """Web research context for a trader (shared by unary and streaming RPCs)."""
         research_context = ""
         try:
             queries = [
@@ -886,7 +907,20 @@ class TradingAnalysisChain:
             research_context = "\n---\n".join(results) if results else "No search results."
         except Exception as e:
             research_context = f"Research unavailable: {e}"
+        return research_context
 
+    def trader_messages(
+        self,
+        wallet_address: str,
+        display_name: str,
+        total_pnl: float,
+        win_rate: float,
+        trade_count: int,
+        markets_traded: int,
+        recent_trades_json: str,
+        research_context: str,
+    ) -> list:
+        """Prompt messages for trader analysis (shared by unary and streaming RPCs)."""
         prompt_template = self.prompts.get("trader_analysis", "profile_research")
         prompt = prompt_template.format(
             wallet_address=wallet_address,
@@ -897,20 +931,11 @@ class TradingAnalysisChain:
             markets_traded=markets_traded,
             recent_trades=recent_trades_json,
         )
-
         system_prompt = self.prompts.get("trader_analysis", "system_prompt")
-        messages = [
+        return [
             SystemMessage(content=system_prompt),
             HumanMessage(content=f"{prompt}\n\nInternet Research:\n{research_context}"),
         ]
-        llm = self._get_task_llm("trader_profile")
-        response = await llm.ainvoke(messages)
-
-        return {
-            "analysis": response.content,
-            "research_context": research_context,
-            "timestamp": datetime.utcnow().isoformat(),
-        }
 
     async def evaluate_copy_trade(
         self,
