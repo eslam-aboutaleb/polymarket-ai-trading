@@ -44,9 +44,9 @@ repos:
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
-        exclude: \.(md|svg)$
+        exclude: (^prompts/contracts/|\.(md|svg)$)
       - id: end-of-file-fixer
-        exclude: \.(svg|tsbuildinfo)$
+        exclude: (^prompts/contracts/|\.(svg|tsbuildinfo)$)
       - id: check-merge-conflict
       - id: check-yaml
         exclude: ^backend/alembic\.ini$

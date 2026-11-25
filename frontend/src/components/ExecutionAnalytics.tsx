@@ -12,7 +12,7 @@
  *
  * @module components/ExecutionAnalytics
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -29,6 +29,8 @@ import {
 } from "recharts";
 import { getApiErrorMessage } from "../utils/apiError";
 import { Banner } from "./ui";
+import LiveReconciliation from "./LiveReconciliation";
+import { onActiveAccountChange } from "../services/accountService";
 import {
   EdgeScoreRow,
   ExecutionStrategyStats,
@@ -79,8 +81,8 @@ interface SlippageBucket {
 
 interface CumulativePoint {
   time: string;
-  cumulative_fees: number;
-  cumulative_pnl: number;
+  cumulative_fees: number | null;
+  cumulative_pnl: number | null;
 }
 
 function bucketSlippage(trades: ExecutionTradeRecord[]): SlippageBucket[] {
@@ -103,13 +105,17 @@ function cumulativeSeries(trades: ExecutionTradeRecord[]): CumulativePoint[] {
     );
   let fees = 0;
   let pnl = 0;
+  let feeKnown = true;
+  let pnlKnown = true;
   return filled.map((t) => {
-    fees += t.fee_paid ?? 0;
-    pnl += t.pnl ?? 0;
+    if (t.fee_paid == null) feeKnown = false;
+    else fees += t.fee_paid;
+    if (t.action === "sell" && t.pnl == null) pnlKnown = false;
+    else pnl += t.pnl ?? 0;
     return {
       time: new Date(t.executed_at as string).toLocaleDateString(),
-      cumulative_fees: Number(fees.toFixed(4)),
-      cumulative_pnl: Number(pnl.toFixed(4)),
+      cumulative_fees: feeKnown ? Number(fees.toFixed(4)) : null,
+      cumulative_pnl: pnlKnown ? Number(pnl.toFixed(4)) : null,
     };
   });
 }
@@ -120,6 +126,8 @@ function edgeColor(score: number): string {
 
 export default function ExecutionAnalytics() {
   const [windowDays, setWindowDays] = useState(30);
+  const [accountEpoch, setAccountEpoch] = useState(0);
+  const request = useRef(0);
   const [strategyFilter, setStrategyFilter] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -130,6 +138,7 @@ export default function ExecutionAnalytics() {
   const [trades, setTrades] = useState<ExecutionTradeRecord[]>([]);
 
   const fetchData = useCallback(async () => {
+    const sequence = ++request.current;
     setLoading(true);
     setError(null);
     try {
@@ -140,20 +149,36 @@ export default function ExecutionAnalytics() {
         executionAnalyticsService.getStrategyBreakdown(query),
         executionAnalyticsService.getTrades(strategyFilter || undefined, 200),
       ]);
+      if (sequence !== request.current) return;
       setSummary(summaryResp);
       setEdgeScores(edgeResp);
       setBreakdown(breakdownResp);
       setTrades(tradesResp.trades);
     } catch (err) {
-      setError(getApiErrorMessage(err));
+      if (sequence === request.current) setError(getApiErrorMessage(err));
     } finally {
-      setLoading(false);
+      if (sequence === request.current) setLoading(false);
     }
   }, [windowDays, strategyFilter]);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    void fetchData();
+    return () => {
+      request.current += 1;
+    };
+  }, [fetchData, accountEpoch]);
+  useEffect(
+    () =>
+      onActiveAccountChange(() => {
+        request.current += 1;
+        setSummary(null);
+        setEdgeScores(null);
+        setBreakdown(null);
+        setTrades([]);
+        setAccountEpoch((value) => value + 1);
+      }),
+    [],
+  );
 
   const slippageData = useMemo(() => bucketSlippage(trades), [trades]);
   const cumulativeData = useMemo(() => cumulativeSeries(trades), [trades]);
@@ -237,8 +262,8 @@ export default function ExecutionAnalytics() {
           <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 text-yellow-400 text-sm">
             Data quality: {dataQuality.legacy_trades} pre-analytics trades excluded,{" "}
             {dataQuality.missing_expected_price} filled trades missing expected price,{" "}
-            {dataQuality.missing_fee} fills missing fee data (treated as $0). Metrics accumulate
-            from deployment onward.
+            {dataQuality.missing_fee} fills missing fee data. Net P&amp;L and Edge Score remain
+            unknown until costs are complete. Metrics accumulate from deployment onward.
           </div>
         )}
 
@@ -268,6 +293,7 @@ export default function ExecutionAnalytics() {
         />
       </div>
 
+      <LiveReconciliation key={accountEpoch} />
       {/* Per-strategy fill-rate cards */}
       {strategyStats.length > 0 && (
         <div className="surface-panel p-5">
@@ -325,7 +351,11 @@ export default function ExecutionAnalytics() {
                     <td className="text-right">{usd(row.gross_realized_pnl)}</td>
                     <td
                       className={`text-right ${
-                        row.net_realized_pnl >= 0 ? "text-green-400" : "text-red-400"
+                        row.net_realized_pnl == null
+                          ? "text-soft"
+                          : row.net_realized_pnl >= 0
+                            ? "text-green-400"
+                            : "text-red-400"
                       }`}
                     >
                       {usd(row.net_realized_pnl)}

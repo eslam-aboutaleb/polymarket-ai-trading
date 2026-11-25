@@ -32,6 +32,7 @@ class Settings(SharedLLMSettings):
 
     # Prompts
     prompts_path: str = "/app/prompts/prompts.json"
+    prompt_contracts_root: str = ""
 
     # SQLite RAG store settings. CHROMA_* names remain supported for existing deployments.
     chroma_persist_dir: str = "/app/data/chroma"

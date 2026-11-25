@@ -1,8 +1,10 @@
 """Actual CLOB v2 I/O. No fallback fills, wallet guessing or submission retries."""
 
+import time
 from datetime import UTC, datetime
-from decimal import ROUND_DOWN, ROUND_UP, Decimal
+from decimal import ROUND_DOWN, ROUND_UP, Decimal, InvalidOperation, localcontext
 
+from app.services.analytics.replay.ledger import ACCOUNTING_CONTEXT
 from app.services.market_data.polymarket_service import POLYMARKET_CLOB_API
 
 
@@ -102,20 +104,49 @@ def settled_fills(client, order_hash: str, trade_ids: list[str]) -> dict | None:
     """Only settled, attributable authenticated fills prove execution."""
     from py_clob_client_v2 import TradeParams
 
+    if (
+        not isinstance(trade_ids, list)
+        or not 0 < len(trade_ids) <= 1000
+        or any(not isinstance(value, str) or not 0 < len(value) <= 200 for value in trade_ids)
+    ):
+        return None
+    with localcontext(ACCOUNTING_CONTEXT):
+        try:
+            return _collect_settled_fills(
+                client, order_hash, sorted(set(trade_ids)), TradeParams, time.monotonic() + 10
+            )
+        except (KeyError, TypeError, ValueError, InvalidOperation, AttributeError):
+            return None
+
+
+def _collect_settled_fills(client, order_hash, trade_ids, params_type, deadline):
     shares = Decimal(0)
     notional = Decimal(0)
-    seen = set()
     timestamps = []
-    for trade_id in set(trade_ids):
-        trades = client.get_trades(TradeParams(id=trade_id))
-        if not isinstance(trades, list):
+    fills = []
+    fill_timestamps = {}
+    for trade_id in trade_ids:
+        if time.monotonic() >= deadline:
             return None
-        for trade in trades:
-            identity = trade.get("id")
-            if identity in seen or identity != trade_id:
-                continue
-            seen.add(identity)
-            if trade.get("status") != "CONFIRMED" or not trade.get("transaction_hash"):
+        trades = client.get_trades(params_type(id=trade_id), only_first_page=True)
+        if time.monotonic() >= deadline:
+            return None
+        if not isinstance(trades, list) or len(trades) > 1000:
+            return None
+        matching = [
+            trade for trade in trades if isinstance(trade, dict) and trade.get("id") == trade_id
+        ]
+        # A duplicated ID with contradictory data is not a second economic fill
+        # and cannot be resolved by silently taking whichever row arrived first.
+        if len(matching) != 1:
+            return None
+        for trade in matching:
+            transaction_hash = trade.get("transaction_hash")
+            if (
+                trade.get("status") != "CONFIRMED"
+                or not isinstance(transaction_hash, str)
+                or not 0 < len(transaction_hash) <= 100
+            ):
                 return None
             try:
                 timestamp = datetime.fromtimestamp(float(trade["match_time"]), tz=UTC)
@@ -123,6 +154,7 @@ def settled_fills(client, order_hash: str, trade_ids: list[str]) -> dict | None:
                 timestamp = None
             if timestamp is not None:
                 timestamps.append(timestamp)
+                fill_timestamps[trade_id] = timestamp.isoformat()
             if trade.get("taker_order_id") == order_hash:
                 pieces = [(trade["size"], trade["price"])]
             else:
@@ -131,6 +163,8 @@ def settled_fills(client, order_hash: str, trade_ids: list[str]) -> dict | None:
                     for maker in trade.get("maker_orders", [])
                     if maker.get("order_id") == order_hash
                 ]
+            if len(pieces) != 1:
+                return None
             for size, price in pieces:
                 quantity, execution_price = Decimal(str(size)), Decimal(str(price))
                 if not quantity.is_finite() or not execution_price.is_finite():
@@ -139,11 +173,21 @@ def settled_fills(client, order_hash: str, trade_ids: list[str]) -> dict | None:
                     return None
                 shares += quantity
                 notional += quantity * execution_price
-    if shares <= 0 or len(seen) != len(set(trade_ids)):
+                fills.append(
+                    {
+                        "trade_id": trade_id,
+                        "transaction_hash": transaction_hash,
+                        "shares": format(quantity.normalize(), "f"),
+                        "notional": format((quantity * execution_price).normalize(), "f"),
+                    }
+                )
+    if shares <= 0:
         return None
     return {
         "shares": shares,
         "notional": notional,
         "price": notional / shares,
-        "filled_at": max(timestamps) if len(timestamps) == len(seen) else None,
+        "filled_at": max(timestamps) if len(timestamps) == len(trade_ids) else None,
+        "fills": fills,
+        "fill_timestamps": fill_timestamps,
     }

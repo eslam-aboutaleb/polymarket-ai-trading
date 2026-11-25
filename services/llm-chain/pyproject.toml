@@ -5,6 +5,7 @@ description = "LangChain-based AI analysis service for Polymarket"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "prompt-contracts @ git+https://github.com/eslam-aboutaleb/prompt-contracts.git@15b8737f3d7e329612fb85a1d440994015a2573e",
     "grpcio>=1.60.0",
     "grpcio-tools>=1.60.0",
     "grpcio-reflection>=1.60.0",

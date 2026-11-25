@@ -239,7 +239,7 @@ class AggregationTests(AnalyticsTestBase):
         self.assertAlmostEqual(totals["losses"], 1)
         self.assertAlmostEqual(totals["win_rate"], 2 / 3, places=4)
 
-    def test_missing_fee_treated_as_zero_and_counted(self):
+    def test_missing_fee_withholds_net_metrics_and_is_counted(self):
         self._trade(
             strategy_source="copy",
             status="executed",
@@ -251,9 +251,12 @@ class AggregationTests(AnalyticsTestBase):
         summary = get_execution_summary(self.db, USER_ID)
         self.assertEqual(summary["data_quality"]["missing_fee"], 1)
         copy_stats = get_strategy_stats(self.db, USER_ID)["copy"]
-        # The missing fee contributes 0 to the total.
+        # Known fees remain visible, but incomplete fees withhold net metrics.
         self.assertAlmostEqual(copy_stats.total_fees, 1.0, places=6)
         self.assertEqual(copy_stats.missing_fee, 1)
+        self.assertIsNone(copy_stats.to_dict()["total_fees"])
+        self.assertIsNone(copy_stats.net_realized_pnl)
+        self.assertIsNone(copy_stats.edge_score)
 
     def test_window_excludes_old_trades(self):
         self._trade(
@@ -405,7 +408,7 @@ class FillCaptureTests(AnalyticsTestBase):
         self.assertIsNotNone(trade.latency_ms)
         self.assertGreaterEqual(trade.latency_ms, 0.0)
 
-    def test_fill_without_fee_defaults_to_zero(self):
+    def test_fill_without_fee_remains_unknown(self):
         trade = self._pending()
         trade_monitor._mark_pending_trades_filled(
             self.db,
@@ -414,7 +417,7 @@ class FillCaptureTests(AnalyticsTestBase):
             fill_price=0.5,
         )
         self.db.refresh(trade)
-        self.assertAlmostEqual(trade.fee_paid, 0.0, places=6)
+        self.assertIsNone(trade.fee_paid)
         self.assertAlmostEqual(trade.slippage_bps, 0.0, places=2)
 
     def test_fill_without_price_leaves_slippage_null(self):
@@ -427,7 +430,7 @@ class FillCaptureTests(AnalyticsTestBase):
         self.db.refresh(trade)
         self.assertIsNone(trade.filled_price)
         self.assertIsNone(trade.slippage_bps)
-        self.assertAlmostEqual(trade.fee_paid, 0.0, places=6)
+        self.assertIsNone(trade.fee_paid)
 
     def test_fill_without_expected_price_leaves_slippage_null(self):
         trade = self._pending(expected_price=None)
@@ -553,7 +556,7 @@ class EndpointAuthTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         payload = resp.json()
         self.assertEqual([s["strategy"] for s in payload["strategies"]], ["copy"])
-        self.assertEqual(payload["strategies"][0]["net_realized_pnl"], 5.0)
+        self.assertIsNone(payload["strategies"][0]["net_realized_pnl"])
         self.assertEqual(payload["data_quality"]["unattributed_trades"], 1)
 
     def test_summary_returns_valid_schema_when_authenticated(self):

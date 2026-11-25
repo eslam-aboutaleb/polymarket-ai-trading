@@ -527,9 +527,10 @@ def _mark_pending_trades_filled(
             row.filled_price = fill_price
         if fill_size is not None:
             row.filled_size = fill_size
-        # Missing fee data is treated as 0 (and counted by the
-        # analytics summary's data-quality block).
-        row.fee_paid = float(fill_fee) if fill_fee is not None else 0.0
+        # An absent fee is unknown. Preserve already recorded cost evidence,
+        # and never turn an incomplete fill event into a proven zero cost.
+        if fill_fee is not None:
+            row.fee_paid = float(fill_fee)
         if row.expected_price is not None and row.filled_price is not None:
             row.slippage_bps = compute_slippage_bps(row.expected_price, row.filled_price)
         row.latency_ms = compute_latency_ms(row.created_at, filled_at)

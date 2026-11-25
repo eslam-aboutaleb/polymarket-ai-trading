@@ -20,8 +20,8 @@ carry NULL expected/filled data. They are excluded from the
 per-strategy metrics and surfaced as ``legacy_trades`` in the
 summary's data-quality block, so operators can see how much of the
 history is unmeasurable. Metrics therefore accumulate from deployment
-onward. Missing fee data is treated as 0 and counted in
-``missing_fee`` so data quality stays visible.
+onward. Missing fees remain unknown: net returns, fee drag and Edge Score are withheld
+until cost coverage is complete.
 
 Edge Score
 ----------
@@ -142,7 +142,7 @@ class StrategyStats:
     median_slippage_bps: float | None = None
     total_fees: float = 0.0
     gross_realized_pnl: float = 0.0
-    net_realized_pnl: float = 0.0
+    net_realized_pnl: float | None = None
     fee_drag_ratio: float | None = None
     win_rate: float | None = None
     avg_win: float | None = None
@@ -166,9 +166,10 @@ class StrategyStats:
             "fill_rate": _round_opt(self.fill_rate, 4),
             "avg_slippage_bps": _round_opt(self.avg_slippage_bps, 2),
             "median_slippage_bps": _round_opt(self.median_slippage_bps, 2),
-            "total_fees": round(self.total_fees, 6),
+            "total_fees": None if self.missing_fee else round(self.total_fees, 6),
+            "known_fees": round(self.total_fees, 6),
             "gross_realized_pnl": round(self.gross_realized_pnl, 6),
-            "net_realized_pnl": round(self.net_realized_pnl, 6),
+            "net_realized_pnl": _round_opt(self.net_realized_pnl, 6),
             "fee_drag_ratio": _round_opt(self.fee_drag_ratio, 4),
             "win_rate": _round_opt(self.win_rate, 4),
             "avg_win": _round_opt(self.avg_win, 6),
@@ -201,16 +202,16 @@ def _finalize(stats: _Accumulator) -> _Accumulator:
     if stats.slippage_samples:
         stats.avg_slippage_bps = sum(stats.slippage_samples) / len(stats.slippage_samples)
         stats.median_slippage_bps = median(stats.slippage_samples)
-    if stats.filled > 0:
+    if stats.filled > 0 and not stats.missing_fee:
         stats.avg_fee = stats.total_fees / stats.filled
     else:
-        # No fills with fee data: missing fees are treated
-        # as 0, never as "unknown", so the Edge Score still
-        # computes for strategies whose fills carried no fee.
-        stats.avg_fee = 0.0
-    if stats.gross_realized_pnl > 0:
+        # Unknown costs cannot support net-return or Edge Score claims.
+        stats.avg_fee = None
+    if stats.gross_realized_pnl > 0 and not stats.missing_fee:
         stats.fee_drag_ratio = stats.total_fees / stats.gross_realized_pnl
-    stats.net_realized_pnl = stats.gross_realized_pnl - stats.total_fees
+    stats.net_realized_pnl = (
+        stats.gross_realized_pnl - stats.total_fees if not stats.missing_fee else None
+    )
 
     closed = stats.wins + stats.losses
     stats.closed_trades = closed
@@ -224,7 +225,7 @@ def _finalize(stats: _Accumulator) -> _Accumulator:
         # avg_risk_per_trade: mean absolute realized PnL (the typical R).
         risk_samples = stats._win_samples + stats._loss_samples
         stats.avg_risk_per_trade = _mean([abs(v) for v in risk_samples])
-        if stats.avg_risk_per_trade and stats.avg_risk_per_trade > 0:
+        if stats.avg_risk_per_trade and stats.avg_risk_per_trade > 0 and stats.avg_fee is not None:
             expectancy = stats.win_rate * stats.avg_win - loss_rate * stats.avg_loss - stats.avg_fee
             stats.edge_raw = expectancy / stats.avg_risk_per_trade
             stats.edge_score = _normalize_edge_score(stats.edge_raw)
@@ -255,7 +256,7 @@ def _absorb(stats: _Accumulator, row: UserTrade) -> None:
     if status in _FILLED_STATUSES:
         stats.filled += 1
         fee = row.fee_paid
-        if fee is None:
+        if fee is None or not math.isfinite(fee) or fee < 0:
             stats.missing_fee += 1
         else:
             stats.total_fees += float(fee)
@@ -266,7 +267,7 @@ def _absorb(stats: _Accumulator, row: UserTrade) -> None:
             stats.missing_expected_price += 1
 
     pnl = row.pnl
-    if pnl is not None:
+    if pnl is not None and status in _FILLED_STATUSES and math.isfinite(pnl):
         value = float(pnl)
         stats.gross_realized_pnl += value
         if value > 0:
@@ -281,6 +282,7 @@ def get_strategy_stats(
     db: Session,
     user_id: int,
     window_days: int = DEFAULT_WINDOW_DAYS,
+    account_id: int | None = None,
 ) -> dict[str, StrategyStats]:
     """Per-strategy rolling execution stats for a user.
 
@@ -290,7 +292,7 @@ def get_strategy_stats(
     trades) are excluded — they cannot be attributed to a strategy.
     """
     cutoff = utc_now() - timedelta(days=max(1, int(window_days)))
-    rows = AnalyticsTradeRepository(db).list_strategy_trades(user_id, cutoff)
+    rows = AnalyticsTradeRepository(db, account_id).list_strategy_trades(user_id, cutoff)
 
     by_strategy: dict[str, _Accumulator] = {}
     for row in rows:
@@ -307,6 +309,7 @@ def get_strategy_breakdown(
     db: Session,
     user_id: int,
     window_days: int = DEFAULT_WINDOW_DAYS,
+    account_id: int | None = None,
 ) -> dict[str, Any]:
     """Flat per-strategy realized performance, best net P&L first.
 
@@ -322,7 +325,7 @@ def get_strategy_breakdown(
     limit derived from ``UserTrade.pnl`` depends on this attribution.
     """
     window = max(1, int(window_days))
-    per_strategy = get_strategy_stats(db, user_id, window)
+    per_strategy = get_strategy_stats(db, user_id, window, account_id)
 
     rows: list[dict[str, Any]] = []
     for strategy, stats in per_strategy.items():
@@ -336,16 +339,19 @@ def get_strategy_breakdown(
                 "losses": stats.losses,
                 "win_rate": _round_opt(stats.win_rate, 4),
                 "gross_realized_pnl": round(stats.gross_realized_pnl, 6),
-                "net_realized_pnl": round(stats.net_realized_pnl, 6),
-                "total_fees": round(stats.total_fees, 6),
+                "net_realized_pnl": _round_opt(stats.net_realized_pnl, 6),
+                "total_fees": None if stats.missing_fee else round(stats.total_fees, 6),
+                "known_fees": round(stats.total_fees, 6),
                 "avg_slippage_bps": _round_opt(stats.avg_slippage_bps, 2),
                 "edge_score": _round_opt(stats.edge_score, 2),
             }
         )
-    rows.sort(key=lambda r: -r["net_realized_pnl"])
+    rows.sort(key=lambda r: (r["net_realized_pnl"] is None, -(r["net_realized_pnl"] or 0)))
 
     cutoff = utc_now() - timedelta(days=window)
-    unattributed = AnalyticsTradeRepository(db).count_unattributed_trades(user_id, cutoff)
+    unattributed = AnalyticsTradeRepository(db, account_id).count_unattributed_trades(
+        user_id, cutoff
+    )
 
     return {
         "window_days": window,
@@ -362,6 +368,7 @@ def get_execution_summary(
     db: Session,
     user_id: int,
     window_days: int = DEFAULT_WINDOW_DAYS,
+    account_id: int | None = None,
 ) -> dict[str, Any]:
     """Aggregate execution summary across all strategies.
 
@@ -370,11 +377,11 @@ def get_execution_summary(
     rows missing expected price, filled rows missing fee data).
     """
     cutoff = utc_now() - timedelta(days=max(1, int(window_days)))
-    per_strategy = get_strategy_stats(db, user_id, window_days)
+    per_strategy = get_strategy_stats(db, user_id, window_days, account_id)
 
     # Data-quality counts over the whole cohort (including rows
     # without a strategy source, which are legacy by definition).
-    cohort = AnalyticsTradeRepository(db).list_cohort_trades(user_id, cutoff)
+    cohort = AnalyticsTradeRepository(db, account_id).list_cohort_trades(user_id, cutoff)
     legacy = sum(1 for r in cohort if r.strategy_source is None)
     missing_expected = sum(
         1
@@ -418,6 +425,7 @@ def get_edge_scores(
     db: Session,
     user_id: int,
     window_days: int = DEFAULT_WINDOW_DAYS,
+    account_id: int | None = None,
 ) -> list[dict[str, Any]]:
     """Edge Score per strategy, sorted best-first.
 
@@ -425,7 +433,7 @@ def get_edge_scores(
     are still listed with ``edge_score: null`` so the UI can show
     "insufficient data" rather than hiding the strategy.
     """
-    per_strategy = get_strategy_stats(db, user_id, window_days)
+    per_strategy = get_strategy_stats(db, user_id, window_days, account_id)
     rows = []
     for strategy, stats in per_strategy.items():
         rows.append(
@@ -451,6 +459,7 @@ def get_trade_details(
     user_id: int,
     strategy: str | None = None,
     limit: int = 50,
+    account_id: int | None = None,
 ) -> list[dict[str, Any]]:
     """Per-trade execution detail, newest first.
 
@@ -458,7 +467,7 @@ def get_trade_details(
     strategy. Pre-migration trades appear with null expected/filled
     fields.
     """
-    rows = AnalyticsTradeRepository(db).list_trade_details(
+    rows = AnalyticsTradeRepository(db, account_id).list_trade_details(
         user_id,
         strategy,
         max(1, min(int(limit), 200)),
