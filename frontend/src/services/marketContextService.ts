@@ -58,7 +58,11 @@ export function isMarketContext(value: unknown): value is MarketContext {
 }
 
 export const marketContextService = {
-  async history(conditionId: string, asOf?: string, signal?: AbortSignal): Promise<MarketContext[]> {
+  async history(
+    conditionId: string,
+    asOf?: string,
+    signal?: AbortSignal,
+  ): Promise<MarketContext[]> {
     const query = new URLSearchParams({ limit: "25" });
     if (asOf) query.set("as_of", asOf);
     const result = await apiClient.get<{ observations: unknown[] }>(
