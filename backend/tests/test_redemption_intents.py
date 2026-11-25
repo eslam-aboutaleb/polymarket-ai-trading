@@ -420,3 +420,36 @@ def test_halt_after_signing_prevents_first_broadcast(redemption_db, synthetic_re
         assert rpc.broadcasts == []
     finally:
         native.close()
+
+
+def test_replaced_nonce_is_detected_without_resend_or_cash(redemption_db, synthetic_release):
+    db, rpc = redemption_db, FundedRedemptionRPC()
+    rpc.fail_broadcast = True
+    native = rpc.native()
+    account = db.get(Account, 11)
+    try:
+        row = intent(db, native)
+        workflow.submit_intent(db, account, row.id, chain=native)
+        assert row.state == "unknown" and len(rpc.broadcasts) == 1
+        rpc.receipt = None  # node never indexed our hash
+        # Nonce still free: the transaction may be pending. Stay unknown, no resend.
+        workflow.reconcile_intent(db, account, row.id, chain=native)
+        assert row.state == "unknown" and row.reason == "REDEMPTION_RECEIPT_UNAVAILABLE"
+        # Finalized nonce count passed ours with no receipt for our hash: replaced.
+        rpc.finalized_nonce_count = 8
+        workflow.reconcile_intent(db, account, row.id, chain=native)
+        assert row.state == "replaced"
+        assert row.reason == "REDEMPTION_NONCE_CONSUMED_BY_DIFFERENT_TRANSACTION"
+        assert row.payout is None
+        assert db.query(AppEvent).filter_by(event_type="redemption_finalized").count() == 0
+        assert len(rpc.broadcasts) == 1
+        from app.models.trading.redemption_attempt import RedemptionAttempt
+
+        attempt = db.query(RedemptionAttempt).filter_by(intent_id=row.id).one()
+        assert attempt.status == "replaced"
+        # The wallet lease is released so an operator may create a NEW intent.
+        from app.models.trading.redemption_intent import RedemptionWalletLease
+
+        assert db.query(RedemptionWalletLease).one().active_intent_id is None
+    finally:
+        native.close()

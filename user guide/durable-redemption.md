@@ -36,3 +36,7 @@ Protocol references: [position management](https://docs.polymarket.com/trading/p
 Migration `20261122_0043_redemption` adds intent, wallet lease and observation tables plus a nullable link on legacy attempts. It preserves existing users, accounts, attempts and settings. Empty-schema downgrade is tested. Once intents exist, downgrade refuses deletion of evidence; roll back application code while retaining the additive schema.
 
 Tests use synthetic funded wallets, real local Ethereum signing and intercepted JSON-RPC. They cover durable-before-send ordering, duplicate requests and PostgreSQL worker races, ambiguous timeout, restart recovery, account isolation, release barriers, finality, canonical reverts/reorgs, malformed receipt identity, missing payout, void/unresolved outcomes and externally redeemed inventory. Browser tests exercise the real API and disposable PostgreSQL schema. No funded on-chain transaction is used for verification.
+
+## Replaced transactions
+
+If a submitted intent never gets a receipt, it stays `unknown` while the wallet nonce is still free (the transaction may be pending). When the wallet's nonce at the finalized block is greater than the intent's nonce and no receipt exists for the intent's hash, a different transaction owns that nonce: the intent becomes `replaced` (reason `REDEMPTION_NONCE_CONSUMED_BY_DIFFERENT_TRANSACTION`). Nothing is rebroadcast, no cash is recognized, no finalized event is written, and the wallet lease is released so an operator can review and create a new intent with a new idempotency key.
