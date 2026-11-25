@@ -1058,7 +1058,7 @@ class MarkPendingTradesFilledTests(_MonitorTestCase):
         for row in rows:
             self.assertEqual(row.status, "executed")
             self.assertEqual(row.executed_at, filled_at)
-            self.assertEqual(row.fee_paid, 0.0)
+            self.assertIsNone(row.fee_paid)
             self.assertIsNone(row.filled_price)
             self.assertIsNone(row.slippage_bps)
             self.assertIsNotNone(row.latency_ms)

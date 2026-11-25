@@ -355,37 +355,6 @@ async def _get_open_orders(
         return []
 
 
-async def _cancel_order(private_key: str, order_id: str) -> bool:
-    """Cancel a single order by ID."""
-    from py_clob_client.client import ClobClient
-
-    try:
-        client = ClobClient(
-            host=POLYMARKET_CLOB_API,
-            chain_id=137,
-            key=private_key,
-            signature_type=1,
-        )
-        creds = client.create_or_derive_api_creds()
-        client.set_api_creds(creds)
-        client.cancel(order_id)
-        return True
-    except Exception as e:
-        logger.error("Error cancelling order %s: %s", order_id, e)
-        return False
-
-
-async def _cancel_all_orders(private_key: str, token_id: str) -> int:
-    """Cancel all open orders for a token. Returns count cancelled."""
-    open_orders = await _get_open_orders(private_key, token_id)
-    cancelled = 0
-    for order in open_orders:
-        oid = order.get("id") or order.get("order_id")
-        if oid and await _cancel_order(private_key, oid):
-            cancelled += 1
-    return cancelled
-
-
 async def _place_maker_order(
     private_key: str,
     token_id: str,

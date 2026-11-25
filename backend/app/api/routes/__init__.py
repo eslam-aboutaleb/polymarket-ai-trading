@@ -97,6 +97,10 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
     ):
         app.include_router(module.router)
 
+    from app.api.routes.analysis import live_reconciliation
+
+    app.include_router(live_reconciliation.router)
+
     if debug_enabled:
         app.include_router(debug.router)
     else:

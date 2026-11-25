@@ -119,15 +119,10 @@ class ApiClient {
           originalRequest._retry = true;
 
           try {
-            if (!refreshPromise) {
-              refreshPromise = this.post("/api/auth/refresh", {}).finally(() => {
-                refreshPromise = null;
-              });
-            }
-            await refreshPromise;
+            await this.refreshTokens();
             return this.client(originalRequest);
           } catch (refreshError) {
-            useAuthStore.getState().clearSession();
+            if (!originalRequest.signal?.aborted) useAuthStore.getState().clearSession();
             return Promise.reject(toApiError(refreshError));
           }
         }
@@ -144,7 +139,7 @@ class ApiClient {
    */
   async refreshTokens(): Promise<unknown> {
     if (!refreshPromise) {
-      refreshPromise = this.post("/api/auth/refresh", {}).finally(() => {
+      refreshPromise = this.post("/api/auth/refresh", {}, { timeout: 8_000 }).finally(() => {
         refreshPromise = null;
       });
     }

@@ -379,7 +379,6 @@ class MakerLoopGuardTests(unittest.IsolatedAsyncioTestCase):
         config = _config(enabled=True, sync_interval_seconds=1)
         settings = SimpleNamespace(simulation_mode=False)
         db = _session([config, config, _user(), settings])
-        cancel_all = AsyncMock()
         sync = AsyncMock(side_effect=asyncio.CancelledError)
 
         with (
@@ -387,7 +386,6 @@ class MakerLoopGuardTests(unittest.IsolatedAsyncioTestCase):
             patch.object(market_maker_service, "acquire_scheduler_lock", return_value=True),
             patch.object(market_maker_service, "_sync_market_maker", new=sync),
             patch.object(market_maker_service, "release_scheduler_lock") as release,
-            patch.object(market_maker_service, "_cancel_all_orders", new=cancel_all),
             patch(
                 "app.services.trading.execution.live.load_wallet_credentials",
                 return_value={"private_key": "0xpk"},
@@ -397,7 +395,6 @@ class MakerLoopGuardTests(unittest.IsolatedAsyncioTestCase):
 
         sync.assert_awaited_once_with(1)
         release.assert_called_once_with("market_maker:1")
-        cancel_all.assert_not_awaited()
         self.assertEqual(config.status, "idle")
         self.assertEqual(config.current_open_orders, 0)
         db.commit.assert_called_once_with()
