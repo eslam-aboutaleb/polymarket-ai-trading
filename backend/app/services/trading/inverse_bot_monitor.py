@@ -41,6 +41,10 @@ INVERSE_BOT_CHECK_INTERVAL = 300  # 5 minutes
 INVERSE_DELTA_TRIGGER = 0.08
 INVERSE_PERSISTENCE_REQUIRED = 2
 BUY_SLIPPAGE_GUARD = 0.015  # 1.5%
+# Confidence ceiling when the AI had no X/Twitter signal. With the default
+# user threshold (75) a reversal can never fire without X data; the monitor
+# says so in the position's reasoning instead of silently holding.
+NO_X_CONFIDENCE_CAP = 70.0
 MIN_BUY_NOTIONAL = 1.0
 
 # Absolute server-side ceilings for manual ("force") reversals.
@@ -430,9 +434,17 @@ async def evaluate_inverse_position_row(
         db.commit()
         return {"status": "hold", "reason": "AI recommendation not reverse"}
 
-    if confidence < float(settings.inverse_bot_confidence_threshold or 75):
+    threshold = float(settings.inverse_bot_confidence_threshold or 75)
+    if confidence < threshold:
         row.persistence_count = 0
         row.status = "active"
+        if ai_eval.get("confidence_capped") and threshold > NO_X_CONFIDENCE_CAP:
+            row.last_reasoning = (
+                f"{row.last_reasoning or ''} [No X data: confidence capped at "
+                f"{NO_X_CONFIDENCE_CAP:.0f} < threshold {threshold:.0f}, so this "
+                "position cannot reverse until X data is available or the "
+                "threshold is lowered.]"
+            ).strip()
         db.commit()
         return {"status": "hold", "reason": "Confidence below threshold"}
 
@@ -1132,9 +1144,12 @@ async def _evaluate_with_ai(
 
     recommendation = str(result.get("recommendation", "hold")).lower()
     confidence = float(result.get("confidence", 0.0))
+    confidence_capped = False
     if not result.get("x_summary"):
         # Conservative cap when X signal is unavailable
-        confidence = min(confidence, 70.0)
+        capped = min(confidence, NO_X_CONFIDENCE_CAP)
+        confidence_capped = capped < confidence
+        confidence = capped
     return {
         "recommendation": recommendation,
         "confidence": confidence,
@@ -1144,4 +1159,5 @@ async def _evaluate_with_ai(
         "alt_token_id": result.get("alt_token_id", ""),
         "web_summary": result.get("web_summary", ""),
         "x_summary": result.get("x_summary", ""),
+        "confidence_capped": confidence_capped,
     }

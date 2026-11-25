@@ -225,6 +225,10 @@ def compute_t_remaining(
     return min(max(remaining, 0.0), 1.0)
 
 
+# Floor for σ so a flat kline history never divides by zero.
+MIN_SIGMA = 1e-6
+
+
 def realized_volatility(closes: list[float], window_minutes: int) -> float:
     """Per-window realized σ from recent 1m kline closes.
 
@@ -359,6 +363,7 @@ def evaluate_opportunity(
     kline_closes: list[float],
     feed_lag_ms: float | None = None,
     edge_threshold: float | None = None,
+    taker_fee_rate: float | None = None,
 ) -> Opportunity | None:
     """Evaluate one symbol/window against the edge model.
 
@@ -377,13 +382,26 @@ def evaluate_opportunity(
         return None
     realized = realized_volatility(kline_closes, window_minutes)
     p_market = market.up_price
-    implied = implied_volatility(p_market, t_remaining)
-    sigma = conservative_sigma(realized, implied)
+    # σ is the realized σ only. implied_volatility() returns a z-score (~1-7),
+    # not a σ in return units (~0.001), so max(realized, 2 × implied) was ~3000×
+    # too large: P(Up) sat at ~0.5 in ~99% of states and the "edge" degenerated
+    # into |0.5 - p_market|. ``conservative_sigma`` / ``implied_volatility`` are
+    # kept (unit-tested helpers) but no longer feed the model.
+    sigma = max(realized, MIN_SIGMA)
     p_model = probability_up(distance, sigma, t_remaining)
-    edge = compute_edge(p_model, p_market)
+    side = "up" if p_model > p_market else "down"
+    gross_edge = compute_edge(p_model, p_market)
+    # Net edge: the taker fee on the leg actually bought comes off the gap
+    # (fee = rate × p × (1 - p) per share, up to 1.25 pts at 50c with rate 5%).
+    fee_rate = (
+        float(get_settings().latency_arb_taker_fee_rate)
+        if taker_fee_rate is None
+        else float(taker_fee_rate)
+    )
+    leg_price = p_market if side == "up" else 1.0 - p_market
+    edge = gross_edge - max(fee_rate, 0.0) * leg_price * (1.0 - leg_price)
     if edge < threshold:
         return None
-    side = "up" if p_model > p_market else "down"
     return Opportunity(
         symbol=symbol.upper(),
         window_minutes=int(window_minutes),
@@ -634,7 +652,9 @@ def _circuit_breaker_state(
         if (row.pnl or 0.0) < 0.0:
             consecutive += 1
             if last_loss_at is None:
-                last_loss_at = row.created_at or row.updated_at
+                # Resume counts from when the loss resolved (updated_at), not
+                # from entry: a 5m trade resolves up to 5 minutes after it opens.
+                last_loss_at = row.updated_at or row.created_at
         else:
             break
     if consecutive >= limit and last_loss_at is not None:
@@ -1227,6 +1247,22 @@ _stop_event: asyncio.Event | None = None
 _running = False
 
 
+def _warn_incoherent_risk_limits() -> None:
+    """Warn when the daily loss limit is below one trade's notional.
+
+    One losing trade would then exceed the limit and halt the strategy for
+    the rest of the UTC day.
+    """
+    cfg = get_settings()
+    if float(cfg.latency_arb_daily_loss_limit) < float(cfg.latency_arb_max_notional):
+        logger.warning(
+            "Latency arb: daily loss limit $%.2f is below max notional $%.2f; "
+            "a single losing trade halts the strategy for the day",
+            float(cfg.latency_arb_daily_loss_limit),
+            float(cfg.latency_arb_max_notional),
+        )
+
+
 async def start_latency_arb_engine() -> None:
     """Start the latency-arbitrage engine as a background task.
 
@@ -1238,6 +1274,7 @@ async def start_latency_arb_engine() -> None:
     global _engine_task, _stop_event, _running
     if _running:
         return
+    _warn_incoherent_risk_limits()
     if not acquire_scheduler_lock("latency_arb"):
         logger.info("Latency arb engine: scheduler lock held elsewhere; not starting")
         return
