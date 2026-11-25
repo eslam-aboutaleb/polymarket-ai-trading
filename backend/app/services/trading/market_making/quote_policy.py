@@ -56,6 +56,13 @@ class PolicyParams:
     max_book_age_seconds: Decimal = Decimal("10")
     rebate_confirmed: bool = False
     rebate_per_share: Decimal = ZERO
+    # Issue #156. 0 disables the window. When enabled, an unknown time to
+    # resolution fails closed (no quotes) rather than assuming plenty of time.
+    pre_resolution_window_seconds: int = 0
+    # Pause when the rolling mean markout per share is below -toxicity_threshold
+    # with at least toxicity_min_samples frozen marks. None disables the switch.
+    toxicity_threshold: Decimal | None = None
+    toxicity_min_samples: int = 5
 
 
 @dataclass(frozen=True)
@@ -67,6 +74,9 @@ class MarketState:
     realized_sigma: Decimal | None = None
     book_age_seconds: Decimal | None = None
     resting_notional: Decimal = ZERO  # old orders that may still be live
+    seconds_to_resolution: Decimal | None = None
+    rolling_markout: Decimal | None = None  # mean markout per share, signed for the maker
+    markout_samples: int = 0
 
 
 @dataclass
@@ -141,6 +151,19 @@ def build_quote_plan(params: PolicyParams, state: MarketState, token_id: str) ->
         return _abstain(params, state, payload, ["STALE_BOOK"])
     if params.num_bands < 1:
         return _abstain(params, state, payload, ["NO_BANDS"])
+    if params.pre_resolution_window_seconds > 0:
+        left = state.seconds_to_resolution
+        if left is None:
+            return _abstain(params, state, payload, ["RESOLUTION_TIME_UNKNOWN"])
+        if left <= params.pre_resolution_window_seconds:
+            return _abstain(params, state, payload, ["PRE_RESOLUTION_WINDOW"])
+    if (
+        params.toxicity_threshold is not None
+        and state.rolling_markout is not None
+        and state.markout_samples >= params.toxicity_min_samples
+        and state.rolling_markout < -params.toxicity_threshold
+    ):
+        return _abstain(params, state, payload, ["TOXIC_MARKOUT_PAUSE"])
 
     reasons: list[str] = []
     inventory = state.inventory_shares
