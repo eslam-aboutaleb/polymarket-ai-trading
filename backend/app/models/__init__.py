@@ -149,3 +149,7 @@ from app.models.analytics.live_balance_snapshot import (  # noqa: F401,E402
 )
 
 __all__ += ["LiveBalanceSnapshot", "LiveAttributionReport", "AttributionStudy"]
+
+from app.models.analytics.analysis_run import AnalysisRun  # noqa: F401,E402
+
+__all__ += ["AnalysisRun"]

@@ -5,13 +5,15 @@ import contextlib
 import json
 import logging
 from collections import OrderedDict
+from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import Any
+from decimal import Decimal
+from typing import Any, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -34,6 +36,10 @@ from app.services.intelligence.market_context import (
     MarketIdentityError,
     fetch_market_context,
 )
+from app.services.intelligence.market_deep_dive import analysis_runs
+from app.services.intelligence.market_deep_dive.assembler import run_structured_analysis
+from app.services.intelligence.market_deep_dive.context_builder import TokenSelectionError
+from app.services.intelligence.market_deep_dive.schemas import DeepDiveRequest
 from app.services.intelligence.market_research import (
     finalize_research,
     missing_input_research,
@@ -42,6 +48,7 @@ from app.services.intelligence.market_research import (
 from app.services.intelligence.user_preferences import get_user_settings
 from app.services.market_data.market_observations import append_observation, observation_history
 from app.services.market_data.polymarket_service import get_polymarket_service
+from app.services.market_data.replay_capture import PublicVenueCapture
 from app.services.users.entitlement_service import CAP_OPPORTUNITY_SCAN
 from app.utils.cache import opportunity_cache
 from app.utils.database import get_db
@@ -80,15 +87,67 @@ def _analysis_scan_rate_limit(request: Request) -> None:
 
 # Request/Response schemas
 class MarketAnalysisRequest(BaseModel):
-    """Request for market analysis."""
+    """Request for market analysis.
 
-    market_title: str = Field(..., description="Title of the prediction market")
-    market_description: str = Field(..., description="Full market description")
-    yes_price: float = Field(..., ge=0, le=1, description="Current YES token price")
-    no_price: float = Field(..., ge=0, le=1, description="Current NO token price")
+    ``legacy_markdown`` (default) keeps the original client-supplied contract.
+    ``structured_v2`` accepts an authoritative ``condition_id`` only: title,
+    description, prices, volume and end date are ignored and rejected so a
+    modified link can never become source data.
+    """
+
+    market_title: str | None = Field(default=None, description="Title of the prediction market")
+    market_description: str | None = Field(default=None, description="Full market description")
+    yes_price: float | None = Field(default=None, ge=0, le=1, description="Current YES token price")
+    no_price: float | None = Field(default=None, ge=0, le=1, description="Current NO token price")
     volume_24h: float = Field(default=0, description="24-hour trading volume in USD")
-    end_date: str = Field(..., description="Market resolution date (ISO format)")
+    end_date: str | None = Field(default=None, description="Market resolution date (ISO format)")
     include_research: bool = Field(default=True, description="Include web research in analysis")
+    output_format: Literal["legacy_markdown", "structured_v2"] = "legacy_markdown"
+    condition_id: str | None = Field(default=None, pattern=r"^0x[0-9a-fA-F]{64}$")
+    selected_token_id: str | None = Field(default=None, pattern=r"^[0-9]{1,120}$")
+    requested_shares: Decimal | None = Field(default=None, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _check_format(self):
+        if self.output_format == "structured_v2":
+            client_supplied = [
+                name
+                for name in (
+                    "market_title",
+                    "market_description",
+                    "yes_price",
+                    "no_price",
+                    "end_date",
+                )
+                if getattr(self, name) is not None
+            ]
+            if self.volume_24h:
+                client_supplied.append("volume_24h")
+            if self.condition_id is None:
+                raise ValueError("structured_v2 requires condition_id")
+            if client_supplied:
+                raise ValueError(
+                    "structured_v2 does not accept client-supplied market data: "
+                    + ", ".join(client_supplied)
+                )
+            DeepDiveRequest(
+                condition_id=self.condition_id,
+                selected_token_id=self.selected_token_id,
+                requested_shares=self.requested_shares,
+            )  # bounds and Decimal parsing
+            return self
+        missing = [
+            name
+            for name in ("market_title", "market_description", "yes_price", "no_price", "end_date")
+            if getattr(self, name) is None
+        ]
+        if missing:
+            raise ValueError("Missing required fields: " + ", ".join(missing))
+        if self.condition_id or self.selected_token_id or self.requested_shares is not None:
+            raise ValueError(
+                "condition_id, selected_token_id and requested_shares need structured_v2"
+            )
+        return self
 
 
 class MarketResearchRequest(BaseModel):
@@ -360,6 +419,61 @@ async def market_research_stream(
     )
 
 
+def _deep_dive_request(request: MarketAnalysisRequest) -> DeepDiveRequest:
+    if not settings.market_deep_dive_v2_enabled:
+        raise HTTPException(status_code=503, detail="Structured market analysis is disabled")
+    return DeepDiveRequest(
+        condition_id=request.condition_id or "",
+        selected_token_id=request.selected_token_id,
+        requested_shares=request.requested_shares,
+        include_research=request.include_research,
+    )
+
+
+@contextlib.asynccontextmanager
+async def deep_dive_venue() -> AsyncIterator[PublicVenueCapture]:
+    """Public, credential-free venue reader. Tests replace this with a fixture transport."""
+    async with httpx.AsyncClient() as client:
+        yield PublicVenueCapture(client)
+
+
+async def _structured_events(
+    request: MarketAnalysisRequest,
+    current_user: dict | None,
+    db: Session,
+) -> AsyncIterator[dict[str, Any]]:
+    """Typed v2 frames; the venue client lives exactly as long as this iterator."""
+    deep_dive = _deep_dive_request(request)
+    user_id = current_user.get("user_id") if current_user else None
+
+    async def client_factory():
+        return await get_analysis_client_for_user(user_id, db)
+
+    async with deep_dive_venue() as venue:
+        agen = run_structured_analysis(
+            deep_dive,
+            venue=venue,
+            client_factory=client_factory,
+            db=db,
+            user_id=user_id,
+            research_timeout=settings.grpc_timeout * 2,
+            retention_days=settings.analysis_run_retention_days,
+        )
+        try:
+            async for event in agen:
+                yield event
+        finally:
+            await agen.aclose()
+
+
+def _structured_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, (MarketIdentityError, TokenSelectionError)):
+        return HTTPException(status_code=422, detail=str(exc))
+    if isinstance(exc, HTTPException):
+        return exc
+    return HTTPException(status_code=503, detail="Market source unavailable")
+
+
 @router.post("/market", response_model=AnalysisResponse)
 async def analyze_market(
     request: MarketAnalysisRequest,
@@ -373,6 +487,22 @@ async def analyze_market(
 
     Rate limited to 10 requests per minute.
     """
+    if request.output_format == "structured_v2":
+        try:
+            async for event in _structured_events(request, current_user, db):
+                if event["type"] == "analysis_completed":
+                    return AnalysisResponse(
+                        success=True,
+                        data=event["result"],
+                        timestamp=utc_now().isoformat(),
+                        backend="structured_v2",
+                    )
+        except Exception as exc:
+            if isinstance(exc, HTTPException):
+                raise
+            logger.exception("Structured market analysis failed")
+            raise _structured_http_error(exc) from exc
+        raise HTTPException(status_code=503, detail="Market analysis produced no result")
     try:
         user_id = current_user.get("user_id")
         client, llm_config = await get_analysis_client_for_user(user_id, db)
@@ -402,6 +532,44 @@ async def analyze_market(
         ) from e
 
 
+async def _structured_stream(
+    request: MarketAnalysisRequest, current_user: dict | None, db: Session
+) -> StreamingResponse:
+    """Resolve identity before opening the stream so bad input is a plain HTTP error."""
+    events = _structured_events(request, current_user, db)
+    try:
+        first = await anext(events)
+    except Exception as exc:
+        await events.aclose()
+        if not isinstance(exc, (HTTPException, MarketIdentityError, TokenSelectionError)):
+            logger.exception("Structured market context failed")
+        raise _structured_http_error(exc) from exc
+
+    async def generator():
+        try:
+            yield f"data: {json.dumps(first)}\n\n"
+            async for event in events:
+                yield f"data: {json.dumps(event)}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Structured market analysis failed")
+            yield f"data: {json.dumps({'error': 'Market analysis failed'})}\n\n"
+        finally:
+            await events.aclose()
+
+    return StreamingResponse(
+        generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.post("/market/stream", dependencies=[Depends(_analysis_rate_limit)])
 async def analyze_market_stream(
     request: MarketAnalysisRequest,
@@ -412,6 +580,8 @@ async def analyze_market_stream(
     Stream market analysis via Server-Sent Events (SSE) (public).
     Opens immediately and delivers chunks as the LLM generates them.
     """
+    if request.output_format == "structured_v2":
+        return await _structured_stream(request, current_user, db)
     user_id = current_user.get("user_id") if current_user else None
     client, llm_config = await get_analysis_client_for_user(user_id, db)
 
@@ -446,6 +616,38 @@ async def analyze_market_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get("/deep-dive/runs")
+async def deep_dive_runs(
+    limit: int = Query(default=25, ge=1, le=100),
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """The caller's own immutable analysis history; never another user's."""
+    rows = analysis_runs.list_runs(db, int(current_user["user_id"]), limit)
+    return {"runs": [analysis_runs.run_view(row) for row in rows]}
+
+
+@router.get("/deep-dive/runs/quality")
+async def deep_dive_quality(
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """Quality metrics over the caller's own runs, with forward paired scoring."""
+    return analysis_runs.quality_report(db, int(current_user["user_id"]))
+
+
+@router.get("/deep-dive/runs/{analysis_id}")
+async def deep_dive_run(
+    analysis_id: str = Path(pattern=r"^[0-9a-fA-F-]{36}$"),
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    row = analysis_runs.get_run(db, analysis_id, int(current_user["user_id"]))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Analysis run not found")
+    return analysis_runs.run_view(row)
 
 
 @router.post(
