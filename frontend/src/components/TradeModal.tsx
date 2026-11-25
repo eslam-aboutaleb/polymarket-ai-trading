@@ -7,6 +7,8 @@
  *
  * @module components/TradeModal
  */
+import FillStatus from "./evidence/FillStatus";
+import { fillInfo } from "../lib/evidence";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   tradesService,
@@ -575,8 +577,13 @@ export default function TradeModal({
         onSuccess?.(resp);
         // Ephemeral confirmation of the fill — the inline block below keeps
         // the order hash for the record.
+        // Only an exchange-confirmed fill is worded as done; accepted, acknowledged
+        // and partial orders are reported as still pending.
+        const fill = fillInfo(resp.status);
         toast.success(
-          `${side === "BUY" ? "Bought" : "Sold"} ${resp.size ?? amountNum} ${outcome} @ ${pct(resp.price)}`,
+          fill.completed
+            ? `${side === "BUY" ? "Bought" : "Sold"} ${resp.size ?? amountNum} ${outcome} @ ${pct(resp.price)}`
+            : `Order ${fill.label.toLowerCase()}: ${resp.size ?? amountNum} ${outcome} @ ${pct(resp.price)}`,
         );
       } else if (resp.error) {
         setError(resp.error);
@@ -1043,8 +1050,11 @@ export default function TradeModal({
           {result?.success && (
             <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-sm">
               <p className="font-semibold">
-                {side === "BUY" ? "Bought" : "Sold"} {outcome} shares.
+                {fillInfo(result.status).completed
+                  ? `${side === "BUY" ? "Bought" : "Sold"} ${outcome} shares.`
+                  : `Order placed for ${outcome} shares. Not confirmed filled yet.`}
               </p>
+              <FillStatus status={result.status} />
               <p className="text-xs mt-1 mono">
                 {result.side}{" "}
                 {result.side === "BUY"
