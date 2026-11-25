@@ -58,11 +58,12 @@ export function isMarketContext(value: unknown): value is MarketContext {
 }
 
 export const marketContextService = {
-  async history(conditionId: string, asOf?: string): Promise<MarketContext[]> {
+  async history(conditionId: string, asOf?: string, signal?: AbortSignal): Promise<MarketContext[]> {
     const query = new URLSearchParams({ limit: "25" });
     if (asOf) query.set("as_of", asOf);
     const result = await apiClient.get<{ observations: unknown[] }>(
       `/api/analysis/markets/${encodeURIComponent(conditionId)}/observations?${query}`,
+      { signal },
     );
     if (
       !Array.isArray(result.observations) ||
@@ -75,9 +76,10 @@ export const marketContextService = {
     }
     return result.observations as MarketContext[];
   },
-  async get(conditionId: string): Promise<MarketContext> {
+  async get(conditionId: string, signal?: AbortSignal): Promise<MarketContext> {
     const context = await apiClient.get<unknown>(
       `/api/analysis/markets/${encodeURIComponent(conditionId)}/context`,
+      { signal },
     );
     if (
       !isMarketContext(context) ||
