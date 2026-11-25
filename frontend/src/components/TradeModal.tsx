@@ -969,7 +969,9 @@ export default function TradeModal({
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted">Potential profit</span>
+                    <span className="text-muted">
+                      Gain if this outcome wins (not an expected return)
+                    </span>
                     <span className="status-good mono">+{fmt$(potentialProfit)}</span>
                   </div>
                 </>
