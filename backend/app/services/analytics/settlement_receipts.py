@@ -140,6 +140,11 @@ def _verify_redemption_receipt(receipt, block, head, *, tx_hash, condition_id, w
             / Decimal(10**18)
         ),
         "block_hash": block["hash"],
+        "block_timestamp": (
+            datetime.fromtimestamp(int(block["timestamp"], 16), UTC).isoformat()
+            if block.get("timestamp")
+            else None
+        ),
         "confirmations": head - number + 1,
         "source_sha256": digest,
         "index_sets": indices,
@@ -161,3 +166,54 @@ async def read_redemption_receipt(client, *, tx_hash, condition_id, wallet):
     )
     result["receipt_observed_at"] = datetime.now(UTC).isoformat()
     return result
+
+
+PAYOUT_DENOMINATOR = Web3.keccak(text="payoutDenominator(bytes32)")[:4].hex()
+PAYOUT_NUMERATORS = Web3.keccak(text="payoutNumerators(bytes32,uint256)")[:4].hex()
+SLOT_COUNT = Web3.keccak(text="getOutcomeSlotCount(bytes32)")[:4].hex()
+
+
+async def _call(client, selector, *words):
+    data = "0x" + selector + "".join(f"{word:064x}" for word in words)
+    result = await rpc(client, "eth_call", [{"to": CTF, "data": data}, "latest"])
+    if not isinstance(result, str) or not re.fullmatch(r"0x[0-9a-fA-F]{64}", result):
+        raise ValueError("MALFORMED_CTF_CALL_RESULT")
+    return int(result, 16)
+
+
+async def read_condition_resolution(client, *, condition_id):
+    """Read the CTF's reported payout vector for a condition (read-only eth_call).
+
+    ``denominator == 0`` means no payout has been reported. UMA proposal and
+    dispute stages precede this on-chain report and are not visible here.
+    """
+    if not HEX32.fullmatch(condition_id):
+        raise ValueError("INVALID_RECEIPT_IDENTITY")
+    if int(await rpc(client, "eth_chainId", []), 16) != 137:
+        raise ValueError("WRONG_CHAIN")
+    cid = int(condition_id, 16)
+    slots = await _call(client, SLOT_COUNT, cid)
+    if slots == 0:
+        return {
+            "condition_id": condition_id,
+            "prepared": False,
+            "resolved": False,
+            "denominator": 0,
+            "numerators": [],
+        }
+    if slots != 2:
+        raise ValueError("UNSUPPORTED_OUTCOME_SLOT_COUNT")
+    denominator = await _call(client, PAYOUT_DENOMINATOR, cid)
+    numerators = [await _call(client, PAYOUT_NUMERATORS, cid, index) for index in range(slots)]
+    if denominator == 0 and any(numerators):
+        raise ValueError("INCONSISTENT_PAYOUT_VECTOR")
+    if denominator and sum(numerators) != denominator:
+        raise ValueError("INCONSISTENT_PAYOUT_VECTOR")
+    return {
+        "condition_id": condition_id,
+        "prepared": True,
+        "resolved": denominator > 0,
+        "denominator": denominator,
+        "numerators": numerators,
+        "observed_at": datetime.now(UTC).isoformat(),
+    }

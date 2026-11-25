@@ -66,6 +66,8 @@ def exercise_recorded(db, inp, monkeypatch):
     def handler(request):
         data = json.loads(request.content)
         calls.append(data["method"])
+        if data["method"] == "eth_call":
+            return httpx.Response(200, json={"id": 1, "jsonrpc": "2.0", "result": "0x" + "00" * 32})
         result = {
             "eth_chainId": "0x89",
             "eth_getTransactionReceipt": receipt,
