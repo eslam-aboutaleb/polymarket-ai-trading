@@ -10,11 +10,13 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
+import httpx
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -47,8 +49,13 @@ from app.services.intelligence.market_deep_dive.schemas import (
     MarketDeepDiveResult,
     QuoteAndCost,
 )
+from app.services.intelligence.market_research import _search_excerpts
 from app.services.intelligence.prompt_version import current_prompt_version
 from app.services.intelligence.resolution_rules import record_rule_snapshot
+from app.services.intelligence.social_evidence.evidence import posts_to_evidence
+from app.services.intelligence.social_evidence.providers import parse_status_url
+from app.services.intelligence.social_evidence.quota import SocialQuota
+from app.services.intelligence.social_evidence.service import collect_social
 from app.services.market_data.replay_capture import PublicVenueCapture
 
 logger = logging.getLogger(__name__)
@@ -71,6 +78,22 @@ def _server_invalidations(market: CanonicalMarket) -> list[str]:
     ]
 
 
+@dataclass
+class SocialConfig:
+    mode: str
+    quota: SocialQuota
+    bearer_token: str | None = None
+    client: httpx.AsyncClient | None = None
+
+
+def _indexed_x_items(research_context: str) -> list[dict]:
+    items = []
+    for url, excerpts in _search_excerpts(research_context or "").items():
+        if parse_status_url(url) and excerpts:
+            items.append({"url": url, "snippet": excerpts[0]})
+    return items
+
+
 async def run_structured_analysis(
     request: DeepDiveRequest,
     *,
@@ -80,6 +103,7 @@ async def run_structured_analysis(
     user_id: int | None,
     research_timeout: float,
     retention_days: int = 365,
+    social: SocialConfig | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> AsyncIterator[dict[str, Any]]:
     started = time.monotonic()
@@ -167,6 +191,24 @@ async def run_structured_analysis(
 
         as_of = clock()  # after capture, so every receipt is visible at the cutoff
         evidence = collect_evidence(market.context, research_context, as_of)
+        social_coverage = None
+        if social is not None and social.mode != "off" and db is not None:
+            try:
+                social_posts, social_coverage = await collect_social(
+                    db,
+                    mode=social.mode,
+                    query=market.context.question,
+                    as_of=as_of,
+                    indexed_items=_indexed_x_items(research_context),
+                    user_id=user_id,
+                    bearer_token=social.bearer_token,
+                    quota=social.quota,
+                    client=social.client,
+                )
+                evidence.extend(posts_to_evidence(social_posts, as_of))
+            except Exception:
+                logger.exception("Social evidence failed")
+                failures.append("SOCIAL_EVIDENCE_FAILED")
         evidence, rejected_future = drop_future_evidence(evidence, as_of)
         yield _frame("evidence_collected", analysis_id, evidence_count=len(evidence))
 
@@ -255,6 +297,15 @@ async def run_structured_analysis(
             "forecast": "missing"
             if forecast is None or forecast.validity_status == "unavailable"
             else ("complete" if forecast.validity_status == "validated" else "partial"),
+            **(
+                {
+                    "social": "complete"
+                    if social_coverage and social_coverage.posts_used
+                    else "missing"
+                }
+                if social_coverage
+                else {}
+            ),
             "price_and_cost": "complete"
             if cost.validity_status == "executable_modeled"
             else ("failed" if "QUOTE_CAPTURE_FAILED" in failures else "partial"),
@@ -287,6 +338,7 @@ async def run_structured_analysis(
             claims=claims,
             forecast=forecast,
             price_and_cost=cost,
+            social=social_coverage,
             risks=draft.risks if draft else [],
             invalidation_conditions=[
                 *(draft.invalidation_conditions if draft else []),

@@ -3,8 +3,9 @@
 from decimal import Decimal
 from enum import StrEnum
 from functools import lru_cache
+from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -66,6 +67,11 @@ class Settings(BaseSettings):
     # Market Deep Dive 2.0 (#33): off switch leaves legacy analysis untouched.
     market_deep_dive_v2_enabled: bool = True
     analysis_run_retention_days: int = Field(default=365, ge=1, le=3650)
+    # Social evidence (#57): optional. Disabled means no social section at all.
+    social_evidence_mode: Literal["off", "indexed", "x_api"] = "off"
+    x_api_bearer_token: SecretStr | None = None
+    social_user_hourly_quota: int = Field(default=10, ge=1, le=1000)
+    social_user_daily_quota: int = Field(default=50, ge=1, le=10000)
 
     # API Configuration
     api_title: str = "Polymarket AI Trading API"
