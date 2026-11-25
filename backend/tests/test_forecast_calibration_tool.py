@@ -13,7 +13,7 @@ SERVER = Path(__file__).parents[2] / "services/mcps/research/server.py"
 
 @pytest.fixture(scope="module")
 def server():
-    if importlib.util.find_spec("ddgs") is None:
+    if "ddgs" not in sys.modules and importlib.util.find_spec("ddgs") is None:
         # The server only needs the search client at call time of unrelated tools.
         sys.modules["ddgs"] = types.SimpleNamespace(DDGS=object)
     sys.path.insert(0, str(SERVER.parent))
