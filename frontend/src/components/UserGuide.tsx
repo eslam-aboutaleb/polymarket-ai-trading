@@ -302,15 +302,16 @@ const sections: GuideSection[] = [
     id: "arbitrage-detection",
     icon: "💰",
     title: "Arbitrage Detection",
-    description: "Automatically scan markets for complement and spread mispricing opportunities.",
+    description:
+      "Scan markets for indicative complement price gaps and wide-spread liquidity signals. Signals are research only.",
     items: [
       {
-        heading: "Complement Arbitrage",
-        body: "When the combined price of Yes + No tokens in a market drops below $1.00, there's a risk-free profit opportunity. The bot scans all markets and flags pairs where the combined cost is less than $0.98.",
+        heading: "Complement price gap",
+        body: "When the indicative Yes + No prices sum to less than $1.00, the scanner shows an indicative gross price gap in percentage points. It is not executable, not fee-adjusted and not a return on capital. Verify real ask depth for both legs, fees and settlement rules with the feasibility check before treating it as anything more.",
       },
       {
-        heading: "Spread Arbitrage",
-        body: "When the bid-ask spread on a single outcome exceeds 5%, the bot flags the market. Large spreads may indicate temporary inefficiency that can be exploited by placing limit orders.",
+        heading: "Wide spread",
+        body: "When the bid-ask spread on a single outcome is 5% or more, the scanner flags it as a liquidity research signal. A wide spread alone is not arbitrage and implies no fill.",
       },
       {
         heading: "Background Monitor",
