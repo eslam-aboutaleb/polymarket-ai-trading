@@ -267,7 +267,78 @@ export interface ExperimentComparisonQuery {
 
 // ── Service ─────────────────────────────────────────────────
 
+
+// ── Forecast skill report (issue #22) ───────────────────────
+
+export type ForecastSkillStatus =
+  | "BETTER_THAN_MARKET"
+  | "WORSE_THAN_MARKET"
+  | "NOT_DISTINGUISHABLE"
+  | "INSUFFICIENT_SAMPLE"
+  | "NO_MATCHED_BASELINE";
+
+export type ConfidenceInterval = [number, number] | null;
+
+export interface ForecastSkillCohort {
+  scorer_version: string;
+  clipping_policy: string;
+  forecast_count: number;
+  scored_forecast_count: number;
+  effective_independent_events: number;
+  min_effective_events: number;
+  excluded: Record<string, number>;
+  clipped_for_log_loss: number;
+  evidence_class: string;
+  status: ForecastSkillStatus;
+  abstain_reason?: string;
+  brier?: number;
+  log_loss?: number;
+  brier_ci95?: ConfidenceInterval;
+  calibration_in_the_large?: number;
+  sharpness?: number;
+  ece?: number | null;
+  base_rate?: number;
+  matched_baseline_forecasts?: number;
+  paired_events?: number;
+  model_brier_matched?: number;
+  market_brier?: number;
+  brier_skill?: number | null;
+  paired_brier_delta?: number;
+  paired_brier_delta_ci95?: ConfidenceInterval;
+  paired_log_loss_delta?: number;
+  paired_log_loss_delta_ci95?: ConfidenceInterval;
+  delta_convention?: string;
+  claims_alpha?: boolean;
+  state?: { research_only: boolean; reasons: string[]; execution_eligible: boolean };
+}
+
+export interface ForecastSkillReport {
+  schema_version: string;
+  scorer_version: string;
+  generated_at: string;
+  window_days: number;
+  scope: string;
+  overall: ForecastSkillCohort;
+  by_model: Record<string, ForecastSkillCohort>;
+  by_horizon: Record<string, ForecastSkillCohort>;
+  drift: { drifted_count: number; drifted_models: string[] };
+  source_coverage: {
+    forecasts: number;
+    with_matched_baseline: number;
+    with_event_group: number;
+    window_start: string;
+  };
+  execution_eligible: boolean;
+  feature_flag: string;
+}
+
 export const calibrationService = {
+  async getSkillReport(query: CalibrationQuery = {}): Promise<ForecastSkillReport> {
+    return apiClient.get<ForecastSkillReport>("/api/analysis/calibration/skill-report", {
+      params: query,
+    });
+  },
+
   async getSummary(query: CalibrationQuery = {}): Promise<CalibrationSummaryResponse> {
     return apiClient.get<CalibrationSummaryResponse>("/api/analysis/calibration/summary", {
       params: query,
