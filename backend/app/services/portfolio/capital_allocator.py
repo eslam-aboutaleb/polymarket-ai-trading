@@ -112,10 +112,16 @@ def _leg(c: Candidate, shares: Decimal) -> ExposureLeg:
 
 
 def _assess(req: AllocationRequest, legs: list[ExposureLeg]):
+    present = {leg.condition_id.lower() for leg in legs}
+    relations = [
+        r
+        for r in req.relations
+        if r.left_condition_id.lower() in present and r.right_condition_id.lower() in present
+    ]
     return assess_event_correlation_risk(
         EventCorrelationRequest(
             legs=legs,
-            relations=req.relations,
+            relations=relations,
             max_cluster_concentration_pct=req.max_cluster_concentration_pct,
             as_of=req.as_of,
         )
@@ -170,10 +176,9 @@ def _allocate(req: AllocationRequest) -> AllocationProposal:
             why.append("INSUFFICIENT_OOS_CALIBRATION")
         elif p_lb <= cost_unit:
             why.append("NO_POSITIVE_EDGE_AFTER_UNCERTAINTY")
-        if why:
+        if why or p_lb is None:
             rejected.append(Rejection(candidate_id=c.candidate_id, reasons=why))
             continue
-        assert p_lb is not None
         frac = min(req.kelly_cap, (p_lb - cost_unit) / (1 - cost_unit))
         shares = min(c.depth_shares, (cash * frac) / cost_unit)
         shares = shares.quantize(Decimal("0.01"), rounding="ROUND_DOWN")
@@ -182,9 +187,9 @@ def _allocate(req: AllocationRequest) -> AllocationProposal:
             trial = _assess(req, [*legs, _leg(c, shares)])
             loss = trial.worst_case_portfolio_loss or Decimal(0)
             over_cluster = any(
-                cl.concentration_pct > req.max_cluster_concentration_pct for cl in trial.clusters
-            ) and not any(
-                cl.concentration_pct > req.max_cluster_concentration_pct for cl in base.clusters
+                len(cl.condition_ids) > 1
+                and cl.concentration_pct > req.max_cluster_concentration_pct
+                for cl in trial.clusters
             )
             if loss <= req.max_worst_case_loss and not over_cluster and shares * cost_unit <= cash:
                 marginal = loss - current_loss
