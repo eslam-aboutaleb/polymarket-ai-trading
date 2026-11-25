@@ -113,6 +113,8 @@ class ForecastGenerationApiTests(unittest.TestCase):
             data = e.json()
             self.assertEqual(data["evidence_snapshot_id"], sid)
             self.assertEqual(data["rule_hash"], "rule1")
+            self.assertAlmostEqual(data["market_price"], 0.4)
+            self.assertIsNotNone(data["forecast_probability"])
             self.assertEqual({k["source_id"] for k in data["evidence"]["kept"]}, {"s1", "s2", "s3"})
 
     def test_snapshot_is_idempotent_and_hash_matches_content(self):
