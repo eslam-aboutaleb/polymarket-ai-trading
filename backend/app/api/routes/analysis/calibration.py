@@ -484,6 +484,27 @@ async def get_model_leaderboard(
     return report
 
 
+@router.get("/skill-report")
+async def get_forecast_skill_report(
+    window_days: int = Query(default=settings.calibration_default_window_days, ge=1, le=365),
+    scope: str = Query(default="user", pattern="^(user|global)$"),
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """Proper-score skill vs the matched market baseline, with uncertainty.
+
+    Read-only and research-only: it never changes sizing or orders. Behind
+    ``FORECAST_CALIBRATION_ENABLED`` (default off).
+    """
+    if not get_settings().forecast_calibration_enabled:
+        raise HTTPException(status_code=503, detail="Forecast calibration skill disabled")
+    if scope == "global" and not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="scope=global requires an admin account")
+    from app.services.intelligence.forecast_skill_report import build_report
+
+    return build_report(db, window_days=window_days, scope=scope, user_id=current_user["user_id"])
+
+
 @router.get("/forecasts/{assessment_id}/history")
 async def get_forecast_resolution_history(
     assessment_id: int,
