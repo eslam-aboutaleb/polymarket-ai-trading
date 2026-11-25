@@ -55,11 +55,51 @@ the whole receipt pass has an 8-second deadline, and responses are bounded to 51
 No user URL, wallet key or caller-supplied receipt enters this path.
 
 `observed_redemption_cashflows_usdc` sums only supported observed events. Missing
-receipt evidence returns null, never invented zero. `available_cash_usdc` and
-`realized_pnl_usdc` remain null with `accounting_status=abstain`: current records do
-not prove complete share/fee reconciliation or native-gas conversion to USDC. Use the
-separately reconciled ledger for these totals; an observed payout is not spendable
-account cash. This analytical PR does not implement #56's durable submission intents.
+receipt evidence returns null, never invented zero.
+
+### Accounting reconciliation (`accounting_status`)
+
+`realized_pnl_usdc` and `available_cash_usdc` are filled only when every input agrees,
+otherwise they stay null with `accounting_status=abstain` and per-scope reason codes
+(`accounting_reasons`, `conditions[].reasons`):
+
+- Realized P&L is recognized per redeemed condition only when recorded inventory
+  (shares times entry price plus recorded fee) reconciles exactly (to 1e-6 USDC) with
+  the canonical receipt payout **and** the on-chain CTF payout vector
+  (`payoutNumerators`/`payoutDenominator`, read-only `eth_call`), the redeemed index
+  sets cover the recorded tokens, there is no pending order on the condition and at
+  most one non-zero redemption exists. Zero-payout redemptions of losing tokens
+  recognize the loss. Partial, duplicate, unrecorded or disagreeing redemptions
+  abstain for manual review. Native gas is reported in `gas_fee_native` and is **not**
+  converted to USDC, so P&L is explicitly `realized_pnl_excludes_native_gas`.
+- `available_cash_usdc` is the latest integrity-checked balance snapshot cash minus
+  open-order reservations. It abstains if the snapshot is older than 15 minutes,
+  predates a redemption block, saw active/unsettled orders, disagrees with recorded
+  wallet inventory, or reservations exceed cash. Unredeemed and unsettled positions are
+  reported in `locked_collateral_usdc` and never counted as cash.
+- `shadow_comparison` compares the existing bot's recorded sell-side realized P&L with
+  the settlement-reconciled redemption P&L for that account (recorded, not assumed).
+
+### Persisted lifecycle (`settlement_transitions`)
+
+`POST /api/settlement/sync` appends server-derived transitions to an append-only,
+hash-chained, per account/condition/token ledger: `FINAL` from the CTF payout vector,
+then `TX_CONFIRMED` (canonical receipt) / `TX_PENDING` / `TX_FAILED`. The previous
+state is read from the ledger, never from the caller. `POST /api/settlement/transitions`
+accepts only `venue_reported` or `operator_asserted` observations (for example UMA
+proposal/dispute stages, which the Polygon CTF does not expose) and can never claim
+chain-verified or transaction states. `GET /api/settlement/transitions?condition_id=`
+returns history plus a hash-chain integrity verdict. Database triggers reject UPDATE and
+DELETE. Every discrepancy code is also written once to `app_events`
+(`settlement_discrepancy_flagged`) for manual review. Migration
+`20261125_0060_settlement_ledger` refuses a destructive downgrade once evidence exists.
+
+Limits: UMA proposal/dispute stages are not derivable on-chain here; the YES/NO to CTF
+index mapping is verified only through the payout cross-check; native gas has no USDC
+price source; proxy/Safe wallets and non-USDC.e collateral abstain; the public RPC
+canary returns HTTP 403 in the development environment, so live receipt verification is
+exercised through a deterministic JSON-RPC transport, not a live node. This issue does
+not implement #56's durable submission intents.
 
 ## Agent integration, telemetry and rollback
 
