@@ -1,4 +1,5 @@
 """PostgreSQL: Alembic DDL, append-only triggers, concurrent appends and the API flow."""
+# ruff: noqa: B023, S603
 
 import os
 import subprocess
