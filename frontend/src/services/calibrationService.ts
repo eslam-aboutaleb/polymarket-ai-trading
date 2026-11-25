@@ -267,7 +267,6 @@ export interface ExperimentComparisonQuery {
 
 // ── Service ─────────────────────────────────────────────────
 
-
 // ── Forecast skill report (issue #22) ───────────────────────
 
 export type ForecastSkillStatus =
