@@ -79,9 +79,9 @@ test("cancellation aborts generation and late results cannot populate the brief"
 }) => {
   await page.goto(`/analysis?condition_id=${cid("14")}`);
   await page.getByRole("button", { name: "Run Deep Dive", exact: true }).click();
-  await expect(page.getByRole("status")).toContainText("Gathering research");
+  await expect(page.getByRole("status").filter({ hasText: "Gathering research" })).toBeVisible();
   await page.getByRole("button", { name: "Cancel research" }).click();
-  await expect(page.getByRole("status")).toContainText("Research cancelled");
+  await expect(page.getByRole("status").filter({ hasText: "Research cancelled" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Run Deep Dive", exact: true })).toBeEnabled();
   await expect(page.getByRole("heading", { name: "Investigate further" })).toHaveCount(0);
 });
@@ -150,7 +150,7 @@ test("aborted browser request cannot accept a delayed complete response", async 
   await aborted;
   release();
   await settled;
-  await expect(page.getByRole("status")).toContainText("Research cancelled");
+  await expect(page.getByRole("status").filter({ hasText: "Research cancelled" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Investigate further" })).toHaveCount(0);
 });
 
