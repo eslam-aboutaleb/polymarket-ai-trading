@@ -11,7 +11,6 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from app.services.intelligence.market_deep_dive.evidence_adapter import canonical_url
 from app.services.intelligence.social_evidence.schemas import Engagement, SocialPost
 
 X_API_BASE = "https://api.x.com/2"
@@ -195,7 +194,7 @@ def indexed_posts(items: list[dict], now: datetime) -> list[SocialPost]:
         posts[post_id] = SocialPost(
             provider="indexed_search",
             post_id=post_id,
-            canonical_url=canonical_url(f"https://x.com/{handle}/status/{post_id}"),
+            canonical_url=f"https://x.com/{handle.lower()}/status/{post_id}",
             author_handle=handle,
             text=text,
             text_hash=text_hash(text),

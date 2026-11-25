@@ -84,6 +84,11 @@ function EvidenceRow({ item }: { item: DeepDiveEvidence }) {
         {item.publisher}
       </a>{" "}
       <span className="chip">{item.verification.replace("_", " ")}</span>
+      {item.source_family === "social_post" && (
+        <span className="chip" data-testid="social-badge">
+          Social post · untrusted
+        </span>
+      )}
       <p className="text-xs">
         Retrieved {new Date(item.retrieved_at).toLocaleString()} · Published{" "}
         {item.published_at ? new Date(item.published_at).toLocaleString() : "date unavailable"}
@@ -102,6 +107,25 @@ export function EvidenceExplorer({ result }: { result: MarketDeepDiveResult }) {
       <h2 id="dd-evidence" className="text-lg font-bold">
         Evidence and claims
       </h2>
+      {result.social && result.social.mode !== "disabled" && (
+        <div className="text-sm mt-2" data-testid="social-coverage">
+          <p>
+            Social source:{" "}
+            {result.social.mode === "api"
+              ? "authorized API"
+              : "search-index snippets (fallback, not an authenticated feed)"}
+            . {result.social.posts_used} used, {result.social.duplicates} duplicate,{" "}
+            {result.social.deleted} deleted, {result.social.rejected_future} rejected as later than
+            the analysis time. Coverage is not comprehensive and social posts never count as
+            independent sources.
+          </p>
+          <ul className="list-disc pl-5">
+            {result.social.notices.map((notice) => (
+              <li key={notice}>{notice}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       {result.claims.length === 0 && <p className="mt-2">No attributable claims were found.</p>}
       <ul className="space-y-4 mt-3">
         {result.claims.map((claim) => (

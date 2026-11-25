@@ -12,7 +12,7 @@ export interface DeepDiveEvidence {
   published_at: string | null;
   retrieved_at: string;
   available_at: string | null;
-  source_family: "venue_rules" | "search_excerpt";
+  source_family: "venue_rules" | "search_excerpt" | "social_post";
   content_hash: string;
   excerpt: string | null;
   verification: "excerpt_matched" | "venue_text" | "unverified";
@@ -63,6 +63,19 @@ export interface DeepDiveCost {
   validity_reasons: string[];
 }
 
+export interface SocialCoverage {
+  mode: "disabled" | "api" | "indexed_fallback";
+  fallback_reason: string | null;
+  provider: string | null;
+  posts_seen: number;
+  posts_used: number;
+  duplicates: number;
+  deleted: number;
+  rejected_future: number;
+  comprehensive: false;
+  notices: string[];
+}
+
 export interface MarketDeepDiveResult {
   schema_version: "market-deep-dive-v2";
   analysis_id: string;
@@ -92,6 +105,7 @@ export interface MarketDeepDiveResult {
   claims: DeepDiveClaim[];
   forecast: DeepDiveForecast | null;
   price_and_cost: DeepDiveCost | null;
+  social?: SocialCoverage | null;
   risks: string[];
   invalidation_conditions: string[];
   missing_information: string[];

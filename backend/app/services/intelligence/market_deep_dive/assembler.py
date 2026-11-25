@@ -193,6 +193,8 @@ async def run_structured_analysis(
         evidence = collect_evidence(market.context, research_context, as_of)
         social_coverage = None
         if social is not None and social.mode != "off" and db is not None:
+            # The adapter supersedes search-excerpt X links so each post appears once.
+            evidence = [e for e in evidence if e.source_family != "social_post"]
             try:
                 social_posts, social_coverage = await collect_social(
                     db,
