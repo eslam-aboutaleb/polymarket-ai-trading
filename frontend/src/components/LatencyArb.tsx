@@ -498,8 +498,8 @@ export default function LatencyArb() {
             </p>
             {config.daily_loss_limit < config.max_notional && (
               <p className="text-xs text-amber-500 mt-1">
-                Below your max trade size (${config.max_notional}): one losing trade
-                will pause the strategy for the rest of the UTC day.
+                Below your max trade size (${config.max_notional}): one losing trade will pause the
+                strategy for the rest of the UTC day.
               </p>
             )}
           </div>
