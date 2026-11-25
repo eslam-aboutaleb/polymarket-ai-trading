@@ -37,6 +37,7 @@ class Settings(BaseSettings):
 
     paper_journal_v2_enabled: bool = False
     executable_replay_enabled: bool = False
+    event_replay_lab_enabled: bool = False
     binary_book_research_enabled: bool = False
     resolution_rule_analysis_enabled: bool = False
     binary_valuation_enabled: bool = False
