@@ -23,7 +23,15 @@ export default function ExecutionShortfallPanel() {
     let cancelled = false;
     executionEstimateService
       .quality(30)
-      .then((response) => !cancelled && setData(response))
+      .then((response) => {
+        if (cancelled) return;
+        // A malformed or unrelated payload must degrade to "unavailable", never crash the page.
+        if (!response?.summary || !Array.isArray(response.rows)) {
+          setError("unexpected response");
+          return;
+        }
+        setData(response);
+      })
       .catch((err) => !cancelled && setError(getApiErrorMessage(err)));
     return () => {
       cancelled = true;
