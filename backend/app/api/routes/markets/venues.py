@@ -128,7 +128,16 @@ class VenueMismatch(BaseModel):
     low_price: float | None = None
     high_price: float | None = None
     min_liquidity: float = 0.0
+    # Legacy meaning: both legs are real money. It never means a trade is
+    # available; read ``classification`` and ``executable`` (cross-venue-v2).
     executable_signal: bool = False
+    schema_version: str | None = None
+    classification: str | None = None
+    badges: list[str] = []
+    gross_price_gap_pct_points: float | None = None
+    executable: bool = False
+    equivalence: dict | None = None
+    rules_for_review: list[dict] = []
     # A horizon gap usually means the two questions are not the same
     # market, so it is the cheapest wrong-match signal to surface.
     end_date_delta_days: float | None = None
