@@ -41,6 +41,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
     from app.api.routes.billing import billing
     from app.api.routes.markets import (
         binance_signals,
+        consistency,
         markets,
         microstructure,
         news,
@@ -91,6 +92,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         markets,
         observations,
         microstructure,
+        consistency,
         oracle_basis,
         resolution_rules,
     ):
