@@ -348,3 +348,40 @@ def test_nov_13_capture_replay_every_reconstructed_forecast_is_skipped():
         )
         skipped += not decision.allowed
     assert skipped == 5
+
+
+def test_live_gate_prices_the_orders_own_evidence_without_any_fetch():
+    from types import SimpleNamespace
+
+    def level(price, shares):
+        return SimpleNamespace(price=D(price), shares=D(shares))
+
+    def evidence(fee):
+        return SimpleNamespace(
+            bids=[level("0.49", "100")],
+            asks=[level("0.50", "60")],
+            shares=D("60"),
+            fee_usdc=fee,
+        )
+
+    async def boom(*_):
+        raise AssertionError("evidence path must not fetch")
+
+    def gate(ev):
+        return asyncio.run(
+            latency_arb_service._net_edge_gate(
+                opportunity(p_model=0.70),
+                "tok",
+                50.0,
+                fee_fetcher=boom,
+                book_fetcher=boom,
+                evidence=ev,
+            )
+        )
+
+    ok = gate(evidence(D("0.6")))  # 0.01 per share over 60 shares
+    assert ok.allowed and ok.fee == D("0.01")
+    unknown = gate(evidence(None))
+    assert not unknown.allowed and unknown.reason.startswith("ABSTAIN")
+    costly = gate(evidence(D("18")))  # 0.30 per share swallows the edge
+    assert not costly.allowed and costly.reason == "NET_EDGE_NOT_POSITIVE"

@@ -60,6 +60,7 @@ class Leg:
     shares: Decimal
     fee_metadata: dict[str, Any] | None
     book: BookSide | None
+    fee_per_share: Decimal | None = None  # already-priced fee (e.g. from book evidence)
 
 
 @dataclass(frozen=True)
@@ -160,7 +161,10 @@ def net_edge(
         if not legs:
             raise Abstain("ABSTAIN_NO_LEGS")
         for leg in legs:
-            leg_fee = taker_fee_per_share(leg.price, leg.fee_metadata)
+            if leg.fee_per_share is not None:
+                leg_fee = leg.fee_per_share
+            else:
+                leg_fee = taker_fee_per_share(leg.price, leg.fee_metadata)
             leg_spread = half_spread(leg.book)
             leg_slip = expected_slippage(leg.side, leg.book, leg.shares)
             fee, spread, slip = fee + leg_fee, spread + leg_spread, slip + leg_slip
