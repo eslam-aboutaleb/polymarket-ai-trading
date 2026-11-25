@@ -17,6 +17,8 @@ from pydantic import (
     field_validator,
 )
 
+from app.services.intelligence.social_evidence.schemas import SocialCoverage
+
 SCHEMA_VERSION = "market-deep-dive-v2"
 
 DecimalStr = Annotated[Decimal, PlainSerializer(lambda v: str(v), return_type=str)]
@@ -76,7 +78,7 @@ class EvidenceItem(_Model):
     published_at: AwareDatetime | None = None
     retrieved_at: AwareDatetime
     available_at: AwareDatetime | None = None
-    source_family: Literal["venue_rules", "search_excerpt"]
+    source_family: Literal["venue_rules", "search_excerpt", "social_post"]
     content_hash: str
     excerpt: str | None = None
     verification: EvidenceVerification
@@ -157,6 +159,7 @@ class MarketDeepDiveResult(_Model):
     claims: list[ResearchClaim]
     forecast: ForecastDisplay | None = None
     price_and_cost: QuoteAndCost | None = None
+    social: SocialCoverage | None = None
     risks: list[str] = Field(default_factory=list)
     invalidation_conditions: list[str] = Field(default_factory=list)
     missing_information: list[str] = Field(default_factory=list)
