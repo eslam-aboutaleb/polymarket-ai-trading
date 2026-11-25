@@ -24,6 +24,7 @@ from typing import Any
 from app.services.intelligence import forecast_scoring as fs
 
 GENERATOR_VERSION = "forecast-generation-v1"
+TASK_PREFIX = "forecast_generation"  # recorded task is "forecast_generation:<category>"
 MIN_INDEPENDENT_SOURCES = 2
 MIN_BASE_RATE_SAMPLE = 20
 MAX_INTERVAL_WIDTH = 0.5
@@ -184,6 +185,46 @@ def evidence_snapshot_id(audit: EvidenceAudit) -> str:
         for i in audit.kept
     )
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def serialize_audit(audit: EvidenceAudit) -> dict[str, Any]:
+    """Everything needed to trace a displayed prediction back to its sources."""
+    return {
+        "generator_version": GENERATOR_VERSION,
+        "kept": [
+            {
+                "source_id": i.source_id,
+                "domain": i.domain,
+                "title": i.title,
+                "text": i.text[:MAX_TEXT_CHARS],
+                "published_at": i.published_at.isoformat() if i.published_at else None,
+                "retrieved_at": i.retrieved_at.isoformat() if i.retrieved_at else None,
+            }
+            for i in audit.kept
+        ],
+        "independent_sources": audit.independent_sources,
+        "syndicated_groups": audit.duplicate_groups,
+        "quarantined_source_ids": audit.quarantined,
+        "rejected": audit.rejected,
+    }
+
+
+def store_snapshot(db, audit: EvidenceAudit, as_of: datetime) -> str:
+    """Idempotently persist the audited evidence under its content hash."""
+    from app.models.analytics.forecast_evidence import ForecastEvidenceSnapshot
+
+    sid = evidence_snapshot_id(audit)
+    if db.get(ForecastEvidenceSnapshot, sid) is None:
+        db.add(
+            ForecastEvidenceSnapshot(
+                snapshot_id=sid,
+                payload_json=json.dumps(serialize_audit(audit), sort_keys=True),
+                as_of=as_of,
+                generator_version=GENERATOR_VERSION,
+            )
+        )
+        db.commit()
+    return sid
 
 
 def render_evidence_block(audit: EvidenceAudit, limit: int = 1200) -> str:
@@ -413,10 +454,12 @@ def record_estimate(db, req: ForecastRequest, estimate: ForecastEstimate, *, tok
 
     if estimate.abstain:
         return None
+    store_snapshot(db, audit_evidence(req.evidence, req.as_of), req.as_of)
     row = record_verdict(
         db,
         condition_id=estimate.condition_id,
-        task="forecast_generation",
+        task=TASK_PREFIX
+        + (f":{estimate.calibration_cohort}"[:30] if estimate.calibration_cohort else ""),
         model_name=estimate.model_version,
         provider="forecast-generation",
         ai_probability=(
