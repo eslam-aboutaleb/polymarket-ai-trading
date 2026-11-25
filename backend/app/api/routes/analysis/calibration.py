@@ -61,6 +61,7 @@ from app.services.intelligence.calibration_service import (
 from app.services.intelligence.calibration_service import (
     delete_verdict_feedback as delete_feedback,
 )
+from app.services.intelligence.forecast_audit import resolution_history
 from app.services.intelligence.forecast_resolution import (
     is_verified_resolution,
     last_resolution_run,
@@ -481,6 +482,59 @@ async def get_model_leaderboard(
     report = model_leaderboard(db, window_days=window_days)
     report["scope"] = scope
     return report
+
+
+@router.get("/forecasts/{assessment_id}/history")
+async def get_forecast_resolution_history(
+    assessment_id: int,
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """Append-only resolution/scoring audit history of one forecast (admin)."""
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="forecast audit history requires an admin")
+    row = db.get(Assessment, assessment_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Forecast not found")
+    return {
+        "assessment_id": assessment_id,
+        "forecast_uuid": row.forecast_uuid,
+        "request_key": row.request_key,
+        "rule_hash": row.rule_hash,
+        "token_id": row.token_id,
+        "p_interpretation": row.p_interpretation,
+        "events": [
+            {
+                "id": event.id,
+                "event_type": event.event_type,
+                "scoring_version": event.scoring_version,
+                "resolved_outcome": event.resolved_outcome,
+                "brier_score": event.brier_score,
+                "exclusion_reason": event.exclusion_reason,
+                "finality_status": event.finality_status,
+                "recorded_at": event.recorded_at.isoformat() if event.recorded_at else None,
+            }
+            for event in resolution_history(db, assessment_id)
+        ],
+    }
+
+
+@router.post("/revalidate")
+async def revalidate_scored_forecasts(
+    limit: int = Query(default=200, ge=1, le=500),
+    current_user: dict = Depends(get_current_user_from_token),
+    db: Session = Depends(get_db),
+):
+    """Re-check scored forecasts against current settlement state (admin).
+
+    Corrections and reversals are appended to the audit history; nothing is
+    deleted or edited, and no order or position is touched.
+    """
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="revalidation requires an admin account")
+    from app.services.intelligence.forecast_resolution import revalidate_resolved
+
+    return await revalidate_resolved(db, limit=limit)
 
 
 class VerdictFeedbackRequest(BaseModel):
