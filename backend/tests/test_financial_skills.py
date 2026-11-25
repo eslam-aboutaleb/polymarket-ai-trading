@@ -23,7 +23,7 @@ DECISION = "2026-01-01T12:00:00+00:00"
 
 @pytest.fixture(scope="module")
 def server():
-    if importlib.util.find_spec("ddgs") is None:
+    if "ddgs" not in sys.modules and importlib.util.find_spec("ddgs") is None:
         sys.modules["ddgs"] = types.SimpleNamespace(DDGS=object)
     sys.path.insert(0, str(RESEARCH))
     spec = importlib.util.spec_from_file_location("research_server_fin_skill", SERVER)
