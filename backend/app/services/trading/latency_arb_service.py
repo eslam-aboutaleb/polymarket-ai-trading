@@ -299,6 +299,79 @@ def probability_up(
     return normal_cdf(distance / (float(sigma) * math.sqrt(t_remaining)))
 
 
+# ────────────── TWAP-aware model ──────────────
+#
+# The 5m/15m markets do not resolve on spot-vs-open. They resolve Up when the
+# 60 s average price at the END of the window is >= the 60 s average price just
+# BEFORE the window started. Pricing spot-vs-open uses the wrong reference and
+# the wrong terminal quantity, so near the end of a window it is confidently
+# wrong where the TWAP rule is still open.
+
+TWAP_SECONDS = 60
+
+
+def sigma_per_second(closes: list[float], cap_multiple: float = 1.5) -> float:
+    """Per-second relative sigma from 1m closes, with a spike cap.
+
+    Uses the last 59 one-minute log returns, capped at ``cap_multiple``
+    times the sigma over every close available, then scales by 1/sqrt(60).
+    Returns 0.0 when there is not enough history.
+    """
+    returns = [
+        math.log(b / a) for a, b in zip(closes[:-1], closes[1:], strict=False) if a > 0 and b > 0
+    ]
+    if len(returns) < 10:
+        return 0.0
+
+    def _std(values: list[float]) -> float:
+        mean = sum(values) / len(values)
+        return math.sqrt(sum((v - mean) ** 2 for v in values) / (len(values) - 1))
+
+    recent = _std(returns[-59:])
+    long_run = _std(returns)
+    return min(recent, max(cap_multiple, 1.0) * long_run) / math.sqrt(TWAP_SECONDS)
+
+
+def twap_probability_up(
+    reference: float,
+    current_price: float,
+    elapsed_s: float,
+    window_seconds: int,
+    final_prices: list[float],
+    sigma_s: float,
+) -> float:
+    """P(Up) under the 60 s TWAP resolution rule.
+
+    ``reference`` is the mean price of the 60 s before the window start.
+    ``final_prices`` holds the one-second prices already observed inside the
+    final 60 s of the window (empty before it starts). The unobserved rest of
+    the final minute is modelled as a driftless random walk from
+    ``current_price`` with per-second relative sigma ``sigma_s``.
+    """
+    if reference <= 0.0 or current_price <= 0.0:
+        return 0.5
+    final_start = window_seconds - TWAP_SECONDS
+    known = min(len(final_prices), TWAP_SECONDS)
+    remaining = TWAP_SECONDS - known
+    known_sum = float(sum(final_prices[:known]))
+    expected = (known_sum + remaining * current_price) / TWAP_SECONDS
+    if remaining <= 0:
+        variance_units = 0.0
+    else:
+        # Seconds until the first unobserved sample of the final minute.
+        first = 1 if known > 0 else max(1.0, final_start - elapsed_s)
+        horizons = [first + i for i in range(remaining)]
+        variance_units = sum(min(a, b) for a in horizons for b in horizons)
+    sd = current_price * sigma_s * math.sqrt(variance_units) / TWAP_SECONDS
+    if sd <= 0.0:
+        if expected > reference:
+            return 1.0
+        if expected < reference:
+            return 0.0
+        return 0.5
+    return normal_cdf((expected - reference) / sd)
+
+
 def compute_edge(p_model: float, p_market: float) -> float:
     """Absolute probability gap between model and market."""
     return abs(float(p_model) - float(p_market))
@@ -323,6 +396,7 @@ class Opportunity:
     market: CryptoMarket
     detected_at: datetime
     feed_lag_ms: float | None = None
+    model: str = "spot"
 
     @property
     def window_end_epoch(self) -> int:
@@ -349,6 +423,7 @@ class Opportunity:
             "token_ids": dict(self.market.token_ids),
             "prices": dict(self.market.prices),
             "feed_lag_ms": (round(self.feed_lag_ms, 1) if self.feed_lag_ms is not None else None),
+            "model": self.model,
             "detected_at": self.detected_at.isoformat(),
         }
 
@@ -364,6 +439,8 @@ def evaluate_opportunity(
     feed_lag_ms: float | None = None,
     edge_threshold: float | None = None,
     taker_fee_rate: float | None = None,
+    twap_reference: float | None = None,
+    final_prices: list[float] | None = None,
 ) -> Opportunity | None:
     """Evaluate one symbol/window against the edge model.
 
@@ -389,6 +466,21 @@ def evaluate_opportunity(
     # kept (unit-tested helpers) but no longer feed the model.
     sigma = max(realized, MIN_SIGMA)
     p_model = probability_up(distance, sigma, t_remaining)
+    model_used = "spot"
+    if (
+        get_settings().latency_arb_edge_model == "twap"
+        and twap_reference
+        and twap_reference > 0.0
+        and final_prices is not None
+    ):
+        sigma_s = sigma_per_second(kline_closes, get_settings().latency_arb_sigma_cap_multiple)
+        if sigma_s > 0.0:
+            window_seconds = int(window_minutes) * 60
+            elapsed = window_seconds * (1.0 - t_remaining)
+            p_model = twap_probability_up(
+                twap_reference, current_price, elapsed, window_seconds, final_prices, sigma_s
+            )
+            model_used = "twap"
     side = "up" if p_model > p_market else "down"
     gross_edge = compute_edge(p_model, p_market)
     # Net edge: the taker fee on the leg actually bought comes off the gap
@@ -418,6 +510,7 @@ def evaluate_opportunity(
         market=market,
         detected_at=now,
         feed_lag_ms=feed_lag_ms,
+        model=model_used,
     )
 
 
@@ -1096,6 +1189,35 @@ def _dispatch_opportunity_alert(
 _book_feed_skips: list[int] = [0]
 
 
+def _twap_inputs(
+    feed_symbol: str, window_start_epoch: int, window_minutes: int, now: datetime
+) -> tuple[float | None, list[float] | None]:
+    """60 s reference mean before the window and the observed final-minute prices.
+
+    ``(None, None)`` when the one-second history is incomplete: the caller
+    then falls back to the spot model for that signal.
+    """
+    if get_settings().latency_arb_edge_model != "twap":
+        return None, None
+    start = int(window_start_epoch)
+    reference_prices = binance_ws_service.get_second_prices(
+        feed_symbol, start - TWAP_SECONDS, start - 1
+    )
+    if not reference_prices or len(reference_prices) < TWAP_SECONDS:
+        return None, None
+    reference = sum(reference_prices) / len(reference_prices)
+    final_start = start + int(window_minutes) * 60 - TWAP_SECONDS
+    now_sec = int(now.timestamp())
+    if now_sec < final_start:
+        return reference, []
+    observed = binance_ws_service.get_second_prices(
+        feed_symbol, final_start, min(now_sec, final_start + TWAP_SECONDS - 1)
+    )
+    if observed is None:
+        return None, None
+    return reference, observed
+
+
 async def _fetch_opportunities(now: datetime) -> list[Opportunity]:
     """Evaluate every enabled symbol/window for the current cycle."""
     opportunities: list[Opportunity] = []
@@ -1132,6 +1254,9 @@ async def _fetch_opportunities(now: datetime) -> list[Opportunity]:
                 continue
             kline_closes = binance_ws_service.get_recent_closes(feed_symbol)
             feed_lag_ms = binance_ws_service.get_feed_lag_ms(feed_symbol)
+            twap_reference, final_prices = _twap_inputs(
+                feed_symbol, market.window_start_epoch, window_minutes, now
+            )
             opportunity = evaluate_opportunity(
                 symbol,
                 window_minutes,
@@ -1141,6 +1266,8 @@ async def _fetch_opportunities(now: datetime) -> list[Opportunity]:
                 now,
                 kline_closes,
                 feed_lag_ms,
+                twap_reference=twap_reference,
+                final_prices=final_prices,
             )
             if opportunity is not None:
                 opportunities.append(opportunity)

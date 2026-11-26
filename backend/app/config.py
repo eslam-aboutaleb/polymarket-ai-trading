@@ -236,6 +236,14 @@ class Settings(BaseSettings):
     latency_arb_book_feed_enabled: bool = True
     # Reject a live quote when no websocket frame arrived within this many ms.
     latency_arb_book_max_age_ms: int = 3000
+    # Edge model: "twap" prices the market's real resolution rule (mean of the
+    # last 60 s of the window vs mean of the 60 s before it); "spot" is the old
+    # spot-vs-window-open model. "twap" falls back to "spot" per signal when
+    # the 1 s price history is not complete enough.
+    latency_arb_edge_model: str = "twap"
+    # Sigma cap: realized 1m sigma is capped at this multiple of the long-run
+    # (up to 6 h) 1m sigma so a volatility spike cannot shrink the z-score.
+    latency_arb_sigma_cap_multiple: float = 1.5
     # Taker fee rate parameter (fee per share = rate x p x (1 - p)); the
     # engine subtracts it from the model/market gap. Set 0 for fee-free markets.
     latency_arb_taker_fee_rate: float = 0.05
@@ -385,6 +393,10 @@ class Settings(BaseSettings):
     def validate_latency_arb_settings(self) -> "Settings":
         if not 0.0 < self.latency_arb_edge_threshold < 1.0:
             raise ValueError("LATENCY_ARB_EDGE_THRESHOLD must be in (0, 1).")
+        if self.latency_arb_edge_model not in ("twap", "spot"):
+            raise ValueError("LATENCY_ARB_EDGE_MODEL must be 'twap' or 'spot'.")
+        if self.latency_arb_sigma_cap_multiple < 1.0:
+            raise ValueError("LATENCY_ARB_SIGMA_CAP_MULTIPLE must be >= 1.")
         if self.latency_arb_max_notional <= 0:
             raise ValueError("LATENCY_ARB_MAX_NOTIONAL must be > 0.")
         if self.latency_arb_max_latency_ms < 1:
