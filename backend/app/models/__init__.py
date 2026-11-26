@@ -16,6 +16,7 @@ from app.models.analytics.forecast_resolution_event import ForecastResolutionEve
 from app.models.analytics.portfolio_scenario import PortfolioScenario
 from app.models.analytics.portfolio_snapshot import PortfolioSnapshot
 from app.models.analytics.resolution_rule_snapshot import ResolutionRuleSnapshot
+from app.models.analytics.settlement_transition import SettlementTransition
 from app.models.base import Base
 from app.models.billing.subscription import BillingWebhookEvent, Subscription
 from app.models.intelligence.collaboration import ForecastVote, MarketAnnotation, UserFollow
@@ -91,6 +92,7 @@ __all__ = [
     "Assessment",
     "ForecastEvidenceSnapshot",
     "ResolutionRuleSnapshot",
+    "SettlementTransition",
     "UserTrade",
     "RefreshToken",
     "FollowedTrader",

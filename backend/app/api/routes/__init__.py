@@ -76,6 +76,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         portfolio,
         redemption_intents,
         risk_report,
+        settlement,
     )
     from app.api.routes.trading import (
         arbitrage,
@@ -109,6 +110,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         redemption_intents,
         allocation,
         event_risk,
+        settlement,
         risk_report,
         risk,
         settings_routes,
