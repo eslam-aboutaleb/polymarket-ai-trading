@@ -54,6 +54,16 @@ class Settings(SharedLLMSettings):
     rag_retrieval_breaker_threshold: int = 3
     rag_retrieval_breaker_cooldown_seconds: float = 60.0
 
+    # Trader-analysis streaming (issue #59)
+    trader_stream_deadline_seconds: float = 120.0
+    trader_stream_first_token_timeout_seconds: float = 60.0
+    trader_stream_idle_timeout_seconds: float = 30.0
+    trader_stream_max_frame_chars: int = 4000
+    trader_stream_max_output_chars: int = 200_000
+    trader_stream_replay_ttl_seconds: float = 300.0
+    trader_stream_replay_max_streams: int = 64
+    trader_stream_replay_max_frames: int = 5000
+
     # Tavily premium search (optional)
     tavily_api_key: str = Field(default="", repr=False, exclude=True)
     tavily_enabled: bool = False
