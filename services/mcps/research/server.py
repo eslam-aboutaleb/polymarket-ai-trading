@@ -746,6 +746,25 @@ def _tool_event_correlation_risk(args):
     return _run_async(_structured_skill_research("event_correlation_risk", args))
 
 
+def _tool_event_logic(args):
+    return _run_async(_structured_skill_research("event_logic", args))
+
+
+EVENT_LOGIC_SCHEMA = {
+    "name": "event_logic",
+    "read_only": True,
+    "version": "event-logic-v1",
+    "description": (
+        "Exact probability bounds and coherence checks between related contracts "
+        "(complement, exclusive groups, nested thresholds, implication) with explicit "
+        "infeasibility conflicts and abstention; research only, no order action."
+    ),
+    "input_schema": json.loads(
+        (Path(__file__).parent / "schemas" / "event-logic-request.json").read_text()
+    ),
+}
+
+
 def _tool_forecast_calibration(args):
     return _run_async(_structured_skill_research("forecast_calibration", args))
 
@@ -839,6 +858,7 @@ async def _structured_skill_research(tool, args):
             "/api/risk/event-correlation/analyze",
             "event-correlation-risk-v1",
         ),
+        "event_logic": ("POST", "/api/analysis/event-logic/analyze", "event-logic-v1"),
         "recorded_event_correlation_risk": (
             "GET",
             "/api/risk/event-correlation/recorded",
@@ -943,6 +963,8 @@ TOOLS: dict[str, Any] = {
     "describe_oracle_basis_risk": lambda _: ORACLE_BASIS_TOOL_SCHEMA,
     "event_correlation_risk": _tool_event_correlation_risk,
     "recorded_event_correlation_risk": _tool_recorded_event_risk,
+    "event_logic": _tool_event_logic,
+    "describe_event_logic": lambda _: EVENT_LOGIC_SCHEMA,
     "forecast_calibration": _tool_forecast_calibration,
     "describe_forecast_calibration": lambda _: FORECAST_CALIBRATION_SCHEMA,
     "describe_recorded_event_correlation_risk": lambda _: RECORDED_EVENT_RISK_SCHEMA,

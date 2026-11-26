@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     portfolio_allocation_enabled: bool = False
     cross_market_consistency_enabled: bool = False
     event_correlation_risk_enabled: bool = False
+    event_logic_enabled: bool = False
     forecast_calibration_enabled: bool = False
     live_account_reconciliation_enabled: bool = False
     observation_archive_enabled: bool = False
