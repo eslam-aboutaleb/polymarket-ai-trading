@@ -8,6 +8,7 @@ from app.models.analytics.assessment import Assessment
 from app.models.analytics.backtest_run import BacktestRun
 from app.models.analytics.book_research_run import BookResearchRun
 from app.models.analytics.executable_replay import ExecutableReplayRun, ExecutableSignalSource
+from app.models.analytics.execution_estimate import ExecutionEstimateRecord
 from app.models.analytics.follower_experiment import FollowerExperimentRun
 from app.models.analytics.forecast_resolution_event import ForecastResolutionEvent
 from app.models.analytics.portfolio_snapshot import PortfolioSnapshot
@@ -100,6 +101,7 @@ __all__ = [
     "PaperNavPoint",
     "BacktestRun",
     "BookResearchRun",
+    "ExecutionEstimateRecord",
     "FollowerExperimentRun",
     "TakeProfitOrder",
     "RedemptionAttempt",
