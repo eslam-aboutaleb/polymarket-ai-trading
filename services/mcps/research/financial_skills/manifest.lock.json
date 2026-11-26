@@ -1,0 +1,224 @@
+{
+  "lock_version": "financial-skills-lock-v1",
+  "skills": [
+    {
+      "credential_access": false,
+      "evidence_class": "descriptive_unvalidated",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "condition_id": {
+            "pattern": "[A-Za-z0-9_\\-:.]{1,100}",
+            "type": "string"
+          },
+          "data_quality": {
+            "enum": [
+              "ok",
+              "degraded",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "decision_time_utc": {
+            "pattern": "[0-9T:\\-.+Z]{20,40}",
+            "type": "string"
+          },
+          "external_reference": {
+            "additionalProperties": false,
+            "properties": {
+              "implied_yes": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              "observed_at_utc": {
+                "pattern": "[0-9T:\\-.+Z]{20,40}",
+                "type": "string"
+              },
+              "source": {
+                "enum": [
+                  "oracle",
+                  "spot_feed",
+                  "other"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "source",
+              "implied_yes",
+              "observed_at_utc"
+            ],
+            "type": "object"
+          },
+          "observed_at_utc": {
+            "pattern": "[0-9T:\\-.+Z]{20,40}",
+            "type": "string"
+          },
+          "quotes": {
+            "additionalProperties": false,
+            "properties": {
+              "no": {
+                "additionalProperties": false,
+                "properties": {
+                  "ask": {
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "bid": {
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "observed_at_utc": {
+                    "pattern": "[0-9T:\\-.+Z]{20,40}",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "bid",
+                  "ask",
+                  "observed_at_utc"
+                ],
+                "type": "object"
+              },
+              "yes": {
+                "additionalProperties": false,
+                "properties": {
+                  "ask": {
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "bid": {
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "observed_at_utc": {
+                    "pattern": "[0-9T:\\-.+Z]{20,40}",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "bid",
+                  "ask",
+                  "observed_at_utc"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "yes",
+              "no"
+            ],
+            "type": "object"
+          },
+          "rule_hash": {
+            "pattern": "[0-9a-f]{64}",
+            "type": "string"
+          },
+          "token_ids": {
+            "items": {
+              "pattern": "[A-Za-z0-9_\\-:.]{1,100}",
+              "type": "string"
+            },
+            "maxItems": 2,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "condition_id",
+          "token_ids",
+          "observed_at_utc",
+          "decision_time_utc",
+          "quotes",
+          "data_quality"
+        ],
+        "type": "object"
+      },
+      "license": "PolyForm-Noncommercial-1.0.0",
+      "network_access": false,
+      "output_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "abstain_reason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "features": {
+            "type": "object"
+          },
+          "interval": {
+            "additionalProperties": false,
+            "nullable": true,
+            "properties": {
+              "basis": {
+                "type": "string"
+              },
+              "high": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              "low": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              }
+            },
+            "required": [
+              "low",
+              "high",
+              "basis"
+            ],
+            "type": "object"
+          },
+          "probability": {
+            "type": "null"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10,
+            "type": "array"
+          }
+        },
+        "required": [
+          "features",
+          "probability",
+          "interval",
+          "abstain_reason",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "permission": "read_only",
+      "required_observations": [
+        "yes_quote",
+        "no_quote",
+        "rule_hash",
+        "decision_time_utc"
+      ],
+      "resource_budget": {
+        "max_input_bytes": 16384,
+        "max_output_bytes": 16384,
+        "network": false,
+        "wall_seconds": 1.0
+      },
+      "sha256": "02848cdb4ef380f9d6bab1a3390abc17b42d29e2c5670a904e2ef488eedf70b3",
+      "skill_id": "quote_consistency",
+      "source_file": "quote_consistency.py",
+      "supported_market_types": [
+        "binary"
+      ],
+      "timeframes": [
+        "snapshot"
+      ],
+      "version": "1.0.0"
+    }
+  ]
+}
