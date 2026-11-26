@@ -410,6 +410,95 @@ def walk_depth(spec: MarketSpec, book: BinaryBook, request: WalkRequest) -> Cost
         )
 
 
+class DepthProfilePoint(Contract):
+    shares: Decimal
+    ask_covered: bool
+    bid_covered: bool
+    ask_marginal_price: Decimal | None = None
+    bid_marginal_price: Decimal | None = None
+    ask_vwap: Decimal | None = None
+    bid_vwap: Decimal | None = None
+    buy_walk_slippage_vs_touch: Decimal | None = None
+    sell_walk_slippage_vs_touch: Decimal | None = None
+    spread_at_depth: Decimal | None = None
+    vwap_spread_at_depth: Decimal | None = None
+
+
+class DepthProfile(Contract):
+    version: Literal["binary-book-v1"] = VERSION
+    status: Literal["modeled", "abstain"]
+    reason: str | None = None
+    token_id: str
+    book_hash: str | None
+    points: list[DepthProfilePoint] = Field(default_factory=list)
+    confidence: str = "counterfactual_displayed_depth_only"
+    measured_price_impact: None = None
+    fill_probability: None = None
+
+
+def _walk_side(levels, shares):
+    """Marginal price and VWAP for exactly `shares`, or None beyond displayed depth."""
+    remaining, gross = shares, Decimal(0)
+    for level in levels:
+        take = min(level.shares, remaining)
+        gross += take * level.price
+        remaining -= take
+        if remaining <= 0:
+            return level.price, gross / shares
+    return None, None
+
+
+def depth_profile(spec: MarketSpec, book: BinaryBook, sizes: list[Decimal]) -> DepthProfile:
+    """Fee-free displayed spread and walk cost at several share depths.
+
+    Counterfactual displayed-depth arithmetic: it is not a measured price impact,
+    never sums the YES and NO books, and withholds every size the book cannot cover.
+    """
+    from decimal import ROUND_DOWN
+
+    def abstain(reason):
+        return DepthProfile(status="abstain", reason=reason, token_id=book.token_id, book_hash=None)
+
+    with localcontext(ACCOUNTING_CONTEXT):
+        if book.grade != "VERIFIED_BOOK" or not book.bids or not book.asks:
+            return abstain("BOOK_NOT_USABLE")
+        if (
+            book.token_id not in (spec.yes_token, spec.no_token)
+            or book.rule_hash != spec.rule_hash
+            or book.condition_id != spec.condition_id
+        ):
+            return abstain("BOOK_IDENTITY_MISMATCH")
+        if not sizes or any(size <= 0 for size in sizes):
+            return abstain("POSITIVE_SIZES_REQUIRED")
+        touch_ask, touch_bid = book.asks[0].price, book.bids[0].price
+        points = []
+        for size in sorted(set(sizes)):
+            shares = (size / spec.lot).to_integral_value(rounding=ROUND_DOWN) * spec.lot
+            if shares < spec.minimum_shares:
+                return abstain("BELOW_MINIMUM_ORDER_SIZE")
+            ask_marginal, ask_vwap = _walk_side(book.asks, shares)
+            bid_marginal, bid_vwap = _walk_side(book.bids, shares)
+            both = ask_marginal is not None and bid_marginal is not None
+            points.append(
+                DepthProfilePoint(
+                    shares=shares,
+                    ask_covered=ask_marginal is not None,
+                    bid_covered=bid_marginal is not None,
+                    ask_marginal_price=ask_marginal,
+                    bid_marginal_price=bid_marginal,
+                    ask_vwap=ask_vwap,
+                    bid_vwap=bid_vwap,
+                    buy_walk_slippage_vs_touch=None if ask_vwap is None else ask_vwap - touch_ask,
+                    sell_walk_slippage_vs_touch=None if bid_vwap is None else touch_bid - bid_vwap,
+                    spread_at_depth=ask_marginal - bid_marginal if both else None,
+                    vwap_spread_at_depth=ask_vwap - bid_vwap if both else None,
+                )
+            )
+        return DepthProfile(
+            status="modeled", token_id=book.token_id, book_hash=book.book_hash, points=points
+        )
+
+
 def complement_summary(yes: BinaryBook, no: BinaryBook) -> dict:
     """Independent displayed inequalities, never fungible/netted liquidity."""
     result = {
