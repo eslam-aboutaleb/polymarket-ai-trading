@@ -1,0 +1,10 @@
+{
+  "skill": "cross-market-consistency",
+  "evidence_class": "implemented_detector",
+  "execution_eligible": false,
+  "shadow_period": "not run",
+  "false_alert_rate": null,
+  "baseline_comparison": "not recorded: no historical verified relation set exists yet",
+  "note": "Only synthetic fixtures. No profitability or detection-quality claim.",
+  "independent_replication": ["Run backend/tests/test_cross_market_consistency*.py", "Record a shadow period on verified relations before any promotion"]
+}
