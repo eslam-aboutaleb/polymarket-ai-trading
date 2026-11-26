@@ -127,10 +127,16 @@ class RecordVerdictTests(unittest.TestCase):
         self.assertIsNone(self._record())
         self.assertEqual(len(self._rows()), 1)
 
-    def test_rounded_price_key_dedupes(self):
-        # 0.1234 and 0.12344 both round to 0.123 → same dedupe key.
+    def test_rounded_equal_prices_are_distinct_full_precision_requests(self):
+        # The identity is the full-precision input (issue #60): two prices that
+        # round to the same 0.1c are two decisions, not a replay.
         self.assertIsNotNone(self._record(market_price=0.1234))
-        self.assertIsNone(self._record(market_price=0.12344))
+        self.assertIsNotNone(self._record(market_price=0.12344))
+        self.assertEqual(len(self._rows()), 2)
+
+    def test_identical_full_precision_request_is_a_replay(self):
+        self.assertIsNotNone(self._record(market_price=0.1234))
+        self.assertIsNone(self._record(market_price=0.1234))
         self.assertEqual(len(self._rows()), 1)
 
     def test_different_price_writes_second_row(self):
@@ -163,11 +169,13 @@ class RecordVerdictTests(unittest.TestCase):
         self.assertAlmostEqual(rows[0].ai_probability, 0.7)
         self.assertAlmostEqual(rows[1].ai_probability, 0.8)
 
-    def test_rounded_probability_key_dedupes(self):
-        # 0.7004 and 0.7001 both round to 0.700 → the same sample.
+    def test_rounded_equal_probabilities_are_distinct_revisions(self):
+        # 0.7004 and 0.7001 round to the same 0.700 but are different stated
+        # forecasts; only an identical full-precision request is a replay.
         self.assertIsNotNone(self._record(ai_probability=0.7004))
+        self.assertIsNotNone(self._record(ai_probability=0.7001))
         self.assertIsNone(self._record(ai_probability=0.7001))
-        self.assertEqual(len(self._rows()), 1)
+        self.assertEqual(len(self._rows()), 2)
 
     def test_a_replayed_verdict_stays_one_row_and_one_sample(self):
         """A replayed SSE verdict must not become a second sample.
