@@ -129,6 +129,9 @@ def _engine_settings(**overrides) -> Settings:
     kwargs = {
         "latency_arb_late_entry": True,
         "latency_arb_live": False,
+        # This module tests paper-mode gating on a Gamma-priced market; the
+        # live order-book path is covered in test_live_book_feed.py.
+        "latency_arb_book_feed_enabled": False,
     }
     kwargs.update(overrides)
     return Settings(**kwargs)

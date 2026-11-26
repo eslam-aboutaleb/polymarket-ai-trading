@@ -23,6 +23,7 @@ server-side by title pattern, mirroring ``polymarket_service``.
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import re
@@ -162,9 +163,33 @@ def _market_title(event: dict[str, Any], market: dict[str, Any]) -> str:
     return ""
 
 
+def _json_list(value: Any) -> list[Any] | None:
+    """Gamma returns list-valued market fields as JSON-encoded strings."""
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    if isinstance(value, str) and value.strip().startswith("["):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            return None
+        return parsed if isinstance(parsed, list) else None
+    return None
+
+
 def _extract_tokens(market: dict[str, Any]) -> dict[str, str]:
     """Map outcome labels to token ids for the up/down legs."""
     tokens: dict[str, str] = {}
+    clob_ids = _json_list(market.get("clobTokenIds"))
+    outcomes = _json_list(market.get("outcomes"))
+    if clob_ids and outcomes and len(clob_ids) == len(outcomes):
+        for outcome, token_id in zip(outcomes, clob_ids, strict=True):
+            label = str(outcome).strip().lower()
+            if label in _UP_OUTCOMES and token_id:
+                tokens["up"] = str(token_id)
+            elif label in _DOWN_OUTCOMES and token_id:
+                tokens["down"] = str(token_id)
+        if tokens:
+            return tokens
     for token in market.get("tokens") or []:
         if not isinstance(token, dict):
             continue
@@ -182,8 +207,8 @@ def _extract_tokens(market: dict[str, Any]) -> dict[str, str]:
 def _extract_prices(market: dict[str, Any]) -> dict[str, float]:
     """Current up/down prices from the market payload."""
     prices: dict[str, float] = {}
-    outcome_prices = market.get("outcomePrices")
-    if isinstance(outcome_prices, (list, tuple)) and len(outcome_prices) >= 2:
+    outcome_prices = _json_list(market.get("outcomePrices"))
+    if outcome_prices and len(outcome_prices) >= 2:
         try:
             prices["up"] = float(outcome_prices[0])
             prices["down"] = float(outcome_prices[1])
@@ -203,6 +228,29 @@ def _extract_prices(market: dict[str, Any]) -> dict[str, float]:
         elif outcome in _DOWN_OUTCOMES:
             prices["down"] = price
     return prices
+
+
+_SLUG_WINDOW = re.compile(r"-updown-(\d+)(m|h)-", re.IGNORECASE)
+
+
+def _window_from_event(event: dict[str, Any], market: dict[str, Any]) -> int | None:
+    """Window length when the title carries a time range instead of "5m".
+
+    Current Gamma titles read "Bitcoin Up or Down - November 25, 6:55PM-7:00PM
+    ET", so the length comes from the event slug (``btc-updown-5m-<epoch>``) or,
+    failing that, from the start/end times.
+    """
+    slug = str(event.get("slug") or market.get("slug") or "")
+    found = _SLUG_WINDOW.search(slug)
+    if found:
+        minutes = int(found.group(1)) * (60 if found.group(2).lower() == "h" else 1)
+        return minutes if minutes in WINDOW_MINUTES else None
+    start = _parse_iso_datetime(market.get("eventStartTime") or event.get("startTime"))
+    end = _parse_iso_datetime(market.get("endDate") or event.get("endDate"))
+    if start is None or end is None:
+        return None
+    minutes = round((end - start).total_seconds() / 60)
+    return minutes if minutes in WINDOW_MINUTES else None
 
 
 def _align_window_start(epoch_seconds: int, window_minutes: int) -> int:
@@ -248,7 +296,7 @@ def parse_crypto_markets(
             window_minutes = next(
                 (minutes for minutes, pattern in _WINDOW_PATTERNS.items() if pattern.search(title)),
                 None,
-            )
+            ) or _window_from_event(event, market)
             if window_minutes is None:
                 continue
             condition_id = str(market.get("conditionId") or market.get("condition_id") or "")
@@ -257,7 +305,14 @@ def parse_crypto_markets(
             token_ids = _extract_tokens(market)
             if not token_ids:
                 continue
-            start_date = _parse_iso_datetime(market.get("startDate") or event.get("startDate"))
+            # ``eventStartTime`` is the window boundary; ``startDate`` is when
+            # the market was created (often the day before) and only a fallback.
+            start_date = _parse_iso_datetime(
+                market.get("eventStartTime")
+                or event.get("startTime")
+                or market.get("startDate")
+                or event.get("startDate")
+            )
             if start_date is None:
                 continue
             window_start = _align_window_start(int(start_date.timestamp()), window_minutes)
@@ -314,6 +369,36 @@ async def _fetch_gamma_events(limit: int = FETCH_LIMIT) -> list[dict[str, Any]]:
     return events if isinstance(events, list) else []
 
 
+def window_slugs(now: datetime | None = None) -> list[str]:
+    """Deterministic Gamma slugs for the current and next 5m/15m windows."""
+    moment = now or datetime.now(UTC)
+    slugs: list[str] = []
+    for window_minutes in (5, 15):
+        start = current_window_start(window_minutes, moment)
+        for offset in (0, 1):
+            for symbol in SYMBOLS:
+                epoch = start + offset * window_minutes * 60
+                slugs.append(f"{symbol.lower()}-updown-{window_minutes}m-{epoch}")
+    return slugs
+
+
+async def _fetch_slug_events(slugs: list[str]) -> list[dict[str, Any]]:
+    """Fetch one Gamma event per slug (windows are named by their start epoch)."""
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
+
+        async def one(slug: str) -> list[dict[str, Any]]:
+            try:
+                response = await client.get(f"{POLYMARKET_GAMMA_API}/events", params={"slug": slug})
+                body = response.json() if response.status_code == 200 else []
+            except Exception as exc:
+                logger.debug("Gamma slug %s failed: %s", slug, exc)
+                return []
+            return body if isinstance(body, list) else []
+
+        batches = await asyncio.gather(*(one(slug) for slug in slugs))
+    return [event for batch in batches for event in batch]
+
+
 async def refresh_markets() -> int:
     """Rebuild the market mapping from the Gamma API.
 
@@ -323,14 +408,89 @@ async def refresh_markets() -> int:
     global _markets, _last_refresh_at
     try:
         events = await _fetch_gamma_events()
+        # The generic listing is capped (and misses windows that just opened),
+        # so the current and next 5m/15m windows are fetched by slug as well.
+        events = events + await _fetch_slug_events(window_slugs())
     except Exception as exc:
         logger.warning("Crypto market discovery failed: %s", exc)
         return len(_markets)
     parsed = parse_crypto_markets(events)
     _markets = parsed
     _last_refresh_at = datetime.now(UTC).timestamp()
+    _sync_live_book_tokens(parsed)
     logger.debug("Crypto markets refreshed: %d active windows", len(parsed))
     return len(parsed)
+
+
+def _sync_live_book_tokens(markets: dict[tuple[str, int, int], CryptoMarket]) -> None:
+    """Tell the live order-book feed which outcome tokens to follow."""
+    try:
+        if not get_settings().latency_arb_book_feed_enabled:
+            return
+        from app.services.market_data.live_book_service import get_live_book_feed
+
+        get_live_book_feed().set_tokens(
+            {token for m in markets.values() for token in m.token_ids.values()}
+        )
+    except Exception:
+        logger.warning("Live book token sync failed", exc_info=True)
+
+
+def with_live_prices(market: CryptoMarket) -> CryptoMarket | None:
+    """A copy of ``market`` priced from the live order book, or ``None``.
+
+    Prices are the mid of the best bid/ask of each outcome token. ``None``
+    means the live book is missing or not fresh; the caller must not trade on
+    the 30 s Gamma price instead.
+    """
+    from app.services.market_data.live_book_service import get_live_book_feed
+
+    feed = get_live_book_feed()
+    up = feed.quote(market.up_token_id)
+    down = feed.quote(market.down_token_id)
+    if up is None or down is None:
+        return None
+    return CryptoMarket(
+        symbol=market.symbol,
+        window_minutes=market.window_minutes,
+        window_start_epoch=market.window_start_epoch,
+        condition_id=market.condition_id,
+        token_ids=dict(market.token_ids),
+        prices={"up": up.mid, "down": down.mid},
+        question=market.question,
+        start_date=market.start_date,
+        end_date=market.end_date,
+    )
+
+
+def live_quote_for_condition(condition_id: str) -> dict[str, Any] | None:
+    """Live up/down book quotes for a tracked crypto window, or ``None``.
+
+    Read-only view for the AI context. It reads the same live order-book feed
+    the edge calculation uses, so the numbers an agent sees match the numbers
+    the engine trades on. Returns ``None`` when the condition is not a tracked
+    window or the live book is not fresh.
+    """
+    from app.services.market_data.live_book_service import get_live_book_feed
+
+    wanted = condition_id.lower()
+    for market in _markets.values():
+        if market.condition_id.lower() != wanted:
+            continue
+        feed = get_live_book_feed()
+        up, down = feed.quote(market.up_token_id), feed.quote(market.down_token_id)
+        if up is None or down is None:
+            return None
+        return {
+            "symbol": market.symbol,
+            "window_minutes": market.window_minutes,
+            "window_start_epoch": market.window_start_epoch,
+            "condition_id": market.condition_id,
+            "up": up.to_dict(),
+            "down": down.to_dict(),
+            "source": "clob_ws",
+        }
+    return None
 
 
 def get_market(
