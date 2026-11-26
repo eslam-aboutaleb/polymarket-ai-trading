@@ -674,6 +674,80 @@ class AnalysisClient:
         # gRPC server-streaming contract and implementation.
         yield analysis_text
 
+    async def analyze_trader_events(
+        self,
+        wallet_address: str,
+        display_name: str = "",
+        total_pnl: float = 0.0,
+        win_rate: float = 0.0,
+        trade_count: int = 0,
+        markets_traded: int = 0,
+        recent_trades_json: str = "[]",
+        user_id: str = "",
+        llm_config: dict[str, Any] | None = None,
+        max_reconnects: int = 2,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Stream typed trader-analysis events from the server-streaming RPC.
+
+        Events are ordered and de-duplicated by sequence. After a transport
+        failure the stream is resumed with ``analysis_id`` and the last
+        sequence; replayed events carry ``replayed=True`` and are labelled
+        ``buffered_replay``. A stream that ends without a completion or error
+        event raises instead of looking finished.
+        """
+        import uuid
+
+        from app.grpc_clients import analysis_pb2
+        from app.grpc_clients.trader_stream import (
+            StreamGapError,
+            TraderStreamAssembler,
+            frame_to_event,
+        )
+
+        stub = await self._get_stub()
+        trader_kwargs = {
+            "wallet_address": wallet_address,
+            "display_name": display_name,
+            "total_pnl": total_pnl,
+            "win_rate": win_rate,
+            "trade_count": trade_count,
+            "markets_traded": markets_traded,
+            "recent_trades_json": recent_trades_json,
+            "user_id": user_id,
+        }
+        proto_llm_config = _build_llm_config(llm_config)
+        if proto_llm_config is not None:
+            trader_kwargs["llm_config"] = proto_llm_config
+        trader = analysis_pb2.TraderAnalysisRequest(**trader_kwargs)
+        analysis_id = uuid.uuid4().hex
+        assembler = TraderStreamAssembler()
+        attempts = 0
+        while True:
+            request = analysis_pb2.TraderStreamRequest(
+                request=trader,
+                analysis_id=analysis_id,
+                resume_after_sequence=assembler.last_sequence,
+            )
+            call = stub.AnalyzeTraderStream(request, timeout=settings.grpc_timeout * 2)
+            try:
+                async for frame in call:
+                    for event in assembler.feed(frame_to_event(frame)):
+                        yield event
+                    if assembler.terminal is not None:
+                        break
+                if assembler.terminal is not None:
+                    assembler.finish()
+                    return
+                raise ConnectionError("stream ended without a terminal event")
+            except (grpc.RpcError, ConnectionError) as exc:
+                attempts += 1
+                if attempts > max_reconnects:
+                    raise RuntimeError(f"trader stream failed after {attempts} attempts") from exc
+            except StreamGapError:
+                raise
+            finally:
+                call.cancel()
+
     async def evaluate_copy_trade(
         self,
         trader_wallet: str,
