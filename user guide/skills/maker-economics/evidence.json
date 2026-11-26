@@ -1,0 +1,18 @@
+{
+  "skill": "maker-economics",
+  "version": "maker-economics-v1",
+  "status": "implemented_detector",
+  "execution_eligible": false,
+  "owner": "backend/app/services/analytics/maker_economics.py",
+  "dependencies": ["#8", "#18", "#26", "#27", "#34"],
+  "gates": {
+    "live_trading_unchanged": true,
+    "credentials_required": false,
+    "modeled_fills_never_realized": true,
+    "abstain_on_unknown_fee_or_cost": true
+  },
+  "production_approved": false,
+  "shadow_baseline": "not_recorded: no venue-confirmed maker fills exist yet",
+  "human_approval": "not_asserted",
+  "fee_table_version": "polymarket-fees-2026-11-25"
+}

@@ -1,0 +1,17 @@
+{
+  "skill": "forecast-calibration",
+  "version": "forecast-calibration-v1",
+  "status": "implemented_detector",
+  "execution_eligible": false,
+  "owner": "backend/app/services/intelligence/forecast_scoring.py",
+  "dependencies": ["#60", "#29", "#4"],
+  "gates": {
+    "live_trading_unchanged": true,
+    "credentials_required": false,
+    "pre_trade_gate_authoritative": true
+  },
+  "production_approved": false,
+  "human_approval": "not_asserted",
+  "shadow_report": "not_recorded: needs forward-recorded matched baselines (see SKILL.md)",
+  "trading_authority": "Existing pre-trade, durable execution and emergency halt unchanged"
+}
