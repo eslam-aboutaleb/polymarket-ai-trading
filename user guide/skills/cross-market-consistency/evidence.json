@@ -1,0 +1,17 @@
+{
+  "skill": "cross-market-consistency",
+  "version": "cross-market-consistency-v1",
+  "status": "implemented_detector",
+  "execution_eligible": false,
+  "owner": "backend/app/services/analytics/consistency/cross_market_consistency.py",
+  "dependencies": ["#9", "#16", "#20"],
+  "gates": {
+    "live_trading_unchanged": true,
+    "credentials_required": false,
+    "abstain_on_unverified_relation": true,
+    "promotion_requires": "verified rule mappings, forward shadow period with false-alert rate, human review"
+  },
+  "production_approved": false,
+  "shadow_report": "shadow-baseline.json",
+  "human_approval": "not_asserted"
+}
