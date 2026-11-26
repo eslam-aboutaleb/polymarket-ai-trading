@@ -407,3 +407,10 @@ def get_lifecycle_metrics() -> dict[str, Any]:
         "reports_stale_positions": True,
         "reports_duplicate_positions": True,
     }
+
+
+async def read_recorded_settlement(db, account):
+    """Account-scoped lifecycle read-side; never runs redemption or P&L writers."""
+    from app.services.analytics.settlement_read_side import recorded_settlement
+
+    return await recorded_settlement(db, account)

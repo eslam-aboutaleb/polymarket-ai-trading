@@ -777,12 +777,13 @@ class ExternalWebSocketTest(_ExternalBase):
         """Open the socket and return the close code the server chose."""
         from fastapi import WebSocketDisconnect
 
+        url = kwargs.pop("url", "/ws/v1")
         # The outer context is the catcher: the disconnect fires inside the
         # inner one, so the pair must nest — expressed as one parenthesised
         # with so the behaviour is unchanged but the block is one unit.
         with (
             self.assertRaises(WebSocketDisconnect) as ctx,
-            self.client.websocket_connect("/ws/v1", **kwargs) as ws,
+            self.client.websocket_connect(url, **kwargs) as ws,
         ):
             ws.receive_json()
         return ctx.exception.code
@@ -859,9 +860,19 @@ class ExternalWebSocketTest(_ExternalBase):
             self.assertEqual(frame["data"]["trade_id"], filled.id)
             self.assertEqual(frame["data"]["filled_price"], 0.61)
 
-    def test_url_query_key_is_accepted_as_a_fallback(self):
+    def test_url_query_key_is_rejected_by_default(self):
         _, secret = self._make_key()
-        with self.client.websocket_connect(f"/ws/v1?api_key={secret}") as ws:
+        self.assertEqual(
+            self._rejected_handshake(url=f"/ws/v1?api_key={secret}"),
+            4401,
+        )
+
+    def test_url_query_key_is_accepted_when_explicitly_enabled(self):
+        _, secret = self._make_key()
+        with (
+            patch.object(ws_module.get_settings(), "ws_allow_query_key", True),
+            self.client.websocket_connect(f"/ws/v1?api_key={secret}") as ws,
+        ):
             ws.send_json({"action": "subscribe", "channel": "positions"})
             self.assertEqual(ws.receive_json()["channel"], "positions")
 

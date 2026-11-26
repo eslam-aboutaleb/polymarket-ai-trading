@@ -27,6 +27,7 @@ import Leaderboard from "./components/Leaderboard";
 import TradeHistory from "./components/TradeHistory";
 import CopyTrading from "./components/CopyTrading";
 import WhaleFeed from "./components/WhaleFeed";
+import RedemptionPanel from "./components/RedemptionPanel";
 import ExecutionAnalytics from "./components/ExecutionAnalytics";
 import CalibrationPanel from "./components/CalibrationPanel";
 import NotFound from "./components/NotFound";
@@ -162,6 +163,7 @@ function App() {
                   <Route path="trades" element={<TradeHistory />} />
                   <Route path="whales" element={<WhaleFeed />} />
                   <Route path="analytics/execution" element={<ExecutionAnalytics />} />
+                  <Route path="portfolio/redemptions" element={<RedemptionPanel />} />
                   <Route path="analytics/calibration" element={<CalibrationPanel />} />
                   <Route path="analytics/risk" element={<RiskReportPage />} />
                   <Route path="latency-arb" element={<LatencyArb />} />
