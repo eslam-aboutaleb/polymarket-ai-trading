@@ -71,6 +71,26 @@ test.describe("Forecast calibration", () => {
       );
     }
   });
+
+  test("forecast scorecard shows what the real evidence endpoint says about an unknown id", async ({
+    adminPage: page,
+  }) => {
+    await page.reload();
+    const card = page.getByTestId("forecast-scorecard");
+    await expect(card.getByText("Forecast scorecard")).toBeVisible();
+    const responded = page.waitForResponse((r) => r.url().includes("/api/analysis/forecasts/"));
+    await card.getByLabel("Forecast id").fill("does-not-exist");
+    await card.getByRole("button", { name: "Show evidence" }).click();
+    const response = await responded;
+    if (response.status() === 503) {
+      await expect(page.getByTestId("scorecard-disabled")).toBeVisible();
+    } else {
+      expect(response.status()).toBe(404);
+      await expect(card.getByRole("alert")).toContainText("No such forecast");
+    }
+    // Nothing is claimed for a forecast the backend does not know.
+    await expect(page.getByTestId("scorecard-forecast")).toHaveCount(0);
+  });
 });
 
 test.describe("Portfolio risk report", () => {
