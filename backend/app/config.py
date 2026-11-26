@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     resolution_rule_analysis_enabled: bool = False
     binary_valuation_enabled: bool = False
     oracle_basis_risk_enabled: bool = False
+    portfolio_allocation_enabled: bool = False
     cross_market_consistency_enabled: bool = False
     event_correlation_risk_enabled: bool = False
     forecast_calibration_enabled: bool = False
