@@ -372,6 +372,31 @@ def twap_probability_up(
     return normal_cdf((expected - reference) / sd)
 
 
+def pick_edge_threshold(
+    history: list[tuple[float, float, float]],
+    grid: tuple[float, ...] = (0.10, 0.15, 0.20),
+    min_trades: int = 100,
+    default: float = 0.15,
+) -> float:
+    """Walk-forward threshold: the grid value with the best ROI on past trades.
+
+    ``history`` is ``(edge, pnl, stake)`` per past signal. Call it with rows
+    from BEFORE the period it will be applied to, never the same period.
+    A threshold with fewer than ``min_trades`` past signals is not eligible;
+    when none qualifies (or none is positive) ``default`` is returned.
+    """
+    best: tuple[float, float] | None = None
+    for threshold in grid:
+        rows = [(pnl, stake) for edge, pnl, stake in history if edge >= threshold]
+        stake_total = sum(stake for _, stake in rows)
+        if len(rows) < min_trades or stake_total <= 0.0:
+            continue
+        roi = sum(pnl for pnl, _ in rows) / stake_total
+        if roi > 0.0 and (best is None or roi > best[1]):
+            best = (threshold, roi)
+    return best[0] if best is not None else default
+
+
 def compute_edge(p_model: float, p_market: float) -> float:
     """Absolute probability gap between model and market."""
     return abs(float(p_model) - float(p_market))
@@ -493,6 +518,12 @@ def evaluate_opportunity(
     leg_price = p_market if side == "up" else 1.0 - p_market
     edge = gross_edge - max(fee_rate, 0.0) * leg_price * (1.0 - leg_price)
     if edge < threshold:
+        return None
+    settings = get_settings()
+    own_probability = p_model if side == "up" else 1.0 - p_model
+    if own_probability < settings.latency_arb_min_own_probability:
+        return None
+    if not settings.latency_arb_leg_price_min <= leg_price <= settings.latency_arb_leg_price_max:
         return None
     return Opportunity(
         symbol=symbol.upper(),
