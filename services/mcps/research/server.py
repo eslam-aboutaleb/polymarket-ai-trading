@@ -57,6 +57,15 @@ except ImportError:
     _BINANCE_AVAILABLE = False
     binance_skills = None  # type: ignore
 
+# ── Read-only financial skills adapter (issue #28) ────────
+# Disabled unless FINANCIAL_SKILLS_ENABLED is set; evaluated on every call.
+try:
+    from financial_skills import SkillsAdapter
+
+    _FINANCIAL_SKILLS = SkillsAdapter()
+except ImportError:  # pragma: no cover - package ships with this server
+    _FINANCIAL_SKILLS = None
+
 
 # ── Cross-venue market cache ─────────────────────────────
 # The venue cache lives in the backend: this server runs as a stdio
@@ -904,7 +913,26 @@ async def _structured_skill_research(tool, args):
         return unavailable
 
 
+def _tool_financial_skill(args):
+    if _FINANCIAL_SKILLS is None:
+        return {
+            "schema_version": "financial-skill-result-v1",
+            "status": "error",
+            "reason": "FINANCIAL_SKILLS_UNAVAILABLE",
+            "execution_eligible": False,
+        }
+    return _FINANCIAL_SKILLS.run(args, now=datetime.now(UTC).isoformat())
+
+
+def _describe_financial_skill(_args):
+    if _FINANCIAL_SKILLS is None:
+        return {"name": "financial_skill", "read_only": True, "skills": []}
+    return _FINANCIAL_SKILLS.describe()
+
+
 TOOLS: dict[str, Any] = {
+    "financial_skill": _tool_financial_skill,
+    "describe_financial_skill": _describe_financial_skill,
     "binary_book": _tool_binary_book,
     "describe_book_research": lambda _: BOOK_TOOL_SCHEMA,
     "resolution_rule_analysis": _tool_resolution_rule_analysis,
