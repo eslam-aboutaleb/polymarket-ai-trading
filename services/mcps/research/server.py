@@ -57,6 +57,15 @@ except ImportError:
     _BINANCE_AVAILABLE = False
     binance_skills = None  # type: ignore
 
+# ── Read-only financial skills adapter (issue #28) ────────
+# Disabled unless FINANCIAL_SKILLS_ENABLED is set; evaluated on every call.
+try:
+    from financial_skills import SkillsAdapter
+
+    _FINANCIAL_SKILLS = SkillsAdapter()
+except ImportError:  # pragma: no cover - package ships with this server
+    _FINANCIAL_SKILLS = None
+
 
 # ── Cross-venue market cache ─────────────────────────────
 # The venue cache lives in the backend: this server runs as a stdio
@@ -733,8 +742,52 @@ def _tool_oracle_basis_risk(args):
     return _run_async(_structured_skill_research("oracle_basis_risk", args))
 
 
+def _tool_maker_economics(args):
+    return _run_async(_structured_skill_research("maker_economics", args))
+
+
 def _tool_event_correlation_risk(args):
     return _run_async(_structured_skill_research("event_correlation_risk", args))
+
+
+def _tool_event_logic(args):
+    return _run_async(_structured_skill_research("event_logic", args))
+
+
+EVENT_LOGIC_SCHEMA = {
+    "name": "event_logic",
+    "read_only": True,
+    "version": "event-logic-v1",
+    "description": (
+        "Exact probability bounds and coherence checks between related contracts "
+        "(complement, exclusive groups, nested thresholds, implication) with explicit "
+        "infeasibility conflicts and abstention; research only, no order action."
+    ),
+    "input_schema": json.loads(
+        (Path(__file__).parent / "schemas" / "event-logic-request.json").read_text()
+    ),
+}
+
+
+def _tool_forecast_calibration(args):
+    return _run_async(_structured_skill_research("forecast_calibration", args))
+
+
+FORECAST_CALIBRATION_SCHEMA = {
+    "name": "forecast_calibration",
+    "read_only": True,
+    "version": "forecast-skill-report-v1",
+    "description": (
+        "Proper-score forecast skill versus the matched market baseline with event-cluster "
+        "uncertainty, calibration, drift state and explicit abstention; research only, "
+        "no order action."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {"window_days": {"type": "integer", "minimum": 1, "maximum": 365}},
+        "additionalProperties": False,
+    },
+}
 
 
 def _tool_recorded_event_risk(args):
@@ -767,6 +820,27 @@ BINARY_VALUATION_TOOL_SCHEMA = {
     ),
     "input_schema": json.loads(
         (Path(__file__).parent / "schemas" / "binary-valuation-request.json").read_text()
+    ),
+}
+
+
+MAKER_ECONOMICS_TOOL_SCHEMA = {
+    "name": "maker_economics",
+    "read_only": True,
+    "version": "maker-economics-v1",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "account_id": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+            "config_id": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        },
+        "required": ["config_id"],
+        "additionalProperties": False,
+    },
+    "description": (
+        "Recorded maker quote economics: realized vs modeled P&L, effective spread, "
+        "post-fill markouts, adverse selection, nonfills and a kill-switch recommendation. "
+        "Modeled fills are never reported as realized; no order, signing or cancel action."
     ),
 }
 
@@ -810,15 +884,22 @@ async def _structured_skill_research(tool, args):
         ),
         "binary_contract_valuation": ("POST", "/api/valuation/binary", "binary-valuation-v1"),
         "oracle_basis_risk": ("POST", "/api/oracle-basis/analyze", "oracle-basis-v1"),
+        "maker_economics": ("GET", "/api/market-maker/economics", "maker-economics-v1"),
         "event_correlation_risk": (
             "POST",
             "/api/risk/event-correlation/analyze",
             "event-correlation-risk-v1",
         ),
+        "event_logic": ("POST", "/api/analysis/event-logic/analyze", "event-logic-v1"),
         "recorded_event_correlation_risk": (
             "GET",
             "/api/risk/event-correlation/recorded",
             "event-correlation-risk-v1",
+        ),
+        "forecast_calibration": (
+            "GET",
+            "/api/analysis/calibration/skill-report",
+            "forecast-skill-report-v1",
         ),
     }
     if tool not in contracts:
@@ -834,9 +915,29 @@ async def _structured_skill_research(tool, args):
     if VENUE_API_TOKEN:
         headers["Authorization"] = f"Bearer {VENUE_API_TOKEN}"
     kwargs = {}
-    if method == "GET":
-        if set(args) - {"account_id"}:
+    if tool == "forecast_calibration":
+        window = args.get("window_days", 30)
+        if (
+            set(args) - {"window_days"}
+            or isinstance(window, bool)
+            or not isinstance(window, int)
+            or not 0 < window <= 365
+        ):
             return unavailable
+        kwargs["params"] = {"window_days": window, "scope": "user"}
+    elif method == "GET":
+        allowed = {"account_id", "config_id"} if tool == "maker_economics" else {"account_id"}
+        if set(args) - allowed:
+            return unavailable
+        if tool == "maker_economics":
+            config = args.get("config_id")
+            if (
+                isinstance(config, bool)
+                or not isinstance(config, int)
+                or not 0 < config <= 2147483647
+            ):
+                return unavailable
+            kwargs["params"] = {"config_id": config}
         if "account_id" in args:
             account = args["account_id"]
             if (
@@ -910,7 +1011,26 @@ def _tool_recorded_settlement(args):
     return _run_async(_structured_skill_research("recorded_settlement_and_redemption", args))
 
 
+def _tool_financial_skill(args):
+    if _FINANCIAL_SKILLS is None:
+        return {
+            "schema_version": "financial-skill-result-v1",
+            "status": "error",
+            "reason": "FINANCIAL_SKILLS_UNAVAILABLE",
+            "execution_eligible": False,
+        }
+    return _FINANCIAL_SKILLS.run(args, now=datetime.now(UTC).isoformat())
+
+
+def _describe_financial_skill(_args):
+    if _FINANCIAL_SKILLS is None:
+        return {"name": "financial_skill", "read_only": True, "skills": []}
+    return _FINANCIAL_SKILLS.describe()
+
+
 TOOLS: dict[str, Any] = {
+    "financial_skill": _tool_financial_skill,
+    "describe_financial_skill": _describe_financial_skill,
     "settlement_and_redemption": _tool_settlement_and_redemption,
     "describe_settlement_and_redemption": lambda _: SETTLEMENT_TOOL_SCHEMA,
     "recorded_settlement_and_redemption": _tool_recorded_settlement,
@@ -922,9 +1042,15 @@ TOOLS: dict[str, Any] = {
     "binary_contract_valuation": _tool_binary_contract_valuation,
     "describe_binary_contract_valuation": lambda _: BINARY_VALUATION_TOOL_SCHEMA,
     "oracle_basis_risk": _tool_oracle_basis_risk,
+    "maker_economics": _tool_maker_economics,
+    "describe_maker_economics": lambda _: MAKER_ECONOMICS_TOOL_SCHEMA,
     "describe_oracle_basis_risk": lambda _: ORACLE_BASIS_TOOL_SCHEMA,
     "event_correlation_risk": _tool_event_correlation_risk,
     "recorded_event_correlation_risk": _tool_recorded_event_risk,
+    "event_logic": _tool_event_logic,
+    "describe_event_logic": lambda _: EVENT_LOGIC_SCHEMA,
+    "forecast_calibration": _tool_forecast_calibration,
+    "describe_forecast_calibration": lambda _: FORECAST_CALIBRATION_SCHEMA,
     "describe_recorded_event_correlation_risk": lambda _: RECORDED_EVENT_RISK_SCHEMA,
     "describe_event_correlation_risk": lambda _: EVENT_CORRELATION_TOOL_SCHEMA,
     "web_search": _tool_web_search,

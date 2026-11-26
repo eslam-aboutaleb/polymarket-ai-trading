@@ -36,11 +36,21 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
     The debug router is the only feature-gated router and stays in its
     original position in the sequence.
     """
-    from app.api.routes.analysis import analysis, calibration, experiments, orchestration, valuation
+    from app.api.routes.analysis import (
+        analysis,
+        calibration,
+        event_logic,
+        experiments,
+        forecasts,
+        opportunities,
+        orchestration,
+        valuation,
+    )
     from app.api.routes.auth import accounts, auth, credentials
     from app.api.routes.billing import billing
     from app.api.routes.markets import (
         binance_signals,
+        consistency,
         markets,
         microstructure,
         news,
@@ -48,6 +58,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         oracle_basis,
         resolution_rules,
         venues,
+        whale_signal_quality,
         whales,
     )
     from app.api.routes.platform import (
@@ -59,10 +70,19 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         ws_v1,
     )
     from app.api.routes.platform import settings as settings_routes
-    from app.api.routes.portfolio import event_risk, portfolio, risk_report, settlement
+    from app.api.routes.portfolio import (
+        allocation,
+        event_risk,
+        portfolio,
+        risk_report,
+        settlement,
+    )
     from app.api.routes.trading import (
+        arbitrage,
         backtesting,
+        copy_intelligence,
         executable_replay,
+        execution_estimate,
         follower_replay,
         inverse_bot,
         latency_arb,
@@ -70,6 +90,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         paper,
         replay_evidence,
         risk,
+        trader_evaluation,
         trades,
     )
 
@@ -79,10 +100,13 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         credentials,
         analysis,
         calibration,
+        forecasts,
+        event_logic,
         collaboration,
         experiments,
         valuation,
         portfolio,
+        allocation,
         event_risk,
         settlement,
         risk_report,
@@ -92,6 +116,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         markets,
         observations,
         microstructure,
+        consistency,
         oracle_basis,
         resolution_rules,
     ):
@@ -113,14 +138,20 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         paper,
         backtesting,
         executable_replay,
+        execution_estimate,
         follower_replay,
+        copy_intelligence,
+        trader_evaluation,
         binance_signals,
         news,
         health,
         whales,
+        whale_signal_quality,
         notifications,
         latency_arb,
+        arbitrage,
         orchestration,
+        opportunities,
         venues,
         billing,
     ):
@@ -131,6 +162,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
     # /api/portfolio/exposure (user-authenticated), and /ws/v1.
     app.include_router(external.router)
     app.include_router(trades.safety_router)
+    app.include_router(latency_arb.v1_router)
     app.include_router(external.api_keys_router)
     app.include_router(external.exposure_router)
     app.include_router(ws_v1.router)
