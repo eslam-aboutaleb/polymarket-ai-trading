@@ -195,7 +195,9 @@ class EdgeTests(unittest.TestCase):
         # Fresh Binance move (+0.35%) vs a coin-flip market
         # that has not adjusted: large edge, side = up.
         market = _market(up_price=0.5)
-        now = datetime.now(UTC)
+        now = datetime.fromtimestamp(
+            market.window_start_epoch + 150, UTC
+        )  # mid-window: no wall-clock flake
         opportunity = evaluate_opportunity(
             "BTC",
             5,
@@ -221,7 +223,9 @@ class EdgeTests(unittest.TestCase):
         # Price fell since the window opened while the market
         # still prices a coin flip → Down is underpriced.
         market = _market(up_price=0.5)
-        now = datetime.now(UTC)
+        now = datetime.fromtimestamp(
+            market.window_start_epoch + 150, UTC
+        )  # mid-window: no wall-clock flake
         opportunity = evaluate_opportunity(
             "BTC",
             5,
@@ -240,7 +244,9 @@ class EdgeTests(unittest.TestCase):
     def test_evaluate_opportunity_below_threshold(self):
         # Tiny move vs an already-adjusted market: no edge.
         market = _market(up_price=0.51)
-        now = datetime.now(UTC)
+        now = datetime.fromtimestamp(
+            market.window_start_epoch + 150, UTC
+        )  # mid-window: no wall-clock flake
         opportunity = evaluate_opportunity(
             "BTC",
             5,
@@ -274,7 +280,9 @@ class EdgeTests(unittest.TestCase):
         # return units. Feeding it into σ made σ ~3000x too large, so P(Up)
         # stayed ~0.5 and the model was blind to the BTC move.
         market = _market(up_price=0.9)
-        now = datetime.now(UTC)
+        now = datetime.fromtimestamp(
+            market.window_start_epoch + 150, UTC
+        )  # mid-window: no wall-clock flake
         closes = _calm_closes()
         opportunity = evaluate_opportunity(
             "BTC",
