@@ -63,6 +63,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
     from app.api.routes.trading import (
         backtesting,
         executable_replay,
+        execution_estimate,
         follower_replay,
         inverse_bot,
         latency_arb,
@@ -112,6 +113,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         paper,
         backtesting,
         executable_replay,
+        execution_estimate,
         follower_replay,
         binance_signals,
         news,
