@@ -151,6 +151,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
     # /api/portfolio/exposure (user-authenticated), and /ws/v1.
     app.include_router(external.router)
     app.include_router(trades.safety_router)
+    app.include_router(latency_arb.v1_router)
     app.include_router(external.api_keys_router)
     app.include_router(external.exposure_router)
     app.include_router(ws_v1.router)
