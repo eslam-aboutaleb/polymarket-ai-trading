@@ -362,6 +362,7 @@ class ResearchMCPClient:
             "oracle_basis_risk",
             "event_correlation_risk",
             "recorded_event_correlation_risk",
+            "forecast_calibration",
         )
         values = await self.call_tools([("describe_" + name, {}) for name in names])
         if len(values) != len(names):
@@ -382,6 +383,7 @@ class ResearchMCPClient:
             "oracle_basis_risk": "oracle-basis-v1",
             "event_correlation_risk": "event-correlation-risk-v1",
             "recorded_event_correlation_risk": "event-correlation-risk-v1",
+            "forecast_calibration": "forecast-skill-report-v1",
         }
         if tool not in versions:
             raise ValueError("Unsupported read-only prediction-market skill")
@@ -393,6 +395,36 @@ class ResearchMCPClient:
         ):
             return {
                 "schema_version": versions[tool],
+                "status": "abstain",
+                "reason": "SKILL_TOOL_UNAVAILABLE_OR_UNSAFE",
+                "execution_eligible": False,
+            }
+        return result
+
+    async def financial_skill_evidence(
+        self,
+        skill_id: str,
+        skill_version: str,
+        context: dict[str, Any],
+        experiment_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Read-only, hash-pinned financial skill evidence; never executable or order-capable."""
+        version = "financial-skill-result-v1"
+        args: dict[str, Any] = {
+            "skill_id": skill_id,
+            "skill_version": skill_version,
+            "context": context,
+        }
+        if experiment_id:
+            args["experiment_id"] = experiment_id
+        result = await self._call_tool("financial_skill", args)
+        if (
+            not isinstance(result, dict)
+            or result.get("schema_version") != version
+            or result.get("execution_eligible") is not False
+        ):
+            return {
+                "schema_version": version,
                 "status": "abstain",
                 "reason": "SKILL_TOOL_UNAVAILABLE_OR_UNSAFE",
                 "execution_eligible": False,

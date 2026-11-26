@@ -21,6 +21,7 @@ from polymarket_mcp.research_contract import RESEARCH_CONTRACT
 from src.analysis_chain import get_chain_for_request, get_trading_chain
 from src.config import get_settings
 from src.llm_factory import get_available_providers, parse_llm_config_from_proto
+from src.market_rag import RAGRetrievalRequest
 from src.orchestrator import (
     OrchestrationError,
     build_plan,
@@ -29,6 +30,7 @@ from src.orchestrator import (
     run_plan,
     stream_plan,
 )
+from src.trader_stream import Frame, TraderStreamer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -86,12 +88,83 @@ def _get_provider_metadata(request) -> dict:
     return {}
 
 
+def _retrieval_metadata(retrieval: dict) -> dict[str, str]:
+    """Flatten a retrieval result dict into gRPC response metadata."""
+    hits = retrieval.get("hits", [])
+    index_age = retrieval.get("index_age_seconds")
+    meta = {
+        "retrieval_status": str(retrieval.get("status", "")),
+        "retrieval_source_count": str(len(hits)),
+        "retrieval_hit_ids": ",".join(str(h["condition_id"]) for h in hits),
+        "retrieval_omitted": json.dumps(retrieval.get("omitted", {}), sort_keys=True),
+        "retrieval_omitted_stale": str(retrieval.get("omitted", {}).get("stale", 0)),
+        "retrieval_embedding_version": str(retrieval.get("embedding_version", "")),
+        "retrieval_no_index_reason": (
+            str(retrieval.get("reason", "")) if retrieval.get("status") != "ok" else ""
+        ),
+        "retrieval_provider_error": str(retrieval.get("provider_error", "")),
+        "retrieval_cached": str(bool(retrieval.get("cached"))).lower(),
+        "retrieval_as_of": str(retrieval.get("as_of", "")),
+        "retrieval_hits_json": json.dumps(hits),
+    }
+    if index_age is not None:
+        meta["retrieval_index_age_seconds"] = f"{float(index_age):.1f}"
+    return meta
+
+
+def _frame_to_pb(frame: Frame):
+    return analysis_pb2.TraderAnalysisFrame(
+        analysis_id=frame.analysis_id,
+        event_type=frame.event_type,
+        provider_call_id=frame.provider_call_id,
+        sequence=frame.sequence,
+        observed_at=frame.observed_at,
+        replayed=frame.replayed,
+        text=frame.text,
+        end_state=frame.end_state,
+        error_code=frame.error_code,
+        error_message=frame.error_message,
+        metadata=frame.metadata,
+        output_tokens=frame.output_tokens,
+        time_to_first_token_ms=frame.time_to_first_token_ms,
+        total_ms=frame.total_ms,
+        stream_kind=frame.stream_kind,
+    )
+
+
+def _retrieval_enabled(settings) -> bool:
+    """True only when both RAG flags are on (absent flags count as off)."""
+    return bool(
+        getattr(settings, "rag_enabled", False)
+        and getattr(settings, "rag_retrieval_enabled", False)
+    )
+
+
+def _retrieval_request(request, settings) -> RAGRetrievalRequest | None:
+    """Build the RAG read request for an AnalyzeMarket call.
+
+    Returns None when retrieval is disabled, so the disabled route never
+    constructs a request, an embedding client or a store handle.
+    """
+    if not _retrieval_enabled(settings):
+        return None
+    return RAGRetrievalRequest(
+        query=request.market_title,
+        canonical_condition_id=request.condition_id,
+        token_id=request.token_id,
+        as_of=request.as_of,
+        max_results=5,
+        user_scope=request.user_id,
+    )
+
+
 class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
     """Implementation of AnalysisService for LLM Chain."""
 
     def __init__(self):
         self.settings = get_settings()
         self.default_chain = get_trading_chain()
+        self.trader_streamer = TraderStreamer(self.settings)
         logger.info(f"Initialized {self.settings.service_name} v{self.settings.service_version}")
         logger.info(f"Available providers: {list(get_available_providers().keys())}")
 
@@ -117,10 +190,17 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                     if request.research_instructions
                     else {}
                 ),
+                **(
+                    {"retrieval": retrieval}
+                    if (retrieval := _retrieval_request(request, self.settings))
+                    else {}
+                ),
             )
 
             metadata = {"backend": "llm-chain", "model": self.settings.llm_model}
             metadata.update(provider_meta)
+            if "retrieval" in result:
+                metadata.update(_retrieval_metadata(result["retrieval"]))
             if request.research_instructions:
                 metadata["research_contract"] = RESEARCH_CONTRACT
 
@@ -337,6 +417,94 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 timestamp=datetime.utcnow().isoformat(),
             )
 
+    def _trader_streamer(self) -> TraderStreamer:
+        streamer = getattr(self, "trader_streamer", None)
+        if streamer is None:
+            streamer = self.trader_streamer = TraderStreamer(self.settings)
+        return streamer
+
+    async def AnalyzeTraderStream(self, request, context):
+        """Server-streaming trader analysis backed by real provider token streaming.
+
+        The unary AnalyzeTrader RPC is unchanged and stays labelled as buffered.
+        """
+        streamer = self._trader_streamer()
+        trader = request.request
+        try:
+            if request.analysis_id and (
+                request.resume_after_sequence > 0 or streamer.record(request.analysis_id)
+            ):
+                # A resume (or an id that already exists) is served from the replay
+                # buffer; an unknown id with a resume point is reported as expired
+                # instead of silently regenerating different text.
+                async for frame in streamer.replay(
+                    request.analysis_id, request.resume_after_sequence
+                ):
+                    yield _frame_to_pb(frame)
+                return
+            if not trader.wallet_address:
+                # Reported in-band as a typed error frame, not a transport failure.
+                yield analysis_pb2.TraderAnalysisFrame(
+                    analysis_id=request.analysis_id,
+                    event_type="error",
+                    sequence=1,
+                    observed_at=datetime.utcnow().isoformat(),
+                    end_state="failed",
+                    error_code="INVALID_ARGUMENT",
+                    error_message="wallet_address is required",
+                )
+                return
+            logger.info("AnalyzeTraderStream request for wallet: %s", trader.wallet_address[:10])
+            chain = _get_chain_for_request(trader)
+            provider_meta = _get_provider_metadata(trader)
+            messages_holder: dict = {}
+
+            def research() -> str:
+                text = chain.trader_research(trader.wallet_address, trader.display_name)
+                messages_holder["messages"] = chain.trader_messages(
+                    trader.wallet_address,
+                    trader.display_name,
+                    trader.total_pnl,
+                    trader.win_rate,
+                    trader.trade_count,
+                    trader.markets_traded,
+                    trader.recent_trades_json,
+                    text,
+                )
+                return text
+
+            class _Lazy:
+                """Defers prompt construction until research has produced its context."""
+
+                def astream(self, _messages):
+                    return chain._get_task_llm("trader_profile").astream(
+                        messages_holder["messages"]
+                    )
+
+            metadata = {"backend": "llm-chain", "type": "trader_analysis"}
+            metadata.update(provider_meta)
+            async for frame in streamer.stream(
+                llm=_Lazy(),
+                messages=[],
+                research=research,
+                analysis_id=request.analysis_id,
+                provider=metadata,
+                time_remaining=context.time_remaining,
+            ):
+                yield _frame_to_pb(frame)
+        except Exception as e:
+            logger.error("AnalyzeTraderStream error: %s", type(e).__name__)
+            context.set_code(_grpc_status_code(e))
+            yield analysis_pb2.TraderAnalysisFrame(
+                analysis_id=request.analysis_id,
+                event_type="error",
+                sequence=1,
+                observed_at=datetime.utcnow().isoformat(),
+                end_state="failed",
+                error_code="PROVIDER_ERROR",
+                error_message="Trader analysis stream failed",
+            )
+
     async def EvaluateCopyTrade(self, request, context):
         """Evaluate whether to copy a specific trade."""
         try:
@@ -449,6 +617,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 "tavily": str(bool(self.settings.tavily_enabled)).lower(),
                 "newsapi": str(bool(self.settings.newsapi_enabled)).lower(),
                 "rag": str(bool(self.settings.rag_enabled)).lower(),
+                "rag_retrieval": str(_retrieval_enabled(self.settings)).lower(),
                 "model": self.settings.llm_model,
             },
         )
@@ -524,6 +693,8 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 markets=markets,
                 budget=request.budget or 100.0,
                 risk_tolerance=request.risk_tolerance or "medium",
+                use_retrieval=_retrieval_enabled(self.settings),
+                user_scope=request.user_id,
             )
 
             metadata = {
@@ -533,6 +704,9 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 "markets_evaluated": str(result.get("markets_evaluated", 0)),
             }
             metadata.update(provider_meta)
+
+            if "retrieval" in result:
+                metadata["retrieval_summary"] = json.dumps(result["retrieval"], sort_keys=True)
 
             best = result.get("best_trade", {})
             if best:

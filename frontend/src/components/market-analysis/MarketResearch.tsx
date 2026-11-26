@@ -4,6 +4,7 @@ import { marketContextService, type MarketContext } from "../../services/marketC
 import { getApiErrorMessage } from "../../utils/apiError";
 import ResearchBrief from "./ResearchBrief";
 import ObservationHistory from "./ObservationHistory";
+import MarketDeepDive from "./MarketDeepDive";
 
 export default function MarketResearch({ conditionId }: { conditionId: string }) {
   const [context, setContext] = useState<MarketContext | null>(null);
@@ -128,6 +129,7 @@ export default function MarketResearch({ conditionId }: { conditionId: string })
         </details>
       </section>
       <ResearchBrief key={conditionId} conditionId={conditionId} onContext={setContext} />
+      <MarketDeepDive key={`deep-dive-${conditionId}`} conditionId={conditionId} />
       <ObservationHistory key={`history-${conditionId}`} conditionId={conditionId} />
     </div>
   );

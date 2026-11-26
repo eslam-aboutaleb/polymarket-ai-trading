@@ -33,6 +33,7 @@ from src.llm_factory import (
     create_llm_for_task,
     get_provider_info,
 )
+from src.market_rag import MarketRAGService, RAGRetrievalRequest, RetrievalResult
 from src.mcp_client import ResearchMCPClient
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,8 @@ EVENTS_TO_SCREEN = 5
 MARKETS_TO_CONSIDER = 40
 MARKETS_TO_SELECT = 10
 MARKETS_TO_FORECAST = 5
+# Live-priced markets surfaced by retrieval that may join the forecast set.
+RETRIEVAL_EXTRA_CANDIDATES = 2
 
 # Lazy imports for optional providers
 _TavilyClient = None
@@ -313,13 +316,24 @@ class TradingAnalysisChain:
         include_research: bool = True,
         llm_override=None,
         research_instructions: str = "",
+        retrieval: RAGRetrievalRequest | None = None,
     ) -> dict[str, Any]:
-        """Perform comprehensive market analysis with optional web research."""
+        """Perform comprehensive market analysis with optional web research.
+
+        ``retrieval`` opts into the evidence-grounded RAG read path. It is a
+        pre-step: retrieved markets are labelled, untrusted context. The
+        prices passed to this method stay the only live prices.
+        """
         llm = self._get_task_llm("market_assessment", llm_override)
         news_context = ""
 
+        retrieval_result = await self._retrieve_related(retrieval)
+
         if include_research:
             news_context = await self._research_market(market_title, market_description)
+        retrieved_block = retrieval_result.prompt_block() if retrieval_result else ""
+        if retrieved_block:
+            news_context = "\n\n".join(part for part in (news_context, retrieved_block) if part)
 
         prompt_template = self.prompts.get("market_analysis", "market_assessment")
         analysis_prompt = prompt_template.format(
@@ -342,11 +356,33 @@ class TradingAnalysisChain:
 
         response = await llm.ainvoke(messages)
 
-        return {
+        result = {
             "analysis": response.content,
             "research_context": news_context,
             "timestamp": datetime.utcnow().isoformat(),
         }
+        if retrieval_result is not None:
+            result["retrieval"] = retrieval_result.to_dict()
+        return result
+
+    async def _retrieve_related(
+        self, retrieval: RAGRetrievalRequest | None
+    ) -> RetrievalResult | None:
+        """Run the optional RAG read. ``None`` means retrieval was not requested.
+
+        A disabled deployment returns a ``disabled`` result without any
+        embedding, store or LLM call; every failure degrades to an explicit
+        status so analysis continues on the existing path.
+        """
+        if retrieval is None:
+            return None
+        try:
+            return await MarketRAGService.get_instance().aretrieve(retrieval)
+        except Exception as exc:  # retrieval must never break analysis
+            logger.warning("RAG retrieval error: %s", type(exc).__name__)
+            return RetrievalResult(
+                status="unavailable", reason="provider_error", provider_error=type(exc).__name__
+            )
 
     async def analyze_market_stream(
         self,
@@ -833,7 +869,28 @@ class TradingAnalysisChain:
         recent_trades_json: str = "[]",
     ) -> dict[str, Any]:
         """Full trader profile analysis with internet research."""
-        # Web research on the trader
+        research_context = self.trader_research(wallet_address, display_name)
+        messages = self.trader_messages(
+            wallet_address,
+            display_name,
+            total_pnl,
+            win_rate,
+            trade_count,
+            markets_traded,
+            recent_trades_json,
+            research_context,
+        )
+        llm = self._get_task_llm("trader_profile")
+        response = await llm.ainvoke(messages)
+
+        return {
+            "analysis": response.content,
+            "research_context": research_context,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+    def trader_research(self, wallet_address: str, display_name: str = "") -> str:
+        """Web research context for a trader (shared by unary and streaming RPCs)."""
         research_context = ""
         try:
             queries = [
@@ -850,7 +907,20 @@ class TradingAnalysisChain:
             research_context = "\n---\n".join(results) if results else "No search results."
         except Exception as e:
             research_context = f"Research unavailable: {e}"
+        return research_context
 
+    def trader_messages(
+        self,
+        wallet_address: str,
+        display_name: str,
+        total_pnl: float,
+        win_rate: float,
+        trade_count: int,
+        markets_traded: int,
+        recent_trades_json: str,
+        research_context: str,
+    ) -> list:
+        """Prompt messages for trader analysis (shared by unary and streaming RPCs)."""
         prompt_template = self.prompts.get("trader_analysis", "profile_research")
         prompt = prompt_template.format(
             wallet_address=wallet_address,
@@ -861,20 +931,11 @@ class TradingAnalysisChain:
             markets_traded=markets_traded,
             recent_trades=recent_trades_json,
         )
-
         system_prompt = self.prompts.get("trader_analysis", "system_prompt")
-        messages = [
+        return [
             SystemMessage(content=system_prompt),
             HumanMessage(content=f"{prompt}\n\nInternet Research:\n{research_context}"),
         ]
-        llm = self._get_task_llm("trader_profile")
-        response = await llm.ainvoke(messages)
-
-        return {
-            "analysis": response.content,
-            "research_context": research_context,
-            "timestamp": datetime.utcnow().isoformat(),
-        }
 
     async def evaluate_copy_trade(
         self,
@@ -1187,6 +1248,8 @@ class TradingAnalysisChain:
         budget: float = 100.0,
         risk_tolerance: str = "medium",
         llm_override=None,
+        use_retrieval: bool = False,
+        user_scope: str = "",
     ) -> dict[str, Any]:
         """
         Autonomous trade discovery pipeline inspired by Polymarket/agents.
@@ -1351,9 +1414,22 @@ class TradingAnalysisChain:
                         ]
             candidate_markets = candidate_markets[:MARKETS_TO_SELECT]
 
+        # ── Step 2b: optional RAG read path (issue #39) ──
+        # Retrieval only ever *adds* candidates that already carry live prices
+        # from the caller's market list; an indexed price is never used.
+        retrieval_by_condition: dict[str, RetrievalResult] = {}
+        retrieval_summary: dict[str, Any] | None = None
+        if use_retrieval:
+            (
+                candidate_markets,
+                retrieval_by_condition,
+                retrieval_summary,
+            ) = await self._merge_retrieved_candidates(candidate_markets, markets, user_scope)
+
         # ── Step 3: Superforecast each candidate ──
         forecasts = []
-        for m in candidate_markets[:MARKETS_TO_FORECAST]:
+        forecast_limit = MARKETS_TO_FORECAST + (RETRIEVAL_EXTRA_CANDIDATES if use_retrieval else 0)
+        for m in candidate_markets[:forecast_limit]:
             question = m.get("question", "")
             prices = m.get("outcomePrices", [])
             try:
@@ -1366,6 +1442,13 @@ class TradingAnalysisChain:
             # Web research is best-effort; the forecast proceeds without it.
             with contextlib.suppress(Exception):
                 research_text = self.search_tool.run(f"{question} latest news")[:500]
+            retrieved = retrieval_by_condition.get(
+                str(m.get("condition_id") or m.get("conditionId") or "")
+            )
+            if retrieved is not None and retrieved.prompt_block():
+                research_text = "\n\n".join(
+                    part for part in (research_text, retrieved.prompt_block()) if part
+                )
 
             parsed, identity = await invoke_contract(
                 llm,
@@ -1440,7 +1523,7 @@ class TradingAnalysisChain:
 
         best = forecasts[0] if forecasts else {}
 
-        return {
+        discovery = {
             "best_trade": {
                 "question": str(final.get("question", best.get("question", ""))),
                 "side": str(final.get("side", best.get("side", "YES"))),
@@ -1458,6 +1541,60 @@ class TradingAnalysisChain:
             "risk_tolerance": risk_tolerance,
             "timestamp": datetime.utcnow().isoformat(),
         }
+        if retrieval_summary is not None:
+            discovery["retrieval"] = retrieval_summary
+        return discovery
+
+    async def _merge_retrieved_candidates(
+        self,
+        candidates: list[dict[str, Any]],
+        live_markets: list[dict[str, Any]],
+        user_scope: str,
+    ) -> tuple[list[dict[str, Any]], dict[str, RetrievalResult], dict[str, Any]]:
+        """Merge semantically related live markets into the candidate list.
+
+        Deduplication is by condition id and the order is deterministic:
+        existing candidates keep their position; additions are ordered by
+        (-similarity, condition_id) and capped at ``RETRIEVAL_EXTRA_CANDIDATES``.
+        """
+
+        def condition(market: dict[str, Any]) -> str:
+            return str(market.get("condition_id") or market.get("conditionId") or "")
+
+        live_by_id = {condition(m): m for m in live_markets if condition(m)}
+        seen = {condition(m) for m in candidates if condition(m)}
+        per_candidate: dict[str, RetrievalResult] = {}
+        additions: dict[str, float] = {}
+        statuses: dict[str, int] = {}
+        for market in candidates[:MARKETS_TO_FORECAST]:
+            cid = condition(market)
+            result = await self._retrieve_related(
+                RAGRetrievalRequest(
+                    query=str(market.get("question", "")),
+                    canonical_condition_id=cid,
+                    max_results=5,
+                    user_scope=user_scope,
+                )
+            )
+            if result is None:
+                continue
+            per_candidate[cid] = result
+            statuses[result.status] = statuses.get(result.status, 0) + 1
+            for hit in result.hits:
+                if hit.condition_id in live_by_id and hit.condition_id not in seen:
+                    additions[hit.condition_id] = max(
+                        additions.get(hit.condition_id, 0.0), hit.similarity
+                    )
+        ranked = sorted(additions.items(), key=lambda item: (-item[1], item[0]))
+        merged = list(candidates)
+        for cid, _ in ranked[:RETRIEVAL_EXTRA_CANDIDATES]:
+            merged.append(live_by_id[cid])
+        summary = {
+            "status_counts": statuses,
+            "added_condition_ids": [cid for cid, _ in ranked[:RETRIEVAL_EXTRA_CANDIDATES]],
+            "queries": len(per_candidate),
+        }
+        return merged, per_candidate, summary
 
     # ── NEW: News Article Generation ─────────────────────────
 

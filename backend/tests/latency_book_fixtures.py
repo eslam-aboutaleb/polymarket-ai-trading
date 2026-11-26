@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from book_research_fixtures import CID, clob_market
 
+from app.services.market_data.binary_book import Level
 from app.services.market_data.replay_capture import digest
 from app.services.trading.latency_book import ExecutableBookEvidence, authorize
 
@@ -59,6 +60,9 @@ def ready(token="token-1", condition="market-1", cash=50):
         received_at=now,
         source_at=now,
         expires_at=now + timedelta(seconds=1),
+        bids=[Level(price=Decimal(".49"), shares=Decimal(str(cash)) * 4)],
+        asks=[Level(price=Decimal(".5"), shares=Decimal(str(cash)) * 4)],
+        fee_usdc=Decimal(".5"),
         shares=Decimal(str(cash)) * 2,
         limit_price=Decimal(".5"),
         authorized_cash=Decimal(str(cash)),
