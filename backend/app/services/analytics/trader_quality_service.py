@@ -1,13 +1,15 @@
-"""
-Trader Quality Scoring Service.
+"""Trader Quality Scoring Service.
 
-Computes a composite quality score (0-100) for each trader based on:
-  1. Win Rate (25%) — percentage of profitable trades
-  2. PnL Consistency (25%) — stability across 24h/7d/30d periods
-  3. Risk-Adjusted Returns (25%) — total PnL relative to volume (efficiency)
-  4. Activity & Freshness (25%) — trade count, market diversity, recency
+The composite score is net-of-cost (issue #158), see ``trader_scoring``:
 
-Inspired by dexorynlabs/polymarket-agents and MrFadiAi scoring concepts.
+  1. Net PnL per dollar risked, shrunk toward zero for small samples
+  2. Maximum drawdown (only when per-position results are available)
+  3. Number of distinct resolved markets
+
+Win rate is no longer scored: on binary markets buying 95c favourites wins
+often and earns little. Traders below the minimum sample are ``UNRANKED`` with
+no score. ``consistency_score`` and ``activity_score`` are still reported for
+display but carry no weight in the composite.
 """
 
 import logging
@@ -18,32 +20,12 @@ from sqlalchemy.orm import Session
 
 from app.models.market_data.winner import Winner
 from app.repositories.market_data.winners import WinnerRepository
+from app.services.analytics.trader_scoring import TIER_THRESHOLDS, score_aggregates
 from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
 
-TIER_THRESHOLDS = {
-    "S": 85,
-    "A": 70,
-    "B": 55,
-    "C": 40,
-    "D": 0,
-}
-
-
-def _win_rate_score(win_rate: float) -> float:
-    """Score from 0-100 based on win rate."""
-    if win_rate is None or win_rate <= 0:
-        return 0.0
-    if win_rate >= 80:
-        return 100.0
-    if win_rate >= 70:
-        return 85.0 + (win_rate - 70) * 1.5
-    if win_rate >= 60:
-        return 70.0 + (win_rate - 60) * 1.5
-    if win_rate >= 50:
-        return 50.0 + (win_rate - 50) * 2.0
-    return max(0, win_rate * 1.0)
+__all__ = ["TIER_THRESHOLDS", "compute_quality_score", "get_trader_quality", "score_all_traders"]
 
 
 def _consistency_score(pnl_24h: float, pnl_7d: float, pnl_30d: float, total_pnl: float) -> float:
@@ -73,28 +55,6 @@ def _consistency_score(pnl_24h: float, pnl_7d: float, pnl_30d: float, total_pnl:
             base += 8
 
     return min(100.0, max(0.0, base))
-
-
-def _risk_adjusted_score(total_pnl: float, volume: float) -> float:
-    """Risk-adjusted return approximation: PnL / Volume ratio."""
-    if not volume or volume <= 0:
-        return 0.0
-    if not total_pnl:
-        return 0.0
-    efficiency = total_pnl / volume
-    if efficiency <= 0:
-        return max(0, 20 + efficiency * 200)
-    if efficiency >= 0.15:
-        return 100.0
-    if efficiency >= 0.10:
-        return 85.0 + (efficiency - 0.10) * 300
-    if efficiency >= 0.05:
-        return 70.0 + (efficiency - 0.05) * 300
-    if efficiency >= 0.02:
-        return 50.0 + (efficiency - 0.02) * 666
-    if efficiency >= 0.01:
-        return 35.0 + (efficiency - 0.01) * 1500
-    return efficiency * 3500
 
 
 def _activity_score(
@@ -141,6 +101,8 @@ def _activity_score(
 
     if last_trade_time:
         now = datetime.now(UTC)
+        if last_trade_time.tzinfo is None:  # SQLite returns naive UTC values
+            last_trade_time = last_trade_time.replace(tzinfo=UTC)
         age = now - last_trade_time
         if age < timedelta(days=1):
             score += 25
@@ -159,82 +121,76 @@ def _activity_score(
 
 
 def compute_quality_score(winner: Winner) -> dict[str, Any]:
-    """Compute composite quality score for a trader."""
-    wr_score = _win_rate_score(winner.win_rate or 0)
+    """Compute the net-of-cost quality score for a trader from leaderboard aggregates."""
+    result = score_aggregates(
+        total_pnl=winner.total_pnl or 0,
+        volume=winner.volume or 0,
+        markets_traded=winner.markets_traded or 0,
+        win_rate_pct=winner.win_rate,
+    )
     cons_score = _consistency_score(
         winner.pnl_24h or 0,
         winner.pnl_7d or 0,
         winner.pnl_30d or 0,
         winner.total_pnl or 0,
     )
-    ra_score = _risk_adjusted_score(winner.total_pnl or 0, winner.volume or 0)
     act_score = _activity_score(
         winner.trade_count or 0,
         winner.markets_traded or 0,
         winner.volume_24h or 0,
         winner.last_trade_time,
     )
-    composite = wr_score * 0.25 + cons_score * 0.25 + ra_score * 0.25 + act_score * 0.25
-    composite = round(min(100.0, max(0.0, composite)), 1)
-
-    tier = "D"
-    for t, threshold in sorted(TIER_THRESHOLDS.items(), key=lambda x: -x[1]):
-        if composite >= threshold:
-            tier = t
-            break
-
+    components = result["components"]
     return {
-        "quality_score": composite,
+        "quality_score": result["score"],
+        "quality_tier": result["tier"],
+        "risk_adjusted_score": None if components is None else components["return_score"],
         "consistency_score": round(cons_score, 1),
-        "risk_adjusted_score": round(ra_score, 1),
         "activity_score": round(act_score, 1),
-        "win_rate_score": round(wr_score, 1),
-        "quality_tier": tier,
+        "win_rate_score": None,
+        "status": result["status"],
+        "reasons": result["reasons"],
+        "net_return_per_dollar": result["net_return_per_dollar_raw"],
+        "net_return_per_dollar_shrunk": result["net_return_per_dollar_shrunk"],
+        "distinct_resolved_markets": result["distinct_resolved_markets"],
+        "max_drawdown": None,
+        "input_source": result["input_source"],
     }
+
+
+_STORED = (
+    "quality_score",
+    "consistency_score",
+    "risk_adjusted_score",
+    "activity_score",
+    "quality_tier",
+)
+
+
+def _store(winner: Winner, scores: dict[str, Any], now: datetime) -> None:
+    for key in _STORED:
+        setattr(winner, key, scores[key])
+    winner.quality_updated_at = now
 
 
 def score_all_traders(db: Session, min_trades: int = 5) -> int:
     """Recompute quality scores for all winners with enough trades."""
     winners = WinnerRepository(db).list_with_minimum_trades(min_trades)
-    count = 0
     now = utc_now()
     for w in winners:
-        scores = compute_quality_score(w)
-        w.quality_score = scores["quality_score"]
-        w.consistency_score = scores["consistency_score"]
-        w.risk_adjusted_score = scores["risk_adjusted_score"]
-        w.activity_score = scores["activity_score"]
-        w.quality_tier = scores["quality_tier"]
-        w.quality_updated_at = now
-        count += 1
+        _store(w, compute_quality_score(w), now)
     db.commit()
-    logger.info("Quality scoring complete: %d traders scored", count)
-    return count
+    logger.info("Quality scoring complete: %d traders scored", len(winners))
+    return len(winners)
 
 
 def get_trader_quality(db: Session, wallet_address: str) -> dict[str, Any] | None:
-    """Get quality score for a specific trader. Computes on-the-fly if stale."""
+    """Get the quality score for one trader, recomputed so status, reasons and
+    sample counts always match the stored score."""
     winner = WinnerRepository(db).get_by_wallet(wallet_address.lower())
     if not winner:
         return None
-    if (
-        winner.quality_score is None
-        or winner.quality_updated_at is None
-        or (utc_now() - winner.quality_updated_at).total_seconds() > 3600
-    ):
-        scores = compute_quality_score(winner)
-        winner.quality_score = scores["quality_score"]
-        winner.consistency_score = scores["consistency_score"]
-        winner.risk_adjusted_score = scores["risk_adjusted_score"]
-        winner.activity_score = scores["activity_score"]
-        winner.quality_tier = scores["quality_tier"]
-        winner.quality_updated_at = utc_now()
-        db.commit()
-        return scores
-    return {
-        "quality_score": winner.quality_score,
-        "consistency_score": winner.consistency_score,
-        "risk_adjusted_score": winner.risk_adjusted_score,
-        "activity_score": winner.activity_score,
-        "quality_tier": winner.quality_tier,
-    }
+    scores = compute_quality_score(winner)
+    _store(winner, scores, utc_now())
+    db.commit()
+    return scores

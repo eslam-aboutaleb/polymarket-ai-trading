@@ -18,6 +18,7 @@
     "test:walletconnect": "playwright test --config playwright.walletconnect.config.ts",
     "test:paper": "playwright test --config playwright.paper.config.ts",
     "test:observations": "playwright test --config playwright.observations.config.ts",
+    "test:arbitrage": "playwright test --config playwright.arbitrage.config.ts",
     "test:book": "playwright test --config playwright.book.config.ts",
     "test:maker": "playwright test --config playwright.maker.config.ts",
     "test:latency": "playwright test --config playwright.latency.config.ts",
@@ -25,7 +26,8 @@
     "test:latency-paper": "playwright test --config playwright.latency-paper.config.ts",
     "test:provider": "playwright test --config playwright.provider.config.ts",
     "test:reconciliation": "playwright test --config playwright.reconciliation.config.ts",
-    "test:session": "playwright test --config playwright.session.config.ts"
+    "test:session": "playwright test --config playwright.session.config.ts",
+    "test:evidence": "playwright test --config playwright.evidence.config.ts"
   },
   "dependencies": {
     "@walletconnect/ethereum-provider": "^2.26.0",
