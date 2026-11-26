@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     binary_valuation_enabled: bool = False
     oracle_basis_risk_enabled: bool = False
     event_correlation_risk_enabled: bool = False
+    forecast_calibration_enabled: bool = False
     live_account_reconciliation_enabled: bool = False
     observation_archive_enabled: bool = False
     historical_feed_canary_enabled: bool = False
