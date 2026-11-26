@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     paper_maker_queue_ahead: Decimal | None = Field(default=None, ge=0, le=1000000000)
     native_capture_enabled: bool = False
     follower_replay_enabled: bool = False
+    # Market Deep Dive 2.0 (#33): off switch leaves legacy analysis untouched.
+    market_deep_dive_v2_enabled: bool = True
+    analysis_run_retention_days: int = Field(default=365, ge=1, le=3650)
 
     # API Configuration
     api_title: str = "Polymarket AI Trading API"
