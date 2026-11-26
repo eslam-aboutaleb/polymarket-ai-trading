@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     event_logic_enabled: bool = False
     forecast_calibration_enabled: bool = False
     forecast_generation_enabled: bool = False
+    settlement_redemption_enabled: bool = False
     live_account_reconciliation_enabled: bool = False
     observation_archive_enabled: bool = False
     historical_feed_canary_enabled: bool = False
