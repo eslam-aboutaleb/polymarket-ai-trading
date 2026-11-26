@@ -21,6 +21,7 @@ from polymarket_mcp.research_contract import RESEARCH_CONTRACT
 from src.analysis_chain import get_chain_for_request, get_trading_chain
 from src.config import get_settings
 from src.llm_factory import get_available_providers, parse_llm_config_from_proto
+from src.market_rag import RAGRetrievalRequest
 from src.orchestrator import (
     OrchestrationError,
     build_plan,
@@ -86,6 +87,56 @@ def _get_provider_metadata(request) -> dict:
     return {}
 
 
+def _retrieval_metadata(retrieval: dict) -> dict[str, str]:
+    """Flatten a retrieval result dict into gRPC response metadata."""
+    hits = retrieval.get("hits", [])
+    index_age = retrieval.get("index_age_seconds")
+    meta = {
+        "retrieval_status": str(retrieval.get("status", "")),
+        "retrieval_source_count": str(len(hits)),
+        "retrieval_hit_ids": ",".join(str(h["condition_id"]) for h in hits),
+        "retrieval_omitted": json.dumps(retrieval.get("omitted", {}), sort_keys=True),
+        "retrieval_omitted_stale": str(retrieval.get("omitted", {}).get("stale", 0)),
+        "retrieval_embedding_version": str(retrieval.get("embedding_version", "")),
+        "retrieval_no_index_reason": (
+            str(retrieval.get("reason", "")) if retrieval.get("status") != "ok" else ""
+        ),
+        "retrieval_provider_error": str(retrieval.get("provider_error", "")),
+        "retrieval_cached": str(bool(retrieval.get("cached"))).lower(),
+        "retrieval_as_of": str(retrieval.get("as_of", "")),
+        "retrieval_hits_json": json.dumps(hits),
+    }
+    if index_age is not None:
+        meta["retrieval_index_age_seconds"] = f"{float(index_age):.1f}"
+    return meta
+
+
+def _retrieval_enabled(settings) -> bool:
+    """True only when both RAG flags are on (absent flags count as off)."""
+    return bool(
+        getattr(settings, "rag_enabled", False)
+        and getattr(settings, "rag_retrieval_enabled", False)
+    )
+
+
+def _retrieval_request(request, settings) -> RAGRetrievalRequest | None:
+    """Build the RAG read request for an AnalyzeMarket call.
+
+    Returns None when retrieval is disabled, so the disabled route never
+    constructs a request, an embedding client or a store handle.
+    """
+    if not _retrieval_enabled(settings):
+        return None
+    return RAGRetrievalRequest(
+        query=request.market_title,
+        canonical_condition_id=request.condition_id,
+        token_id=request.token_id,
+        as_of=request.as_of,
+        max_results=5,
+        user_scope=request.user_id,
+    )
+
+
 class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
     """Implementation of AnalysisService for LLM Chain."""
 
@@ -117,10 +168,17 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                     if request.research_instructions
                     else {}
                 ),
+                **(
+                    {"retrieval": retrieval}
+                    if (retrieval := _retrieval_request(request, self.settings))
+                    else {}
+                ),
             )
 
             metadata = {"backend": "llm-chain", "model": self.settings.llm_model}
             metadata.update(provider_meta)
+            if "retrieval" in result:
+                metadata.update(_retrieval_metadata(result["retrieval"]))
             if request.research_instructions:
                 metadata["research_contract"] = RESEARCH_CONTRACT
 
@@ -449,6 +507,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 "tavily": str(bool(self.settings.tavily_enabled)).lower(),
                 "newsapi": str(bool(self.settings.newsapi_enabled)).lower(),
                 "rag": str(bool(self.settings.rag_enabled)).lower(),
+                "rag_retrieval": str(_retrieval_enabled(self.settings)).lower(),
                 "model": self.settings.llm_model,
             },
         )
@@ -524,6 +583,8 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 markets=markets,
                 budget=request.budget or 100.0,
                 risk_tolerance=request.risk_tolerance or "medium",
+                use_retrieval=_retrieval_enabled(self.settings),
+                user_scope=request.user_id,
             )
 
             metadata = {
@@ -533,6 +594,9 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 "markets_evaluated": str(result.get("markets_evaluated", 0)),
             }
             metadata.update(provider_meta)
+
+            if "retrieval" in result:
+                metadata["retrieval_summary"] = json.dumps(result["retrieval"], sort_keys=True)
 
             best = result.get("best_trade", {})
             if best:
