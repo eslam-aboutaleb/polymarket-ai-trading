@@ -274,6 +274,13 @@ def test_quote_plan_endpoint_reads_a_real_http_book_and_enforces_ownership(
     threading.Thread(target=server.serve_forever, daemon=True).start()
     monkeypatch.setattr(service, "POLYMARKET_CLOB_API", f"http://127.0.0.1:{server.server_port}")
     _config(research_db)
+    from app.models.market_data.market import Market
+    from app.utils.time import utc_now
+
+    research_db.add(
+        Market(id=CID, question="q", status="active", end_date=utc_now() + timedelta(days=1))
+    )
+    research_db.commit()
     account = SimpleNamespace(id=1, owner_user_id=1, is_default=False)
     try:
         plan = asyncio.run(routes.maker_quote_plan(1, account=account, db=research_db))
@@ -284,3 +291,121 @@ def test_quote_plan_endpoint_reads_a_real_http_book_and_enforces_ownership(
         assert err.value.status_code == 404
     finally:
         server.shutdown()
+
+
+# ---- issue #156: pre-resolution window, toxicity switch, pilot report ----
+
+
+def test_no_quotes_inside_the_pre_resolution_window():
+    p = params(pre_resolution_window_seconds=120)
+    inside = build_quote_plan(p, state(seconds_to_resolution=D("120")), "yes")
+    assert inside.orders == [] and inside.reason_codes == ["PRE_RESOLUTION_WINDOW"]
+    outside = build_quote_plan(p, state(seconds_to_resolution=D("121")), "yes")
+    assert outside.orders and "PRE_RESOLUTION_WINDOW" not in outside.reason_codes
+    after = build_quote_plan(p, state(seconds_to_resolution=D("-5")), "yes")
+    assert after.orders == []
+
+
+def test_unknown_resolution_time_fails_closed_only_when_window_is_enabled():
+    closed = build_quote_plan(params(pre_resolution_window_seconds=60), state(), "yes")
+    assert closed.orders == [] and closed.reason_codes == ["RESOLUTION_TIME_UNKNOWN"]
+    assert build_quote_plan(params(), state(), "yes").orders
+
+
+def test_toxic_markout_pauses_quoting_but_needs_enough_samples():
+    p = params(toxicity_threshold=D("0.005"), toxicity_min_samples=5)
+    toxic = build_quote_plan(p, state(rolling_markout=D("-0.006"), markout_samples=5), "yes")
+    assert toxic.orders == [] and toxic.reason_codes == ["TOXIC_MARKOUT_PAUSE"]
+    few = build_quote_plan(p, state(rolling_markout=D("-0.5"), markout_samples=4), "yes")
+    assert few.orders
+    edge = build_quote_plan(p, state(rolling_markout=D("-0.005"), markout_samples=9), "yes")
+    assert edge.orders  # exactly at the threshold is not beyond it
+    unknown = build_quote_plan(p, state(rolling_markout=None, markout_samples=0), "yes")
+    assert unknown.orders
+    off = build_quote_plan(params(), state(rolling_markout=D("-9"), markout_samples=99), "yes")
+    assert off.orders  # switch disabled when no threshold
+
+
+def _mark(db, fill_id, order_id, markout, horizon=30, minute=0):
+    import json
+
+    from app.models import PaperMakerFill, PaperMakerMark
+
+    db.add(
+        PaperMakerFill(
+            id=fill_id,
+            order_id=order_id,
+            event_id=fill_id,
+            fill_sequence=0,
+            realized_pnl_usdc="0",
+            payload_json="{}",
+            observed_at=NOW + timedelta(minutes=minute),
+        )
+    )
+    db.add(
+        PaperMakerMark(
+            fill_id=fill_id,
+            horizon_seconds=horizon,
+            payload_json=json.dumps({"markout_per_share": markout}),
+        )
+    )
+    db.commit()
+
+
+def test_rolling_markout_reads_frozen_marks_and_skips_unavailable(research_db):
+    config = _config(research_db)
+    _order(research_db, "BUY", "11", "1")
+    oid = "o-BUY-11-1"
+    for i, value in enumerate(["-0.010", "-0.002", None]):
+        _mark(research_db, f"f{i}", oid, value, minute=i)
+    _mark(research_db, "other-horizon", oid, "0.9", horizon=5, minute=9)
+    mean, n = service.rolling_markout(research_db, config)
+    assert n == 2 and mean == D("-0.006")
+
+
+def test_rolling_markout_without_marks_is_unknown(research_db):
+    assert service.rolling_markout(research_db, _config(research_db)) == (None, 0)
+
+
+def test_seconds_to_resolution_reads_recorded_end_date(research_db):
+    from app.models.market_data.market import Market
+
+    config = _config(research_db)
+    assert service.seconds_to_resolution(research_db, config, now=NOW) is None
+    research_db.add(
+        Market(id=CID, question="q", status="active", end_date=NOW + timedelta(seconds=90))
+    )
+    research_db.commit()
+    assert service.seconds_to_resolution(research_db, config, now=NOW) == D("90")
+
+
+def test_plan_for_config_pauses_on_toxic_marks_and_on_window(research_db):
+    from app.models.market_data.market import Market
+
+    config = _config(research_db)
+    _order(research_db, "BUY", "11", "1")
+    for i in range(5):
+        _mark(research_db, f"t{i}", "o-BUY-11-1", "-0.02", minute=i)
+    research_db.add(Market(id=CID, question="q", status="active", end_date=NOW + timedelta(days=1)))
+    research_db.commit()
+    book = {"midpoint": 0.5, "age_seconds": 1.0}
+    plan = service.build_plan_for_config(research_db, config, book, record=False, now=NOW)
+    assert plan.reason_codes == ["TOXIC_MARKOUT_PAUSE"]
+
+
+def test_pilot_report_separates_live_from_modeled_and_stays_unverified():
+    from app.services.trading.market_making.pilot_report import PilotFill, build_pilot_report
+
+    live = PilotFill("live", D("10"), D("0"), D("0.30"), D("-0.01"), D("3"), D("8"))
+    modeled = PilotFill("modeled", D("10"), D("0"), D("0.50"), D("0.01"), D("3"), None)
+    report = build_pilot_report([live, modeled])
+    assert report["sources"]["live"]["pnl_after_fee_usdc"] == "0.30"
+    assert report["sources"]["modeled"]["pnl_after_fee_usdc"] == "0.50"
+    assert report["sources"]["live"]["queue_observed_minus_assumed_mean"] == "5"
+    assert report["sources"]["modeled"]["queue_observed_minus_assumed_mean"] is None
+    assert report["claim_status"] == "unverified"
+    only_modeled = build_pilot_report([modeled], promotion_gate_passed=True)
+    assert only_modeled["claim_status"] == "unverified" and "No live fills" in only_modeled["note"]
+    assert build_pilot_report([live], promotion_gate_passed=True)["claim_status"] == "gate_passed"
+    with pytest.raises(ValueError):
+        build_pilot_report([PilotFill("paper", D("1"), D("0"), D("0"), None, None, None)])
