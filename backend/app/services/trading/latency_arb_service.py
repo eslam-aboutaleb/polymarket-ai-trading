@@ -20,13 +20,16 @@ For each active window the engine computes
     P(Up)       = Φ(distance / (σ · √t_remaining))  (Bachelier / log-normal)
     edge        = |P_model − p_market|
 
-A candidate requires ``edge ≥ 3%`` (configurable), executable ask-side
-share depth and a spread ≤ 2% (hard abort above, mirroring the
-sell-side slippage guard).
+A candidate requires ``edge ≥ 3%`` (configurable) as a gross screen. An order
+is then placed only if the shared net-edge gate passes:
+``P(side) − ask − fee − half_spread − slippage − margin > 0`` (see
+``net_edge.py``). Unknown or unsupported fee metadata, a missing book or thin
+depth abstain; fees are never assumed zero. A spread above 2% is still a hard
+abort. Nothing here claims the strategy is profitable.
 
 Paper fills use captured native evidence and the shared paper journal. They are
 modeled, never exchange-confirmed. Live BUY plans use the shared binary-book
-adapter, known zero fees, executable ask depth and an expiring FOK limit. Missing
+adapter, the archived taker fee, executable ask depth and an expiring FOK limit. Missing
 or invalid evidence abstains. Both live latency flags default off.
 
 Risk gates (all must pass before an order):
@@ -859,6 +862,65 @@ async def _execute_live(
     }
 
 
+async def _net_edge_gate(
+    opportunity: Opportunity,
+    token_id: str,
+    size_usd: float,
+    *,
+    fee_fetcher=None,
+    book_fetcher=None,
+    evidence=None,
+):
+    """Fee-aware gate: gross = P(side) - best ask, minus fee, spread, slippage, margin.
+
+    Live orders pass the validated ``evidence`` so the gate prices the same book
+    and fee the order uses; paper runs fetch their own inputs.
+
+    Fetchers are injectable so the gate is exercised against recorded payloads.
+    """
+    from app.services.trading import net_edge as ne
+
+    fee_fetcher = fee_fetcher or ne.fetch_fee_metadata
+    book_fetcher = book_fetcher or ne.fetch_book
+    cfg = get_settings()
+    fee_per_share = None
+    if evidence is not None:
+        metadata = None
+        book = ne.BookSide(
+            bids=tuple(ne.Level(lv.price, lv.shares) for lv in evidence.bids),
+            asks=tuple(ne.Level(lv.price, lv.shares) for lv in evidence.asks),
+        )
+        if evidence.fee_usdc is not None and evidence.shares > 0:
+            fee_per_share = evidence.fee_usdc / evidence.shares
+    else:
+        metadata = await fee_fetcher(opportunity.market.condition_id)
+        book = await book_fetcher(token_id)
+    p_side = opportunity.p_model if opportunity.side == "up" else 1.0 - opportunity.p_model
+    if book is None or not book.asks:
+        decision = ne.net_edge(0, [], margin=cfg.taker_safety_margin)
+        decision = ne.NetEdgeDecision(**{**decision.__dict__, "reason": "ABSTAIN_BOOK_UNAVAILABLE"})
+    else:
+        ask = book.asks[0].price
+        shares = ne.Decimal(str(size_usd)) / ask
+        if evidence is not None and evidence.shares > 0:
+            shares = evidence.shares  # the order's real (depth-downsized) quantity
+        decision = ne.net_edge(
+            ne.Decimal(str(p_side)) - ask,
+            [ne.Leg("BUY", ask, shares, metadata, book, fee_per_share)],
+            margin=cfg.taker_safety_margin,
+            min_net_edge=cfg.taker_min_net_edge,
+        )
+    ne.log_decision(
+        STRATEGY_SOURCE,
+        decision,
+        symbol=opportunity.symbol,
+        window_minutes=opportunity.window_minutes,
+        side=opportunity.side,
+        condition_id=opportunity.market.condition_id,
+    )
+    return decision
+
+
 async def _execute_opportunity(
     db: Session,
     config: LatencyArbConfig,
@@ -941,6 +1003,15 @@ async def _execute_opportunity(
     if opportunity.side not in ("up", "down") or not token_id or reference_price <= 0.0:
         return {"status": "rejected", "reason": "market data incomplete"}
 
+    if simulation:
+        net_decision = await _net_edge_gate(opportunity, token_id, size)
+        if not net_decision.allowed:
+            return {
+                "status": "rejected",
+                "reason": net_decision.reason,
+                "net_edge": net_decision.to_dict(),
+            }
+
     evidence = None
     if not simulation:
         from app.services.trading.latency_book import ExecutableBookEvidence
@@ -960,6 +1031,13 @@ async def _execute_opportunity(
             }
         if evidence.outcome != ("YES" if opportunity.side == "up" else "NO"):
             return {"status": "rejected", "reason": "TOKEN_OUTCOME_MISMATCH"}
+        net_decision = await _net_edge_gate(opportunity, token_id, size, evidence=evidence)
+        if not net_decision.allowed:
+            return {
+                "status": "rejected",
+                "reason": net_decision.reason,
+                "net_edge": net_decision.to_dict(),
+            }
         # Include awaited metadata/fee/book requests in the feed-to-submit budget.
         completed_at = datetime.now(UTC)
         if evidence.expires_at is None or completed_at >= evidence.expires_at:
