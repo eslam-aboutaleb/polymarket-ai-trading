@@ -56,6 +56,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         oracle_basis,
         resolution_rules,
         venues,
+        whale_signal_quality,
         whales,
     )
     from app.api.routes.platform import (
@@ -134,6 +135,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         news,
         health,
         whales,
+        whale_signal_quality,
         notifications,
         latency_arb,
         arbitrage,
