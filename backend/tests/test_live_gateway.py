@@ -96,6 +96,18 @@ def place(db, **changes):
     args.update(changes)
     if args.get("strategy") == "latency_arb" and "execution_deadline" not in args:
         args["execution_deadline"] = utc_now() + timedelta(seconds=1)
+    if args.get("strategy") == "copy" and "execution_deadline" not in args:
+        args.update(
+            market_id="market",
+            order_type="FOK",
+            execution_deadline=utc_now() + timedelta(seconds=5),
+            execution_evidence={
+                "condition": "market",
+                "token": args["token_id"],
+                "tick_size": ".01",
+                "neg_risk": False,
+            },
+        )
     return live.place_live_order(db, **args)
 
 
@@ -316,7 +328,36 @@ def test_copy_requires_active_follow_and_explicit_ai_approval(gateway):
     trader = "0x" + "2" * 40
     with pytest.raises(LiveTradingBlocked, match="AI_APPROVAL"):
         place(db, strategy="copy", copied_from_wallet=trader)
-    result = place(db, strategy="copy", copied_from_wallet=trader, ai_approved=True)
+    with pytest.raises(LiveTradingBlocked, match="COPY_EXECUTABLE_QUOTE_REQUIRED"):
+        place(
+            db,
+            strategy="copy",
+            copied_from_wallet=trader,
+            ai_approved=True,
+            execution_deadline=None,
+        )
+    submit.assert_not_called()
+
+    args = {
+        "strategy": "copy",
+        "copied_from_wallet": trader,
+        "ai_approved": True,
+        "market_id": "market",
+        "order_type": "FOK",
+        "execution_evidence": {
+            "condition": "market",
+            "token": "123",
+            "tick_size": ".01",
+            "neg_risk": False,
+        },
+    }
+    with pytest.raises(LiveTradingBlocked, match="EXECUTABLE_QUOTE_EXPIRED_OR_MISSING"):
+        place(db, **args, execution_deadline=utc_now() - timedelta(seconds=1))
+    with pytest.raises(LiveTradingBlocked, match="COPY_EXECUTABLE_QUOTE_REQUIRED"):
+        place(db, **args, token_id="wrong", execution_deadline=utc_now() + timedelta(seconds=5))
+    submit.assert_not_called()
+
+    result = place(db, **args, execution_deadline=utc_now() + timedelta(seconds=5))
     assert result["success"]
     submit.assert_called_once()
 

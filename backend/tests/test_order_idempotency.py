@@ -1,6 +1,8 @@
 """Copy-service retries run through durable storage rather than an ACK cache."""
 
 import asyncio
+from datetime import timedelta
+from decimal import Decimal
 from unittest.mock import AsyncMock
 
 import pytest
@@ -10,7 +12,9 @@ from test_live_gateway import gateway as gateway
 from app.models.trading.live_order import LiveOrder
 from app.models.trading.user_trade import UserTrade
 from app.services.trading import copy_trade_service
+from app.services.trading.copy_quote import copy_limit
 from app.services.trading.pre_trade_gate import _get_idempotency_cache
+from app.utils.time import utc_now
 
 
 @pytest.fixture
@@ -30,6 +34,14 @@ def copy(gateway, monkeypatch):
         ),
     )
 
+    async def fresh_quote(condition, token, side, price, slippage, size):
+        # Copy orders now require fresh executable CLOB evidence (FOK, tick, neg_risk).
+        evidence = {"condition": condition, "token": token, "tick_size": ".01", "neg_risk": False}
+        limit = copy_limit(side, price, slippage, Decimal(".01"))
+        return limit, Decimal(10), utc_now() + timedelta(seconds=5), evidence
+
+    monkeypatch.setattr(copy_trade_service, "fresh_copy_quote", fresh_quote)
+
     def execute(key):
         return asyncio.run(
             copy_trade_service.execute_copy_trade(
@@ -42,6 +54,7 @@ def copy(gateway, monkeypatch):
                 0.5,
                 10,
                 idempotency_key=key,
+                source_timestamp=utc_now(),
             )
         )
 
@@ -80,5 +93,5 @@ def test_ambiguous_copy_ack_is_replayed_without_new_submission(copy):
     first = execute("source:one")
     assert not first["executed"] and first["status"] == "unknown"
     assert execute("source:one")["order_hash"] == first["order_hash"]
-    assert db.scalar(select(LiveOrder)).reserved == 5
+    assert db.scalar(select(LiveOrder)).reserved == Decimal("5.2")  # 10 shares at the .52 limit
     submit.assert_called_once()

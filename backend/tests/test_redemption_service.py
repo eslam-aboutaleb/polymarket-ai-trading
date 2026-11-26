@@ -28,8 +28,6 @@ import app.services.trading.redemption_service as redemption_service
 from app.services.trading.redemption_service import (
     _CONDITIONAL_TOKENS,
     _CTF_EXCHANGE,
-    DAILY_REDEEM_CAP_PER_USER,
-    MAX_REDEEM_VALUE_PER_TX,
     build_polymarket_event_url,
     compute_collection_id,
     determine_winner_index,
@@ -298,166 +296,8 @@ class ParseRedeemablePositionTests(unittest.TestCase):
         )
 
 
-class ExecuteRedeemTests(unittest.IsolatedAsyncioTestCase):
-    """The synchronous redemption core with a mocked provider."""
-
-    def _execute(self, w3, position=None, db=None, dry_run=False):
-        with patch(
-            "app.services.trading.redemption_service.load_wallet_credentials",
-            return_value={"private_key": TEST_PRIVATE_KEY, "clob_creds": None},
-        ):
-            return redemption_service._execute_redeem(
-                db or _fake_db(),
-                1,
-                TEST_EOA,
-                position or _position(),
-                w3=w3,
-                dry_run=dry_run,
-            )
-
-    def test_eoa_path_redeems_via_conditional_tokens(self):
-        w3 = _fake_w3()
-        attempt = self._execute(w3)
-        self.assertIsNotNone(attempt)
-        self.assertEqual(attempt.status, "confirmed")
-        self.assertEqual(attempt.tx_hash, TEST_TX_HASH)
-        self.assertEqual(attempt.collection_id, CID_AB_INDEX_1)
-        self.assertEqual(attempt.amount, 5.0)
-        # Proxy lookup happened, EOA held the position directly.
-        w3._exchange.functions.getPolyProxyWalletAddress.assert_called_once()
-        # Redeem went to the Conditional Tokens contract.
-        w3._ctf.functions.redeemPosition.assert_called_once_with(CID_AB_INDEX_1)
-        w3._proxy.functions.redeemPosition.assert_not_called()
-        w3.eth.send_raw_transaction.assert_called_once()
-
-    def test_proxy_path_redeems_through_proxy_contract(self):
-        w3 = _fake_w3(proxy_address=TEST_PROXY)
-        attempt = self._execute(w3)
-        self.assertIsNotNone(attempt)
-        self.assertEqual(attempt.status, "confirmed")
-        w3._proxy.functions.redeemPosition.assert_called_once_with(CID_AB_INDEX_1)
-        w3._ctf.functions.redeemPosition.assert_not_called()
-
-    def test_zero_balance_skips_redemption(self):
-        w3 = _fake_w3(balance=0)
-        attempt = self._execute(w3)
-        self.assertIsNone(attempt)
-        w3.eth.send_raw_transaction.assert_not_called()
-
-    def test_dry_run_builds_but_never_broadcasts(self):
-        w3 = _fake_w3()
-        attempt = self._execute(w3, dry_run=True)
-        self.assertIsNotNone(attempt)
-        self.assertEqual(attempt.status, "preview")
-        self.assertIsNone(attempt.tx_hash)
-        # The transaction is built (for logging) but never signed/sent.
-        w3._ctf.functions.redeemPosition.return_value.build_transaction.assert_called_once()
-        w3.eth.account.sign_transaction.assert_not_called()
-        w3.eth.send_raw_transaction.assert_not_called()
-
-    def test_proxy_failure_falls_back_to_claim_via_ui(self):
-        w3 = _fake_w3(
-            proxy_address=TEST_PROXY,
-            proxy_redeem_error=RuntimeError("proxy redeem reverted"),
-        )
-        with patch(
-            "app.services.trading.redemption_service.dispatch_alert",
-            new=AsyncMock(),
-        ) as mock_dispatch:
-            attempt = self._execute(w3)
-        self.assertIsNotNone(attempt)
-        self.assertEqual(attempt.status, "claim_via_ui")
-        self.assertIn("proxy redeem reverted", attempt.error)
-        w3.eth.send_raw_transaction.assert_not_called()
-        # The user is notified via the alert service with a
-        # Polymarket deep-link (inline delivery from the worker thread).
-        mock_dispatch.assert_called_once()
-        args, kwargs = mock_dispatch.call_args
-        self.assertEqual(args[0], "redeem_available")
-        self.assertEqual(args[1], 1)
-        self.assertIn(
-            "polymarket.com/event/test-event-slug/test-market-slug",
-            args[2]["deep_link"],
-        )
-        self.assertFalse(kwargs.get("background", True))
-
-    def test_insufficient_gas_notifies_and_fails(self):
-        w3 = _fake_w3(gas_wei=Web3.to_wei(0.001, "ether"))
-        with patch(
-            "app.services.trading.redemption_service.dispatch_alert",
-            new=AsyncMock(),
-        ) as mock_dispatch:
-            attempt = self._execute(w3)
-        self.assertIsNotNone(attempt)
-        self.assertEqual(attempt.status, "failed")
-        self.assertEqual(attempt.error, "insufficient MATIC for gas")
-        w3.eth.send_raw_transaction.assert_not_called()
-        mock_dispatch.assert_called_once()
-        args, _kwargs = mock_dispatch.call_args
-        self.assertEqual(args[0], "redeem_available")
-
-    def test_value_cap_blocks_large_positions(self):
-        w3 = _fake_w3()
-        attempt = self._execute(w3, position=_position(size=MAX_REDEEM_VALUE_PER_TX + 1))
-        self.assertIsNotNone(attempt)
-        self.assertEqual(attempt.status, "failed")
-        self.assertIn("per-tx cap", attempt.error)
-        w3.eth.send_raw_transaction.assert_not_called()
-
-    def test_daily_cap_blocks_excessive_redemptions(self):
-        w3 = _fake_w3()
-        attempt = self._execute(w3, db=_fake_db(DAILY_REDEEM_CAP_PER_USER))
-        self.assertIsNotNone(attempt)
-        self.assertEqual(attempt.status, "failed")
-        self.assertEqual(attempt.error, "daily redeem cap reached")
-        w3.eth.send_raw_transaction.assert_not_called()
-
-    def test_missing_credentials_fail_the_attempt(self):
-        w3 = _fake_w3()
-        with patch(
-            "app.services.trading.redemption_service.load_wallet_credentials",
-            return_value=None,
-        ):
-            attempt = redemption_service._execute_redeem(
-                _fake_db(), 1, TEST_EOA, _position(), w3=w3, dry_run=False
-            )
-        self.assertIsNotNone(attempt)
-        self.assertEqual(attempt.status, "failed")
-        self.assertEqual(attempt.error, "no wallet credentials stored")
-
-    def test_unreachable_rpc_fails_the_attempt(self):
-        with (
-            patch(
-                "app.services.trading.redemption_service._connect_web3",
-                return_value=None,
-            ),
-            patch(
-                "app.services.trading.redemption_service.load_wallet_credentials",
-                return_value={"private_key": TEST_PRIVATE_KEY, "clob_creds": None},
-            ),
-        ):
-            attempt = redemption_service._execute_redeem(
-                _fake_db(), 1, TEST_EOA, _position(), dry_run=False
-            )
-        self.assertIsNotNone(attempt)
-        self.assertEqual(attempt.status, "failed")
-        self.assertEqual(attempt.error, "no Polygon RPC reachable")
-
-    def test_reverted_receipt_marks_failed(self):
-        w3 = _fake_w3(receipt_status=0)
-        attempt = self._execute(w3)
-        self.assertIsNotNone(attempt)
-        self.assertEqual(attempt.status, "failed")
-        self.assertIn("reverted", attempt.error)
-        self.assertEqual(attempt.tx_hash, TEST_TX_HASH)
-
-    def test_eoa_send_failure_marks_failed(self):
-        w3 = _fake_w3()
-        w3.eth.send_raw_transaction.side_effect = RuntimeError("broadcast failed")
-        attempt = self._execute(w3)
-        self.assertIsNotNone(attempt)
-        self.assertEqual(attempt.status, "failed")
-        self.assertIn("broadcast failed", attempt.error)
+# Durable execution is covered with real database/RPC boundaries in
+# test_redemption_intents.py; obsolete unguarded signing assertions were retired.
 
 
 class OrchestrationTests(unittest.IsolatedAsyncioTestCase):
@@ -466,132 +306,66 @@ class OrchestrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_run_redeem_cycle_dry_run_by_default(self):
         db = _fake_db()
         db.query.return_value.all.return_value = [(1, TEST_EOA)]
-        service = MagicMock()
-        service.get_positions = AsyncMock(return_value=[_raw_position()])
-        w3 = _fake_w3()
+        attempt = MagicMock(status="preview")
         with (
-            patch(
-                "app.services.trading.redemption_service.SessionLocal",
-                return_value=db,
-            ),
-            patch(
-                "app.services.market_data.polymarket_service.get_polymarket_service",
-                return_value=service,
-            ),
-            patch(
-                "app.services.trading.redemption_service._connect_web3",
-                return_value=w3,
-            ),
-            patch(
-                "app.services.trading.redemption_service.load_wallet_credentials",
-                return_value={"private_key": TEST_PRIVATE_KEY, "clob_creds": None},
+            patch.object(redemption_service, "SessionLocal", return_value=db),
+            patch.object(
+                redemption_service, "_redeem_user_positions", new=AsyncMock(return_value=[attempt])
             ),
         ):
             summary = await redemption_service.run_redeem_cycle()
         self.assertEqual(summary["users_checked"], 1)
-        self.assertEqual(summary["attempts"], 1)
-        self.assertTrue(summary["dry_run"])
         self.assertEqual(summary["preview"], 1)
         self.assertEqual(summary["submitted"], 0)
-        # Dry-run: nothing was broadcast.
-        w3.eth.send_raw_transaction.assert_not_called()
+        self.assertTrue(summary["dry_run"])
 
-    async def test_run_redeem_cycle_live_mode_confirms(self):
+    async def test_run_redeem_cycle_live_mode_cannot_bypass_release(self):
         db = _fake_db()
         db.query.return_value.all.return_value = [(1, TEST_EOA)]
-        service = MagicMock()
-        service.get_positions = AsyncMock(return_value=[_raw_position()])
-        w3 = _fake_w3()
+        service = MagicMock(get_positions=AsyncMock(return_value=[_raw_position()]))
         with (
-            patch(
-                "app.services.trading.redemption_service.SessionLocal",
-                return_value=db,
-            ),
-            patch(
-                "app.services.trading.redemption_service.REDEEM_DRY_RUN",
-                False,
-            ),
+            patch.object(redemption_service, "SessionLocal", return_value=db),
+            patch.object(redemption_service, "REDEEM_DRY_RUN", False),
             patch(
                 "app.services.market_data.polymarket_service.get_polymarket_service",
                 return_value=service,
-            ),
-            patch(
-                "app.services.trading.redemption_service._connect_web3",
-                return_value=w3,
-            ),
-            patch(
-                "app.services.trading.redemption_service.load_wallet_credentials",
-                return_value={"private_key": TEST_PRIVATE_KEY, "clob_creds": None},
             ),
         ):
             summary = await redemption_service.run_redeem_cycle()
-        self.assertEqual(summary["confirmed"], 1)
-        w3.eth.send_raw_transaction.assert_called_once()
+        self.assertEqual(summary["confirmed"], 0)
+        self.assertEqual(summary["submitted"], 0)
 
     async def test_redeem_market_for_user_manual_trigger(self):
-        db = _fake_db()
-        service = MagicMock()
-        service.get_positions = AsyncMock(return_value=[_raw_position()])
-        w3 = _fake_w3()
+        service = MagicMock(get_positions=AsyncMock(return_value=[_raw_position()]))
+        attempt = MagicMock(status="preview")
         with (
-            patch(
-                "app.services.trading.redemption_service.SessionLocal",
-                return_value=db,
-            ),
-            patch(
-                "app.services.trading.redemption_service.REDEEM_DRY_RUN",
-                False,
-            ),
             patch(
                 "app.services.market_data.polymarket_service.get_polymarket_service",
                 return_value=service,
             ),
-            patch(
-                "app.services.trading.redemption_service._connect_web3",
-                return_value=w3,
-            ),
-            patch(
-                "app.services.trading.redemption_service.load_wallet_credentials",
-                return_value={"private_key": TEST_PRIVATE_KEY, "clob_creds": None},
-            ),
+            patch.object(
+                redemption_service, "_run_redeem_in_thread", return_value=attempt
+            ) as worker,
         ):
-            attempt = await redemption_service.redeem_market_for_user(1, TEST_EOA, CID_AB)
-        self.assertIsNotNone(attempt)
-        self.assertEqual(attempt.status, "confirmed")
-        self.assertEqual(attempt.collection_id, CID_AB_INDEX_1)
+            result = await redemption_service.redeem_market_for_user(1, TEST_EOA, CID_AB)
+        self.assertIs(result, attempt)
+        self.assertEqual(worker.call_args.args[2]["condition_id"], CID_AB)
+        self.assertEqual(worker.call_args.args[2]["winner_index"], 1)
 
-    async def test_redeem_market_for_user_winner_index_override(self):
-        db = _fake_db()
-        service = MagicMock()
-        service.get_positions = AsyncMock(return_value=[_raw_position()])
-        w3 = _fake_w3()
+    async def test_redeem_market_for_user_rejects_conflicting_winner(self):
+        service = MagicMock(get_positions=AsyncMock(return_value=[_raw_position()]))
         with (
-            patch(
-                "app.services.trading.redemption_service.SessionLocal",
-                return_value=db,
-            ),
-            patch(
-                "app.services.trading.redemption_service.REDEEM_DRY_RUN",
-                False,
-            ),
             patch(
                 "app.services.market_data.polymarket_service.get_polymarket_service",
                 return_value=service,
             ),
-            patch(
-                "app.services.trading.redemption_service._connect_web3",
-                return_value=w3,
-            ),
-            patch(
-                "app.services.trading.redemption_service.load_wallet_credentials",
-                return_value={"private_key": TEST_PRIVATE_KEY, "clob_creds": None},
-            ),
+            patch.object(redemption_service, "_run_redeem_in_thread") as worker,
         ):
-            attempt = await redemption_service.redeem_market_for_user(
+            result = await redemption_service.redeem_market_for_user(
                 1, TEST_EOA, CID_AB, winner_outcome_index=0
             )
-        self.assertIsNotNone(attempt)
-        self.assertEqual(attempt.collection_id, CID_AB_INDEX_0)
+        self.assertIsNone(result)
+        worker.assert_not_called()
 
     async def test_redeem_market_for_user_no_position_returns_none(self):
         service = MagicMock()
@@ -604,36 +378,23 @@ class OrchestrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(attempt)
 
     async def test_redeem_market_for_user_matches_market_slug(self):
-        db = _fake_db()
-        service = MagicMock()
-        service.get_positions = AsyncMock(return_value=[_raw_position()])
-        w3 = _fake_w3()
+        service = MagicMock(get_positions=AsyncMock(return_value=[_raw_position()]))
+        attempt = MagicMock(status="preview")
         with (
-            patch(
-                "app.services.trading.redemption_service.SessionLocal",
-                return_value=db,
-            ),
-            patch(
-                "app.services.trading.redemption_service.REDEEM_DRY_RUN",
-                False,
-            ),
             patch(
                 "app.services.market_data.polymarket_service.get_polymarket_service",
                 return_value=service,
             ),
-            patch(
-                "app.services.trading.redemption_service._connect_web3",
-                return_value=w3,
-            ),
-            patch(
-                "app.services.trading.redemption_service.load_wallet_credentials",
-                return_value={"private_key": TEST_PRIVATE_KEY, "clob_creds": None},
-            ),
+            patch.object(
+                redemption_service, "_run_redeem_in_thread", return_value=attempt
+            ) as worker,
         ):
-            attempt = await redemption_service.redeem_market_for_user(
+            result = await redemption_service.redeem_market_for_user(
                 1, TEST_EOA, "test-market-slug"
             )
-        self.assertIsNotNone(attempt)
+        self.assertIs(result, attempt)
+        self.assertEqual(worker.call_args.args[2]["condition_id"], CID_AB)
+        self.assertEqual(worker.call_args.args[2]["winner_index"], 1)
 
     async def test_redeem_loop_skips_when_lock_held(self):
         # Another worker holds the plan-02 advisory lock:
