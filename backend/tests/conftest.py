@@ -215,3 +215,51 @@ def market_observation_db():
     with Session(engine) as session:
         yield session
     engine.dispose()
+
+
+# ── Offline inputs for the taker net-edge gate ───────────────────────────
+# The gate reads market fee metadata and the CLOB book over HTTP. Tests must
+# never reach the network, so strategy tests get a fixed, valid, deep, tight
+# book and a recorded-shape crypto_fees_v2 schedule (rate 0.01). Tests that
+# check the gate itself mark themselves `real_net_edge` and pass their own inputs.
+@pytest.fixture(autouse=True)
+def _offline_net_edge_inputs(request, monkeypatch):
+    if request.node.get_closest_marker("real_net_edge"):
+        return
+    from decimal import Decimal
+
+    from app.services.trading import net_edge as ne
+
+    async def fee_metadata(condition_id):
+        return {
+            "clob": {},
+            "gamma": {
+                "version": "v1",
+                "feesEnabled": True,
+                "feeType": "crypto_fees_v2",
+                "feeSchedule": {"exponent": 1, "rate": 0.01, "takerOnly": True},
+            },
+        }
+
+    async def book(token_id):
+        return ne.BookSide(
+            bids=(ne.Level(Decimal("0.49"), Decimal("1000000")),),
+            asks=(ne.Level(Decimal("0.51"), Decimal("1000000")),),
+        )
+
+    monkeypatch.setattr(ne, "fetch_fee_metadata", fee_metadata)
+    monkeypatch.setattr(ne, "fetch_book", book)
+
+    # Existing copy-trade tests exercise unrelated behaviour and pass no AI
+    # probability. Give the real gate a 0.9 probability so it prices them; the
+    # gate's own abstain/block behaviour is tested under ``real_net_edge``.
+    from app.services.trading import copy_trade_service
+
+    real_gate = copy_trade_service._copy_net_edge_gate
+
+    async def gate_with_default_probability(**kwargs):
+        assessment = dict(kwargs.get("assessment") or {})
+        assessment.setdefault("ai_probability", 0.9)
+        return await real_gate(**{**kwargs, "assessment": assessment})
+
+    monkeypatch.setattr(copy_trade_service, "_copy_net_edge_gate", gate_with_default_probability)
