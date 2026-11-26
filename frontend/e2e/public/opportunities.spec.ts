@@ -8,7 +8,7 @@ import { test, expect } from "../fixtures/base";
 test.describe("Opportunities", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/opportunities");
-    await expect(page.getByRole("heading", { name: "Opportunities" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Opportunities", exact: true })).toBeVisible();
   });
 
   test("renders the scan board with sort modes", async ({ page }) => {
@@ -33,7 +33,7 @@ test.describe("Opportunities", () => {
     await page.getByRole("button", { name: "Scan opportunities" }).click();
     // The scan runs against the AI backend; whether or not the backend is up,
     // the page must stay alive and keep rendering the board.
-    await expect(page.getByRole("heading", { name: "Opportunities" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Opportunities", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Scan opportunities" })).toBeVisible();
   });
 
