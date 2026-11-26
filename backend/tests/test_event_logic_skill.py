@@ -511,7 +511,7 @@ def test_api_flag_validation_and_read_only_response(monkeypatch):
 
 
 def _server(monkeypatch):
-    if importlib.util.find_spec("ddgs") is None:
+    if "ddgs" not in sys.modules and importlib.util.find_spec("ddgs") is None:
         monkeypatch.setitem(sys.modules, "ddgs", types.SimpleNamespace(DDGS=object))
     mcp_dir = str(ROOT / "services" / "mcps" / "research")
     if mcp_dir not in sys.path:
