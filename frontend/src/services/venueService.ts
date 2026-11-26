@@ -106,8 +106,23 @@ export interface VenueMismatch {
   high_price: number | null;
   /** Liquidity of the weaker leg: what actually bounds the trade. */
   min_liquidity: number;
-  /** False whenever either leg is play money. */
+  /** Legacy: both legs are real money. It never means a trade is available. */
   executable_signal: boolean;
+  /** cross-venue-v2: REVIEW_ONLY until parity is proven, NON_EXECUTABLE for play money. */
+  classification?: "REVIEW_ONLY" | "NON_EXECUTABLE";
+  badges?: string[];
+  gross_price_gap_pct_points?: number;
+  executable?: boolean;
+  equivalence?: { status: string; reasons: string[]; checked: string[] } | null;
+  /** Both venues' questions and rules side by side for a human reviewer. */
+  rules_for_review?: Array<{
+    venue: string;
+    market_id: string;
+    question: string;
+    end_date: string | null;
+    url: string;
+    rules_text: string | null;
+  }>;
   /** Days between the two legs' close dates; null when one is unknown. */
   end_date_delta_days: number | null;
   /** True when the horizons differ enough to doubt the match. */
@@ -132,6 +147,11 @@ export interface IntraPolymarketSignal {
   market_title: string;
   prices?: number[];
   total_cost?: number;
+  signal_class?: string;
+  label?: string;
+  badges?: string[];
+  gross_price_gap_pct_points?: number;
+  /** @deprecated Use `gross_price_gap_pct_points`. */
   profit_pct?: number;
   spread_pct?: number;
   bid?: number;

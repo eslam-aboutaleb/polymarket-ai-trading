@@ -52,7 +52,7 @@ jobs:
       - name: Gateway adapter regression tests (no production secrets)
         env:
           PYTHONPATH: services/shared:services/llm-chain
-        run: uv run --project services/llm-chain --frozen pytest services/tests/test_gateway.py services/tests/test_prompt_contracts.py -q
+        run: uv run --project services/llm-chain --frozen pytest services/tests/test_gateway.py services/tests/test_prompt_contracts.py services/tests/test_market_rag_retrieval.py services/tests/test_trader_stream.py -q
       - name: Verify immutable prompt contracts and reviewed baseline
         run: |
           uv run --project services/llm-chain --frozen prompt-contracts lint prompts/contracts
@@ -219,6 +219,9 @@ jobs:
       - name: Point-in-time archive browser E2E
         working-directory: frontend
         run: npm run test:observations
+      - name: Evidence-first UX logic and component tests
+        working-directory: frontend
+        run: npm run test:evidence
       - name: Executable replay browser E2E
         working-directory: frontend
         run: npm run test:executable
