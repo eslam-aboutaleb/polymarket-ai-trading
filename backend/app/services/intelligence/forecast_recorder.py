@@ -17,27 +17,37 @@ Two invariants matter:
    are excluded rather than backfilled. A stated certainty (exactly 0
    or 1) is a forecast the forecaster actually made: it is kept as
    stated and clipped only inside the log-loss computation.
-2. **Idempotency.** The 20-minute opportunity cache
-   (``analysis.OPPORTUNITY_CACHE_TTL``) replays SSE events without
-   re-running the AI, so a naive writer would inflate the sample with
-   identical verdicts. A row is skipped when one already exists with
-   the same ``(condition_id, round(market_price, 3),
-   round(probability, 3), model_name, task, UTC date)`` key. The
-   probability and the task label are part of the key so a re-analysis
-   that moves the forecast, or a second endpoint that scores the same
-   market, is kept as its own sample instead of being silently
-   dropped.
+2. **Replay-safe identity (issue #60).** Every row carries a random
+   ``forecast_uuid`` and a unique ``request_key``. The key is a caller
+   idempotency key, or the SHA-256 of the full-precision decision inputs
+   (condition, token, p interpretation, probability, price, model, task,
+   prompt, rule hash, evidence snapshot, calibrator) plus the decision
+   instant or replay window. A replayed SSE event therefore collapses to
+   the one row it duplicates, while a revised forecast (even one that
+   rounds to the same 0.1pp) is kept as its own sample. The previous
+   same-day rounded value key could drop a real revision and could not tell
+   a replay from a new day's decision.
 """
 
+import json
 import logging
 import math
-from datetime import UTC, datetime, timedelta
+import uuid
+from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.analytics.assessment import NULL_PROBABILITY_REASON, Assessment
-from app.repositories.intelligence.assessments import AssessmentRepository
+from app.services.intelligence.forecast_identity import (
+    P_YES,
+    REPLAY_WINDOW_SECONDS,
+    build_benchmark,
+    ensure_utc,
+    parse_instant,
+    request_key,
+)
 from app.services.intelligence.prompt_version import current_prompt_version
 
 logger = logging.getLogger(__name__)
@@ -87,26 +97,8 @@ def _coerce_score(value: Any) -> float:
         return 0.0
 
 
-def _find_duplicate(
-    db: Session,
-    condition_id: str,
-    price_key: float | None,
-    probability_key: float,
-    model: str | None,
-    task_key: str | None,
-):
-    """Return the id of a same-key row recorded since UTC midnight, if any."""
-    day_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    day_end = day_start + timedelta(days=1)
-    return AssessmentRepository(db).find_duplicate_forecast(
-        condition_id=condition_id,
-        day_start=day_start,
-        day_end=day_end,
-        probability=probability_key,
-        task=task_key,
-        model=model,
-        price=price_key,
-    )
+def _existing_request(db: Session, key: str) -> Assessment | None:
+    return db.query(Assessment).filter(Assessment.request_key == key).first()
 
 
 def record_verdict(
@@ -126,6 +118,19 @@ def record_verdict(
     experiment_id: str | None = None,
     variant: str | None = None,
     llm_tier: str | None = None,
+    request_id: str | None = None,
+    token_id: str | None = None,
+    outcome_mapping: dict[str, str] | None = None,
+    rule_hash: str | None = None,
+    evidence_snapshot_id: str | None = None,
+    calibrator_version: str | None = None,
+    prediction_instant: Any = None,
+    market_close_at: Any = None,
+    event_group: str | None = None,
+    benchmark_bid: Any = None,
+    benchmark_ask: Any = None,
+    benchmark_observed_at: Any = None,
+    benchmark_source: str | None = None,
 ) -> Assessment | None:
     """Persist one AI verdict for later forecast scoring.
 
@@ -149,6 +154,20 @@ def record_verdict(
         experiment_id: A/B experiment this verdict belongs to, if any.
         variant: ``control`` or ``variant`` arm of that experiment.
         llm_tier: Model tier that produced the verdict, when known.
+        request_id: Caller idempotency key. When given it alone (scoped to the
+            market) is the replay identity.
+        token_id: CLOB token the probability is about (the YES token).
+        outcome_mapping: ``{token_id: outcome label}`` in force at decision time.
+        rule_hash: Resolution-rule hash in force at decision time.
+        evidence_snapshot_id: Evidence snapshot the forecast was grounded on.
+        calibrator_version: Calibrator applied to the raw estimate, if any.
+        prediction_instant: When the forecaster produced the number (UTC).
+            Defaults to the recording time.
+        market_close_at: Scheduled market end, for the horizon and late filter.
+        event_group: Event the market belongs to (the independence unit).
+        benchmark_bid / benchmark_ask / benchmark_observed_at / benchmark_source:
+            The contemporaneous quote. A quote observed after the prediction is
+            rejected; the price is never back-filled.
 
     Returns:
         The persisted :class:`Assessment`, or ``None`` when the verdict
@@ -177,17 +196,67 @@ def record_verdict(
         return None
 
     price = _coerce_price(market_price)
-    # The stored values are the rounded dedupe keys (0.1¢ precision on
-    # Polymarket prices, 0.1pp on the forecast) so a replayed verdict
-    # matches the row it would duplicate.
-    price_key = None if price is None else round(price, 3)
-    probability_key = round(probability, 3)
     model = (model_name or "").strip() or None
     task_key = (task or "").strip() or None
     provider_name = (provider or "").strip() or None
+    version = prompt_version or current_prompt_version()
 
-    if _find_duplicate(db, market_key, price_key, probability_key, model, task_key) is not None:
+    recorded_at = datetime.now(UTC)
+    explicit_instant = parse_instant(prediction_instant)
+    instant = explicit_instant or recorded_at
+    close_at = parse_instant(market_close_at)
+    benchmark = build_benchmark(
+        price=price,
+        bid=benchmark_bid,
+        ask=benchmark_ask,
+        observed_at=benchmark_observed_at,
+        source=(benchmark_source or "").strip() or None,
+        prediction_instant=instant,
+    )
+    if benchmark.rejected_reason in ("quote_after_prediction", "crossed_quote"):
+        logger.warning(
+            "forecast_benchmark_rejected: %s",
+            benchmark.rejected_reason,
+            extra={"condition_id": market_key, "task": task},
+        )
+    token = (token_id or "").strip() or None
+
+    keys = [
+        request_key(
+            request_id=request_id,
+            condition_id=market_key,
+            token_id=token,
+            p_interpretation=P_YES,
+            probability=probability,
+            market_price=price,
+            model=model,
+            task=task_key,
+            prompt_version=version,
+            rule_hash=rule_hash,
+            evidence_snapshot_id=evidence_snapshot_id,
+            calibrator_version=calibrator_version,
+            prediction_instant=explicit_instant,
+            recorded_at=recorded_at,
+            window_offset=offset,
+        )
+        for offset in (0, -1)
+    ]
+    # Inside the replay window an identical decision is a replay. A previous
+    # window's key counts only while its row is younger than the window, so a
+    # replay straddling a window boundary still collapses.
+    current = _existing_request(db, keys[0])
+    if current is not None:
         return None
+    if request_id is None and explicit_instant is None:
+        previous = _existing_request(db, keys[1])
+        if previous is not None:
+            created = ensure_utc(previous.created_at)
+            if (
+                created is not None
+                and (recorded_at - created).total_seconds() < REPLAY_WINDOW_SECONDS
+            ):
+                return None
+    key = keys[0]
 
     record = Assessment(
         # Scan verdicts have no source trade row (trade_history_id is
@@ -201,18 +270,45 @@ def record_verdict(
         recommendation=(recommendation or "hold")[:50],
         risk_level="unknown",
         confidence=_coerce_score(confidence),
-        ai_probability=probability_key,
-        market_price_at_assessment=price_key,
+        ai_probability=probability,
+        market_price_at_assessment=price,
         model_name=model,
         provider=provider_name,
-        prompt_version=(prompt_version or current_prompt_version()),
+        prompt_version=version,
         experiment_id=(experiment_id or "").strip() or None,
         variant=(variant or "").strip() or None,
         llm_tier=(llm_tier or "").strip() or None,
+        created_at=instant,
+        forecast_uuid=str(uuid.uuid4()),
+        request_key=key,
+        token_id=token,
+        p_interpretation=P_YES,
+        outcome_mapping_json=(
+            json.dumps(outcome_mapping, sort_keys=True) if outcome_mapping else None
+        ),
+        rule_hash=(rule_hash or "").strip() or None,
+        evidence_snapshot_id=(evidence_snapshot_id or "").strip() or None,
+        calibrator_version=(calibrator_version or "").strip() or None,
+        prediction_instant=instant,
+        market_close_at=close_at,
+        horizon_seconds=(
+            int((close_at - instant).total_seconds()) if close_at is not None else None
+        ),
+        event_group=(event_group or "").strip() or None,
+        benchmark_price=benchmark.price if benchmark.is_matched else None,
+        benchmark_bid=benchmark.bid if benchmark.is_matched else None,
+        benchmark_ask=benchmark.ask if benchmark.is_matched else None,
+        benchmark_observed_at=benchmark.observed_at if benchmark.is_matched else None,
+        benchmark_source=benchmark.source if benchmark.is_matched else None,
+        quote_age_seconds=benchmark.age_seconds if benchmark.is_matched else None,
     )
     try:
         db.add(record)
         db.commit()
+    except IntegrityError:
+        # A concurrent writer recorded the same request first: a duplicate.
+        db.rollback()
+        return None
     except Exception:
         db.rollback()
         logger.exception("Failed to record forecast verdict for %s", market_key)

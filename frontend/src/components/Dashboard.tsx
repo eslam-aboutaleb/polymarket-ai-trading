@@ -23,6 +23,7 @@ import {
 } from "../services/inverseBotService";
 import EmergencyHaltStatus from "./EmergencyHaltStatus";
 import { emergencyService, ArbitrageOpportunity } from "../services/emergencyService";
+import ArbitragePanel from "./ArbitragePanel";
 import { FollowingFeedEvent, tradesService } from "../services/tradesService";
 import { analysisService } from "../services/analysisService";
 import { getPaperSummary, PaperSummary } from "../services/settingsService";
@@ -871,6 +872,7 @@ function DashboardContent() {
         )}
 
         <p className="text-xs text-soft">Arbitrage opportunities tracked: {arbitrageRows.length}</p>
+        <ArbitragePanel signals={arbitrageRows.slice(0, 8)} />
       </div>
 
       <div className="surface-panel p-6">

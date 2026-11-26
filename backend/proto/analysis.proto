@@ -49,6 +49,12 @@ service AnalysisService {
   // Full trader profile analysis with internet research
   rpc AnalyzeTrader(TraderAnalysisRequest) returns (AnalysisResponse);
 
+  // Genuine provider token streaming for trader analysis (issue #59). Frames are
+  // typed (metadata, status, content, completion, error), carry a monotonic
+  // sequence and a replayed flag, and a reconnect with analysis_id plus
+  // resume_after_sequence replays buffered frames marked replayed=true.
+  rpc AnalyzeTraderStream(TraderStreamRequest) returns (stream TraderAnalysisFrame);
+
   // Evaluate whether to copy a specific trade
   rpc EvaluateCopyTrade(CopyTradeEvaluationRequest) returns (AnalysisResponse);
 
@@ -125,6 +131,9 @@ message MarketAnalysisRequest {
   string user_id = 8;
   LLMConfig llm_config = 9;  // Optional: per-request LLM configuration
   string research_instructions = 10; // Optional typed research contract; not source text
+  string condition_id = 11;  // Optional canonical market identity for RAG retrieval (issue #39)
+  string token_id = 12;      // Optional canonical outcome token for RAG identity checks
+  string as_of = 13;         // Optional ISO-8601 decision time; retrieval never sees later evidence
 }
 
 // Quick Analysis
@@ -186,6 +195,30 @@ message TraderAnalysisRequest {
   string recent_trades_json = 7;   // JSON array of recent trades
   string user_id = 8;
   LLMConfig llm_config = 9;  // Optional: per-request LLM configuration
+}
+
+message TraderStreamRequest {
+  TraderAnalysisRequest request = 1;
+  string analysis_id = 2;           // Empty: start a new stream. Set: resume/replay that stream.
+  int64 resume_after_sequence = 3;  // Replay only frames with sequence greater than this
+}
+
+message TraderAnalysisFrame {
+  string analysis_id = 1;
+  string event_type = 2;            // metadata | status | content | completion | error
+  string provider_call_id = 3;
+  int64 sequence = 4;               // Monotonic per analysis_id, starting at 1
+  string observed_at = 5;           // ISO-8601 UTC time the server produced the frame
+  bool replayed = 6;                // True when served from the replay buffer, never live
+  string text = 7;                  // content: generated delta
+  string end_state = 8;             // completion/error: completed | failed | timeout | cancelled | truncated
+  string error_code = 9;            // RATE_LIMITED | DEADLINE_EXCEEDED | PROVIDER_ERROR | RESUME_INCOMPLETE | RESUME_EXPIRED | OUTPUT_LIMIT | INVALID_ARGUMENT
+  string error_message = 10;        // Sanitised; never prompts or credentials
+  map<string, string> metadata = 11;
+  int64 output_tokens = 12;         // Provider-reported; 0 when output_tokens_source is unavailable
+  int64 time_to_first_token_ms = 13;
+  int64 total_ms = 14;
+  string stream_kind = 15;          // model_tokens | buffered_replay | status
 }
 
 message CopyTradeEvaluationRequest {
