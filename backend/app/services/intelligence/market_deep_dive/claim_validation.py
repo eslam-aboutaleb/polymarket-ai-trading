@@ -71,7 +71,12 @@ def validate_evidence_links(
             draft_claim.quote
         ):
             flags.append("UNTRUSTED_INSTRUCTION_TEXT_IGNORED")
-        sources = {item.publisher for item in evidence if item.evidence_id in cited}
+        # Social posts are untrusted amplification: they never count as independent sources.
+        sources = {
+            item.publisher
+            for item in evidence
+            if item.evidence_id in cited and item.source_family != "social_post"
+        }
         claims.append(
             ResearchClaim(
                 claim_id=_claim_id(draft_claim.statement, draft_claim.direction, index),
@@ -97,4 +102,10 @@ def validate_evidence_links(
 
 def independent_source_total(claims: list[ResearchClaim], evidence: list[EvidenceItem]) -> int:
     cited = {e for c in claims if c.attribution == "attributed" for e in c.cited_evidence_ids}
-    return len({item.publisher for item in evidence if item.evidence_id in cited})
+    return len(
+        {
+            item.publisher
+            for item in evidence
+            if item.evidence_id in cited and item.source_family != "social_post"
+        }
+    )
