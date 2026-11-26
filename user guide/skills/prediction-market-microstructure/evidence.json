@@ -8,7 +8,14 @@
   "underlying_source": "Existing native public CLOB/Gamma capture and immutable receipt-time archive",
   "checksum_reference": "py-clob-client-v2 1.2.1 utilities.generate_orderbook_summary_hash",
   "native_sequence_capability": "Consecutive sequence contract unproven; deltas abstain and request a snapshot",
-  "test_evidence": ["tests/test_binary_book.py", "tests/test_book_research.py", "tests/test_book_tool.py", "tests/integration/test_book_research_postgres.py", "frontend/e2e/book/book.spec.ts"],
+  "test_evidence": [
+    "tests/test_binary_book.py",
+    "tests/test_book_research.py",
+    "tests/test_book_tool.py",
+    "tests/test_book_depth_profile.py",
+    "tests/integration/test_book_research_postgres.py",
+    "frontend/e2e/book/book.spec.ts"
+  ],
   "observed_execution_sample_count": 0,
   "measured_price_impact": null,
   "maker_fill_probability": null,
