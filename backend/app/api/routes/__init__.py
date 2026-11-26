@@ -36,11 +36,19 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
     The debug router is the only feature-gated router and stays in its
     original position in the sequence.
     """
-    from app.api.routes.analysis import analysis, calibration, experiments, orchestration, valuation
+    from app.api.routes.analysis import (
+        analysis,
+        calibration,
+        experiments,
+        opportunities,
+        orchestration,
+        valuation,
+    )
     from app.api.routes.auth import accounts, auth, credentials
     from app.api.routes.billing import billing
     from app.api.routes.markets import (
         binance_signals,
+        consistency,
         markets,
         microstructure,
         news,
@@ -59,10 +67,13 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         ws_v1,
     )
     from app.api.routes.platform import settings as settings_routes
-    from app.api.routes.portfolio import event_risk, portfolio, risk_report
+    from app.api.routes.portfolio import allocation, event_risk, portfolio, risk_report
     from app.api.routes.trading import (
+        arbitrage,
         backtesting,
+        copy_intelligence,
         executable_replay,
+        execution_estimate,
         follower_replay,
         inverse_bot,
         latency_arb,
@@ -70,6 +81,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         paper,
         replay_evidence,
         risk,
+        trader_evaluation,
         trades,
     )
 
@@ -83,6 +95,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         experiments,
         valuation,
         portfolio,
+        allocation,
         event_risk,
         risk_report,
         risk,
@@ -91,6 +104,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         markets,
         observations,
         microstructure,
+        consistency,
         oracle_basis,
         resolution_rules,
     ):
@@ -112,14 +126,19 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         paper,
         backtesting,
         executable_replay,
+        execution_estimate,
         follower_replay,
+        copy_intelligence,
+        trader_evaluation,
         binance_signals,
         news,
         health,
         whales,
         notifications,
         latency_arb,
+        arbitrage,
         orchestration,
+        opportunities,
         venues,
         billing,
     ):

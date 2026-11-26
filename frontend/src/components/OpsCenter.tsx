@@ -546,7 +546,10 @@ export default function OpsCenter() {
               >
                 <p className="font-semibold text-white">{row.market_title}</p>
                 <p className="text-soft">
-                  {row.type.toUpperCase()} · Profit {row.profit_pct ?? row.spread_pct ?? 0}%
+                  {row.type.toUpperCase()} ·{" "}
+                  {row.type === "complement"
+                    ? `Indicative gap ${row.gross_price_gap_pct_points ?? row.profit_pct ?? 0} pts (not guaranteed profit)`
+                    : `Spread ${row.spread_pct ?? 0}% (liquidity signal, not arbitrage)`}
                 </p>
               </div>
             ))}
