@@ -38,10 +38,14 @@ class Settings(BaseSettings):
     paper_journal_v2_enabled: bool = False
     executable_replay_enabled: bool = False
     binary_book_research_enabled: bool = False
+    arbitrage_feasibility_enabled: bool = False
+    execution_estimator_enabled: bool = False
+    executable_opportunities_enabled: bool = False
     resolution_rule_analysis_enabled: bool = False
     binary_valuation_enabled: bool = False
     oracle_basis_risk_enabled: bool = False
     event_correlation_risk_enabled: bool = False
+    forecast_calibration_enabled: bool = False
     live_account_reconciliation_enabled: bool = False
     observation_archive_enabled: bool = False
     historical_feed_canary_enabled: bool = False

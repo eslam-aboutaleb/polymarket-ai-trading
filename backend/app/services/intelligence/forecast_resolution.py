@@ -53,6 +53,7 @@ at most once.
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import logging
 import math
@@ -70,7 +71,15 @@ from app.models.analytics.assessment import (
     BINARY_YES_LABELS,
     VERIFIED_SCORING_VERSION,
 )
+from app.models.analytics.forecast_resolution_event import (
+    EVENT_CORRECTED,
+    EVENT_EXCLUDED,
+    EVENT_REVALIDATED,
+    EVENT_REVERSED,
+    EVENT_SCORED,
+)
 from app.repositories.intelligence.assessments import AssessmentRepository
+from app.services.intelligence.forecast_audit import append_resolution_event
 from app.utils.database import SessionLocal
 from app.utils.scheduler_lock import (
     acquire_scheduler_lock,
@@ -148,6 +157,10 @@ class ExclusionReason(StrEnum):
     FORECAST_AFTER_CLOSE = "forecast_after_close"
     RULE_UNVERIFIED = "rule_unverified"
     RULE_CHANGED = "rule_changed"
+    #: A scored row whose resolution later changed or lost finality.
+    RESOLUTION_REVERSED = "resolution_reversed"
+    #: The recorded YES token or outcome mapping differs from the market now.
+    TOKEN_MAPPING_MISMATCH = "token_mapping_mismatch"  # noqa: S105
 
 
 @dataclass
@@ -229,6 +242,10 @@ class MarketResolution:
     outcome: str | None = None
     reason: ExclusionReason | None = None
     closed_at: datetime | None = None
+    #: Gamma's UMA status string, kept as finality evidence for the audit log.
+    status: str | None = None
+    #: ``{token_id: outcome label}`` Gamma reports now, for the mapping check.
+    token_mapping: dict[str, str] | None = None
 
     @property
     def is_resolved(self) -> bool:
@@ -306,31 +323,47 @@ def classify_market(market: dict[str, Any]) -> MarketResolution:
     status = str(market.get("umaResolutionStatus", "")).strip().lower()
     closed_at = market_close_time(market)
     if status in _VOID_STATUSES:
-        return MarketResolution(reason=ExclusionReason.VOID, closed_at=closed_at)
+        return MarketResolution(reason=ExclusionReason.VOID, closed_at=closed_at, status=status)
     if status in _DISPUTED_STATUSES:
-        return MarketResolution(reason=ExclusionReason.DISPUTED_OR_CHALLENGED, closed_at=closed_at)
+        return MarketResolution(
+            reason=ExclusionReason.DISPUTED_OR_CHALLENGED, closed_at=closed_at, status=status
+        )
     if status not in _FINAL_STATUSES:
-        return MarketResolution(reason=ExclusionReason.CLOSED_NOT_FINALIZED, closed_at=closed_at)
+        return MarketResolution(
+            reason=ExclusionReason.CLOSED_NOT_FINALIZED, closed_at=closed_at, status=status
+        )
     if market.get("closed") not in (True, "true"):
-        return MarketResolution(reason=ExclusionReason.CLOSED_NOT_FINALIZED, closed_at=closed_at)
+        return MarketResolution(
+            reason=ExclusionReason.CLOSED_NOT_FINALIZED, closed_at=closed_at, status=status
+        )
     outcomes = _decode_json_string(market.get("outcomes"))
     prices = _decode_json_string(market.get("outcomePrices"))
     if len(outcomes) != 2 or len(prices) != 2:
-        return MarketResolution(reason=ExclusionReason.MULTI_OUTCOME, closed_at=closed_at)
+        return MarketResolution(
+            reason=ExclusionReason.MULTI_OUTCOME, closed_at=closed_at, status=status
+        )
     labels = [str(v).strip().lower() for v in outcomes]
     if set(labels) != {"yes", "no"}:
-        return MarketResolution(reason=ExclusionReason.NON_BINARY_OUTCOME, closed_at=closed_at)
+        return MarketResolution(
+            reason=ExclusionReason.NON_BINARY_OUTCOME, closed_at=closed_at, status=status
+        )
     try:
         values = [float(v) for v in prices]
     except (TypeError, ValueError):
-        return MarketResolution(reason=ExclusionReason.AMBIGUOUS_SETTLEMENT, closed_at=closed_at)
+        return MarketResolution(
+            reason=ExclusionReason.AMBIGUOUS_SETTLEMENT, closed_at=closed_at, status=status
+        )
     if any(not math.isfinite(v) or v < 0 or v > 1 for v in values):
-        return MarketResolution(reason=ExclusionReason.AMBIGUOUS_SETTLEMENT, closed_at=closed_at)
+        return MarketResolution(
+            reason=ExclusionReason.AMBIGUOUS_SETTLEMENT, closed_at=closed_at, status=status
+        )
     if values == [1.0, 0.0]:
-        return MarketResolution(outcome=labels[0].upper(), closed_at=closed_at)
+        return MarketResolution(outcome=labels[0].upper(), closed_at=closed_at, status=status)
     if values == [0.0, 1.0]:
-        return MarketResolution(outcome=labels[1].upper(), closed_at=closed_at)
-    return MarketResolution(reason=ExclusionReason.AMBIGUOUS_SETTLEMENT, closed_at=closed_at)
+        return MarketResolution(outcome=labels[1].upper(), closed_at=closed_at, status=status)
+    return MarketResolution(
+        reason=ExclusionReason.AMBIGUOUS_SETTLEMENT, closed_at=closed_at, status=status
+    )
 
 
 def winning_outcome(market: dict[str, Any]) -> str | None:
@@ -441,6 +474,36 @@ async def fetch_resolutions(
     return resolutions
 
 
+def _current_token_mapping(market: dict[str, Any]) -> dict[str, str] | None:
+    tokens = _decode_json_string(market.get("clobTokenIds") or market.get("clob_token_ids"))
+    outcomes = _decode_json_string(market.get("outcomes"))
+    if not tokens or len(tokens) != len(outcomes):
+        return None
+    return {str(t): str(o) for t, o in zip(tokens, outcomes, strict=True)}
+
+
+def _mapping_mismatch(row, market: "MarketResolution") -> bool:
+    """True when the row's recorded YES token or mapping differs from now.
+
+    A reversed or changed token/outcome mapping would score the forecast
+    against the other side of the market. Rows without a recorded mapping
+    (legacy) and markets that report no mapping are not checked.
+    """
+    recorded_json = getattr(row, "outcome_mapping_json", None)
+    current = market.token_mapping
+    if not recorded_json or current is None:
+        return False
+    try:
+        recorded = {str(k): str(v) for k, v in json.loads(recorded_json).items()}
+    except (ValueError, AttributeError):
+        return True
+    norm = lambda m: {k: v.strip().lower() for k, v in m.items()}  # noqa: E731
+    if norm(recorded) != norm(current):
+        return True
+    token = getattr(row, "token_id", None)
+    return bool(token) and norm(current).get(str(token)) != "yes"
+
+
 async def _lookup(client, cid: str):
     """One Gamma lookup; ``(cid, MarketResolution)`` or ``None`` on failure."""
     try:
@@ -473,7 +536,8 @@ async def _lookup(client, cid: str):
         # never be matched to a resolution, and guessing would score it
         # against somebody else's outcome.
         return cid, MarketResolution(reason=ExclusionReason.CONDITION_ID_MISMATCH)
-    return cid, classify_market(matches[0])
+    classified = classify_market(matches[0])
+    return cid, dataclasses.replace(classified, token_mapping=_current_token_mapping(matches[0]))
 
 
 def _forecast_after_close(created_at: datetime | None, closed_at: datetime | None) -> bool:
@@ -513,35 +577,43 @@ async def resolve_pending(db: Session, limit: int = _RESOLUTION_BATCH_LIMIT) -> 
         if get_settings().resolution_rule_analysis_enabled:
             reason = await _rule_version_exclusion(db, row, current_rules)
             if reason is not None:
-                row.exclusion_reason = reason.value
-                run.exclude(row.condition_id, reason)
+                _exclude(db, run, row, reason, None)
                 continue
         market = resolutions.get(row.condition_id or "")
         if market is None:
             market = MarketResolution(reason=ExclusionReason.MARKET_NOT_FOUND)
         if not market.is_resolved:
-            reason = market.reason or ExclusionReason.CLOSED_NOT_FINALIZED
-            run.exclude(row.condition_id, reason)
-            row.exclusion_reason = reason.value
+            _exclude(db, run, row, market.reason or ExclusionReason.CLOSED_NOT_FINALIZED, market)
             continue
-        if _forecast_after_close(row.created_at, market.closed_at):
+        if _forecast_after_close(row.prediction_instant or row.created_at, market.closed_at):
             # The forecast was made after the market closed, so it could
             # already know the outcome: it is not a forecast any more.
-            run.exclude(row.condition_id, ExclusionReason.FORECAST_AFTER_CLOSE)
-            row.exclusion_reason = ExclusionReason.FORECAST_AFTER_CLOSE.value
+            _exclude(db, run, row, ExclusionReason.FORECAST_AFTER_CLOSE, market)
+            continue
+        if _mapping_mismatch(row, market):
+            _exclude(db, run, row, ExclusionReason.TOKEN_MAPPING_MISMATCH, market)
             continue
         try:
             score = brier_score(row.ai_probability, market.outcome)
         except (ValueError, TypeError, OverflowError):
             # Caller can retry after corrected source or outcome mapping.
-            run.exclude(row.condition_id, ExclusionReason.INVALID_PROBABILITY)
-            row.exclusion_reason = ExclusionReason.INVALID_PROBABILITY.value
+            _exclude(db, run, row, ExclusionReason.INVALID_PROBABILITY, market)
             continue
         row.resolved_outcome = market.outcome
         row.brier_score = score
         row.resolved_at = utc_now()
         row.scoring_version = SCORING_VERSION
         row.exclusion_reason = None
+        append_resolution_event(
+            db,
+            row,
+            EVENT_SCORED,
+            scoring_version=SCORING_VERSION,
+            resolved_outcome=market.outcome,
+            brier_score=score,
+            finality_status=market.status,
+            detail={"closed_at": market.closed_at},
+        )
         run.resolved += 1
         run.brier_sum += score
         run.record_sample(row.condition_id, score)
@@ -555,6 +627,116 @@ async def resolve_pending(db: Session, limit: int = _RESOLUTION_BATCH_LIMIT) -> 
     global _last_run
     _last_run = run
     return run
+
+
+def _exclude(
+    db: Session,
+    run: "ResolutionRun",
+    row,
+    reason: ExclusionReason,
+    market: "MarketResolution | None",
+) -> None:
+    """Exclude ``row`` and audit the decision once per distinct reason.
+
+    A row that stays unresolved for weeks must not grow an event per pass, so
+    an event is appended only when the recorded reason actually changes.
+    """
+    previous = row.exclusion_reason
+    run.exclude(row.condition_id, reason)
+    row.exclusion_reason = reason.value
+    if previous != reason.value:
+        append_resolution_event(
+            db,
+            row,
+            EVENT_EXCLUDED,
+            exclusion_reason=reason.value,
+            finality_status=None if market is None else market.status,
+        )
+
+
+async def revalidate_resolved(db: Session, limit: int = _RESOLUTION_BATCH_LIMIT) -> dict[str, int]:
+    """Re-check scored forecasts against the market as it is now.
+
+    A settlement can be reversed or disputed after a score was written. For
+    each scored row this fetches the current Gamma state and:
+
+    * unchanged finality and outcome: appends a ``revalidated`` event;
+    * a different final outcome: appends ``reversed`` and a ``corrected`` event
+      carrying the new score, rewrites the score under the same scoring
+      version and keeps the old outcome in the audit trail;
+    * lost finality (disputed, voided, no longer final) or a changed token
+      mapping: appends ``reversed`` and quarantines the row with
+      ``resolution_reversed`` so it leaves every aggregate.
+
+    No audit event is ever edited or deleted. Legacy rows scored under an
+    older scoring version are not rescored from assumptions.
+    """
+    rows = AssessmentRepository(db).scored_for_revalidation(SCORING_VERSION, limit)
+    counts = {"checked": 0, "unchanged": 0, "corrected": 0, "quarantined": 0}
+    if not rows:
+        return counts
+    resolutions = await fetch_resolutions([row.condition_id for row in rows])
+    for row in rows:
+        counts["checked"] += 1
+        market = resolutions.get(row.condition_id or "")
+        if market is None or market.reason == ExclusionReason.LOOKUP_FAILED:
+            continue  # a failed lookup proves nothing either way
+        previous = (row.resolved_outcome or "").upper()
+        if not market.is_resolved or _mapping_mismatch(row, market):
+            reason = (
+                ExclusionReason.TOKEN_MAPPING_MISMATCH
+                if market.is_resolved
+                else ExclusionReason.RESOLUTION_REVERSED
+            )
+            append_resolution_event(
+                db,
+                row,
+                EVENT_REVERSED,
+                scoring_version=row.scoring_version,
+                resolved_outcome=row.resolved_outcome,
+                exclusion_reason=reason.value,
+                finality_status=market.status,
+                detail={
+                    "prior_outcome": previous,
+                    "prior_brier": row.brier_score,
+                    "now": (market.reason.value if market.reason else None),
+                },
+            )
+            row.exclusion_reason = reason.value
+            counts["quarantined"] += 1
+        elif market.outcome != previous:
+            new_score = brier_score(row.ai_probability, market.outcome)
+            append_resolution_event(
+                db,
+                row,
+                EVENT_CORRECTED,
+                scoring_version=SCORING_VERSION,
+                resolved_outcome=market.outcome,
+                brier_score=new_score,
+                finality_status=market.status,
+                detail={"prior_outcome": previous, "prior_brier": row.brier_score},
+            )
+            row.resolved_outcome = market.outcome
+            row.brier_score = new_score
+            counts["corrected"] += 1
+        else:
+            append_resolution_event(
+                db,
+                row,
+                EVENT_REVALIDATED,
+                scoring_version=SCORING_VERSION,
+                resolved_outcome=market.outcome,
+                brier_score=row.brier_score,
+                finality_status=market.status,
+            )
+            counts["unchanged"] += 1
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to persist forecast revalidation")
+        raise
+    return counts
 
 
 def last_resolution_run() -> ResolutionRun:
