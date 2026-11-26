@@ -34,6 +34,12 @@ ambiguous mappings, unknown size rules, and halted markets abstain.
    and stop at actual displayed depth. Return partial coverage, a reproducible
    book hash, per-level curve, fee-inclusive cash and VWAP. USDC means an inclusive
    BUY budget or target net SELL proceeds, not token shares.
+   Setting `include_depth_profile` (opt-in, so earlier saved runs keep their replay
+   hash) adds a fee-free **depth profile** per token: at each requested share size,
+   the marginal ask/bid price, the displayed bid/ask spread at that depth, and the
+   walk VWAP minus the touch. A size beyond displayed depth on a side returns null
+   for that side instead of an extrapolation. These are counterfactual displayed-depth
+   figures, not measured price impact.
 6. Fees use a named **flat notional basis-point assumption**, not an automatically
    verified Polymarket fee tier. Same-token round trips report displayed spread
    and fee costs. Complement inequalities are warnings only: token books are not
