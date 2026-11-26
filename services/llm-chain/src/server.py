@@ -30,6 +30,7 @@ from src.orchestrator import (
     run_plan,
     stream_plan,
 )
+from src.trader_stream import Frame, TraderStreamer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -111,6 +112,26 @@ def _retrieval_metadata(retrieval: dict) -> dict[str, str]:
     return meta
 
 
+def _frame_to_pb(frame: Frame):
+    return analysis_pb2.TraderAnalysisFrame(
+        analysis_id=frame.analysis_id,
+        event_type=frame.event_type,
+        provider_call_id=frame.provider_call_id,
+        sequence=frame.sequence,
+        observed_at=frame.observed_at,
+        replayed=frame.replayed,
+        text=frame.text,
+        end_state=frame.end_state,
+        error_code=frame.error_code,
+        error_message=frame.error_message,
+        metadata=frame.metadata,
+        output_tokens=frame.output_tokens,
+        time_to_first_token_ms=frame.time_to_first_token_ms,
+        total_ms=frame.total_ms,
+        stream_kind=frame.stream_kind,
+    )
+
+
 def _retrieval_enabled(settings) -> bool:
     """True only when both RAG flags are on (absent flags count as off)."""
     return bool(
@@ -143,6 +164,7 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
     def __init__(self):
         self.settings = get_settings()
         self.default_chain = get_trading_chain()
+        self.trader_streamer = TraderStreamer(self.settings)
         logger.info(f"Initialized {self.settings.service_name} v{self.settings.service_version}")
         logger.info(f"Available providers: {list(get_available_providers().keys())}")
 
@@ -393,6 +415,94 @@ class AnalysisServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 success=False,
                 error=str(e),
                 timestamp=datetime.utcnow().isoformat(),
+            )
+
+    def _trader_streamer(self) -> TraderStreamer:
+        streamer = getattr(self, "trader_streamer", None)
+        if streamer is None:
+            streamer = self.trader_streamer = TraderStreamer(self.settings)
+        return streamer
+
+    async def AnalyzeTraderStream(self, request, context):
+        """Server-streaming trader analysis backed by real provider token streaming.
+
+        The unary AnalyzeTrader RPC is unchanged and stays labelled as buffered.
+        """
+        streamer = self._trader_streamer()
+        trader = request.request
+        try:
+            if request.analysis_id and (
+                request.resume_after_sequence > 0 or streamer.record(request.analysis_id)
+            ):
+                # A resume (or an id that already exists) is served from the replay
+                # buffer; an unknown id with a resume point is reported as expired
+                # instead of silently regenerating different text.
+                async for frame in streamer.replay(
+                    request.analysis_id, request.resume_after_sequence
+                ):
+                    yield _frame_to_pb(frame)
+                return
+            if not trader.wallet_address:
+                # Reported in-band as a typed error frame, not a transport failure.
+                yield analysis_pb2.TraderAnalysisFrame(
+                    analysis_id=request.analysis_id,
+                    event_type="error",
+                    sequence=1,
+                    observed_at=datetime.utcnow().isoformat(),
+                    end_state="failed",
+                    error_code="INVALID_ARGUMENT",
+                    error_message="wallet_address is required",
+                )
+                return
+            logger.info("AnalyzeTraderStream request for wallet: %s", trader.wallet_address[:10])
+            chain = _get_chain_for_request(trader)
+            provider_meta = _get_provider_metadata(trader)
+            messages_holder: dict = {}
+
+            def research() -> str:
+                text = chain.trader_research(trader.wallet_address, trader.display_name)
+                messages_holder["messages"] = chain.trader_messages(
+                    trader.wallet_address,
+                    trader.display_name,
+                    trader.total_pnl,
+                    trader.win_rate,
+                    trader.trade_count,
+                    trader.markets_traded,
+                    trader.recent_trades_json,
+                    text,
+                )
+                return text
+
+            class _Lazy:
+                """Defers prompt construction until research has produced its context."""
+
+                def astream(self, _messages):
+                    return chain._get_task_llm("trader_profile").astream(
+                        messages_holder["messages"]
+                    )
+
+            metadata = {"backend": "llm-chain", "type": "trader_analysis"}
+            metadata.update(provider_meta)
+            async for frame in streamer.stream(
+                llm=_Lazy(),
+                messages=[],
+                research=research,
+                analysis_id=request.analysis_id,
+                provider=metadata,
+                time_remaining=context.time_remaining,
+            ):
+                yield _frame_to_pb(frame)
+        except Exception as e:
+            logger.error("AnalyzeTraderStream error: %s", type(e).__name__)
+            context.set_code(_grpc_status_code(e))
+            yield analysis_pb2.TraderAnalysisFrame(
+                analysis_id=request.analysis_id,
+                event_type="error",
+                sequence=1,
+                observed_at=datetime.utcnow().isoformat(),
+                end_state="failed",
+                error_code="PROVIDER_ERROR",
+                error_message="Trader analysis stream failed",
             )
 
     async def EvaluateCopyTrade(self, request, context):
