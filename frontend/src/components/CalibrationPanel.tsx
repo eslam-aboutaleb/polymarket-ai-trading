@@ -36,6 +36,8 @@ import {
 import { useAuthStore } from "../store/authStore";
 import { getApiErrorMessage } from "../utils/apiError";
 import { Banner, useToast } from "./ui";
+import ForecastScorecard from "./ForecastScorecard";
+import ForecastSkillSection from "./ForecastSkillSection";
 import VerdictFeedbackControl from "./VerdictFeedbackControl";
 import {
   CalibrationDriftRow,
@@ -345,6 +347,10 @@ export default function CalibrationPanel() {
           subtitle="AI probability minus market price"
         />
       </div>
+
+      <ForecastSkillSection windowDays={windowDays} scope={globalScope ? "global" : "user"} />
+
+      <ForecastScorecard />
 
       {/* Reliability curve */}
       <div className="surface-panel p-5">

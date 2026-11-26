@@ -82,6 +82,21 @@ class AssessmentRepository:
             .all()
         )
 
+    def scored_for_revalidation(self, scoring_version: str, limit: int) -> list[Assessment]:
+        """Scored, non-quarantined rows, least recently audited first."""
+        return (
+            self.db.query(Assessment)
+            .filter(
+                Assessment.resolved_at.isnot(None),
+                Assessment.scoring_version == scoring_version,
+                Assessment.exclusion_reason.is_(None),
+                Assessment.condition_id.startswith("0x"),
+            )
+            .order_by(Assessment.resolved_at)
+            .limit(limit)
+            .all()
+        )
+
     def scoped_calibration_rows(
         self,
         *,
