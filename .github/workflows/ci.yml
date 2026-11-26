@@ -219,6 +219,9 @@ jobs:
       - name: Point-in-time archive browser E2E
         working-directory: frontend
         run: npm run test:observations
+      - name: Evidence-first UX logic and component tests
+        working-directory: frontend
+        run: npm run test:evidence
       - name: Executable replay browser E2E
         working-directory: frontend
         run: npm run test:executable
