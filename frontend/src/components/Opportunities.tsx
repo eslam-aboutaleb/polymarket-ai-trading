@@ -38,6 +38,7 @@ import {
 } from "../utils/groupMarkets";
 import EventGroupDetailDrawer from "./EventGroupDetailDrawer";
 import MarketBoardCard from "./MarketBoardCard";
+import ExecutableOpportunities from "./ExecutableOpportunities";
 import { buildPolymarketEventUrl } from "../utils/urlSafety";
 import { useRafBufferedText } from "../hooks/useRafBufferedText";
 import { Banner, Modal } from "./ui";
@@ -1847,6 +1848,7 @@ export default function Opportunities() {
         />
       )}
 
+      <ExecutableOpportunities />
       <TradeModal
         market={tradeMarket}
         source="opportunities"
