@@ -30,6 +30,7 @@ import {
 import { getApiErrorMessage } from "../utils/apiError";
 import { Banner } from "./ui";
 import LiveReconciliation from "./LiveReconciliation";
+import ExecutionShortfallPanel from "./ExecutionShortfallPanel";
 import { onActiveAccountChange } from "../services/accountService";
 import {
   EdgeScoreRow,
@@ -293,6 +294,7 @@ export default function ExecutionAnalytics() {
         />
       </div>
 
+      <ExecutionShortfallPanel key={`shortfall-${accountEpoch}`} />
       <LiveReconciliation key={accountEpoch} />
       {/* Per-strategy fill-rate cards */}
       {strategyStats.length > 0 && (

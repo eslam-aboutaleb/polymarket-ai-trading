@@ -3,8 +3,9 @@
 from decimal import Decimal
 from enum import StrEnum
 from functools import lru_cache
+from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,10 +39,16 @@ class Settings(BaseSettings):
     paper_journal_v2_enabled: bool = False
     executable_replay_enabled: bool = False
     binary_book_research_enabled: bool = False
+    arbitrage_feasibility_enabled: bool = False
+    execution_estimator_enabled: bool = False
+    executable_opportunities_enabled: bool = False
     resolution_rule_analysis_enabled: bool = False
     binary_valuation_enabled: bool = False
     oracle_basis_risk_enabled: bool = False
+    portfolio_allocation_enabled: bool = False
+    cross_market_consistency_enabled: bool = False
     event_correlation_risk_enabled: bool = False
+    forecast_calibration_enabled: bool = False
     live_account_reconciliation_enabled: bool = False
     observation_archive_enabled: bool = False
     historical_feed_canary_enabled: bool = False
@@ -63,6 +70,17 @@ class Settings(BaseSettings):
     paper_maker_queue_ahead: Decimal | None = Field(default=None, ge=0, le=1000000000)
     native_capture_enabled: bool = False
     follower_replay_enabled: bool = False
+    # Copy-trade skip rule (#158): skip when the price has moved against the follower by
+    # more than this fraction of the estimated edge since the leader's fill.
+    copy_skip_edge_fraction: float = Field(default=0.5, ge=0, le=10)
+    # Market Deep Dive 2.0 (#33): off switch leaves legacy analysis untouched.
+    market_deep_dive_v2_enabled: bool = True
+    analysis_run_retention_days: int = Field(default=365, ge=1, le=3650)
+    # Social evidence (#57): optional. Disabled means no social section at all.
+    social_evidence_mode: Literal["off", "indexed", "x_api"] = "off"
+    x_api_bearer_token: SecretStr | None = None
+    social_user_hourly_quota: int = Field(default=10, ge=1, le=1000)
+    social_user_daily_quota: int = Field(default=50, ge=1, le=10000)
 
     # API Configuration
     api_title: str = "Polymarket AI Trading API"
@@ -224,6 +242,9 @@ class Settings(BaseSettings):
     latency_arb_live: bool = False
     # Minimum |P_model − p_market| gap to consider a candidate.
     latency_arb_edge_threshold: float = 0.03
+    # Shared taker net-edge gate (net = gross - fee - half spread - slippage - margin).
+    taker_min_net_edge: float = 0.0
+    taker_safety_margin: float = 0.02
     # Max notional per trade (USDC).
     latency_arb_max_notional: float = 50.0
     # Feed→order latency budget (ms): abort when exceeded.
@@ -372,6 +393,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_latency_arb_settings(self) -> "Settings":
+        if not 0.0 <= self.taker_min_net_edge < 1.0:
+            raise ValueError("TAKER_MIN_NET_EDGE must be in [0, 1)")
+        if not 0.0 <= self.taker_safety_margin < 1.0:
+            raise ValueError("TAKER_SAFETY_MARGIN must be in [0, 1)")
         if not 0.0 < self.latency_arb_edge_threshold < 1.0:
             raise ValueError("LATENCY_ARB_EDGE_THRESHOLD must be in (0, 1).")
         if self.latency_arb_max_notional <= 0:
