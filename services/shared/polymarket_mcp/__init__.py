@@ -362,6 +362,7 @@ class ResearchMCPClient:
             "oracle_basis_risk",
             "event_correlation_risk",
             "recorded_event_correlation_risk",
+            "forecast_calibration",
         )
         values = await self.call_tools([("describe_" + name, {}) for name in names])
         if len(values) != len(names):
@@ -382,6 +383,7 @@ class ResearchMCPClient:
             "oracle_basis_risk": "oracle-basis-v1",
             "event_correlation_risk": "event-correlation-risk-v1",
             "recorded_event_correlation_risk": "event-correlation-risk-v1",
+            "forecast_calibration": "forecast-skill-report-v1",
         }
         if tool not in versions:
             raise ValueError("Unsupported read-only prediction-market skill")
