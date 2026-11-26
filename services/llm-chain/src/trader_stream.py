@@ -265,7 +265,7 @@ class TraderStreamer:
                             end_state="truncated",
                             error_code="OUTPUT_LIMIT",
                             error_message="Output limit reached",
-                            total_ms=int((self._clock() - started) * 1000),
+                            total_ms=max(int((self._clock() - started) * 1000), first_token_ms),
                             time_to_first_token_ms=first_token_ms,
                             stream_kind="model_tokens",
                         )
@@ -282,7 +282,7 @@ class TraderStreamer:
                 end_state="completed",
                 output_tokens=output_tokens,
                 time_to_first_token_ms=first_token_ms,
-                total_ms=int((self._clock() - started) * 1000),
+                total_ms=max(int((self._clock() - started) * 1000), first_token_ms),
                 stream_kind="model_tokens",
                 metadata={
                     "research_context": research_context,
