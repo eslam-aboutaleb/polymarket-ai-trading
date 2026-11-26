@@ -2,6 +2,7 @@
 
 import json
 from datetime import timedelta
+from decimal import Decimal
 
 from e2e_paper_app import app, clock, forbidden, reset, sessions
 from latency_paper_fixtures import native
@@ -17,12 +18,40 @@ from app.models.trading.paper_execution_intent import PaperExecutionIntent
 from app.services.analytics import paper_accounting as paper
 from app.services.trading import latency_arb_service as runner
 from app.services.trading import latency_paper as runtime
+from app.services.trading import net_edge as ne
 from app.services.trading.execution import live
 
 app.include_router(router)
 runtime.utc_now = lambda: clock[0]
 live.place_live_order = forbidden
 runner.SessionLocal = sessions
+
+
+# The net-edge gate reads fee metadata and the CLOB book over HTTP. This harness never reaches
+# the network, so it supplies the same fixed offline inputs as the pytest suite (a deep, tight
+# book and a recorded-shape crypto_fees_v2 schedule). The paper fill itself still comes from
+# the captured native evidence below.
+async def _fee_metadata(condition_id):
+    return {
+        "clob": {},
+        "gamma": {
+            "version": "v1",
+            "feesEnabled": True,
+            "feeType": "crypto_fees_v2",
+            "feeSchedule": {"exponent": 1, "rate": 0.01, "takerOnly": True},
+        },
+    }
+
+
+async def _book(token_id):
+    return ne.BookSide(
+        bids=(ne.Level(Decimal("0.49"), Decimal("1000000")),),
+        asks=(ne.Level(Decimal("0.51"), Decimal("1000000")),),
+    )
+
+
+ne.fetch_fee_metadata = _fee_metadata
+ne.fetch_book = _book
 scenario = ["full"]
 
 
