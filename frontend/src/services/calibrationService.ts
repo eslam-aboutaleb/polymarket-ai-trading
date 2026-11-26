@@ -267,7 +267,77 @@ export interface ExperimentComparisonQuery {
 
 // ── Service ─────────────────────────────────────────────────
 
+// ── Forecast skill report (issue #22) ───────────────────────
+
+export type ForecastSkillStatus =
+  | "BETTER_THAN_MARKET"
+  | "WORSE_THAN_MARKET"
+  | "NOT_DISTINGUISHABLE"
+  | "INSUFFICIENT_SAMPLE"
+  | "NO_MATCHED_BASELINE";
+
+export type ConfidenceInterval = [number, number] | null;
+
+export interface ForecastSkillCohort {
+  scorer_version: string;
+  clipping_policy: string;
+  forecast_count: number;
+  scored_forecast_count: number;
+  effective_independent_events: number;
+  min_effective_events: number;
+  excluded: Record<string, number>;
+  clipped_for_log_loss: number;
+  evidence_class: string;
+  status: ForecastSkillStatus;
+  abstain_reason?: string;
+  brier?: number;
+  log_loss?: number;
+  brier_ci95?: ConfidenceInterval;
+  calibration_in_the_large?: number;
+  sharpness?: number;
+  ece?: number | null;
+  base_rate?: number;
+  matched_baseline_forecasts?: number;
+  paired_events?: number;
+  model_brier_matched?: number;
+  market_brier?: number;
+  brier_skill?: number | null;
+  paired_brier_delta?: number;
+  paired_brier_delta_ci95?: ConfidenceInterval;
+  paired_log_loss_delta?: number;
+  paired_log_loss_delta_ci95?: ConfidenceInterval;
+  delta_convention?: string;
+  claims_alpha?: boolean;
+  state?: { research_only: boolean; reasons: string[]; execution_eligible: boolean };
+}
+
+export interface ForecastSkillReport {
+  schema_version: string;
+  scorer_version: string;
+  generated_at: string;
+  window_days: number;
+  scope: string;
+  overall: ForecastSkillCohort;
+  by_model: Record<string, ForecastSkillCohort>;
+  by_horizon: Record<string, ForecastSkillCohort>;
+  drift: { drifted_count: number; drifted_models: string[] };
+  source_coverage: {
+    forecasts: number;
+    with_matched_baseline: number;
+    with_event_group: number;
+    window_start: string;
+  };
+  execution_eligible: boolean;
+  feature_flag: string;
+}
+
 export const calibrationService = {
+  async getSkillReport(query: CalibrationQuery = {}): Promise<ForecastSkillReport> {
+    return apiClient.get<ForecastSkillReport>("/api/analysis/calibration/skill-report", {
+      params: query,
+    });
+  },
+
   async getSummary(query: CalibrationQuery = {}): Promise<CalibrationSummaryResponse> {
     return apiClient.get<CalibrationSummaryResponse>("/api/analysis/calibration/summary", {
       params: query,
@@ -362,5 +432,57 @@ export const calibrationAdminService = {
       `/api/analysis/experiments/${encodeURIComponent(experimentName)}/comparison`,
       { params: query },
     );
+  },
+};
+
+// ── Evidence-grounded forecast scorecard (issue #4) ─────────
+
+export interface ForecastEvidenceItem {
+  source_id: string;
+  domain: string;
+  title: string;
+  text: string;
+  published_at: string | null;
+  retrieved_at: string | null;
+}
+
+export interface ForecastEvidenceResponse {
+  forecast_id: string;
+  evidence_snapshot_id: string;
+  rule_hash: string | null;
+  forecast_probability: number | null;
+  market_price: number | null;
+  calibrator_version: string | null;
+  prediction_instant: string | null;
+  snapshot_as_of: string;
+  evidence: {
+    generator_version: string;
+    kept: ForecastEvidenceItem[];
+    independent_sources: number;
+    syndicated_groups: string[][];
+    quarantined_source_ids: string[];
+    rejected: Record<string, number>;
+  };
+  execution_eligible: false;
+}
+
+export interface ForecastGenerationCalibration {
+  category: string | null;
+  horizon: string | null;
+  report: { status: string; forecast_count: number; min_effective_events: number };
+  execution_eligible: false;
+}
+
+export const forecastGenerationService = {
+  async getEvidence(forecastId: string): Promise<ForecastEvidenceResponse> {
+    return apiClient.get<ForecastEvidenceResponse>(
+      `/api/analysis/forecasts/${encodeURIComponent(forecastId)}/evidence`,
+    );
+  },
+
+  async getCalibration(category?: string): Promise<ForecastGenerationCalibration> {
+    return apiClient.get<ForecastGenerationCalibration>("/api/analysis/forecasts/calibration", {
+      params: category ? { category } : {},
+    });
   },
 };
