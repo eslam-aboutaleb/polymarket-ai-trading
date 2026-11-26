@@ -71,6 +71,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
     from app.api.routes.trading import (
         arbitrage,
         backtesting,
+        copy_intelligence,
         executable_replay,
         execution_estimate,
         follower_replay,
@@ -127,6 +128,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         executable_replay,
         execution_estimate,
         follower_replay,
+        copy_intelligence,
         trader_evaluation,
         binance_signals,
         news,
