@@ -164,3 +164,104 @@ def test_evaluate_opportunity_uses_twap_and_reports_model(windows, monkeypatch):
     spot = svc.evaluate_opportunity(*args, edge_threshold=0.0, taker_fee_rate=0.0)
     assert spot is not None and spot.model == "spot"
     assert twap.to_dict()["model"] == "twap"
+
+
+def _opp(windows, **setting_overrides):
+    from datetime import UTC, datetime
+
+    from app.config import get_settings
+    from app.services.market_data.crypto_markets_service import CryptoMarket
+
+    w = windows[5]
+    elapsed = 200
+    market = CryptoMarket(
+        symbol="BTC",
+        window_minutes=5,
+        window_start_epoch=w["slot"],
+        condition_id="c",
+        token_ids={"up": "u", "down": "d"},
+        prices={"up": 0.5, "down": 0.5},
+    )
+    now = datetime.fromtimestamp(w["slot"] + elapsed, tz=UTC)
+    sec = w["sec"]
+    settings = get_settings().model_copy(update=setting_overrides)
+    from unittest.mock import patch
+
+    with patch.object(svc, "get_settings", lambda: settings):
+        return svc.evaluate_opportunity(
+            "BTC",
+            5,
+            market,
+            sec[PRE + elapsed],
+            sec[PRE],
+            now,
+            w["m1"],
+            edge_threshold=0.0,
+            taker_fee_rate=0.0,
+            twap_reference=_reference(w),
+            final_prices=[],
+        )
+
+
+def test_filters_are_off_by_default(windows):
+    assert _opp(windows) is not None
+
+
+def test_min_own_probability_filter(windows):
+    base = _opp(windows)
+    own = base.p_model if base.side == "up" else 1.0 - base.p_model
+    assert _opp(windows, latency_arb_min_own_probability=own - 0.01) is not None
+    assert _opp(windows, latency_arb_min_own_probability=min(own + 0.01, 0.999)) is None
+
+
+def test_leg_price_band_filter(windows):
+    # The fixture market is 50/50, so the leg price is 0.50.
+    assert _opp(windows, latency_arb_leg_price_min=0.2, latency_arb_leg_price_max=0.85) is not None
+    assert _opp(windows, latency_arb_leg_price_min=0.6, latency_arb_leg_price_max=0.9) is None
+    assert _opp(windows, latency_arb_leg_price_min=0.1, latency_arb_leg_price_max=0.4) is None
+
+
+def test_filter_settings_are_validated():
+    from pydantic import ValidationError
+
+    from app.config import get_settings
+
+    base = get_settings().model_dump()
+    for bad in (
+        {"latency_arb_min_own_probability": 1.0},
+        {"latency_arb_leg_price_min": 0.9, "latency_arb_leg_price_max": 0.5},
+        {"latency_arb_edge_model": "nope"},
+    ):
+        with pytest.raises((ValidationError, ValueError)):
+            type(get_settings())(**{**base, **bad})
+
+
+def test_pick_edge_threshold_is_walk_forward():
+    good = [(0.18, 1.0, 10.0)] * 150 + [(0.12, -1.0, 10.0)] * 150
+    # >= 0.20: no rows; >= 0.15: positive; >= 0.10: breaks even-ish negative.
+    assert svc.pick_edge_threshold(good, grid=(0.10, 0.15, 0.20), min_trades=100) == 0.15
+    assert svc.pick_edge_threshold([], min_trades=100, default=0.15) == 0.15
+    losing = [(0.3, -1.0, 10.0)] * 200
+    assert svc.pick_edge_threshold(losing, min_trades=100, default=0.2) == 0.2
+
+
+def test_walk_forward_script_uses_only_past_days(tmp_path, capsys, monkeypatch):
+    import importlib.util
+    import sys
+
+    csv_path = tmp_path / "s.csv"
+    rows = ["day,edge,pnl,stake"]
+    rows += ["2026-11-01,0.20,1.0,10.0" for _ in range(120)]
+    rows += ["2026-11-02,0.20,-9.0,10.0" for _ in range(120)]
+    csv_path.write_text("\n".join(rows))
+    script = Path(__file__).parents[1] / "scripts" / "latency_arb_walk_forward.py"
+    spec = importlib.util.spec_from_file_location("lawf", script)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setattr(sys, "argv", ["x", str(csv_path)])
+    assert mod.main() == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == "2026-11-01 threshold=0.15"  # no history yet: default
+    assert (
+        out[1] == "2026-11-02 threshold=0.10"
+    )  # day 1 only: first positive grid value is best ROI
