@@ -1,6 +1,6 @@
 """Assessment model for AI trade evaluation"""
 
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text, event
 
 from app.models.base import Base
 from app.utils.time import utc_now
@@ -84,5 +84,109 @@ class Assessment(Base):
     #: treated as a foreign key.
     llm_tier = Column(String(16), nullable=True)
 
+    # ── Immutable forecast identity and provenance (issue #60) ──
+    #: Random identity of this forecast run. Two genuine revisions are
+    #: always distinct runs even when their rounded fields coincide.
+    forecast_uuid = Column(String(36), nullable=True, unique=True, index=True)
+    #: Replay-safe request identity: a caller idempotency key, or the SHA-256
+    #: of the full-precision decision inputs. Unique, so a duplicate request
+    #: can never become a second sample (nullable for legacy rows).
+    request_key = Column(String(64), nullable=True, unique=True, index=True)
+    #: CLOB token the stated probability is about, and what the number means.
+    token_id = Column(String(100), nullable=True)
+    #: ``p_yes`` = P(the YES outcome of the market resolves true). It is never
+    #: P(this order is profitable).
+    p_interpretation = Column(String(24), nullable=True)
+    #: JSON ``{token_id: outcome_label}`` mapping in force at decision time.
+    outcome_mapping_json = Column(Text, nullable=True)
+    #: Resolution-rule hash in force when the forecast was produced.
+    rule_hash = Column(String(64), nullable=True)
+    #: Evidence snapshot the forecast was grounded on, when any.
+    evidence_snapshot_id = Column(String(64), nullable=True)
+    calibrator_version = Column(String(32), nullable=True)
+    #: The moment the forecaster produced the number (UTC). Only evidence
+    #: observed at or before this instant may justify it.
+    prediction_instant = Column(DateTime(timezone=True), nullable=True)
+    #: Scheduled market end at decision time and the horizon to it, seconds.
+    market_close_at = Column(DateTime(timezone=True), nullable=True)
+    horizon_seconds = Column(Integer, nullable=True)
+    #: Event the market belongs to: the independence unit for evaluation.
+    event_group = Column(String(100), nullable=True)
+    #: Contemporaneous benchmark quote (the market-implied probability).
+    benchmark_price = Column(Float, nullable=True)
+    benchmark_bid = Column(Float, nullable=True)
+    benchmark_ask = Column(Float, nullable=True)
+    benchmark_observed_at = Column(DateTime(timezone=True), nullable=True)
+    benchmark_source = Column(String(40), nullable=True)
+    #: Seconds between the quote and the prediction (never negative).
+    quote_age_seconds = Column(Float, nullable=True)
+
     def __repr__(self):
         return f"<Assessment(trade_id={self.trade_history_id}, score={self.ai_score})>"
+
+
+#: Columns fixed when the forecast is recorded. They are written once; a later
+#: UPDATE that changes any of them is a bug or tampering, so it raises.
+IMMUTABLE_FORECAST_COLUMNS = (
+    "condition_id",
+    "ai_probability",
+    "market_price_at_assessment",
+    "model_name",
+    "task",
+    "prompt_version",
+    "created_at",
+    "forecast_uuid",
+    "request_key",
+    "token_id",
+    "p_interpretation",
+    "outcome_mapping_json",
+    "rule_hash",
+    "evidence_snapshot_id",
+    "calibrator_version",
+    "prediction_instant",
+    "market_close_at",
+    "horizon_seconds",
+    "event_group",
+    "benchmark_price",
+    "benchmark_bid",
+    "benchmark_ask",
+    "benchmark_observed_at",
+    "benchmark_source",
+    "quote_age_seconds",
+)
+
+
+class ImmutableForecastError(RuntimeError):
+    """Raised when a recorded forecast field is edited after the fact."""
+
+
+@event.listens_for(Assessment, "before_update")
+def _reject_forecast_mutation(_mapper, connection, target):
+    """Reject edits of recorded fields, comparing against the stored row.
+
+    The stored value is read through the flush connection, so the guard holds
+    for expired instances too. A legacy NULL provenance column may be filled
+    once; every other change raises. This is an application-level guard: it
+    does not stop raw SQL, which an operator must keep to deliberate
+    migrations.
+    """
+    from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy import select
+
+    state = sa_inspect(target)
+    changed = [n for n in IMMUTABLE_FORECAST_COLUMNS if state.attrs[n].history.has_changes()]
+    if not changed:
+        return
+    table = Assessment.__table__
+    stored = connection.execute(
+        select(*[table.c[n] for n in changed]).where(table.c.id == target.id)
+    ).one_or_none()
+    if stored is None:
+        return
+    always_set = {"ai_probability", "condition_id", "created_at"}
+    for name, old in zip(changed, stored, strict=True):
+        if old is None and name not in always_set:
+            continue
+        new = getattr(target, name)
+        if old != new:
+            raise ImmutableForecastError(f"forecast field {name!r} is immutable once recorded")

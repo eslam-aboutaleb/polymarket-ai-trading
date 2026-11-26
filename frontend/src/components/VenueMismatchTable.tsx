@@ -139,6 +139,32 @@ export default function VenueMismatchTable({
                     <span className="text-xs font-semibold px-2 py-0.5 rounded bg-[var(--bg-soft)] text-soft">
                       {score(mismatch.match_type, mismatch.match_score)}
                     </span>
+                    {mismatch.classification && (
+                      <span className="ml-2 text-xs px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 font-mono">
+                        {mismatch.classification}
+                      </span>
+                    )}
+                    {mismatch.rules_for_review && mismatch.rules_for_review.length > 0 && (
+                      <details className="mt-1 text-xs">
+                        <summary className="cursor-pointer text-soft">
+                          Compare both rules ({mismatch.equivalence?.status ?? "unverified"})
+                        </summary>
+                        {mismatch.rules_for_review.map((side) => (
+                          <p key={side.venue} className="mt-1">
+                            <span className="font-semibold">{side.venue}</span>: {side.question}
+                            {side.end_date ? ` (closes ${side.end_date})` : ""}
+                            {side.rules_text
+                              ? ` Rules: ${side.rules_text}`
+                              : " Rules text unavailable."}
+                          </p>
+                        ))}
+                        {mismatch.equivalence && mismatch.equivalence.reasons.length > 0 && (
+                          <p className="mt-1 text-amber-400">
+                            Unverified: {mismatch.equivalence.reasons.join(", ")}
+                          </p>
+                        )}
+                      </details>
+                    )}
                     {mismatch.horizon_mismatch && (
                       <span
                         className="ml-2 text-xs px-2 py-0.5 rounded bg-red-500/10 text-red-400"
@@ -197,7 +223,7 @@ export default function VenueMismatchTable({
                   </td>
                   <td className="py-2.5 text-right text-xs">
                     {mismatch.executable_signal ? (
-                      <span className="text-green-400">review &amp; confirm</span>
+                      <span className="text-amber-400">review only, not executable</span>
                     ) : (
                       <span className="text-amber-400">
                         {mismatch.play_money_only ? "sentiment only" : "not comparable"}
@@ -301,7 +327,9 @@ export default function VenueMismatchTable({
                 </span>
                 <span>{spot.market_title}</span>
                 <span className="font-mono text-xs text-amber-400">
-                  {spot.profit_pct != null ? `${spot.profit_pct.toFixed(2)}% profit` : null}
+                  {(spot.gross_price_gap_pct_points ?? spot.profit_pct) != null
+                    ? `${(spot.gross_price_gap_pct_points ?? spot.profit_pct ?? 0).toFixed(2)} pts indicative gap`
+                    : null}
                   {spot.spread_pct != null ? `${spot.spread_pct.toFixed(2)}% spread` : null}
                 </span>
               </li>

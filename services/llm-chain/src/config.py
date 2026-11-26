@@ -41,6 +41,29 @@ class Settings(SharedLLMSettings):
     rag_enabled: bool = True
     rag_multi_query_count: int = 5
 
+    # Evidence-grounded RAG *read* path (issue #39). Off by default: with the
+    # flag off no embedding, vector-store or LLM call is made on the read route.
+    rag_retrieval_enabled: bool = False
+    rag_retrieval_deadline_seconds: float = 5.0
+    rag_retrieval_max_results: int = 10
+    rag_retrieval_min_similarity: float = 0.3
+    rag_retrieval_max_index_age_seconds: float = 24 * 3600.0
+    rag_retrieval_cache_ttl_seconds: float = 60.0
+    rag_retrieval_cache_size: int = 128
+    rag_retrieval_query_max_chars: int = 1000
+    rag_retrieval_breaker_threshold: int = 3
+    rag_retrieval_breaker_cooldown_seconds: float = 60.0
+
+    # Trader-analysis streaming (issue #59)
+    trader_stream_deadline_seconds: float = 120.0
+    trader_stream_first_token_timeout_seconds: float = 60.0
+    trader_stream_idle_timeout_seconds: float = 30.0
+    trader_stream_max_frame_chars: int = 4000
+    trader_stream_max_output_chars: int = 200_000
+    trader_stream_replay_ttl_seconds: float = 300.0
+    trader_stream_replay_max_streams: int = 64
+    trader_stream_replay_max_frames: int = 5000
+
     # Tavily premium search (optional)
     tavily_api_key: str = Field(default="", repr=False, exclude=True)
     tavily_enabled: bool = False

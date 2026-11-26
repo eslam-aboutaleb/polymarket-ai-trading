@@ -9,6 +9,8 @@
  *
  * @module components/Opportunities
  */
+import EvidenceBadge from "./evidence/EvidenceBadge";
+import ModeBadge from "./evidence/ModeBadge";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -36,6 +38,7 @@ import {
 } from "../utils/groupMarkets";
 import EventGroupDetailDrawer from "./EventGroupDetailDrawer";
 import MarketBoardCard from "./MarketBoardCard";
+import ExecutableOpportunities from "./ExecutableOpportunities";
 import { buildPolymarketEventUrl } from "../utils/urlSafety";
 import { useRafBufferedText } from "../hooks/useRafBufferedText";
 import { Banner, Modal } from "./ui";
@@ -1777,7 +1780,19 @@ export default function Opportunities() {
                 </div>
 
                 {score && (
+                  <EvidenceBadge
+                    evidence={{
+                      // The AI score carries no rule hash, quote time or net edge.
+                      // Leaving them unset keeps the row "indicative" until the
+                      // backend supplies verified evidence.
+                      netEdge: null,
+                    }}
+                  />
+                )}
+
+                {score && (
                   <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <ModeBadge mode="research" />
                     <span className="chip chip-success px-2 py-0.5">
                       AI {(score.ai_score ?? 0).toFixed(0)}
                     </span>
@@ -1833,6 +1848,7 @@ export default function Opportunities() {
         />
       )}
 
+      <ExecutableOpportunities />
       <TradeModal
         market={tradeMarket}
         source="opportunities"

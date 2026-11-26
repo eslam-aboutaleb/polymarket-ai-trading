@@ -1,0 +1,397 @@
+{
+  "$defs": {
+    "BayesIn": {
+      "additionalProperties": false,
+      "properties": {
+        "calibrated": {
+          "title": "Calibrated",
+          "type": "boolean"
+        },
+        "hypothesis": {
+          "title": "Hypothesis",
+          "type": "string"
+        },
+        "like_given_h": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                  "type": "string"
+                }
+              ]
+            }
+          ],
+          "title": "Like Given H",
+          "type": "array"
+        },
+        "like_given_not_h": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                  "type": "string"
+                }
+              ]
+            }
+          ],
+          "title": "Like Given Not H",
+          "type": "array"
+        },
+        "likelihood_source": {
+          "enum": [
+            "observed",
+            "forecast",
+            "historical"
+          ],
+          "title": "Likelihood Source",
+          "type": "string"
+        },
+        "likelihood_source_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Likelihood Source Id"
+        },
+        "sample_size": {
+          "minimum": 0,
+          "title": "Sample Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hypothesis",
+        "like_given_h",
+        "like_given_not_h",
+        "likelihood_source",
+        "sample_size",
+        "calibrated"
+      ],
+      "title": "BayesIn",
+      "type": "object"
+    },
+    "ConditionalQuery": {
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "title": "Event",
+          "type": "string"
+        },
+        "given": {
+          "title": "Given",
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "given"
+      ],
+      "title": "ConditionalQuery",
+      "type": "object"
+    },
+    "EventIn": {
+      "additionalProperties": false,
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "condition_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Condition Id"
+        },
+        "name": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Name",
+          "type": "string"
+        },
+        "p": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "P"
+        },
+        "rule_hash": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rule Hash"
+        },
+        "source": {
+          "enum": [
+            "observed",
+            "forecast",
+            "historical"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "source_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Id"
+        },
+        "token_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Token Id"
+        }
+      },
+      "required": [
+        "name",
+        "p",
+        "source",
+        "as_of"
+      ],
+      "title": "EventIn",
+      "type": "object"
+    },
+    "ExpressionQuery": {
+      "additionalProperties": false,
+      "properties": {
+        "expr": {
+          "additionalProperties": true,
+          "title": "Expr",
+          "type": "object"
+        },
+        "name": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "expr"
+      ],
+      "title": "ExpressionQuery",
+      "type": "object"
+    },
+    "RelationIn": {
+      "additionalProperties": false,
+      "properties": {
+        "approved": {
+          "default": false,
+          "title": "Approved",
+          "type": "boolean"
+        },
+        "events": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 2,
+          "title": "Events",
+          "type": "array"
+        },
+        "evidence_hash": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Evidence Hash"
+        },
+        "exhaustive": {
+          "default": false,
+          "title": "Exhaustive",
+          "type": "boolean"
+        },
+        "rule_hashes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Rule Hashes",
+          "type": "object"
+        },
+        "type": {
+          "enum": [
+            "implies",
+            "prerequisite",
+            "complement",
+            "exclusive_group",
+            "thresholds",
+            "identical"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "events"
+      ],
+      "title": "RelationIn",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "bayes": {
+      "items": {
+        "$ref": "#/$defs/BayesIn"
+      },
+      "maxItems": 8,
+      "title": "Bayes",
+      "type": "array"
+    },
+    "conditional": {
+      "items": {
+        "$ref": "#/$defs/ConditionalQuery"
+      },
+      "maxItems": 32,
+      "title": "Conditional",
+      "type": "array"
+    },
+    "decision_time": {
+      "format": "date-time",
+      "title": "Decision Time",
+      "type": "string"
+    },
+    "events": {
+      "items": {
+        "$ref": "#/$defs/EventIn"
+      },
+      "maxItems": 10,
+      "minItems": 1,
+      "title": "Events",
+      "type": "array"
+    },
+    "expressions": {
+      "items": {
+        "$ref": "#/$defs/ExpressionQuery"
+      },
+      "maxItems": 16,
+      "title": "Expressions",
+      "type": "array"
+    },
+    "joint": {
+      "items": {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ],
+        "type": "array"
+      },
+      "maxItems": 32,
+      "title": "Joint",
+      "type": "array"
+    },
+    "max_age_seconds": {
+      "default": 3600,
+      "maximum": 604800,
+      "minimum": 1,
+      "title": "Max Age Seconds",
+      "type": "integer"
+    },
+    "relations": {
+      "items": {
+        "$ref": "#/$defs/RelationIn"
+      },
+      "maxItems": 32,
+      "title": "Relations",
+      "type": "array"
+    }
+  },
+  "required": [
+    "decision_time",
+    "events"
+  ],
+  "title": "EventLogicRequest",
+  "type": "object"
+}
