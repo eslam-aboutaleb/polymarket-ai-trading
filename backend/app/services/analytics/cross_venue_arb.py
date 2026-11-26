@@ -26,6 +26,12 @@ design:
 * **The gap is a price gap, not a profit.** ``min_edge`` is compared
   against ``max(yes) − min(yes)`` in the same currency. No fee, spread
   or fill model is applied, so the reported edge is an upper bound.
+* **No economic parity without proof.** Every mismatch is ``REVIEW_ONLY``
+  (or ``NON_EXECUTABLE`` for a play-money leg) and carries both questions
+  and the explicit parity checks (event, oracle, cutoff, outcome meaning,
+  currency, settlement) that ``payout_validator.verify_cross_venue`` could
+  not confirm from a cached row. Title or fuzzy overlap never upgrades it.
+  Executable feasibility is the separate, paper-only feasibility engine.
 
 The module also gives the **intra-Polymarket** detector a consumer:
 ``get_intra_polymarket_signals`` reads ``arbitrage_service``'s recent
@@ -47,6 +53,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.repositories.market_data.venues import VenueMarketRepository
+from app.services.analytics.arbitrage.payout_validator import ContractRules, verify_cross_venue
 from app.services.market_data.venue_market_service import normalize_question, serialize_venue_market
 
 logger = logging.getLogger(__name__)
@@ -316,6 +323,32 @@ def _horizon_days(low: Mapping[str, Any], high: Mapping[str, Any]) -> float | No
     return round(abs((left - right).total_seconds()) / 86400.0, 2)
 
 
+CROSS_VENUE_SCHEMA_VERSION = "cross-venue-v2"
+
+
+def _contract_rules(row: Mapping[str, Any]) -> ContractRules:
+    """Cached rows carry no oracle/settlement facts: only what the row proves."""
+    return ContractRules(
+        venue=_venue(row) or "unknown",
+        market_id=str(row.get("market_id") or "unknown"),
+        cutoff=_datetime(row.get("end_date")),
+        is_real_money=bool(row.get("is_real_money", True)),
+        rules_text=str(row.get("rules") or row.get("description") or "") or None,
+    )
+
+
+def _review_side(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Everything a human needs to compare the two rule sets side by side."""
+    return {
+        "venue": _venue(row),
+        "market_id": str(row.get("market_id") or ""),
+        "question": str(row.get("question") or ""),
+        "end_date": row.get("end_date"),
+        "url": str(row.get("url") or ""),
+        "rules_text": str(row.get("rules") or row.get("description") or "") or None,
+    }
+
+
 def _mismatch(
     low: Mapping[str, Any],
     high: Mapping[str, Any],
@@ -337,7 +370,21 @@ def _mismatch(
         _venue(high): str(high.get("question") or ""),
     }
     horizon = _horizon_days(low, high)
+    equivalence = verify_cross_venue(_contract_rules(low), _contract_rules(high))
+    classification = "NON_EXECUTABLE" if play_money_venues else "REVIEW_ONLY"
     return {
+        "schema_version": CROSS_VENUE_SCHEMA_VERSION,
+        "classification": classification,
+        "badges": [
+            "INDICATIVE_ONLY",
+            "NOT_EXECUTABLE",
+            "UNKNOWN_FEES",
+            classification,
+        ],
+        "gross_price_gap_pct_points": round(edge * 100.0, 2),
+        "executable": False,
+        "equivalence": equivalence.model_dump(mode="json"),
+        "rules_for_review": [_review_side(low), _review_side(high)],
         "venues": sorted({_venue(low), _venue(high)}),
         "match_type": match["match_type"],
         "match_score": match["match_score"],
