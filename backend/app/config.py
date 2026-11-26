@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     binary_book_research_enabled: bool = False
     arbitrage_feasibility_enabled: bool = False
     execution_estimator_enabled: bool = False
+    executable_opportunities_enabled: bool = False
     resolution_rule_analysis_enabled: bool = False
     binary_valuation_enabled: bool = False
     oracle_basis_risk_enabled: bool = False
