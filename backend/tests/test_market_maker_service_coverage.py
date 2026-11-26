@@ -172,6 +172,7 @@ class FetchOrderBookTests(unittest.IsolatedAsyncioTestCase):
                 "bid_depth": 5.5,  # 10×0.4 + 5×0.3
                 "ask_depth": 1.2,  # 2×0.6
                 "depth": 1.2,  # min(bid_depth, ask_depth)
+                "age_seconds": None,  # no CLOB timestamp: unknown, never fresh
             },
         )
         self.assertEqual(client.get_calls, [(f"{CLOB_API}/book", {"token_id": "token-yes"})])

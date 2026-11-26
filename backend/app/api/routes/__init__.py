@@ -39,7 +39,9 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
     from app.api.routes.analysis import (
         analysis,
         calibration,
+        event_logic,
         experiments,
+        forecasts,
         opportunities,
         orchestration,
         valuation,
@@ -98,6 +100,8 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         credentials,
         analysis,
         calibration,
+        forecasts,
+        event_logic,
         collaboration,
         experiments,
         valuation,
