@@ -1,6 +1,6 @@
 name: Paper recorder (24h, paper only)
 
-# Manual only. Records real Polymarket BTC 5m order books + BTC spot for about 22h in 4 sequential
+# Manual only. Records real Polymarket BTC 5m order books + BTC spot for about 22h (4 x 5.5h, not a full 24h) in 4 sequential
 # batches (5.5h each), then runs the train/test analysis. PAPER ONLY: no secrets are used or needed,
 # the recorder has no wallet, key, or order code. See tools/paper_recorder/README.md.
 on:

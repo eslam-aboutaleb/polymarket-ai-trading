@@ -38,3 +38,12 @@ Do not re-tune after seeing TEST. For a second opinion, record a new later perio
     python3 tools/paper_recorder/history_backtest.py --hours 48 --out rows.json
     python3 tools/paper_recorder/analyze.py --rows rows.json
 History has only ~1 midpoint per minute, so spread and depth are assumptions (`--spread`, `--slip`). Use it for fee and price-band questions only.
+
+## Run it on GitHub Actions (no machine needed)
+Workflow: `.github/workflows/paper-recorder.yml` (manual only, `workflow_dispatch`).
+- 4 sequential batches of 5.5h = 22h of recording (not a full 24h), hard cap of 4 batches, no re-triggering. Each batch uploads its data as an artifact (`paper-data-1..4`, 30 days). A final job merges them in order, looks up outcomes for windows still unresolved, runs `analyze.py` (train = earlier 60%, test = later 40%), and prints the result in the run's Summary tab. The merged data is the `paper-data-merged` artifact.
+- Paper only: `permissions: contents: read`, no secrets, actions pinned by SHA, one run at a time (`concurrency` group `paper-recorder`, a second dispatch waits).
+- Cost: about 4 x 5.6h = about 1,350 runner minutes plus a few for the analysis. This repo is public, where standard GitHub-hosted runner minutes are free; on a private repo it would count against the plan. A workflow cannot read the remaining quota, so nothing here enforces a minutes limit. The cap is the fixed 4 batches and the 350 minute timeout per batch.
+- Batch boundaries lose a few minutes (the window in progress when a batch starts is skipped), about 2 windows per boundary.
+- To start: the workflow file must be on the default branch (main). GitHub only offers "Run workflow" for workflows that exist on main; a workflow that exists only on a branch cannot be dispatched. So merge it, then Actions -> "Paper recorder (24h, paper only)" -> Run workflow (branch main).
+- One day is one market regime. A "proven" verdict still needs a repeat on a later period.
