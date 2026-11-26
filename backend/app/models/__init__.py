@@ -4,6 +4,7 @@ Importing this package registers every mapped entity with ``Base.metadata``.
 Model definitions live under their bounded-context packages.
 """
 
+from app.models.analytics.arbitrage_feasibility_run import ArbitrageFeasibilityRun
 from app.models.analytics.assessment import Assessment
 from app.models.analytics.backtest_run import BacktestRun
 from app.models.analytics.book_research_run import BookResearchRun
@@ -100,6 +101,7 @@ __all__ = [
     "PaperOrderRecord",
     "PaperNavPoint",
     "BacktestRun",
+    "ArbitrageFeasibilityRun",
     "BookResearchRun",
     "ExecutionEstimateRecord",
     "FollowerExperimentRun",
