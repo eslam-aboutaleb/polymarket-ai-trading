@@ -132,6 +132,8 @@ def _engine_settings(**overrides) -> Settings:
         # This module tests paper-mode gating on a Gamma-priced market; the
         # live order-book path is covered in test_live_book_feed.py.
         "latency_arb_book_feed_enabled": False,
+        "latency_arb_edge_model": "spot",
+        "latency_arb_sigma_cap_multiple": 1.5,
     }
     kwargs.update(overrides)
     return Settings(**kwargs)

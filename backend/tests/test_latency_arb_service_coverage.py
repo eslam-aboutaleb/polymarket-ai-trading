@@ -88,6 +88,8 @@ def _engine_settings(**overrides):
         # These tests cover the Gamma-price path; the live-book path has its own
         # tests in test_live_book_feed.py.
         "latency_arb_book_feed_enabled": False,
+        "latency_arb_edge_model": "spot",
+        "latency_arb_sigma_cap_multiple": 1.5,
         "latency_arb_book_max_age_ms": 3000,
         "latency_arb_daily_loss_limit": 20.0,
         "latency_arb_circuit_breaker_losses": 3,
