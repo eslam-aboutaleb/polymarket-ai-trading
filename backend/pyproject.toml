@@ -57,6 +57,7 @@ testpaths = ["tests"]
 # ../services/shared) is importable.
 pythonpath = [".", "../services/shared"]
 addopts = "--cov=app --cov-report=term-missing --cov-report=xml:coverage.xml"
+markers = ["real_net_edge: exercise the taker net-edge gate with test-supplied inputs"]
 
 # Randomize test order (pytest-randomly). Module-level counters and cached
 # singletons made several tests pass only in file order; randomizing turned

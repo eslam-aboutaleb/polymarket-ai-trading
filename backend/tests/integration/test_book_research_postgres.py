@@ -117,6 +117,16 @@ with Session(engine) as db:
         revision = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(revision)
         with engine.begin() as connection:
+            # Later features add tables that reference book_research_runs; this test downgrades
+            # revision 0035 in isolation, so those dependents must go first (as a full
+            # downgrade would drop them).
+            inspector = inspect(connection)
+            for table in inspector.get_table_names():
+                if any(
+                    fk["referred_table"] == "book_research_runs"
+                    for fk in inspector.get_foreign_keys(table)
+                ):
+                    connection.execute(text(f'DROP TABLE "{table}"'))
             with Operations.context(MigrationContext.configure(connection)):
                 revision.upgrade()
                 revision.downgrade()
