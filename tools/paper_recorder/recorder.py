@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: PTH103, PTH118, PTH123, SIM115, SIM105, S310, S112, E741, T201, C408, C416, B905, ARG001
+# (standalone script, not application code)
 """Standalone PAPER-ONLY recorder for the Polymarket BTC 5m up/down latency-arb idea.
 
 What it does
@@ -51,7 +53,7 @@ MIN_SIGMA = 1e-6
 DEFAULT_SIGMA = 0.002
 
 
-# ---------------------------------------------------------------- model (same math as latency_arb_service)
+# ------------------------------- model (same math as latency_arb_service)
 def normal_cdf(x: float) -> float:
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
@@ -80,8 +82,12 @@ class Book:
     last_update: float = 0.0
 
     def apply_snapshot(self, ev: dict) -> None:
-        self.bids = {float(x["price"]): float(x["size"]) for x in ev.get("bids", []) if float(x["size"]) > 0}
-        self.asks = {float(x["price"]): float(x["size"]) for x in ev.get("asks", []) if float(x["size"]) > 0}
+        self.bids = {
+            float(x["price"]): float(x["size"]) for x in ev.get("bids", []) if float(x["size"]) > 0
+        }
+        self.asks = {
+            float(x["price"]): float(x["size"]) for x in ev.get("asks", []) if float(x["size"]) > 0
+        }
         self.has_snapshot = True
         self.last_update = time.time()
 
@@ -324,16 +330,30 @@ async def snapshot_task(st: State):
             pm = p_up(dist, sig, t_rem)
             ub, ua = levels(bu)
             db, da = levels(bd)
-            row = {"ts": round(now, 3), "win": start, "t_rem": round(t_rem, 4), "spot": st.spot,
-                   "spot_age": round(now - st.spot_ts, 2), "open": m.open_price, "dist": dist, "sigma": sig,
-                   "p_model_up": pm, "fee_rate": m.fee_rate, "fresh": fresh, "crossed": bu.crossed() or bd.crossed(),
-                   "up_bids": ub, "up_asks": ua, "down_bids": db, "down_asks": da}
+            row = {
+                "ts": round(now, 3),
+                "win": start,
+                "t_rem": round(t_rem, 4),
+                "spot": st.spot,
+                "spot_age": round(now - st.spot_ts, 2),
+                "open": m.open_price,
+                "dist": dist,
+                "sigma": sig,
+                "p_model_up": pm,
+                "fee_rate": m.fee_rate,
+                "fresh": fresh,
+                "crossed": bu.crossed() or bd.crossed(),
+                "up_bids": ub,
+                "up_asks": ua,
+                "down_bids": db,
+                "down_asks": da,
+            }
             st.f_snap.write(json.dumps(row) + "\n")
             # default strategy: at most one paper trade per window, only on fresh uncrossed books
             if m.traded or not fresh or row["crossed"] or t_rem < a.min_t_rem or not ua or not da:
                 continue
             for side, asks, pmod in (("up", ua, pm), ("down", da, 1.0 - pm)):
-                # price the signal on the ladder walked for our size, not on a thin top-of-book sliver
+                # price the signal on the ladder walked for our size, not a thin top sliver
                 w = walk_asks([tuple(x) for x in asks], a.shares, m.fee_rate)
                 if w is None:
                     continue
@@ -341,10 +361,21 @@ async def snapshot_task(st: State):
                 net_edge = pmod - avg - fee_tot / a.shares
                 if net_edge >= a.threshold:
                     m.traded = True
-                    st.pending.append({"win": start, "side": side, "signal_ts": now, "fill_at": now + a.latency,
-                                       "net_edge_at_signal": net_edge, "p_model": pmod, "ask_at_signal": asks[0][0],
-                                       "avg_at_signal": avg, "t_rem": t_rem,
-                                       "token": m.up if side == "up" else m.down, "fee_rate": m.fee_rate})
+                    st.pending.append(
+                        {
+                            "win": start,
+                            "side": side,
+                            "signal_ts": now,
+                            "fill_at": now + a.latency,
+                            "net_edge_at_signal": net_edge,
+                            "p_model": pmod,
+                            "ask_at_signal": asks[0][0],
+                            "avg_at_signal": avg,
+                            "t_rem": t_rem,
+                            "token": m.up if side == "up" else m.down,
+                            "fee_rate": m.fee_rate,
+                        }
+                    )
                     break
 
 
@@ -358,11 +389,18 @@ def fill_paper(st: State, p: dict, now: float) -> None:
         rec.update(status="no_fill", reason="ladder too thin or book missing")
     else:
         avg, fee, _ = res
-        rec.update(status="filled", avg_price=avg, fee=fee, cost=avg * a.shares + fee,
-                   levels_used=[[pp, ss] for pp, ss in asks[:5]])
+        rec.update(
+            status="filled",
+            avg_price=avg,
+            fee=fee,
+            cost=avg * a.shares + fee,
+            levels_used=[[pp, ss] for pp, ss in asks[:5]],
+        )
     st.f_trade.write(json.dumps(rec) + "\n")
-    st.log(f"PAPER {rec['status']} win={p['win']} {p['side']} edge={p['net_edge_at_signal']:.3f} "
-           f"avg={rec.get('avg_price')}")
+    st.log(
+        f"PAPER {rec['status']} win={p['win']} {p['side']} edge={p['net_edge_at_signal']:.3f} "
+        f"avg={rec.get('avg_price')}"
+    )
 
 
 async def resolve_task(st: State):
@@ -379,27 +417,55 @@ async def resolve_task(st: State):
                 outs = json.loads(mk["outcomes"])
                 if max(prices) >= 0.99:  # Gamma shows 1/0 only after settlement
                     winner = outs[prices.index(max(prices))].lower()
-                    st.f_out.write(json.dumps({"win": start, "winner": winner, "src": "gamma",
-                                               "resolved_at": round(now, 1)}) + "\n")
+                    st.f_out.write(
+                        json.dumps(
+                            {
+                                "win": start,
+                                "winner": winner,
+                                "src": "gamma",
+                                "resolved_at": round(now, 1),
+                            }
+                        )
+                        + "\n"
+                    )
                     m.resolved = True
                     st.log(f"resolved {start} -> {winner}")
                 elif now > start + WINDOW_S + 900:
                     m.resolved = True
-                    st.f_out.write(json.dumps({"win": start, "winner": None, "src": "gamma_unresolved"}) + "\n")
+                    st.f_out.write(
+                        json.dumps({"win": start, "winner": None, "src": "gamma_unresolved"}) + "\n"
+                    )
             except Exception as e:
                 st.log(f"resolve {start} failed {e!r}")
-        for s in [s for s, m in st.markets.items() if m.resolved and time.time() > s + WINDOW_S + 1200]:
+        for s in [
+            s for s, m in st.markets.items() if m.resolved and time.time() > s + WINDOW_S + 1200
+        ]:
             st.markets.pop(s, None)
 
 
 async def main():
-    ap = argparse.ArgumentParser(description="Paper-only Polymarket BTC 5m recorder (no keys, no wallet, no orders)")
+    ap = argparse.ArgumentParser(
+        description="Paper-only Polymarket BTC 5m recorder (no keys, no wallet, no orders)"
+    )
     ap.add_argument("--out", default="paper_data", help="output directory for JSONL files")
-    ap.add_argument("--threshold", type=float, default=0.03, help="min NET edge (after fee) to paper-trade")
-    ap.add_argument("--latency", type=float, default=1.0, help="seconds between signal and simulated fill")
-    ap.add_argument("--shares", type=float, default=10.0, help="paper order size in shares (market minimum is 5)")
-    ap.add_argument("--min-t-rem", type=float, default=0.05, help="skip the final fraction of the window")
-    ap.add_argument("--max-age", type=float, default=3.0, help="book must have updated within this many seconds")
+    ap.add_argument(
+        "--threshold", type=float, default=0.03, help="min NET edge (after fee) to paper-trade"
+    )
+    ap.add_argument(
+        "--latency", type=float, default=1.0, help="seconds between signal and simulated fill"
+    )
+    ap.add_argument(
+        "--shares",
+        type=float,
+        default=10.0,
+        help="paper order size in shares (market minimum is 5)",
+    )
+    ap.add_argument(
+        "--min-t-rem", type=float, default=0.05, help="skip the final fraction of the window"
+    )
+    ap.add_argument(
+        "--max-age", type=float, default=3.0, help="book must have updated within this many seconds"
+    )
     ap.add_argument("--hours", type=float, default=24.0)
     a = ap.parse_args()
     st = State(a)
@@ -410,10 +476,13 @@ async def main():
             loop.add_signal_handler(s, st.stop.set)
         except NotImplementedError:  # windows
             pass
-    tasks = [asyncio.create_task(f(st)) for f in (spot_task, book_task, discover_task, snapshot_task, resolve_task)]
+    tasks = [
+        asyncio.create_task(f(st))
+        for f in (spot_task, book_task, discover_task, snapshot_task, resolve_task)
+    ]
     try:
         await asyncio.wait_for(st.stop.wait(), timeout=a.hours * 3600)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pass
     st.stop.set()
     for t in tasks:
