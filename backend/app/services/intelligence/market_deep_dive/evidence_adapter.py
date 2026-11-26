@@ -13,6 +13,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from app.services.intelligence.market_context import MarketContext
 from app.services.intelligence.market_deep_dive.schemas import EvidenceItem
 from app.services.intelligence.market_research import _search_excerpts, safe_research_url
+from app.services.intelligence.social_evidence.providers import parse_status_url
 
 _TRACKING = re.compile(r"^(utm_|fbclid$|gclid$|mc_|ref$|ref_src$)", re.I)
 MAX_EVIDENCE_ITEMS = 40
@@ -84,16 +85,17 @@ def collect_evidence(
                 continue
             seen.add(digest)
             canonical = canonical_url(url)
+            social = parse_status_url(url) is not None
             items.append(
                 EvidenceItem(
                     evidence_id=evidence_id(canonical, digest),
                     url=url,
                     canonical_url=canonical,
-                    publisher=publisher_of(url),
+                    publisher="social:x.com" if social else publisher_of(url),
                     published_at=None,
                     retrieved_at=retrieved_at,
                     available_at=None,
-                    source_family="search_excerpt",
+                    source_family="social_post" if social else "search_excerpt",
                     content_hash=digest,
                     excerpt=text[:3000],
                     verification="excerpt_matched",

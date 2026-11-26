@@ -158,4 +158,7 @@ __all__ += ["LiveBalanceSnapshot", "LiveAttributionReport", "AttributionStudy"]
 from app.models.analytics.analysis_run import AnalysisRun  # noqa: F401,E402
 
 __all__ += ["AnalysisRun"]
+from app.models.analytics.social_post import SocialPostVersion  # noqa: F401,E402
+
+__all__ += ["SocialPostVersion"]
 __all__ += ["ForecastResolutionEvent"]
