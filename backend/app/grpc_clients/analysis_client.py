@@ -314,9 +314,15 @@ class AnalysisClient:
         include_research: bool = True,
         llm_config: dict[str, Any] | None = None,
         research_instructions: str = "",
+        condition_id: str = "",
+        token_id: str = "",
+        as_of: str = "",
     ) -> dict[str, Any]:
         """
         Full market analysis with research.
+
+        ``condition_id``, ``token_id`` and ``as_of`` carry the canonical market
+        identity and decision time for the optional RAG retrieval read path.
 
         Args:
             market_title: Title of the prediction market
@@ -354,6 +360,9 @@ class AnalysisClient:
 
         if research_instructions:
             request.research_instructions = research_instructions
+        request.condition_id = condition_id
+        request.token_id = token_id
+        request.as_of = as_of
 
         try:
             response = await stub.AnalyzeMarket(request, timeout=settings.grpc_timeout)
