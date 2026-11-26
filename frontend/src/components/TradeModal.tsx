@@ -9,6 +9,7 @@
  */
 import FillStatus from "./evidence/FillStatus";
 import { fillInfo } from "../lib/evidence";
+import ExecutionCostPreview from "./ExecutionCostPreview";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   tradesService,
@@ -938,6 +939,15 @@ export default function TradeModal({
               </span>
             </div>
           </div>
+
+          {amountNum > 0 && Number.isFinite(amountNum) && market && (
+            <ExecutionCostPreview
+              conditionId={market.market_id}
+              outcome={outcome === "Yes" ? "YES" : "NO"}
+              side={side}
+              shares={shares}
+            />
+          )}
 
           {amountNum > 0 && Number.isFinite(amountNum) && (
             <div className="surface-soft p-3.5 rounded-lg space-y-2 text-sm">

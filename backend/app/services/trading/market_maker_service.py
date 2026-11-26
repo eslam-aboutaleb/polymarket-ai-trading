@@ -16,6 +16,9 @@ Two strategies:
 import asyncio
 import contextlib
 import logging
+from collections import deque
+from datetime import UTC
+from decimal import Decimal
 from typing import Any
 
 from py_clob_client.clob_types import OpenOrderParams
@@ -26,6 +29,12 @@ from app.models.trading.market_maker_config import MarketMakerConfig
 from app.repositories.trading.bots import TradingBotRepository
 from app.services.market_data.polymarket_service import POLYMARKET_CLOB_API
 from app.services.trading.execution.async_io import run_blocking_execution
+from app.services.trading.market_making.quote_policy import (
+    MarketState,
+    PolicyParams,
+    QuotePlan,
+    build_quote_plan,
+)
 from app.utils.database import SessionLocal
 from app.utils.scheduler_lock import (
     acquire_scheduler_lock,
@@ -255,6 +264,161 @@ def _compute_amm_orders(
     return orders
 
 
+# ─────────────── Inventory-aware quote policy (issue #8) ───────────────
+
+_midpoint_history: dict[int, deque] = {}
+SIGMA_WINDOW = 20
+MARKOUT_WINDOW = 20
+
+
+def _record_midpoint(config_id: int, midpoint: float) -> Decimal | None:
+    """Keep a short in-process midpoint window; return realized sigma or None.
+
+    Sigma is the sample standard deviation of midpoint changes. Fewer than
+    three observations is unknown (None), never zero.
+    """
+    history = _midpoint_history.setdefault(config_id, deque(maxlen=SIGMA_WINDOW))
+    history.append(float(midpoint))
+    if len(history) < 3:
+        return None
+    changes = [b - a for a, b in zip(history, list(history)[1:], strict=False)]
+    mean = sum(changes) / len(changes)
+    variance = sum((c - mean) ** 2 for c in changes) / max(len(changes) - 1, 1)
+    return Decimal(str(round(variance**0.5, 6)))
+
+
+def paper_inventory(db: Session, config: MarketMakerConfig) -> Decimal:
+    """Net YES-token shares held through modeled maker fills (BUY NO counts as short YES)."""
+    from app.models.trading.paper_maker_order import PaperMakerOrder
+    from app.services.trading.paper_maker_lifecycle import MakerOrder
+
+    net = Decimal(0)
+    for row in db.query(PaperMakerOrder).filter_by(config_id=config.id).all():
+        filled = Decimal(str(row.cumulative_filled or 0))
+        if filled <= 0:
+            continue
+        order = MakerOrder.model_validate_json(row.payload_json)
+        sign = 1 if order.side == "BUY" else -1
+        if order.token_id == config.token_id_no:
+            sign = -sign
+        net += sign * filled
+    return net
+
+
+def _resting_notional(db: Session, config: MarketMakerConfig) -> Decimal:
+    """Remaining notional of quotes that may still be live (cancel unconfirmed)."""
+    from app.models.trading.paper_maker_order import PaperMakerOrder
+    from app.services.trading.paper_maker_lifecycle import TERMINAL, MakerOrder
+
+    total = Decimal(0)
+    for row in db.query(PaperMakerOrder).filter_by(config_id=config.id).all():
+        if row.state in TERMINAL:
+            continue
+        order = MakerOrder.model_validate_json(row.payload_json)
+        total += (order.shares - order.cumulative_filled) * order.limit_price
+    return total
+
+
+def policy_params_for_config(config: MarketMakerConfig) -> PolicyParams:
+    settings = get_settings()
+    return PolicyParams(
+        min_spread=Decimal(str(config.min_spread)),
+        max_spread=Decimal(str(config.max_spread)),
+        num_bands=int(config.num_bands),
+        band_order_size=Decimal(str(config.band_order_size)),
+        max_collateral=Decimal(str(config.max_collateral)),
+        min_price=Decimal(str(config.min_price)),
+        max_price=Decimal(str(config.max_price)),
+        risk_coefficient=settings.maker_policy_risk_coefficient,
+        max_inventory_shares=settings.maker_policy_max_inventory_shares,
+        vol_widening=settings.maker_policy_vol_widening,
+        max_book_age_seconds=Decimal(settings.maker_policy_max_book_age_seconds),
+        pre_resolution_window_seconds=settings.maker_policy_pre_resolution_seconds,
+        toxicity_threshold=settings.maker_policy_toxicity_threshold,
+        toxicity_min_samples=settings.maker_policy_toxicity_min_samples,
+    )
+
+
+def seconds_to_resolution(db: Session, config: MarketMakerConfig, now=None) -> Decimal | None:
+    """Seconds until the market's recorded end date; None when no end date is known."""
+    from app.models.market_data.market import Market
+    from app.models.market_data.venue_market import VenueMarket
+
+    end = db.query(Market.end_date).filter(Market.id == config.condition_id).scalar()
+    if end is None:
+        end = (
+            db.query(VenueMarket.end_date)
+            .filter(VenueMarket.venue == "polymarket", VenueMarket.market_id == config.condition_id)
+            .scalar()
+        )
+    if end is None:
+        return None
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=UTC)
+    return Decimal(str((end - (now or utc_now())).total_seconds()))
+
+
+def rolling_markout(db: Session, config: MarketMakerConfig) -> tuple[Decimal | None, int]:
+    """Mean frozen markout per share over the latest marks; (None, 0) when there are none.
+
+    Marks come from ``PaperMakerMark`` and are indicative midpoint drift, not realized
+    P&L. Unavailable marks (``markout_per_share`` null) are excluded, never read as zero.
+    """
+    import json
+
+    from app.models.trading.paper_maker_order import (
+        PaperMakerFill,
+        PaperMakerMark,
+        PaperMakerOrder,
+    )
+
+    horizon = get_settings().maker_policy_toxicity_horizon_seconds
+    rows = (
+        db.query(PaperMakerMark.payload_json)
+        .join(PaperMakerFill, PaperMakerFill.id == PaperMakerMark.fill_id)
+        .join(PaperMakerOrder, PaperMakerOrder.id == PaperMakerFill.order_id)
+        .filter(PaperMakerOrder.config_id == config.id, PaperMakerMark.horizon_seconds == horizon)
+        .order_by(PaperMakerFill.observed_at.desc())
+        .limit(MARKOUT_WINDOW)
+        .all()
+    )
+    values = []
+    for (payload,) in rows:
+        raw = json.loads(payload).get("markout_per_share")
+        if raw is not None:
+            values.append(Decimal(str(raw)))
+    if not values:
+        return None, 0
+    return sum(values) / len(values), len(values)
+
+
+def build_plan_for_config(
+    db: Session,
+    config: MarketMakerConfig,
+    book: dict[str, Any] | None,
+    *,
+    record: bool = True,
+    now=None,
+) -> QuotePlan:
+    """Build the versioned quote plan from the stored config, paper state and a fetched book."""
+    book = book or {}
+    age = book.get("age_seconds")
+    midpoint = book.get("midpoint")
+    sigma = _record_midpoint(config.id, midpoint) if record and midpoint else None
+    markout = rolling_markout(db, config)
+    state = MarketState(
+        midpoint=None if midpoint is None else Decimal(str(midpoint)),
+        inventory_shares=paper_inventory(db, config),
+        realized_sigma=sigma,
+        book_age_seconds=None if age is None else Decimal(str(age)),
+        resting_notional=_resting_notional(db, config),
+        seconds_to_resolution=seconds_to_resolution(db, config, now),
+        rolling_markout=markout[0],
+        markout_samples=markout[1],
+    )
+    return build_quote_plan(policy_params_for_config(config), state, config.token_id_yes)
+
+
 # ─────────────── Order book helpers ───────────────
 
 
@@ -284,6 +448,24 @@ async def _fetch_midpoint(token_id: str) -> float | None:
         return None
 
 
+def _book_age_seconds(timestamp: Any, now: float | None = None) -> float | None:
+    """Age of a CLOB book from its millisecond ``timestamp``; None when absent or invalid."""
+    import time
+
+    try:
+        stamp = float(timestamp) / 1000.0
+    except (TypeError, ValueError):
+        return None
+    if stamp <= 0:
+        return None
+    return max(0.0, (now if now is not None else time.time()) - stamp)
+
+
+async def fetch_plan_book(token_id: str) -> dict[str, Any] | None:
+    """Public read-only book fetch for the shadow quote-plan endpoint."""
+    return await _fetch_order_book(token_id)
+
+
 async def _fetch_order_book(token_id: str) -> dict[str, Any] | None:
     """Fetch the full order book for depth-aware paper fills.
 
@@ -308,6 +490,7 @@ async def _fetch_order_book(token_id: str) -> dict[str, Any] | None:
                 return None
             best_bid = float(bids[0]["price"])
             best_ask = float(asks[0]["price"])
+            age_seconds = _book_age_seconds(data.get("timestamp"))
             bid_depth = sum(float(b.get("size", 0)) * float(b.get("price", 0)) for b in bids)
             ask_depth = sum(float(a.get("size", 0)) * float(a.get("price", 0)) for a in asks)
             return {
@@ -317,6 +500,7 @@ async def _fetch_order_book(token_id: str) -> dict[str, Any] | None:
                 "bid_depth": bid_depth,
                 "ask_depth": ask_depth,
                 "depth": min(bid_depth, ask_depth),
+                "age_seconds": age_seconds,
             }
     except Exception as e:
         logger.error("Error fetching order book for %s: %s", token_id[:20], e)
@@ -456,6 +640,15 @@ async def _sync_market_maker(config_id: int) -> dict[str, Any]:
                 db.commit()
                 return {"error": "no book"}
             midpoint = book["midpoint"]
+            if get_settings().maker_quote_policy_v1 and config.strategy != "amm":
+                plan = build_plan_for_config(db, config, book)
+                logger.info(
+                    "Maker quote plan config=%s hash=%s reasons=%s",
+                    config.id,
+                    plan.plan_hash,
+                    plan.reason_codes,
+                )
+                return await _sync_market_maker_paper(db, config, midpoint, plan.orders, book)
         else:
             midpoint = await _fetch_midpoint(config.token_id_yes)
             if midpoint is None:

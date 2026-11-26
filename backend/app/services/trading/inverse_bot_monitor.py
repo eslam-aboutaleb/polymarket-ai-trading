@@ -331,6 +331,48 @@ async def manual_evaluate_inverse_position(
     return {"success": True, "result": result}
 
 
+async def _reversal_net_edge_gate(
+    *,
+    condition_id: str,
+    held_token_id: str,
+    held_price: float,
+    alt_token_id: str,
+    alt_price: float,
+    shares: float,
+    gross_edge: float,
+    fee_fetcher=None,
+    book_fetcher=None,
+):
+    """Price both legs of a reversal: sell the held side, then buy the alternative."""
+    from app.config import get_settings as _get_settings
+    from app.services.trading import net_edge as ne
+
+    fee_fetcher = fee_fetcher or ne.fetch_fee_metadata
+    book_fetcher = book_fetcher or ne.fetch_book
+    cfg = _get_settings()
+    metadata = await fee_fetcher(condition_id)
+    held_book = await book_fetcher(held_token_id)
+    alt_book = await book_fetcher(alt_token_id)
+    qty = ne.Decimal(str(shares))
+    decision = ne.net_edge(
+        gross_edge,
+        [
+            ne.Leg("SELL", ne.Decimal(str(held_price)), qty, metadata, held_book),
+            ne.Leg("BUY", ne.Decimal(str(alt_price)), qty, metadata, alt_book),
+        ],
+        margin=cfg.taker_safety_margin,
+        min_net_edge=cfg.taker_min_net_edge,
+    )
+    ne.log_decision(
+        "inverse_bot",
+        decision,
+        condition_id=condition_id,
+        from_token_id=held_token_id,
+        to_token_id=alt_token_id,
+    )
+    return decision
+
+
 async def evaluate_inverse_position_row(
     db: Session,
     user: User,
@@ -479,6 +521,23 @@ async def evaluate_inverse_position_row(
         row.last_error = "No trading credentials found. Re-login required."
         db.commit()
         return {"status": "error", "reason": row.last_error}
+
+    net_decision = await _reversal_net_edge_gate(
+        condition_id=row.condition_id,
+        held_token_id=row.token_id,
+        held_price=held_pct,
+        alt_token_id=reverse_token["token_id"],
+        alt_price=reverse_token["price"],
+        shares=size,
+        gross_edge=reverse_token["price"] - held_pct,
+    )
+    if not net_decision.allowed:
+        row.persistence_count = 0
+        row.status = "active"
+        row.last_recommendation = "hold"
+        row.last_reasoning = f"Net edge gate: {net_decision.reason}"
+        db.commit()
+        return {"status": "hold", "reason": net_decision.reason, "net_edge": net_decision.to_dict()}
 
     # Paper mode: the AI evaluation and every guardrail above
     # ran unchanged — only the order submission is replaced by
