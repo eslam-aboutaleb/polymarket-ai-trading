@@ -297,9 +297,10 @@ def test_gateway_venue_places_through_real_gateway_and_replays(gateway):  # noqa
     v = GatewayVenue(
         db_,
         user_id=1,
-        strategy="copy",
+        # Copy orders now require FOK plus fresh executable evidence, so the GTC maker leg is
+        # bound through the gateway with a manual order here (same durable risk/halt path).
+        strategy="manual",
         book_reader=lambda t: BOOK,
-        copied_from_wallet="0x" + "2" * 40,
     )
     kw = {
         "key": "ltt:k1",
