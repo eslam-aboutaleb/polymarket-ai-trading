@@ -532,8 +532,7 @@ class ResolvePendingTests(unittest.IsolatedAsyncioTestCase):
     async def test_forecast_recorded_after_the_close_is_not_scored(self):
         """A forecast made after the market closed already knew the answer."""
         closed = utc_now() - timedelta(hours=1)
-        row = _verdict(self.db, probability=0.8)
-        row.created_at = closed + timedelta(hours=1)
+        row = _verdict(self.db, probability=0.8, created_at=closed + timedelta(hours=1))
         self.db.commit()
         with patch.object(
             forecast_resolution,
@@ -549,8 +548,7 @@ class ResolvePendingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_forecast_recorded_before_the_close_is_scored(self):
         closed = utc_now() - timedelta(hours=1)
-        row = _verdict(self.db, probability=0.8)
-        row.created_at = closed - timedelta(hours=2)
+        row = _verdict(self.db, probability=0.8, created_at=closed - timedelta(hours=2))
         self.db.commit()
         with patch.object(
             forecast_resolution,
@@ -601,11 +599,9 @@ class ResolvePendingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.resolved, 0)
 
     async def test_rows_without_probability_or_condition_id_are_skipped(self):
-        legacy = _verdict(self.db)
-        legacy.ai_probability = None
+        _verdict(self.db, probability=None)
         self.db.commit()
-        no_cid = _verdict(self.db, cid=CID_2)
-        no_cid.condition_id = None
+        _verdict(self.db, cid=None)
         self.db.commit()
         fetch = AsyncMock(return_value={})
         with patch.object(forecast_resolution, "fetch_resolutions", fetch):

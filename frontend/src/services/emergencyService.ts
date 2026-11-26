@@ -31,10 +31,21 @@ export interface EmergencyStopResponse {
   message: string;
 }
 
+/**
+ * One scanner signal (arb-scan-v2). `gross_price_gap_pct_points` is an indicative gross price
+ * gap, never executable and not a return on capital. `profit_pct` is a deprecated alias kept for
+ * older clients.
+ */
 export interface ArbitrageOpportunity {
   type: "complement" | "spread";
+  schema_version?: string | null;
+  signal_class?: "complement_signal" | "spread_signal" | null;
+  label?: string | null;
+  badges?: string[];
+  gross_price_gap_pct_points?: number | null;
   market_id: string;
   market_title: string;
+  /** @deprecated Use `gross_price_gap_pct_points`. */
   profit_pct?: number | null;
   spread_pct?: number | null;
   total_cost?: number | null;

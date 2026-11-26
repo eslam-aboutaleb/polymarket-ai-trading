@@ -14,6 +14,7 @@ from app.config import get_settings
 from app.models.analytics.follower_experiment import FollowerExperimentRun
 from app.models.users.account import Account
 from app.services.analytics.replay.follower import FollowerExperiment, replay
+from app.services.analytics.replay.reconciliation import reconcile, withhold_unreconciled
 from app.utils.database import get_db
 
 router = APIRouter(prefix="/api/copy-trading/experiments", tags=["follower research"])
@@ -25,10 +26,29 @@ def enabled():
         raise HTTPException(503, "Follower replay is not enabled on this deployment")
 
 
+def verified_result(input_data: dict, result: dict) -> dict:
+    """Re-reconcile a stored result on every read; a tampered ledger loses its net metrics."""
+    from decimal import Decimal
+
+    scenarios = []
+    for scenario in result.get("scenarios", []):
+        try:
+            check = reconcile(
+                Decimal(str(input_data["funding"])), scenario["journal"], scenario["valuation"]
+            )
+        except (KeyError, ArithmeticError, TypeError, ValueError):
+            check = {"status": "mismatch", "events": 0, "problems": ["stored ledger unreadable"]}
+        scenarios.append(withhold_unreconciled({**scenario, "reconciliation": check}))
+    return {**result, "scenarios": scenarios}
+
+
 def response(row: FollowerExperimentRun, *, detail: bool = True):
     data = {"id": row.id, "input_hash": row.input_hash, "created_at": row.created_at.isoformat()}
     if detail:
-        data.update(input=json.loads(row.input_json), result=json.loads(row.result_json))
+        input_data = json.loads(row.input_json)
+        data.update(
+            input=input_data, result=verified_result(input_data, json.loads(row.result_json))
+        )
     return data
 
 
@@ -74,6 +94,29 @@ def _save_experiment(
         "Follower experiment saved account=%s run=%s hash=%s", account.id, row.id, row.input_hash
     )
     return response(row)
+
+
+@router.get("/actions")
+def actions(account: Account = Depends(get_active_account)):
+    """What Watch, Simulate and Live follow each mean. Only Simulate has a ledger."""
+    del account
+    return {
+        "watch": {
+            "enabled": True,
+            "ledger": False,
+            "description": "Local bookmark of a wallet. Never an execution ledger and never signs.",
+        },
+        "simulate": {
+            "enabled": get_settings().follower_replay_enabled,
+            "ledger": True,
+            "description": "Modeled replay on a reconcilable cash/share/fee ledger.",
+        },
+        "live_follow": {
+            "enabled": False,
+            "ledger": False,
+            "description": "Disabled. Live following needs the server-owned release barrier.",
+        },
+    }
 
 
 @router.post("", dependencies=[Depends(enabled)])
