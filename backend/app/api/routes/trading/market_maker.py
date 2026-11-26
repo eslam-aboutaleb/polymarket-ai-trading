@@ -312,3 +312,34 @@ def maker_book_research(
         return get_maker_book_research(db, config, ResearchQuery(condition_id=config.condition_id))
     except ValueError as exc:
         raise HTTPException(409, "Maker book evidence inconsistent") from exc
+
+
+@router.get("/economics")
+def maker_economics(
+    config_id: int, account=Depends(get_research_account), db: Session = Depends(get_db)
+):
+    """Read-only maker economics (issue #23). Never places, cancels or signs anything."""
+    from app.services.analytics.maker_economics_paper import economics_for_config
+
+    config = get_market_maker_config_for_user(db, config_id, account.owner_user_id)
+    if config is None or not (
+        config.account_id == account.id or (config.account_id is None and account.is_default)
+    ):
+        raise HTTPException(404, "Maker config not found")
+    return economics_for_config(db, config)
+
+
+@router.get("/configs/{config_id}/quote-plan")
+async def maker_quote_plan(
+    config_id: int, account=Depends(get_research_account), db: Session = Depends(get_db)
+):
+    """Shadow quote plan (issue #8). Read-only: it never places, cancels or persists orders."""
+    from app.services.trading.market_maker_service import build_plan_for_config, fetch_plan_book
+
+    config = get_market_maker_config_for_user(db, config_id, account.owner_user_id)
+    if config is None or not (
+        config.account_id == account.id or (config.account_id is None and account.is_default)
+    ):
+        raise HTTPException(404, "Maker config not found")
+    book = await fetch_plan_book(config.token_id_yes)
+    return build_plan_for_config(db, config, book, record=False).as_dict()
