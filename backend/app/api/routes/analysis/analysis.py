@@ -29,6 +29,7 @@ from app.services.analytics.research_quality import (
     GroupEvidence,
     score_batch_credibility,
 )
+from app.services.intelligence.forecast_identity import market_provenance
 from app.services.intelligence.forecast_recorder import record_verdict
 from app.services.intelligence.llm_gateway import get_llm_gateway
 from app.services.intelligence.market_context import (
@@ -1617,6 +1618,17 @@ async def stream_analyze_markets(
                                 ),
                                 None,
                             ),
+                            **market_provenance(
+                                next(
+                                    (
+                                        m
+                                        for m in markets
+                                        if (m.get("condition_id") or m.get("conditionId") or "")
+                                        == cid
+                                    ),
+                                    None,
+                                )
+                            ),
                             ai_score=scores.get("ai_score"),
                             confidence=scores.get("confidence"),
                             recommendation=scores.get("recommendation"),
@@ -1808,6 +1820,17 @@ async def stream_opportunity_scan(
                                     and m.get("outcomePrices")
                                 ),
                                 None,
+                            ),
+                            **market_provenance(
+                                next(
+                                    (
+                                        m
+                                        for m in markets
+                                        if (m.get("condition_id") or m.get("conditionId") or "")
+                                        == cid
+                                    ),
+                                    None,
+                                )
                             ),
                             ai_score=scores.get("ai_score"),
                             confidence=scores.get("confidence"),
