@@ -74,6 +74,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         allocation,
         event_risk,
         portfolio,
+        redemption_intents,
         risk_report,
         settlement,
     )
@@ -106,6 +107,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         experiments,
         valuation,
         portfolio,
+        redemption_intents,
         allocation,
         event_risk,
         settlement,
