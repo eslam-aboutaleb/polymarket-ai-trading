@@ -68,6 +68,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
     from app.api.routes.platform import settings as settings_routes
     from app.api.routes.portfolio import event_risk, portfolio, risk_report
     from app.api.routes.trading import (
+        arbitrage,
         backtesting,
         executable_replay,
         execution_estimate,
@@ -128,6 +129,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         whales,
         notifications,
         latency_arb,
+        arbitrage,
         orchestration,
         opportunities,
         venues,
