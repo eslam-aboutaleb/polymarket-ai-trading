@@ -1145,6 +1145,13 @@ class TraderQualityResponse(BaseModel):
     activity_score: float | None = None
     win_rate_score: float | None = None
     quality_tier: str | None = None
+    status: str | None = None
+    reasons: list[str] = []
+    net_return_per_dollar: float | None = None
+    net_return_per_dollar_shrunk: float | None = None
+    distinct_resolved_markets: int | None = None
+    max_drawdown: float | None = None
+    input_source: str | None = None
 
 
 @router.get("/trader/{wallet}/quality", response_model=TraderQualityResponse)
@@ -1159,7 +1166,10 @@ async def get_trader_quality_score(
     scores = get_trader_quality(db, wallet)
     if not scores:
         raise HTTPException(status_code=404, detail="Trader not found or insufficient data")
-    return TraderQualityResponse(wallet_address=wallet.lower(), **scores)
+    fields = TraderQualityResponse.model_fields
+    return TraderQualityResponse(
+        wallet_address=wallet.lower(), **{k: v for k, v in scores.items() if k in fields}
+    )
 
 
 @router.post("/traders/rescore")
@@ -1178,9 +1188,21 @@ async def rescore_all_traders(
 
 
 class ArbitrageOpportunity(BaseModel):
+    """One scanner signal. ``profit_pct`` is a deprecated alias (arb-scan-v2).
+
+    ``gross_price_gap_pct_points`` is the indicative gross price gap; it is not
+    executable, not fee-adjusted and not a return on capital.
+    """
+
     type: str
+    schema_version: str | None = None
+    signal_class: str | None = None
+    label: str | None = None
+    badges: list[str] = []
     market_id: str
     market_title: str
+    gross_price_gap_pct_points: float | None = None
+    deprecated_fields: dict[str, str] | None = None
     profit_pct: float | None = None
     spread_pct: float | None = None
     total_cost: float | None = None

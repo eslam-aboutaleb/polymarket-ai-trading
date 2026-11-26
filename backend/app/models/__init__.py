@@ -4,11 +4,16 @@ Importing this package registers every mapped entity with ``Base.metadata``.
 Model definitions live under their bounded-context packages.
 """
 
+from app.models.analytics.arbitrage_feasibility_run import ArbitrageFeasibilityRun
 from app.models.analytics.assessment import Assessment
 from app.models.analytics.backtest_run import BacktestRun
 from app.models.analytics.book_research_run import BookResearchRun
 from app.models.analytics.executable_replay import ExecutableReplayRun, ExecutableSignalSource
+from app.models.analytics.execution_estimate import ExecutionEstimateRecord
 from app.models.analytics.follower_experiment import FollowerExperimentRun
+from app.models.analytics.forecast_evidence import ForecastEvidenceSnapshot
+from app.models.analytics.forecast_resolution_event import ForecastResolutionEvent
+from app.models.analytics.portfolio_scenario import PortfolioScenario
 from app.models.analytics.portfolio_snapshot import PortfolioSnapshot
 from app.models.analytics.resolution_rule_snapshot import ResolutionRuleSnapshot
 from app.models.base import Base
@@ -34,6 +39,7 @@ from app.models.notifications.notification_followed_trader import NotificationFo
 from app.models.notifications.user_notification_preference import UserNotificationPreference
 from app.models.platform.app_event import AppEvent
 from app.models.platform.audit_log import AdminAuditLog
+from app.models.trading.execution_shortfall import ExecutionShortfall
 from app.models.trading.followed_trader import FollowedTrader
 from app.models.trading.inverse_bot_action import InverseBotAction
 from app.models.trading.inverse_bot_position import InverseBotPosition
@@ -64,6 +70,7 @@ from app.models.users.user_settings import UserSettings
 __all__ = [
     "Base",
     "LiveOrder",
+    "ExecutionShortfall",
     "MarketObservation",
     "VenueObservation",
     "ObservationDataset",
@@ -77,6 +84,7 @@ __all__ = [
     "Winner",
     "TradeHistory",
     "Assessment",
+    "ForecastEvidenceSnapshot",
     "ResolutionRuleSnapshot",
     "UserTrade",
     "RefreshToken",
@@ -98,7 +106,10 @@ __all__ = [
     "PaperOrderRecord",
     "PaperNavPoint",
     "BacktestRun",
+    "ArbitrageFeasibilityRun",
     "BookResearchRun",
+    "PortfolioScenario",
+    "ExecutionEstimateRecord",
     "FollowerExperimentRun",
     "TakeProfitOrder",
     "RedemptionAttempt",
@@ -149,3 +160,11 @@ from app.models.analytics.live_balance_snapshot import (  # noqa: F401,E402
 )
 
 __all__ += ["LiveBalanceSnapshot", "LiveAttributionReport", "AttributionStudy"]
+
+from app.models.analytics.analysis_run import AnalysisRun  # noqa: F401,E402
+
+__all__ += ["AnalysisRun"]
+from app.models.analytics.social_post import SocialPostVersion  # noqa: F401,E402
+
+__all__ += ["SocialPostVersion"]
+__all__ += ["ForecastResolutionEvent"]

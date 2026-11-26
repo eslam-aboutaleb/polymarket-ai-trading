@@ -11,6 +11,7 @@ Runs inside the FastAPI backend process using asyncio tasks.
 import asyncio
 import contextlib
 import logging
+import re
 from datetime import UTC, datetime
 from time import perf_counter
 from types import SimpleNamespace
@@ -51,6 +52,27 @@ except Exception:
     STOP_LOSS_CHECK_INTERVAL = 10
 
 _monitor_task: asyncio.Task | None = None
+
+_SHORT_MARKET = re.compile(r"up or down", re.IGNORECASE)
+# Interval chosen by the latest cycle; reset to the default every cycle.
+_cycle_interval: int | None = None
+
+
+def interval_for_titles(titles, settings=None) -> int:
+    """Poll interval for the markets that currently have active price orders.
+
+    Short 5/15-minute Up-or-Down markets can use ``stop_loss_check_interval_short_markets_seconds``
+    (never slower than the default). Everything else keeps the default interval.
+    """
+    settings = settings or get_settings()
+    short = settings.stop_loss_check_interval_short_markets_seconds
+    default = int(settings.stop_loss_check_interval_seconds)
+    if short is None:
+        return default
+    if any(_SHORT_MARKET.search(t or "") for t in titles):
+        return min(default, int(short))
+    return default
+
 
 # Outstanding price-alert verdict tasks (plan 03). Kept as a strong
 # reference so the coroutine is not garbage-collected mid-flight and so
@@ -200,7 +222,7 @@ async def _monitor_loop():
             except Exception as e:
                 logger.error("Stop-loss check error: %s", e, exc_info=True)
             scheduler_heartbeat("stop_loss_monitor")
-            await asyncio.sleep(STOP_LOSS_CHECK_INTERVAL)
+            await asyncio.sleep(_cycle_interval or STOP_LOSS_CHECK_INTERVAL)
     finally:
         release_scheduler_lock("stop_loss_monitor")
 
@@ -220,6 +242,10 @@ async def _check_stop_losses():
         repository = TradingOrderRepository(db)
         active_sl_orders = repository.list_active_stop_losses_with_user()
         active_tp_orders = repository.list_active_take_profits_with_user()
+        global _cycle_interval
+        _cycle_interval = interval_for_titles(
+            getattr(o, "market_title", None) for o in [*active_sl_orders, *active_tp_orders]
+        )
 
         if not active_sl_orders and not active_tp_orders:
             return
