@@ -67,6 +67,12 @@ class Settings(BaseSettings):
         return value
 
     paper_maker_fill_model_v2: bool = False
+    # Issue #8: inventory-aware quote policy. Paper/shadow only; default keeps the band baseline.
+    maker_quote_policy_v1: bool = False
+    maker_policy_max_book_age_seconds: int = Field(default=10, ge=1, le=300)
+    maker_policy_risk_coefficient: Decimal = Field(default=Decimal("0.0005"), ge=0, le=1)
+    maker_policy_max_inventory_shares: Decimal = Field(default=Decimal("200"), gt=0, le=1000000000)
+    maker_policy_vol_widening: Decimal = Field(default=Decimal("1"), ge=0, le=100)
     paper_maker_latency_ms: int = Field(default=0, ge=0, le=60000)
     paper_maker_expiry_seconds: int = Field(default=300, ge=1, le=3600)
     paper_maker_queue_ahead: Decimal | None = Field(default=None, ge=0, le=1000000000)
