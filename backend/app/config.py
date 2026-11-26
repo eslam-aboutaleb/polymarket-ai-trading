@@ -267,8 +267,13 @@ class Settings(BaseSettings):
     latency_arb_max_latency_ms: int = 1500
     # Engine cycle interval (seconds).
     latency_arb_cycle_seconds: int = 5
-    # Per-strategy daily loss limit (USDC).
-    latency_arb_daily_loss_limit: float = 20.0
+    # Taker fee rate parameter (fee per share = rate x p x (1 - p)); the
+    # engine subtracts it from the model/market gap. Set 0 for fee-free markets.
+    latency_arb_taker_fee_rate: float = 0.05
+    # Per-strategy daily loss limit (USDC). Keep it several trades above
+    # latency_arb_max_notional: a limit below one trade size halts the bot
+    # after a single loss (a warning is logged at startup when it is).
+    latency_arb_daily_loss_limit: float = 150.0
     # Consecutive-loss circuit breaker: pause after N losses,
     # resume after the cooldown.
     latency_arb_circuit_breaker_losses: int = 3

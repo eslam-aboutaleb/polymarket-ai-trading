@@ -216,6 +216,61 @@ class UrlAndConversionTests(BinanceServiceTestCase):
         for symbol in bs.SYMBOLS:
             self.assertIn(bs._stream_name(symbol), url)
 
+    def test_combined_streams_url_includes_trade_stream(self):
+        # kline_1m only pushes ~1 update / 2s; @trade carries the live price.
+        url = combined_streams_url(("BTCUSDT",))
+        self.assertIn("btcusdt@kline_1m", url)
+        self.assertIn("btcusdt@trade", url)
+
+    def test_trade_frame_updates_price_and_feed_event_time(self):
+        frame = json.dumps(
+            {
+                "stream": "btcusdt@trade",
+                "data": {"e": "trade", "E": 5000, "s": "BTCUSDT", "p": "67001.5"},
+            }
+        )
+        state = handle_message(frame)
+        self.assertIsNotNone(state)
+        self.assertEqual(get_last_price("BTCUSDT"), 67001.5)
+        self.assertEqual(bs._state["BTCUSDT"].last_event_time_ms, 5000)
+
+    def test_stale_kline_does_not_overwrite_fresher_trade(self):
+        handle_message(
+            json.dumps({"data": {"e": "trade", "E": 9000, "s": "BTCUSDT", "p": "100.0"}})
+        )
+        handle_message(
+            json.dumps(
+                {
+                    "data": {
+                        "e": "kline",
+                        "E": 8000,
+                        "s": "BTCUSDT",
+                        "k": {
+                            "t": 0,
+                            "T": 59999,
+                            "o": "90",
+                            "h": "95",
+                            "l": "90",
+                            "c": "99",
+                            "x": False,
+                        },
+                    }
+                }
+            )
+        )
+        self.assertEqual(get_last_price("BTCUSDT"), 100.0)
+        # The forming kline is still tracked.
+        self.assertIsNotNone(get_current_kline("BTCUSDT"))
+
+    def test_malformed_or_unknown_trade_frames_are_ignored(self):
+        self.assertIsNone(
+            handle_message(json.dumps({"data": {"e": "trade", "E": 1, "s": "XRPUSDT", "p": "1"}}))
+        )
+        self.assertIsNone(
+            handle_message(json.dumps({"data": {"e": "trade", "E": 1, "s": "BTCUSDT", "p": "abc"}}))
+        )
+        self.assertIsNone(get_last_price("BTCUSDT"))
+
     def test_combined_streams_url_custom_symbols(self):
         url = combined_streams_url(("ETHUSDT", "SOLUSDT"))
         self.assertIn("ethusdt@kline_1m", url)

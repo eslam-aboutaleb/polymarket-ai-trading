@@ -19,7 +19,9 @@ class LatencyArbConfig(Base):
     symbols = Column(JSON, nullable=False, default=list)
     windows = Column(JSON, nullable=False, default=list)
     late_entry = Column(Boolean, nullable=False, default=False)
-    daily_loss_limit = Column(Float, nullable=False, default=20.0)
+    # Keep several trades above max_notional (a limit below one trade halts the
+    # strategy after a single loss). Matches Settings.latency_arb_daily_loss_limit.
+    daily_loss_limit = Column(Float, nullable=False, default=150.0)
     alert_on_opportunity = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at = Column(
