@@ -1,0 +1,93 @@
+name: Paper recorder (24h, paper only)
+
+# Manual only. Records real Polymarket BTC 5m order books + BTC spot for about 22h in 4 sequential
+# batches (5.5h each), then runs the train/test analysis. PAPER ONLY: no secrets are used or needed,
+# the recorder has no wallet, key, or order code. See tools/paper_recorder/README.md.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run at a time. A second dispatch waits instead of running in parallel (nothing is cancelled).
+concurrency:
+  group: paper-recorder
+  cancel-in-progress: false
+
+jobs:
+  record:
+    name: Batch ${{ matrix.batch }} of 4
+    runs-on: ubuntu-latest
+    timeout-minutes: 350 # hard cap per batch (GitHub's own max is 360)
+    strategy:
+      fail-fast: false
+      max-parallel: 1 # batches run one after another
+      matrix:
+        batch: [1, 2, 3, 4] # hard cap: exactly 4 batches, no loop, no re-trigger
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install the only dependency
+        run: python -m pip install --disable-pip-version-check websockets==16.1.1
+      - name: Record 5.5 hours (paper only)
+        run: python tools/paper_recorder/recorder.py --out paper_data --hours 5.5 --threshold 0.03 --latency 1.0
+      - name: Batch size
+        if: always()
+        run: du -sh paper_data || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() # keep partial data even if a batch is cut off
+        with:
+          name: paper-data-${{ matrix.batch }}
+          path: paper_data/
+          retention-days: 30
+          if-no-files-found: warn
+
+  analyze:
+    name: Aggregate and train/test analysis
+    needs: record
+    if: always() # analyze whatever batches produced data
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: paper-data-*
+          path: batches
+      - name: Merge batches in time order
+        run: |
+          mkdir -p merged
+          for n in 1 2 3 4; do
+            d="batches/paper-data-$n"
+            [ -d "$d" ] || { echo "batch $n: no data"; continue; }
+            for f in snapshots trades outcomes; do
+              [ -f "$d/$f.jsonl" ] && cat "$d/$f.jsonl" >> "merged/$f.jsonl"
+            done
+            echo "batch $n: $(wc -l < "$d/snapshots.jsonl" 2>/dev/null || echo 0) snapshot rows"
+          done
+          touch merged/snapshots.jsonl merged/trades.jsonl merged/outcomes.jsonl
+      - name: Analyze (train = earlier 60%, test = later 40%)
+        run: |
+          {
+            echo '## Paper recorder: train/test result'
+            echo
+            echo 'Paper only. Only the TEST line counts. Re-tuning after seeing TEST invalidates it.'
+            echo
+            echo '```'
+            python tools/paper_recorder/analyze.py --data merged --latency 1.0 --fetch-missing-outcomes 2>&1
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: paper-data-merged
+          path: merged/
+          retention-days: 30

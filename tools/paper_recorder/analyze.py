@@ -27,6 +27,30 @@ def walk(asks, shares, fee_rate):
     return None if need > 1e-9 else (cost / shares, fee / shares)
 
 
+def fetch_missing_outcomes(d):
+    """Resolve windows that have snapshots but no recorded outcome (the last windows of a batch)."""
+    import urllib.request
+    have, wins = set(), set()
+    p = os.path.join(d, "outcomes.jsonl")
+    if os.path.exists(p):
+        for l in open(p):
+            o = json.loads(l)
+            if o.get("winner"): have.add(o["win"])
+    for l in open(os.path.join(d, "snapshots.jsonl")):
+        wins.add(json.loads(l)["win"])
+    with open(p, "a") as f:
+        for w in sorted(wins - have):
+            try:
+                ev = json.load(urllib.request.urlopen(urllib.request.Request(
+                    f"https://gamma-api.polymarket.com/events?slug=btc-updown-5m-{w}", headers={"User-Agent": "a/1"}), timeout=15))
+                mk = ev[0]["markets"][0]
+                pr = [float(x) for x in json.loads(mk["outcomePrices"])]
+                if max(pr) >= 0.99:
+                    f.write(json.dumps({"win": w, "winner": json.loads(mk["outcomes"])[pr.index(max(pr))].lower(), "src": "gamma_late"}) + "\n")
+            except Exception:
+                pass
+
+
 def rows_from_recorder(d, shares, latency):
     snaps = defaultdict(list)
     for l in open(os.path.join(d, "snapshots.jsonl")):
@@ -115,10 +139,12 @@ def breakdown(rows, thr):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data"); ap.add_argument("--rows")
+    ap.add_argument("--fetch-missing-outcomes", action="store_true", help="look up outcomes for windows without one (network)")
     ap.add_argument("--shares", type=float, default=10); ap.add_argument("--latency", type=float, default=1.0)
     ap.add_argument("--train-frac", type=float, default=0.6); ap.add_argument("--min-trades", type=int, default=30)
     ap.add_argument("--baseline-thr", type=float, default=0.03)
     a = ap.parse_args()
+    if a.data and a.fetch_missing_outcomes: fetch_missing_outcomes(a.data)
     rows = json.load(open(a.rows)) if a.rows else rows_from_recorder(a.data, a.shares, a.latency)
     wins = sorted({r["win"] for r in rows})
     print(f"{len(rows)} decision rows over {len(wins)} resolved windows")
