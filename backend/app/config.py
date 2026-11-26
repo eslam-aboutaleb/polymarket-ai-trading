@@ -48,7 +48,9 @@ class Settings(BaseSettings):
     portfolio_allocation_enabled: bool = False
     cross_market_consistency_enabled: bool = False
     event_correlation_risk_enabled: bool = False
+    event_logic_enabled: bool = False
     forecast_calibration_enabled: bool = False
+    forecast_generation_enabled: bool = False
     live_account_reconciliation_enabled: bool = False
     observation_archive_enabled: bool = False
     historical_feed_canary_enabled: bool = False
@@ -65,6 +67,16 @@ class Settings(BaseSettings):
         return value
 
     paper_maker_fill_model_v2: bool = False
+    # Issue #8: inventory-aware quote policy. Paper/shadow only; default keeps the band baseline.
+    maker_quote_policy_v1: bool = False
+    maker_policy_max_book_age_seconds: int = Field(default=10, ge=1, le=300)
+    maker_policy_risk_coefficient: Decimal = Field(default=Decimal("0.0005"), ge=0, le=1)
+    maker_policy_max_inventory_shares: Decimal = Field(default=Decimal("200"), gt=0, le=1000000000)
+    maker_policy_pre_resolution_seconds: int = Field(default=120, ge=0, le=3600)
+    maker_policy_toxicity_threshold: Decimal | None = Field(default=Decimal("0.005"), ge=0, le=1)
+    maker_policy_toxicity_min_samples: int = Field(default=5, ge=1, le=1000)
+    maker_policy_toxicity_horizon_seconds: int = Field(default=30)
+    maker_policy_vol_widening: Decimal = Field(default=Decimal("1"), ge=0, le=100)
     paper_maker_latency_ms: int = Field(default=0, ge=0, le=60000)
     paper_maker_expiry_seconds: int = Field(default=300, ge=1, le=3600)
     paper_maker_queue_ahead: Decimal | None = Field(default=None, ge=0, le=1000000000)
@@ -153,6 +165,10 @@ class Settings(BaseSettings):
     execution_mode: str = "approval"  # auto or approval
     max_position_size: float = 1000.0  # Max USDC per trade
     stop_loss_check_interval_seconds: int = 10
+    # Issue #157: faster polling while an active order sits on a 5/15-minute Up-or-Down market.
+    stop_loss_check_interval_short_markets_seconds: int | None = Field(default=None, ge=1)
+    # Issue #157: limit-then-take execution. Off by default; default behavior is unchanged.
+    limit_then_take_enabled: bool = False
     trade_poll_max_concurrency: int = 50
     trade_poll_http_max_connections: int = 200
     trade_poll_http_keepalive_connections: int = 50

@@ -360,8 +360,10 @@ class ResearchMCPClient:
             "resolution_rule_analysis",
             "binary_contract_valuation",
             "oracle_basis_risk",
+            "maker_economics",
             "event_correlation_risk",
             "recorded_event_correlation_risk",
+            "event_logic",
             "forecast_calibration",
         )
         values = await self.call_tools([("describe_" + name, {}) for name in names])
@@ -381,8 +383,10 @@ class ResearchMCPClient:
             "resolution_rule_analysis": "resolution-rule-v1",
             "binary_contract_valuation": "binary-valuation-v1",
             "oracle_basis_risk": "oracle-basis-v1",
+            "maker_economics": "maker-economics-v1",
             "event_correlation_risk": "event-correlation-risk-v1",
             "recorded_event_correlation_risk": "event-correlation-risk-v1",
+            "event_logic": "event-logic-v1",
             "forecast_calibration": "forecast-skill-report-v1",
         }
         if tool not in versions:
