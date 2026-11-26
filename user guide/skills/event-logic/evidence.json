@@ -1,0 +1,24 @@
+{
+  "skill": "event-logic",
+  "version": "event-logic-v1",
+  "status": "implemented_detector",
+  "execution_eligible": false,
+  "owner": "backend/app/services/intelligence/event_logic_skill.py",
+  "dependencies": [
+    "#16",
+    "#19",
+    "#21"
+  ],
+  "gates": {
+    "live_trading_unchanged": true,
+    "credentials_required": false,
+    "pre_trade_gate_authoritative": true
+  },
+  "feature_flag": "EVENT_LOGIC_ENABLED",
+  "production_approved": false,
+  "human_approval": "not_asserted",
+  "shadow_report": "shadow-baseline.json",
+  "promotion_gate": "Requires human approval plus matched out-of-sample scoring on at least 30 independent resolved events with observable joint states; the recorded sample has 1.",
+  "recorded_scope": "Declared hypothetical event graphs with approved rule evidence; no account, order or fill data is read",
+  "trading_authority": "Existing pre-trade, durable execution and emergency halt unchanged"
+}
