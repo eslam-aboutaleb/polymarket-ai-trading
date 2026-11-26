@@ -499,6 +499,7 @@ class MigrationBackfillTest(unittest.TestCase):
             "live_balance_snapshots",
             "live_attribution_reports",
             "attribution_studies",
+            "portfolio_scenarios",
             "arbitrage_feasibility_runs",
             "execution_estimates",
         }

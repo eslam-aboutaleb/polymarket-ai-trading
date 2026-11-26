@@ -12,6 +12,7 @@ from app.models.analytics.executable_replay import ExecutableReplayRun, Executab
 from app.models.analytics.execution_estimate import ExecutionEstimateRecord
 from app.models.analytics.follower_experiment import FollowerExperimentRun
 from app.models.analytics.forecast_resolution_event import ForecastResolutionEvent
+from app.models.analytics.portfolio_scenario import PortfolioScenario
 from app.models.analytics.portfolio_snapshot import PortfolioSnapshot
 from app.models.analytics.resolution_rule_snapshot import ResolutionRuleSnapshot
 from app.models.base import Base
@@ -103,6 +104,7 @@ __all__ = [
     "BacktestRun",
     "ArbitrageFeasibilityRun",
     "BookResearchRun",
+    "PortfolioScenario",
     "ExecutionEstimateRecord",
     "FollowerExperimentRun",
     "TakeProfitOrder",
