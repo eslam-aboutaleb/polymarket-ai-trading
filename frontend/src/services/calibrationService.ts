@@ -434,3 +434,55 @@ export const calibrationAdminService = {
     );
   },
 };
+
+// ── Evidence-grounded forecast scorecard (issue #4) ─────────
+
+export interface ForecastEvidenceItem {
+  source_id: string;
+  domain: string;
+  title: string;
+  text: string;
+  published_at: string | null;
+  retrieved_at: string | null;
+}
+
+export interface ForecastEvidenceResponse {
+  forecast_id: string;
+  evidence_snapshot_id: string;
+  rule_hash: string | null;
+  forecast_probability: number | null;
+  market_price: number | null;
+  calibrator_version: string | null;
+  prediction_instant: string | null;
+  snapshot_as_of: string;
+  evidence: {
+    generator_version: string;
+    kept: ForecastEvidenceItem[];
+    independent_sources: number;
+    syndicated_groups: string[][];
+    quarantined_source_ids: string[];
+    rejected: Record<string, number>;
+  };
+  execution_eligible: false;
+}
+
+export interface ForecastGenerationCalibration {
+  category: string | null;
+  horizon: string | null;
+  report: { status: string; forecast_count: number; min_effective_events: number };
+  execution_eligible: false;
+}
+
+export const forecastGenerationService = {
+  async getEvidence(forecastId: string): Promise<ForecastEvidenceResponse> {
+    return apiClient.get<ForecastEvidenceResponse>(
+      `/api/analysis/forecasts/${encodeURIComponent(forecastId)}/evidence`,
+    );
+  },
+
+  async getCalibration(category?: string): Promise<ForecastGenerationCalibration> {
+    return apiClient.get<ForecastGenerationCalibration>("/api/analysis/forecasts/calibration", {
+      params: category ? { category } : {},
+    });
+  },
+};
