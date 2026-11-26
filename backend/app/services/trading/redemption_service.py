@@ -1046,3 +1046,12 @@ def get_redemption_metrics() -> dict[str, Any]:
         "daily_redeem_cap_per_user": DAILY_REDEEM_CAP_PER_USER,
         "min_gas_balance_matic": MIN_GAS_BALANCE_MATIC,
     }
+
+
+async def read_redemption_cashflow(client, *, tx_hash, condition_id, wallet):
+    """Observe a canonical receipt without credentials, signing, retries or DB writes."""
+    from app.services.analytics.settlement_receipts import read_redemption_receipt
+
+    return await read_redemption_receipt(
+        client, tx_hash=tx_hash, condition_id=condition_id, wallet=wallet
+    )

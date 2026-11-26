@@ -1,0 +1,38 @@
+{
+  "skill": "settlement-and-redemption",
+  "issue": 24,
+  "read_only": true,
+  "execution_eligible": false,
+  "feature_flag": "settlement_redemption_enabled",
+  "endpoints": [
+    "GET /api/settlement/schema",
+    "POST /api/settlement/analyze",
+    "GET /api/settlement/recorded",
+    "POST /api/settlement/sync",
+    "GET /api/settlement/transitions",
+    "POST /api/settlement/transitions"
+  ],
+  "mcp_tools": [
+    "settlement_and_redemption",
+    "describe_settlement_and_redemption",
+    "recorded_settlement_and_redemption",
+    "describe_recorded_settlement_and_redemption"
+  ],
+  "service": "backend/app/services/analytics/settlement_lifecycle.py",
+  "status": "implemented_detector",
+  "version": "settlement-lifecycle-v1",
+  "production_approved": false,
+  "human_approval": "not_asserted",
+  "shadow_report": "shadow-baseline.json",
+  "rpc_canary": "HTTP 403 in this environment; controlled HTTP success/fault branches tested",
+  "accounting_status": "reconciled only when recorded inventory, canonical receipt, CTF payout vector and a fresh post-redemption wallet snapshot agree; otherwise abstain with reason codes",
+  "recorded_scope": "application-recorded data and current supported RPC cashflow observations",
+  "related_issue": 56,
+  "persisted_lifecycle": "settlement_transitions (append-only, hash-chained, DB triggers); revision 20261125_0060_settlement_ledger",
+  "shadow_comparison": "per-account recorded comparison with the existing bot's sell-side realized P&L (shadow_comparison field)",
+  "limits": [
+    "native gas not converted to USDC",
+    "UMA proposal/dispute stages not chain-derivable here",
+    "live RPC verification not demonstrated (HTTP 403 canary)"
+  ]
+}
