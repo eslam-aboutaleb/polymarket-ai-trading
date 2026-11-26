@@ -242,6 +242,9 @@ class Settings(BaseSettings):
     latency_arb_live: bool = False
     # Minimum |P_model − p_market| gap to consider a candidate.
     latency_arb_edge_threshold: float = 0.03
+    # Shared taker net-edge gate (net = gross - fee - half spread - slippage - margin).
+    taker_min_net_edge: float = 0.0
+    taker_safety_margin: float = 0.02
     # Max notional per trade (USDC).
     latency_arb_max_notional: float = 50.0
     # Feed→order latency budget (ms): abort when exceeded.
@@ -390,6 +393,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_latency_arb_settings(self) -> "Settings":
+        if not 0.0 <= self.taker_min_net_edge < 1.0:
+            raise ValueError("TAKER_MIN_NET_EDGE must be in [0, 1)")
+        if not 0.0 <= self.taker_safety_margin < 1.0:
+            raise ValueError("TAKER_SAFETY_MARGIN must be in [0, 1)")
         if not 0.0 < self.latency_arb_edge_threshold < 1.0:
             raise ValueError("LATENCY_ARB_EDGE_THRESHOLD must be in (0, 1).")
         if self.latency_arb_max_notional <= 0:
