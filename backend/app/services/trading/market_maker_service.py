@@ -17,6 +17,7 @@ import asyncio
 import contextlib
 import logging
 from collections import deque
+from datetime import UTC
 from decimal import Decimal
 from typing import Any
 
@@ -267,6 +268,7 @@ def _compute_amm_orders(
 
 _midpoint_history: dict[int, deque] = {}
 SIGMA_WINDOW = 20
+MARKOUT_WINDOW = 20
 
 
 def _record_midpoint(config_id: int, midpoint: float) -> Decimal | None:
@@ -331,23 +333,88 @@ def policy_params_for_config(config: MarketMakerConfig) -> PolicyParams:
         max_inventory_shares=settings.maker_policy_max_inventory_shares,
         vol_widening=settings.maker_policy_vol_widening,
         max_book_age_seconds=Decimal(settings.maker_policy_max_book_age_seconds),
+        pre_resolution_window_seconds=settings.maker_policy_pre_resolution_seconds,
+        toxicity_threshold=settings.maker_policy_toxicity_threshold,
+        toxicity_min_samples=settings.maker_policy_toxicity_min_samples,
     )
 
 
+def seconds_to_resolution(db: Session, config: MarketMakerConfig, now=None) -> Decimal | None:
+    """Seconds until the market's recorded end date; None when no end date is known."""
+    from app.models.market_data.market import Market
+    from app.models.market_data.venue_market import VenueMarket
+
+    end = db.query(Market.end_date).filter(Market.id == config.condition_id).scalar()
+    if end is None:
+        end = (
+            db.query(VenueMarket.end_date)
+            .filter(VenueMarket.venue == "polymarket", VenueMarket.market_id == config.condition_id)
+            .scalar()
+        )
+    if end is None:
+        return None
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=UTC)
+    return Decimal(str((end - (now or utc_now())).total_seconds()))
+
+
+def rolling_markout(db: Session, config: MarketMakerConfig) -> tuple[Decimal | None, int]:
+    """Mean frozen markout per share over the latest marks; (None, 0) when there are none.
+
+    Marks come from ``PaperMakerMark`` and are indicative midpoint drift, not realized
+    P&L. Unavailable marks (``markout_per_share`` null) are excluded, never read as zero.
+    """
+    import json
+
+    from app.models.trading.paper_maker_order import (
+        PaperMakerFill,
+        PaperMakerMark,
+        PaperMakerOrder,
+    )
+
+    horizon = get_settings().maker_policy_toxicity_horizon_seconds
+    rows = (
+        db.query(PaperMakerMark.payload_json)
+        .join(PaperMakerFill, PaperMakerFill.id == PaperMakerMark.fill_id)
+        .join(PaperMakerOrder, PaperMakerOrder.id == PaperMakerFill.order_id)
+        .filter(PaperMakerOrder.config_id == config.id, PaperMakerMark.horizon_seconds == horizon)
+        .order_by(PaperMakerFill.observed_at.desc())
+        .limit(MARKOUT_WINDOW)
+        .all()
+    )
+    values = []
+    for (payload,) in rows:
+        raw = json.loads(payload).get("markout_per_share")
+        if raw is not None:
+            values.append(Decimal(str(raw)))
+    if not values:
+        return None, 0
+    return sum(values) / len(values), len(values)
+
+
 def build_plan_for_config(
-    db: Session, config: MarketMakerConfig, book: dict[str, Any] | None, *, record: bool = True
+    db: Session,
+    config: MarketMakerConfig,
+    book: dict[str, Any] | None,
+    *,
+    record: bool = True,
+    now=None,
 ) -> QuotePlan:
     """Build the versioned quote plan from the stored config, paper state and a fetched book."""
     book = book or {}
     age = book.get("age_seconds")
     midpoint = book.get("midpoint")
     sigma = _record_midpoint(config.id, midpoint) if record and midpoint else None
+    markout = rolling_markout(db, config)
     state = MarketState(
         midpoint=None if midpoint is None else Decimal(str(midpoint)),
         inventory_shares=paper_inventory(db, config),
         realized_sigma=sigma,
         book_age_seconds=None if age is None else Decimal(str(age)),
         resting_notional=_resting_notional(db, config),
+        seconds_to_resolution=seconds_to_resolution(db, config, now),
+        rolling_markout=markout[0],
+        markout_samples=markout[1],
     )
     return build_quote_plan(policy_params_for_config(config), state, config.token_id_yes)
 
