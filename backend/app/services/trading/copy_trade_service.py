@@ -1027,6 +1027,59 @@ def _paper_copy_response(result: dict) -> dict:
     }
 
 
+async def _copy_net_edge_gate(
+    *,
+    market_id: str,
+    token_id: str,
+    side: str,
+    price: float,
+    trade_size: float,
+    assessment: dict[str, Any] | None,
+    fee_fetcher=None,
+    book_fetcher=None,
+):
+    """Fee-aware gate. Gross edge is the AI probability for the token minus the price.
+
+    No probability estimate means no measurable edge, so BUY abstains. SELL
+    (exit) orders are priced and logged but never blocked by this gate.
+    """
+    from app.config import get_settings as _get_settings
+    from app.services.trading import net_edge as ne
+
+    fee_fetcher = fee_fetcher or ne.fetch_fee_metadata
+    book_fetcher = book_fetcher or ne.fetch_book
+    cfg = _get_settings()
+    probability = _coerce_probability((assessment or {}).get("ai_probability"))
+    is_buy = side.upper() == "BUY"
+    if probability is None:
+        decision = ne.NetEdgeDecision(
+            False,
+            "ABSTAIN_GROSS_EDGE_UNKNOWN",
+            ne.Decimal(0),
+            ne.Decimal(0),
+            ne.Decimal(0),
+            ne.Decimal(0),
+            ne.Decimal(str(cfg.taker_safety_margin)),
+            None,
+            ne.Decimal(str(cfg.taker_min_net_edge)),
+        )
+    else:
+        gross = (probability - price) if is_buy else (price - probability)
+        metadata = await fee_fetcher(market_id)
+        book = await book_fetcher(token_id)
+        shares = ne.Decimal(str(trade_size)) / ne.Decimal(str(price))
+        decision = ne.net_edge(
+            gross,
+            [ne.Leg("BUY" if is_buy else "SELL", ne.Decimal(str(price)), shares, metadata, book)],
+            margin=cfg.taker_safety_margin,
+            min_net_edge=cfg.taker_min_net_edge,
+        )
+    ne.log_decision(
+        "copy_trade", decision, market_id=market_id, token_id=token_id, side=side.upper()
+    )
+    return decision, is_buy
+
+
 async def execute_copy_trade(
     db: Session,
     user_id: int,
@@ -1317,6 +1370,39 @@ async def execute_copy_trade(
             model_name=assessment.get("model", ""),
             provider=assessment.get("provider", ""),
         )
+
+    # 4b – Fee-aware net-edge gate (BUY blocks; SELL exits are logged only)
+    net_decision, gated = await _copy_net_edge_gate(
+        market_id=market_id,
+        token_id=token_id,
+        side=side,
+        price=price,
+        trade_size=trade_size,
+        assessment=assessment,
+    )
+    if gated and not net_decision.allowed:
+        rejected = _record_copy_trade_attempt(
+            db=db,
+            user_id=user_id,
+            market_id=market_id,
+            side=side,
+            trade_size=trade_size,
+            price=price,
+            status="rejected",
+            trader_wallet=trader_wallet,
+            order_hash=None,
+            trade_history_id=trade_history_id,
+            plan=plan,
+            reason=f"Net edge gate: {net_decision.reason}",
+        )
+        return {
+            "executed": False,
+            "reason": f"Net edge gate: {net_decision.reason}",
+            "trade_id": rejected.id,
+            "trade_size": trade_size,
+            "status": "rejected",
+            "net_edge": net_decision.to_dict(),
+        }
 
     # 5 – Ensure credentials exist before placing order
     if not stored and not user_settings.simulation_mode:
