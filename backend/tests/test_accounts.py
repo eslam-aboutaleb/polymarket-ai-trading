@@ -499,6 +499,9 @@ class MigrationBackfillTest(unittest.TestCase):
             "live_balance_snapshots",
             "live_attribution_reports",
             "attribution_studies",
+            "redemption_intents",
+            "redemption_wallet_leases",
+            "redemption_observations",
             "portfolio_scenarios",
             "arbitrage_feasibility_runs",
             "execution_estimates",
@@ -593,6 +596,7 @@ class MigrationBackfillTest(unittest.TestCase):
                 "paper_execution_intents",
                 "paper_journal_events",
                 "paper_accounts",
+                "settlement_transitions",
             ):
                 conn.execute(text(f"DROP TABLE IF EXISTS {future_table}"))
             conn.execute(text("DROP TABLE IF EXISTS account_settings"))

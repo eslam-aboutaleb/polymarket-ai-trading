@@ -149,6 +149,7 @@ export async function installGuideFixtures(page: Page, anonymous = false) {
     else if (path === "/api/portfolio/positions") data = { positions, count: 1 };
     else if (path === "/api/portfolio/positions/prices")
       data = { prices: { "11": 0.7 }, ts: stamp };
+    else if (path === "/api/portfolio/redemption-intents") data = [];
     else if (path.startsWith("/api/portfolio/equity/snapshots")) data = [];
     else if (path.startsWith("/api/portfolio/equity/summary"))
       data = {

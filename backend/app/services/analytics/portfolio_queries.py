@@ -7,7 +7,7 @@ from app.repositories.portfolio.redemptions import RedemptionRepository
 
 
 def list_redemption_history(
-    db: Session, *, user_id: int, limit: int = 50
+    db: Session, *, user_id: int, limit: int = 50, account=None
 ) -> list[RedemptionAttempt]:
     bounded_limit = max(1, min(int(limit), 200))
-    return RedemptionRepository(db).list_for_user(user_id, bounded_limit)
+    return RedemptionRepository(db).list_for_user(user_id, bounded_limit, account=account)

@@ -6,11 +6,12 @@ import logging
 import time
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from py_clob_client.clob_types import BookParams
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_strict_account
@@ -503,7 +504,10 @@ class RedeemRequest(BaseModel):
     """Manual on-chain redemption trigger for a single resolved market."""
 
     market_id: str
-    winner_outcome_index: int | None = None
+    winner_outcome_index: int | None = Field(default=None, ge=0, le=1)
+    idempotency_key: str = Field(
+        default_factory=lambda: uuid4().hex, pattern=r"^[A-Za-z0-9_.:-]{1,160}$"
+    )
 
 
 class RedemptionAttemptResponse(BaseModel):
@@ -517,6 +521,9 @@ class RedemptionAttemptResponse(BaseModel):
     status: str
     preview_only: bool = False
     on_chain_submitted: bool = False
+    intent_id: str | None = None
+    provenance_quality: str = "legacy_unverified"
+    finality_verified: bool = False
     amount: float
     error: str | None = None
     created_at: datetime
@@ -524,7 +531,12 @@ class RedemptionAttemptResponse(BaseModel):
 
 def _attempt_response(attempt) -> RedemptionAttemptResponse:
     """Serialize a RedemptionAttempt for the API."""
+    intent_id = getattr(attempt, "intent_id", None)
+    intent_id = intent_id if isinstance(intent_id, str) else None
     return RedemptionAttemptResponse(
+        intent_id=intent_id,
+        provenance_quality="durable_intent" if intent_id else "legacy_unverified",
+        finality_verified=bool(intent_id) and attempt.status == "confirmed",
         id=attempt.id,
         user_id=attempt.user_id,
         market_id=attempt.market_id,
@@ -543,23 +555,30 @@ def _attempt_response(attempt) -> RedemptionAttemptResponse:
 async def redeem_market(
     request: RedeemRequest,
     current_user: dict = Depends(get_current_user_from_token),
+    account: Account = Depends(get_strict_account),
 ):
     """
-    Manually trigger on-chain redemption for one resolved market.
+    Record an account-scoped preview for one resolved market.
 
-    The winning outcome is validated against the market's
-    resolved outcomePrices before any transaction is built.
-    Dry-run mode (REDEEM_DRY_RUN) records a preview, without
-    broadcasting a transaction.
+    The chain determines payout entitlement. This compatibility route cannot
+    bypass the existing live release barrier.
     """
+    from app.services.trading.live_trading_policy import LiveTradingBlocked
     from app.services.trading.redemption_service import redeem_market_for_user
 
-    attempt = await redeem_market_for_user(
-        user_id=current_user["user_id"],
-        wallet_address=current_user["wallet_address"],
-        market_id=request.market_id,
-        winner_outcome_index=request.winner_outcome_index,
-    )
+    try:
+        attempt = await redeem_market_for_user(
+            user_id=current_user["user_id"],
+            wallet_address=current_user["wallet_address"],
+            market_id=request.market_id,
+            winner_outcome_index=request.winner_outcome_index,
+            account_id=account.id,
+            idempotency_key=request.idempotency_key,
+        )
+    except LiveTradingBlocked as exc:
+        raise HTTPException(423, "Live redemption release is blocked") from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     if attempt is None:
         raise HTTPException(
             status_code=404,
@@ -573,10 +592,13 @@ async def get_redemptions(
     limit: int = 50,
     current_user: dict = Depends(get_current_user_from_token),
     db: Session = Depends(get_db),
+    account: Account = Depends(get_strict_account),
 ):
     """Redemption attempt history for the authenticated user."""
     limit = max(1, min(limit, 200))
-    rows = list_redemption_history(db, user_id=current_user["user_id"], limit=limit)
+    rows = list_redemption_history(
+        db, user_id=current_user["user_id"], limit=limit, account=account
+    )
     return [_attempt_response(row) for row in rows]
 
 
