@@ -502,6 +502,9 @@ class MigrationBackfillTest(unittest.TestCase):
             "redemption_intents",
             "redemption_wallet_leases",
             "redemption_observations",
+            "portfolio_scenarios",
+            "arbitrage_feasibility_runs",
+            "execution_estimates",
         }
     )
 
@@ -577,6 +580,8 @@ class MigrationBackfillTest(unittest.TestCase):
             conn.execute(text("DROP TABLE IF EXISTS executable_signal_sources"))
             conn.execute(text("DROP TABLE IF EXISTS executable_replay_runs"))
             conn.execute(text("DROP TABLE IF EXISTS book_research_runs"))
+            conn.execute(text("DROP TABLE IF EXISTS analysis_runs"))
+            conn.execute(text("DROP TABLE IF EXISTS execution_estimates"))
             conn.execute(text("DROP TABLE IF EXISTS follower_experiment_runs"))
             conn.execute(text("DROP TABLE IF EXISTS paper_maker_intents"))
             for future_table in (

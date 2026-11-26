@@ -70,6 +70,11 @@ class AnalysisServiceStub(object):
                 request_serializer=analysis__pb2.TraderAnalysisRequest.SerializeToString,
                 response_deserializer=analysis__pb2.AnalysisResponse.FromString,
                 _registered_method=True)
+        self.AnalyzeTraderStream = channel.unary_stream(
+                '/polymarket.analysis.AnalysisService/AnalyzeTraderStream',
+                request_serializer=analysis__pb2.TraderStreamRequest.SerializeToString,
+                response_deserializer=analysis__pb2.TraderAnalysisFrame.FromString,
+                _registered_method=True)
         self.EvaluateCopyTrade = channel.unary_unary(
                 '/polymarket.analysis.AnalysisService/EvaluateCopyTrade',
                 request_serializer=analysis__pb2.CopyTradeEvaluationRequest.SerializeToString,
@@ -172,6 +177,16 @@ class AnalysisServiceServicer(object):
         """── NEW: Trader / Copy-Trading RPCs ──────────────────────
 
         Full trader profile analysis with internet research
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def AnalyzeTraderStream(self, request, context):
+        """Genuine provider token streaming for trader analysis (issue #59). Frames are
+        typed (metadata, status, content, completion, error), carry a monotonic
+        sequence and a replayed flag, and a reconnect with analysis_id plus
+        resume_after_sequence replays buffered frames marked replayed=true.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -292,6 +307,11 @@ def add_AnalysisServiceServicer_to_server(servicer, server):
                     servicer.AnalyzeTrader,
                     request_deserializer=analysis__pb2.TraderAnalysisRequest.FromString,
                     response_serializer=analysis__pb2.AnalysisResponse.SerializeToString,
+            ),
+            'AnalyzeTraderStream': grpc.unary_stream_rpc_method_handler(
+                    servicer.AnalyzeTraderStream,
+                    request_deserializer=analysis__pb2.TraderStreamRequest.FromString,
+                    response_serializer=analysis__pb2.TraderAnalysisFrame.SerializeToString,
             ),
             'EvaluateCopyTrade': grpc.unary_unary_rpc_method_handler(
                     servicer.EvaluateCopyTrade,
@@ -534,6 +554,33 @@ class AnalysisService(object):
             '/polymarket.analysis.AnalysisService/AnalyzeTrader',
             analysis__pb2.TraderAnalysisRequest.SerializeToString,
             analysis__pb2.AnalysisResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def AnalyzeTraderStream(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/polymarket.analysis.AnalysisService/AnalyzeTraderStream',
+            analysis__pb2.TraderStreamRequest.SerializeToString,
+            analysis__pb2.TraderAnalysisFrame.FromString,
             options,
             channel_credentials,
             insecure,

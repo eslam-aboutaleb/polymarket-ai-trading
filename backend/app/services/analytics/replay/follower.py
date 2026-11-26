@@ -8,6 +8,7 @@ from typing import Annotated, Literal
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from app.services.analytics.replay.ledger import ACCOUNTING_CONTEXT, PaperLedger
+from app.services.analytics.replay.reconciliation import reconcile, withhold_unreconciled
 
 Amount = Annotated[Decimal, Field(ge=0, le=1_000_000_000, max_digits=18, decimal_places=8)]
 Price = Annotated[Decimal, Field(gt=0, le=1, max_digits=9, decimal_places=8)]
@@ -98,6 +99,12 @@ class FollowerExperiment(FrozenInput):
     end_at: AwareDatetime
     funding: Annotated[Amount, Field(gt=0)] = Decimal(1000)
     order_notional: Annotated[Amount, Field(gt=0)] = Decimal(10)
+    # "fixed_notional": spend order_notional per signal. "cash_fraction": spend
+    # cash_fraction of available cash at the moment of each BUY (compounding).
+    sizing: Literal["fixed_notional", "cash_fraction"] = "fixed_notional"
+    cash_fraction: Annotated[Decimal, Field(gt=0, le=1, max_digits=9, decimal_places=8)] = Decimal(
+        "0.01"
+    )
     fee_bps: Annotated[Amount, Field(le=10000)] | None = None
     delays_seconds: list[Annotated[int, Field(ge=0, le=86400)]] = Field(
         default=[0, 60, 300, 1800], min_length=1, max_length=4
@@ -126,9 +133,22 @@ def replay(experiment: FollowerExperiment) -> dict:
     with localcontext(ACCOUNTING_CONTEXT):
         return {
             "model_version": "follower-replay-v2",
-            "dataset_hash": hashlib.sha256(
-                experiment.dataset.model_dump_json().encode()
-            ).hexdigest(),
+            "dataset_hash": (
+                dataset_hash := hashlib.sha256(
+                    experiment.dataset.model_dump_json().encode()
+                ).hexdigest()
+            ),
+            "dataset_version": {"hash": dataset_hash, "source": experiment.dataset.source},
+            "sizing": {
+                "mode": experiment.sizing,
+                "order_notional": str(experiment.order_notional),
+                "cash_fraction": str(experiment.cash_fraction),
+            },
+            "fee_model": {
+                "fee_bps": None if experiment.fee_bps is None else str(experiment.fee_bps)
+            },
+            "start_at": experiment.start_at.isoformat(),
+            "funding": str(experiment.funding),
             "quality": "user_supplied_unverified",
             "execution_eligible": False,
             "baseline": {"name": "no-copy cash", "nav": str(experiment.funding), "net_pnl": "0"},
@@ -197,7 +217,12 @@ def _scenario(exp: FollowerExperiment, delay: int) -> dict:
         if event.token_id in ledger.settled_tokens:
             row["reason"] = "already_settled"
             continue
-        budget = min(exp.order_notional, ledger.available_cash / (1 + exp.fee_bps / 10000))
+        target = (
+            ledger.available_cash * exp.cash_fraction
+            if exp.sizing == "cash_fraction"
+            else exp.order_notional
+        )
+        budget = min(target, ledger.available_cash / (1 + exp.fee_bps / 10000))
         remaining = budget if event.side == "BUY" else exp.order_notional
         inventory = ledger.available_shares(event.token_id)
         total_shares = Decimal(0)
@@ -249,11 +274,15 @@ def _scenario(exp: FollowerExperiment, delay: int) -> dict:
                 and (exp.end_at - latest.source_at).total_seconds() <= exp.max_book_age_seconds
             ):
                 marks[token] = positive_bids[0].price
-    return {
-        "delay_seconds": delay,
-        "valuation": ledger.value(marks),
-        "outcomes": outcomes,
-        "journal": ledger.journal,
-        "sharpe_ratio": None,
-        "mark_policy": "fresh end-of-window best bid; indicative, no exit capacity claim",
-    }
+    valuation = ledger.value(marks)
+    return withhold_unreconciled(
+        {
+            "delay_seconds": delay,
+            "valuation": valuation,
+            "reconciliation": reconcile(exp.funding, ledger.journal, valuation),
+            "outcomes": outcomes,
+            "journal": ledger.journal,
+            "sharpe_ratio": None,
+            "mark_policy": "fresh end-of-window best bid; indicative, no exit capacity claim",
+        }
+    )
