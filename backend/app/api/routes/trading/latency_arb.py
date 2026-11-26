@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_strict_account, require_plan
 from app.api.routes.auth.auth import get_current_user_from_token
 from app.models import Account
+from app.services.trading import latency_arb_feasibility, latency_arb_telemetry
 from app.services.trading.latency_arb_service import (
     get_config,
     get_engine_status,
@@ -23,6 +24,7 @@ from app.services.users.entitlement_service import CAP_LATENCY_ARB
 from app.utils.database import get_db
 
 router = APIRouter(prefix="/api/latency-arb", tags=["latency-arb"])
+v1_router = APIRouter(prefix="/api/v1/latency-arb", tags=["latency-arb"])
 
 
 class LatencyArbConfigResponse(BaseModel):
@@ -303,4 +305,22 @@ def _trade_response(row):
             "fill_evidence_grade": "modeled_native_depth" if timed else "unverified_legacy",
             "pnl": response.pnl if timed else None,
         }
+    )
+
+
+@v1_router.get("/telemetry")
+async def get_latency_arb_telemetry(
+    current_user: dict = Depends(get_current_user_from_token),
+):
+    """p50/p95/p99 per stage from recorded traces. Empty until the engine records traces."""
+    return latency_arb_telemetry.summarize(latency_arb_telemetry.STORE.snapshot())
+
+
+@v1_router.get("/feasibility")
+async def get_latency_arb_feasibility(
+    current_user: dict = Depends(get_current_user_from_token),
+):
+    """Edge decay and promotion verdict. No live promotion without canary approval."""
+    return latency_arb_feasibility.feasibility(
+        latency_arb_feasibility.REPORTS.snapshot(), canary_approved=False
     )
