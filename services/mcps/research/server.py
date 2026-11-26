@@ -57,6 +57,15 @@ except ImportError:
     _BINANCE_AVAILABLE = False
     binance_skills = None  # type: ignore
 
+# ── Read-only financial skills adapter (issue #28) ────────
+# Disabled unless FINANCIAL_SKILLS_ENABLED is set; evaluated on every call.
+try:
+    from financial_skills import SkillsAdapter
+
+    _FINANCIAL_SKILLS = SkillsAdapter()
+except ImportError:  # pragma: no cover - package ships with this server
+    _FINANCIAL_SKILLS = None
+
 
 # ── Cross-venue market cache ─────────────────────────────
 # The venue cache lives in the backend: this server runs as a stdio
@@ -737,6 +746,27 @@ def _tool_event_correlation_risk(args):
     return _run_async(_structured_skill_research("event_correlation_risk", args))
 
 
+def _tool_forecast_calibration(args):
+    return _run_async(_structured_skill_research("forecast_calibration", args))
+
+
+FORECAST_CALIBRATION_SCHEMA = {
+    "name": "forecast_calibration",
+    "read_only": True,
+    "version": "forecast-skill-report-v1",
+    "description": (
+        "Proper-score forecast skill versus the matched market baseline with event-cluster "
+        "uncertainty, calibration, drift state and explicit abstention; research only, "
+        "no order action."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {"window_days": {"type": "integer", "minimum": 1, "maximum": 365}},
+        "additionalProperties": False,
+    },
+}
+
+
 def _tool_recorded_event_risk(args):
     return _run_async(_structured_skill_research("recorded_event_correlation_risk", args))
 
@@ -814,6 +844,11 @@ async def _structured_skill_research(tool, args):
             "/api/risk/event-correlation/recorded",
             "event-correlation-risk-v1",
         ),
+        "forecast_calibration": (
+            "GET",
+            "/api/analysis/calibration/skill-report",
+            "forecast-skill-report-v1",
+        ),
     }
     if tool not in contracts:
         raise ValueError("Unknown read-only skill")
@@ -828,7 +863,17 @@ async def _structured_skill_research(tool, args):
     if VENUE_API_TOKEN:
         headers["Authorization"] = f"Bearer {VENUE_API_TOKEN}"
     kwargs = {}
-    if method == "GET":
+    if tool == "forecast_calibration":
+        window = args.get("window_days", 30)
+        if (
+            set(args) - {"window_days"}
+            or isinstance(window, bool)
+            or not isinstance(window, int)
+            or not 0 < window <= 365
+        ):
+            return unavailable
+        kwargs["params"] = {"window_days": window, "scope": "user"}
+    elif method == "GET":
         if set(args) - {"account_id"}:
             return unavailable
         if "account_id" in args:
@@ -868,7 +913,26 @@ async def _structured_skill_research(tool, args):
         return unavailable
 
 
+def _tool_financial_skill(args):
+    if _FINANCIAL_SKILLS is None:
+        return {
+            "schema_version": "financial-skill-result-v1",
+            "status": "error",
+            "reason": "FINANCIAL_SKILLS_UNAVAILABLE",
+            "execution_eligible": False,
+        }
+    return _FINANCIAL_SKILLS.run(args, now=datetime.now(UTC).isoformat())
+
+
+def _describe_financial_skill(_args):
+    if _FINANCIAL_SKILLS is None:
+        return {"name": "financial_skill", "read_only": True, "skills": []}
+    return _FINANCIAL_SKILLS.describe()
+
+
 TOOLS: dict[str, Any] = {
+    "financial_skill": _tool_financial_skill,
+    "describe_financial_skill": _describe_financial_skill,
     "binary_book": _tool_binary_book,
     "describe_book_research": lambda _: BOOK_TOOL_SCHEMA,
     "resolution_rule_analysis": _tool_resolution_rule_analysis,
@@ -879,6 +943,8 @@ TOOLS: dict[str, Any] = {
     "describe_oracle_basis_risk": lambda _: ORACLE_BASIS_TOOL_SCHEMA,
     "event_correlation_risk": _tool_event_correlation_risk,
     "recorded_event_correlation_risk": _tool_recorded_event_risk,
+    "forecast_calibration": _tool_forecast_calibration,
+    "describe_forecast_calibration": lambda _: FORECAST_CALIBRATION_SCHEMA,
     "describe_recorded_event_correlation_risk": lambda _: RECORDED_EVENT_RISK_SCHEMA,
     "describe_event_correlation_risk": lambda _: EVENT_CORRELATION_TOOL_SCHEMA,
     "web_search": _tool_web_search,
