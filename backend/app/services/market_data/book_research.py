@@ -19,6 +19,7 @@ from app.services.market_data.binary_book import (
     NoQueueEvidencePolicy,
     WalkRequest,
     complement_summary,
+    depth_profile,
     reconstruct,
     round_trip_cost,
     walk_depth,
@@ -45,6 +46,8 @@ class ResearchQuery(Contract):
     fee_version: str | None = Field(default=None, min_length=1, max_length=80)
     lot: Decimal = Field(default=Decimal("0.01"), gt=0, le=1, decimal_places=8)
     max_age_seconds: int = Field(default=60, ge=1, le=300)
+    # Opt-in so results saved before this field existed keep their replay hash.
+    include_depth_profile: bool = False
 
 
 def checksum(raw):
@@ -232,8 +235,15 @@ def analyze_values(query: ResearchQuery, values: list[dict], as_of):
                 if book.grade == "VERIFIED_BOOK"
                 else None
             )
+    optional = {}
+    if query.include_depth_profile:
+        optional["depth_profile"] = {
+            label: depth_profile(spec, book, query.sizes).model_dump(mode="json")
+            for label, book in books.items()
+        }
     return {
         **base,
+        **optional,
         "top_of_book": top,
         "maker_queue": NoQueueEvidencePolicy().assess(books[query.outcome]).model_dump(mode="json"),
         "round_trip": [

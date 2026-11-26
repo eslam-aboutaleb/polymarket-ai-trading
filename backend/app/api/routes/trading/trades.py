@@ -1188,9 +1188,21 @@ async def rescore_all_traders(
 
 
 class ArbitrageOpportunity(BaseModel):
+    """One scanner signal. ``profit_pct`` is a deprecated alias (arb-scan-v2).
+
+    ``gross_price_gap_pct_points`` is the indicative gross price gap; it is not
+    executable, not fee-adjusted and not a return on capital.
+    """
+
     type: str
+    schema_version: str | None = None
+    signal_class: str | None = None
+    label: str | None = None
+    badges: list[str] = []
     market_id: str
     market_title: str
+    gross_price_gap_pct_points: float | None = None
+    deprecated_fields: dict[str, str] | None = None
     profit_pct: float | None = None
     spread_pct: float | None = None
     total_cost: float | None = None
