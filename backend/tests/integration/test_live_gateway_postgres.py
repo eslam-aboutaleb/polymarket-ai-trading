@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 from threading import Barrier, Event
@@ -25,6 +26,7 @@ from app.models.users.user_settings import UserSettings
 from app.services.trading.execution import clob_transport, live
 from app.services.trading.live_trading_policy import LiveTradingBlocked
 from app.services.trading.trading_halt_service import request_halt
+from app.utils.time import utc_now
 
 
 @pytest.fixture
@@ -135,6 +137,7 @@ def test_competing_orders_cannot_double_spend_budget(pg_gateway):
 
 CRASH_WORKER = """
 import os
+from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from sqlalchemy import create_engine
@@ -278,6 +281,15 @@ def test_copy_permission_is_locked_until_submission_result_commits(pg_gateway, m
             idempotency_key="copy-grant",
             strategy="copy",
             copied_from_wallet=wallet,
+            market_id="market",
+            order_type="FOK",
+            execution_deadline=utc_now() + timedelta(seconds=5),
+            execution_evidence={
+                "condition": "market",
+                "token": "123",
+                "tick_size": ".01",
+                "neg_risk": False,
+            },
         )
     assert result["success"] and observation["locked"]
     submit.assert_called_once()
