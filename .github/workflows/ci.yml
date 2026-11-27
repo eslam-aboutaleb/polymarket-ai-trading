@@ -103,6 +103,15 @@ jobs:
       test-script: test:webmcp
       browsers: chromium
 
+  tailwind-css:
+    uses: eslam-aboutaleb/ci-workflows/.github/workflows/browser.yml@cb10612004f98e6ec10158af72c4d0e1a044e436
+    with:
+      project-dir: frontend
+      manager: npm
+      node-version: "24.22.1"
+      test-script: test:tailwind
+      browsers: chromium
+
   # Full real-stack Playwright regression suite. The emergency-browser reusable
   # workflow only runs test:safety; it does not cover auth/features/public E2E.
   e2e:
