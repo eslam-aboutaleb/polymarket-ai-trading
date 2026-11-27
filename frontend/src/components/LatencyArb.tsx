@@ -30,7 +30,7 @@ import { Banner, InfoTooltip, useToast } from "./ui";
 const POLL_INTERVAL_MS = 5000;
 const DEFAULT_EDGE_THRESHOLD = 0.03;
 const DEFAULT_MAX_NOTIONAL = 50;
-const DEFAULT_DAILY_LOSS_LIMIT = 20;
+const DEFAULT_DAILY_LOSS_LIMIT = 150;
 
 const SYMBOL_OPTIONS = ["BTC", "ETH", "SOL"];
 const WINDOW_OPTIONS = [5, 15, 60];
@@ -496,6 +496,12 @@ export default function LatencyArb() {
             <p className="text-xs text-soft mt-1">
               Per-strategy daily loss limit; trading pauses when hit.
             </p>
+            {config.daily_loss_limit < config.max_notional && (
+              <p className="text-xs text-amber-500 mt-1">
+                Below your max trade size (${config.max_notional}): one losing trade will pause the
+                strategy for the rest of the UTC day.
+              </p>
+            )}
           </div>
           <div className="rounded border border-[var(--line)] bg-[var(--bg-soft)] p-3">
             <p className="text-xs font-semibold mb-1">Symbols</p>

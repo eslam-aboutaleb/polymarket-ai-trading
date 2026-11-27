@@ -40,6 +40,7 @@ import PositionAnalysisPopup, {
 } from "./PositionAnalysisPopup";
 import ErrorBoundary from "./ErrorBoundary";
 import EquityCurvePanel from "./EquityCurvePanel";
+import RedemptionPanel from "./RedemptionPanel";
 
 const STOP_LOSS_POLL_INTERVAL = 10_000; // 10 seconds – match backend check
 const FOLLOWING_FEED_POLL_INTERVAL = 15_000;
@@ -1447,6 +1448,7 @@ function DashboardContent() {
 
       {/* Equity curve — hourly bankroll snapshots (plan 05) */}
       <EquityCurvePanel />
+      <RedemptionPanel />
 
       {/* ── Modals ── */}
       {cashOutPosition && (

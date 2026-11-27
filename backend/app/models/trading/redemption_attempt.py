@@ -1,6 +1,6 @@
 """RedemptionAttempt model for on-chain auto-redeem audit tracking."""
 
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 
 from app.models.base import Base
 from app.utils.time import utc_now
@@ -25,8 +25,14 @@ class RedemptionAttempt(Base):
     """
 
     __tablename__ = "redemption_attempts"
+    __table_args__ = (UniqueConstraint("intent_id", name="uq_redemption_attempt_intent"),)
 
     id = Column(Integer, primary_key=True, index=True)
+    intent_id = Column(
+        String(64),
+        ForeignKey("redemption_intents.id", name="fk_redemption_attempt_intent"),
+        nullable=True,
+    )
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     account_id = Column(Integer, nullable=True, index=True)
     market_id = Column(String(200), nullable=False, index=True)  # conditionId
