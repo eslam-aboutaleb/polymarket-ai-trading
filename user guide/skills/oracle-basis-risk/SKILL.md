@@ -42,3 +42,12 @@ The shared public replay has eight actual exchange-rise/official-Down diagnostic
 Before promoting this detector, independently obtain the exact authorized oracle series, freeze the study/hypotheses before evaluation, measure held-out coverage/false matches by regime and audit all source/receipt clocks. Production approval is not asserted. Monitor missing/stale/source-mismatch/coverage counts and roll back with `ORACLE_BASIS_RISK_ENABLED=false`. The existing latency engine, pre-trade authority, account caps, signing and emergency halt remain unchanged.
 
 Keep typed numerical schemas behind a versioned adapter when migrating pure primitives to the shared financial-skills package. Venue/archive/rule adapters remain owned here. References: [Polymarket real-time sources](https://docs.polymarket.com/market-data/realtime-data), [current market definitions](https://docs.polymarket.com/market-data/market-details), and the exact Chainlink instrument URLs retained in the raw market receipts.
+
+## Timed BTC paper forecasts
+
+For five- and fifteen-minute BTC paper forecasts, keep the settlement reference, the same-source
+exchange return, and the market midpoint as separate inputs. Record provider and
+timestamps. A language-model explanation cannot authenticate a price or turn the
+exchange proxy into settlement evidence. Use the read-only basis tool for offline
+diagnostics when both aligned feeds are available. Keep open-ended research outside
+the timed decision loop, where delayed information can invalidate a quote.

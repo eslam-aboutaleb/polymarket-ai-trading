@@ -14,6 +14,7 @@ from test_live_account_reconciliation import T0, seed_fill, snapshot
 
 from app.api.routes.analysis.live_reconciliation import router
 from app.api.routes.auth.auth import get_current_user_from_token
+from app.api.routes.portfolio.redemption_intents import router as redemption_router
 from app.config import get_settings
 from app.models import Base
 from app.models.users.account import Account
@@ -61,6 +62,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(router)
+
+app.include_router(redemption_router)
 app.dependency_overrides[get_current_user_from_token] = lambda: {"user_id": 1}
 
 
@@ -111,4 +114,71 @@ def seed_chain_scenario(
         "ready": True,
         "classification": "synthetic_rpc_boundary_only",
         "synthetic_deposit_usdc": str(deposit_usdc),
+    }
+
+
+@app.post("/__test/redemption")
+def seed_redemption_scenario(submitted: bool = False):
+    from unittest.mock import patch
+
+    from redemption_fixtures import CONDITION, TEST_KEY, TEST_WALLET, FundedRedemptionRPC
+
+    from app.models import AppEvent, RedemptionAttempt, TradingControlState
+    from app.models.trading.redemption_intent import (
+        RedemptionIntent,
+        RedemptionObservation,
+        RedemptionWalletLease,
+    )
+    from app.services.trading import redemption_workflow as workflow
+
+    rpc = FundedRedemptionRPC()
+    workflow.NativeRedemption = rpc.native
+    app.state.redemption_rpc = rpc
+    with Session(engine) as db:
+        for model in (
+            RedemptionWalletLease,
+            RedemptionObservation,
+            RedemptionAttempt,
+            RedemptionIntent,
+        ):
+            db.query(model).delete(synchronize_session=False)
+        db.query(AppEvent).filter_by(source="redemption_gateway").delete(synchronize_session=False)
+        db.get(User, 1).wallet_address = TEST_WALLET
+        db.get(UserSettings, 1).simulation_mode = False
+        for scope in ("global", "user:1"):
+            db.merge(TradingControlState(scope=scope, state="RUNNING", reason="synthetic fixture"))
+        db.commit()
+        if submitted:
+            native = rpc.native()
+            try:
+                row = workflow.create_intent(
+                    db,
+                    db.get(Account, 11),
+                    CONDITION,
+                    "mock-submission",
+                    mode="submit",
+                    chain=native,
+                )
+                with (
+                    patch.object(workflow, "block_legacy_live_execution", lambda _: None),
+                    patch.object(
+                        workflow, "load_wallet_credentials", lambda _: {"private_key": TEST_KEY}
+                    ),
+                ):
+                    workflow.submit_intent(db, db.get(Account, 11), row.id, chain=native)
+            finally:
+                native.close()
+    return {"condition_id": CONDITION, "classification": "synthetic_mock_funded_redemption"}
+
+
+@app.post("/__test/redemption/finality")
+def finalize_mock_redemption(reorg: bool = False):
+    rpc = app.state.redemption_rpc
+    rpc.final_number = 30
+    if reorg:
+        rpc.receipt["blockHash"] = "0x" + "f" * 64
+    return {
+        "classification": "synthetic_mock_finality",
+        "broadcasts": len(rpc.broadcasts),
+        "nonce_reads": rpc.nonce_reads,
     }

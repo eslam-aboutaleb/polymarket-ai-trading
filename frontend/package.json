@@ -12,20 +12,25 @@
     "preview": "vite preview",
     "type-check": "tsc --noEmit",
     "test:e2e": "playwright test",
+    "test:webmcp": "playwright test --config playwright.webmcp.config.ts",
+    "test:tailwind": "playwright test --config playwright.tailwind.config.ts",
     "test:safety": "playwright test --config playwright.safety.config.ts",
     "test:research": "playwright test --config playwright.research.config.ts",
     "test:e2e:ui": "playwright test --ui",
     "test:walletconnect": "playwright test --config playwright.walletconnect.config.ts",
     "test:paper": "playwright test --config playwright.paper.config.ts",
     "test:observations": "playwright test --config playwright.observations.config.ts",
+    "test:arbitrage": "playwright test --config playwright.arbitrage.config.ts",
     "test:book": "playwright test --config playwright.book.config.ts",
     "test:maker": "playwright test --config playwright.maker.config.ts",
     "test:latency": "playwright test --config playwright.latency.config.ts",
     "test:executable": "playwright test --config playwright.executable.config.ts",
+    "test:lab": "playwright test --config playwright.lab.config.ts",
     "test:latency-paper": "playwright test --config playwright.latency-paper.config.ts",
     "test:provider": "playwright test --config playwright.provider.config.ts",
     "test:reconciliation": "playwright test --config playwright.reconciliation.config.ts",
-    "test:session": "playwright test --config playwright.session.config.ts"
+    "test:session": "playwright test --config playwright.session.config.ts",
+    "test:evidence": "playwright test --config playwright.evidence.config.ts"
   },
   "dependencies": {
     "@walletconnect/ethereum-provider": "^2.26.0",
@@ -38,24 +43,24 @@
     "react-router-dom": "^7.18.4",
     "react-virtuoso": "^4.12.7",
     "recharts": "^2.10.0",
-    "tailwindcss": "^3.3.0",
     "zustand": "^4.4.0"
   },
   "devDependencies": {
     "@mcp-b/webmcp-polyfill": "^6.0.1",
     "@playwright/test": "^1.64.0",
+    "@tailwindcss/postcss": "4.3.5",
     "@types/node": "^20.19.43",
     "@types/react": "^18.2.37",
     "@types/react-dom": "^18.2.15",
     "@typescript-eslint/eslint-plugin": "^8.72.2",
     "@typescript-eslint/parser": "^8.72.2",
     "@vitejs/plugin-react": "5.2.0",
-    "autoprefixer": "^10.4.16",
     "eslint": "^8.54.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "jscpd": "^4.3.0",
     "postcss": "^8.4.31",
     "prettier": "^3.9.9",
+    "tailwindcss": "4.3.5",
     "typescript": "^5.2.2",
     "vite": "^8.3.5",
     "vite-plugin-pwa": "^2.0.0"
@@ -64,7 +69,8 @@
     "utf-8-validate": "^5.0.2",
     "zod": "4.6.6",
     "minimatch@>=7 <11.0.1": "11.0.5",
-    "glob@>=9 <14.0.2": "14.0.2"
+    "glob@>=9 <14.0.2": "14.0.2",
+    "@tailwindcss/oxide-wasm32-wasi": "npm:@tailwindcss/oxide-win32-x64-msvc@4.3.5"
   },
   "engines": {
     "node": ">=22.12.0"

@@ -93,6 +93,24 @@ def acceptance_checks(result):
     costs_ok = (
         result["total_fees_usdc"] is not None and result["confirmed_rebates_usdc"] is not None
     )
+    rows = result.get("ledger_rows") or []
+    identities = [(row["order_hash"], row["fill_id"]) for row in rows]
+    no_double_count = len(identities) == len(set(identities)) and len(rows) == len(
+        result.get("source_ids") or rows
+    )
+    confirmed_parts = [row.get("confirmed_rebate_usdc") for row in rows]
+    reported_rebate = result["confirmed_rebates_usdc"]
+    rebates_separate = (
+        reported_rebate is None
+        and any(part is None for part in confirmed_parts)
+        or reported_rebate is not None
+        and all(part is not None for part in confirmed_parts)
+        and Decimal(reported_rebate) == sum((Decimal(part) for part in confirmed_parts), Decimal(0))
+    )
+    unknown_fee_rows = [row for row in rows if row.get("fee_usdc") is None]
+    costs_unknown_kept = all(row.get("net_cashflow") is None for row in unknown_fee_rows) and (
+        not unknown_fee_rows or result["total_fees_usdc"] is None
+    )
     return [
         check(
             "exchange_cash_and_positions",
@@ -100,15 +118,25 @@ def acceptance_checks(result):
             "WALLET_OR_SETTLEMENT_COVERAGE_UNVERIFIED",
             fails=(cash is not None and abs(Decimal(cash)) > tolerance) or not position_ok,
         ),
-        check("duplicate_fill_identity", True, ""),
-        check("confirmed_and_estimated_rebates_separate", True, ""),
+        check("duplicate_fill_identity", no_double_count, "DUPLICATE_FILL_IDENTITY", fails=True),
+        check(
+            "confirmed_and_estimated_rebates_separate",
+            rebates_separate,
+            "REBATE_CLASSES_MIXED",
+            fails=True,
+        ),
         check("strategy_totals_additive", additive, "NET_COST_OR_BASIS_INCOMPLETE"),
         check(
             "versioned_fill_and_benchmark_lineage",
             benchmark_ok,
             "POINT_IN_TIME_BENCHMARK_UNAVAILABLE",
         ),
-        check("missing_costs_remain_unknown", True, ""),
+        check(
+            "missing_costs_remain_unknown",
+            costs_unknown_kept,
+            "MISSING_COST_TREATED_AS_KNOWN",
+            fails=True,
+        ),
         check("actual_cost_evidence", costs_ok, "ACTUAL_COSTS_UNVERIFIED"),
         check(
             "forward_validation",

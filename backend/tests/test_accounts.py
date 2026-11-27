@@ -499,6 +499,12 @@ class MigrationBackfillTest(unittest.TestCase):
             "live_balance_snapshots",
             "live_attribution_reports",
             "attribution_studies",
+            "redemption_intents",
+            "redemption_wallet_leases",
+            "redemption_observations",
+            "portfolio_scenarios",
+            "arbitrage_feasibility_runs",
+            "execution_estimates",
         }
     )
 
@@ -574,6 +580,8 @@ class MigrationBackfillTest(unittest.TestCase):
             conn.execute(text("DROP TABLE IF EXISTS executable_signal_sources"))
             conn.execute(text("DROP TABLE IF EXISTS executable_replay_runs"))
             conn.execute(text("DROP TABLE IF EXISTS book_research_runs"))
+            conn.execute(text("DROP TABLE IF EXISTS analysis_runs"))
+            conn.execute(text("DROP TABLE IF EXISTS execution_estimates"))
             conn.execute(text("DROP TABLE IF EXISTS follower_experiment_runs"))
             conn.execute(text("DROP TABLE IF EXISTS paper_maker_intents"))
             for future_table in (
@@ -588,6 +596,7 @@ class MigrationBackfillTest(unittest.TestCase):
                 "paper_execution_intents",
                 "paper_journal_events",
                 "paper_accounts",
+                "settlement_transitions",
             ):
                 conn.execute(text(f"DROP TABLE IF EXISTS {future_table}"))
             conn.execute(text("DROP TABLE IF EXISTS account_settings"))
@@ -645,8 +654,8 @@ class MigrationBackfillTest(unittest.TestCase):
             migrated = self._tables_with_user_id(conn)
             # 20 tables the migration widened, plus api_keys (plan 06b)
             # and the collaboration tables (plan 02), which were created
-            # with account_id already in place.
-            self.assertEqual(len(migrated), 24)
+            # with account_id already in place, and execution_shortfalls (#157).
+            self.assertEqual(len(migrated), 25)
             for table in migrated:
                 columns = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})"))}
                 self.assertIn("account_id", columns, msg=table)
@@ -667,8 +676,8 @@ class MigrationBackfillTest(unittest.TestCase):
                     msg=f"{table} has {nulls} rows without an account_id",
                 )
         # 20 widened tables + api_keys (plan 06b) + the 3 collaboration
-        # tables (plan 02), all created with the column.
-        self.assertEqual(checked, 24)
+        # tables (plan 02) + execution_shortfalls (#157), all created with the column.
+        self.assertEqual(checked, 25)
 
     def test_migration_is_idempotent(self):
         """Re-running the migration must not duplicate accounts or rows."""
