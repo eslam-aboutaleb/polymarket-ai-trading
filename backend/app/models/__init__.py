@@ -16,6 +16,7 @@ from app.models.analytics.forecast_resolution_event import ForecastResolutionEve
 from app.models.analytics.portfolio_scenario import PortfolioScenario
 from app.models.analytics.portfolio_snapshot import PortfolioSnapshot
 from app.models.analytics.resolution_rule_snapshot import ResolutionRuleSnapshot
+from app.models.analytics.settlement_transition import SettlementTransition
 from app.models.base import Base
 from app.models.billing.subscription import BillingWebhookEvent, Subscription
 from app.models.intelligence.collaboration import ForecastVote, MarketAnnotation, UserFollow
@@ -54,6 +55,11 @@ from app.models.trading.paper_account import (
 )
 from app.models.trading.paper_maker_intent import PaperMakerIntent
 from app.models.trading.redemption_attempt import RedemptionAttempt
+from app.models.trading.redemption_intent import (
+    RedemptionIntent,
+    RedemptionObservation,
+    RedemptionWalletLease,
+)
 from app.models.trading.stop_loss import StopLossOrder
 from app.models.trading.take_profit import TakeProfitOrder
 from app.models.trading.trade_history import TradeHistory
@@ -86,6 +92,7 @@ __all__ = [
     "Assessment",
     "ForecastEvidenceSnapshot",
     "ResolutionRuleSnapshot",
+    "SettlementTransition",
     "UserTrade",
     "RefreshToken",
     "FollowedTrader",
@@ -113,6 +120,9 @@ __all__ = [
     "FollowerExperimentRun",
     "TakeProfitOrder",
     "RedemptionAttempt",
+    "RedemptionIntent",
+    "RedemptionObservation",
+    "RedemptionWalletLease",
     "WhaleEvent",
     "WhaleConfig",
     "StopLossOrder",

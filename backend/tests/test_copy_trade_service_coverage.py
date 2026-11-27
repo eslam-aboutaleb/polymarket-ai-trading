@@ -14,7 +14,8 @@ No network, database or exchange is touched.
 """
 
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -26,6 +27,7 @@ from app.models.trading.user_trade import UserTrade
 from app.models.users.user import User
 from app.models.users.user_settings import RiskMode, UserSettings
 from app.security.credential_store import CredentialStoreError
+from app.utils.time import utc_now
 
 WALLET = "0x" + "ab" * 20
 TRADER_WALLET = "0x" + "cd" * 20
@@ -109,6 +111,23 @@ class FakeDB:
     def refresh(self, obj):
         if getattr(obj, "id", None) is None:
             obj.id = 1
+
+    def begin_nested(self):
+        class DummyNested:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+        return DummyNested()
+
+    def connection(self):
+        class DummyConn:
+            dialect = MagicMock()
+            dialect.name = "postgresql"
+
+        return DummyConn()
 
     def close(self):
         self.closed += 1
@@ -1297,6 +1316,17 @@ class ExecuteCopyTradeTests(CopyTradeServiceTestCase):
         self.db.first_results[UserSettings] = make_settings()
         self.db.first_results[User] = make_user()
         self.db.first_results[FollowedTrader] = None
+        self.db.first_results[TradeHistory] = SimpleNamespace(timestamp=utc_now())
+
+        async def fresh(condition, token, side, price, slippage, size):
+            from app.services.trading.copy_quote import copy_limit
+
+            limit = copy_limit(side, price, slippage, Decimal(".001"))
+            return limit, Decimal("95.23"), utc_now() + timedelta(seconds=5), {"token": token}
+
+        self.quote = self.enterContext(
+            patch.object(copy_trade_service, "fresh_copy_quote", side_effect=fresh)
+        )
 
     def _patch_plan(self, plan=None, rejection=None):
         plan = plan or make_plan(rejection=rejection)
@@ -1472,6 +1502,12 @@ class ExecuteCopyTradeTests(CopyTradeServiceTestCase):
         self._patch_credentials(stored=None)
         self._patch_plan()
         self._patch_caps()
+        self.enterContext(
+            patch(
+                "app.services.analytics.paper_accounting.get_settings",
+                return_value=SimpleNamespace(paper_journal_v2_enabled=False),
+            )
+        )
         result = await copy_trade_service.execute_copy_trade(
             self.db, 1, TRADER_WALLET, MARKET_ID, TOKEN_ID, "BUY", 0.5, 100.0
         )
@@ -1500,7 +1536,7 @@ class ExecuteCopyTradeTests(CopyTradeServiceTestCase):
         )
         self.assertEqual(result["trade_id"], 99)
         self.assertEqual(gateway.call_args.kwargs["idempotency_key"], "copy-trade:7")
-        self.assertEqual(gateway.call_args.kwargs["size"], 100.0)
+        self.assertEqual(gateway.call_args.kwargs["size"], 95.23)
         self.assertEqual(self.db.added, [])
 
     async def test_accepted_live_order_does_not_fabricate_win(self):
@@ -1557,6 +1593,7 @@ class ExecuteCopyTradeTests(CopyTradeServiceTestCase):
             0.5,
             100,
             idempotency_key="explicit-key",
+            source_timestamp=utc_now(),
         )
         self.assertEqual(gateway.call_args.kwargs["idempotency_key"], "explicit-key")
 
@@ -1577,6 +1614,182 @@ class ExecuteCopyTradeTests(CopyTradeServiceTestCase):
         )
         self.assertFalse(result["executed"])
         self.assertEqual(result["reason"], "Source trade identity required")
+        gateway.assert_not_called()
+
+    async def test_sell_copy_order_applies_sell_slippage_guard_to_fok_limit_price(self):
+        self._patch_credentials(stored={"private_key": "0xpk"})
+        self._patch_plan()
+        self._patch_caps()
+        gateway = self._patch_order({"success": True, "status": "submitted", "trade_id": 99})
+        result = await copy_trade_service.execute_copy_trade(
+            self.db,
+            1,
+            TRADER_WALLET,
+            MARKET_ID,
+            TOKEN_ID,
+            "SELL",
+            0.50,
+            100,
+            trade_history_id=7,
+        )
+        self.assertTrue(result["executed"])
+        # Sell limit is aligned inward at the source slippage floor.
+        self.assertEqual(gateway.call_args.kwargs["price"], 0.475)
+        self.assertEqual(gateway.call_args.kwargs["order_type"], "FOK")
+        self.assertEqual(gateway.call_args.kwargs["side"], "SELL")
+
+    async def test_buy_copy_order_uses_fok_with_fresh_quote_and_source_ceiling(self):
+        self._patch_credentials(stored={"private_key": "0xpk"})
+        self._patch_plan()
+        self._patch_caps()
+        gateway = self._patch_order({"success": True, "status": "submitted", "trade_id": 99})
+        result = await copy_trade_service.execute_copy_trade(
+            self.db,
+            1,
+            TRADER_WALLET,
+            MARKET_ID,
+            TOKEN_ID,
+            "BUY",
+            0.50,
+            100,
+            trade_history_id=7,
+        )
+        self.assertTrue(result["executed"])
+        self.assertEqual(gateway.call_args.kwargs["price"], 0.525)
+        self.assertEqual(gateway.call_args.kwargs["order_type"], "FOK")
+        self.assertGreater(gateway.call_args.kwargs["execution_deadline"], utc_now())
+        self.quote.assert_awaited_once()
+        self.assertEqual(gateway.call_args.kwargs["side"], "BUY")
+
+    async def test_stale_source_trade_rejected_by_timestamp(self):
+        self._patch_credentials(stored={"private_key": "0xpk"})
+        self._patch_plan()
+        self._patch_caps()
+        gateway = self._patch_order({"success": True})
+        stale_time = utc_now() - timedelta(seconds=120)
+        stale_trade = TradeHistory(
+            id=7,
+            market_id=MARKET_ID,
+            wallet_address=TRADER_WALLET,
+            order_type="buy",
+            amount=100.0,
+            price=0.50,
+            timestamp=stale_time,
+        )
+        self.db.first_results[TradeHistory] = stale_trade
+        result = await copy_trade_service.execute_copy_trade(
+            self.db,
+            1,
+            TRADER_WALLET,
+            MARKET_ID,
+            TOKEN_ID,
+            "BUY",
+            0.50,
+            100,
+            trade_history_id=7,
+        )
+        self.assertFalse(result["executed"])
+        self.assertEqual(result["status"], "rejected")
+        self.assertIn("stale", result["reason"].lower())
+        gateway.assert_not_called()
+
+    async def test_fresh_source_trade_accepted(self):
+        self._patch_credentials(stored={"private_key": "0xpk"})
+        self._patch_plan()
+        self._patch_caps()
+        gateway = self._patch_order({"success": True, "status": "submitted", "trade_id": 99})
+        fresh_time = utc_now() - timedelta(seconds=5)
+        fresh_trade = TradeHistory(
+            id=7,
+            market_id=MARKET_ID,
+            wallet_address=TRADER_WALLET,
+            order_type="buy",
+            amount=100.0,
+            price=0.50,
+            timestamp=fresh_time,
+        )
+        self.db.first_results[TradeHistory] = fresh_trade
+        result = await copy_trade_service.execute_copy_trade(
+            self.db,
+            1,
+            TRADER_WALLET,
+            MARKET_ID,
+            TOKEN_ID,
+            "BUY",
+            0.50,
+            100,
+            trade_history_id=7,
+        )
+        self.assertTrue(result["executed"])
+        gateway.assert_called_once()
+
+    async def test_source_timestamp_param_staleness(self):
+        self._patch_credentials(stored={"private_key": "0xpk"})
+        self._patch_plan()
+        self._patch_caps()
+        gateway = self._patch_order({"success": True})
+        stale_time = utc_now() - timedelta(seconds=100)
+        result = await copy_trade_service.execute_copy_trade(
+            self.db,
+            1,
+            TRADER_WALLET,
+            MARKET_ID,
+            TOKEN_ID,
+            "BUY",
+            0.50,
+            100,
+            idempotency_key="key-stale-ts",
+            source_timestamp=stale_time,
+        )
+        self.assertFalse(result["executed"])
+        self.assertEqual(result["status"], "rejected")
+        self.assertIn("stale", result["reason"].lower())
+        gateway.assert_not_called()
+
+    async def test_live_price_sell_floor_breached_rejected(self):
+        self._patch_credentials(stored={"private_key": "0xpk"})
+        self._patch_plan()
+        self._patch_caps()
+        gateway = self._patch_order({"success": True})
+        # Source price = 0.50, 5% floor = 0.475. Live price = 0.46 (breached!)
+        result = await copy_trade_service.execute_copy_trade(
+            self.db,
+            1,
+            TRADER_WALLET,
+            MARKET_ID,
+            TOKEN_ID,
+            "SELL",
+            0.50,
+            100,
+            idempotency_key="key-live-breach",
+            live_price=0.46,
+        )
+        self.assertFalse(result["executed"])
+        self.assertEqual(result["status"], "rejected")
+        self.assertIn("dropped below sell floor", result["reason"])
+        gateway.assert_not_called()
+
+    async def test_live_price_buy_ceiling_breached_rejected(self):
+        self._patch_credentials(stored={"private_key": "0xpk"})
+        self._patch_plan()
+        self._patch_caps()
+        gateway = self._patch_order({"success": True})
+        # Source price = 0.50, 5% ceiling = 0.525. Live price = 0.54 (breached!)
+        result = await copy_trade_service.execute_copy_trade(
+            self.db,
+            1,
+            TRADER_WALLET,
+            MARKET_ID,
+            TOKEN_ID,
+            "BUY",
+            0.50,
+            100,
+            idempotency_key="key-live-buy-breach",
+            live_price=0.54,
+        )
+        self.assertFalse(result["executed"])
+        self.assertEqual(result["status"], "rejected")
+        self.assertIn("exceeded buy ceiling", result["reason"])
         gateway.assert_not_called()
 
 
