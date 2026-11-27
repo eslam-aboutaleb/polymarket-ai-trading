@@ -18,6 +18,7 @@ import { getApiErrorMessage } from "../utils/apiError";
 import { Banner, ConfirmModal, Skeleton } from "./ui";
 import MarketDataQuality from "./MarketDataQuality";
 import ExecutableReplayPanel from "./ExecutableReplayPanel";
+import EventReplayLabPanel from "./EventReplayLabPanel";
 import BookResearchPanel from "./BookResearchPanel";
 
 type FormState = CreateBacktestRequest;
@@ -164,6 +165,7 @@ export default function Backtesting() {
       <MarketDataQuality />
       <BookResearchPanel />
       <ExecutableReplayPanel />
+      <EventReplayLabPanel />
 
       {/* Create Form */}
       {showForm && (
