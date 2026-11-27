@@ -347,3 +347,52 @@ def test_saved_report_is_idempotent_owned_and_integrity_checked(account_db, tmp_
     db.get(LiveAttributionReport, artifact["report_id"]).report_json = "{}"
     db.commit()
     assert http.get(path, headers={"X-Account-Id": "11"}).status_code == 422
+
+
+def _checks(report):
+    from app.services.analytics.attribution_contracts import acceptance_checks
+
+    return {c["criterion"]: c["status"] for c in acceptance_checks(report)}
+
+
+def test_cost_checks_are_derived_from_evidence_not_hardcoded():
+    from test_live_account_reconciliation import fill, observation
+
+    rows = [fill(1, "BUY", "10", "4", fee=".1"), fill(1, "BUY", "10", "4", fee=".1")]
+    result = reconcile_confirmed_cashflows(rows, observation(), observation("95.9"))
+    assert len(result["ledger_rows"]) == 1  # duplicate not double counted
+    base = {**result, "benchmarks": [], "forward_study": None, "full_wallet_reconciled": False}
+    checks = _checks(base)
+    assert checks["duplicate_fill_identity"] == "pass"
+    assert checks["confirmed_and_estimated_rebates_separate"] == "pass"
+    assert checks["missing_costs_remain_unknown"] == "pass"
+    doubled = {**base, "ledger_rows": result["ledger_rows"] * 2, "source_ids": ["a", "b"]}
+    assert _checks(doubled)["duplicate_fill_identity"] == "fail"
+    mixed = {**base, "confirmed_rebates_usdc": Decimal("5")}
+    assert _checks(mixed)["confirmed_and_estimated_rebates_separate"] == "fail"
+    zeroed = {**base, "total_fees_usdc": Decimal(0)}
+    zeroed["ledger_rows"] = [
+        {**result["ledger_rows"][0], "fee_usdc": None, "net_cashflow": Decimal(-4)}
+    ]
+    assert _checks(zeroed)["missing_costs_remain_unknown"] == "fail"
+
+
+def test_attribution_and_benchmarks_endpoints_scope_by_account_and_strategy(account_db):
+    db = account_db
+    opening = snapshot(db, T0, "100", {})
+    closing = snapshot(db, T0 + timedelta(seconds=10), "100", {})
+    http = client(db)
+    q = {"opening_id": opening, "closing_id": closing}
+    h = {"X-Account-Id": "11"}
+    ok = http.get("/api/trades/analytics/attribution", params=q, headers=h)
+    assert ok.status_code == 200 and ok.json()["account_id"] == 11
+    assert (
+        http.get(
+            "/api/trades/analytics/attribution", params={**q, "strategy_id": "nope"}, headers=h
+        ).status_code
+        == 404
+    )
+    dl = http.get("/api/trades/analytics/attribution", params={**q, "download": True}, headers=h)
+    assert "attachment" in dl.headers["content-disposition"]
+    bm = http.get("/api/trades/analytics/benchmarks", params=q, headers=h).json()
+    assert bm["benchmark_version"] and bm["benchmarks"] == [] and len(bm["input_hash"]) == 64
