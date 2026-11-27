@@ -52,6 +52,7 @@ import {
 } from "../services/accountService";
 import ApiKeysSection from "../components/ApiKeysSection";
 import BillingSection from "../components/BillingSection";
+import WebMcpPermissionsPanel from "../integrations/webmcp/WebMcpPermissionsPanel";
 
 type AIBackend = "llm_chain" | "cli_agent";
 type SettingsTab = "profile" | "trading" | "notifications" | "accounts" | "admin";
@@ -701,6 +702,8 @@ export default function SettingsPage() {
       {/* Profile Tab */}
       {activeTab === "profile" && (
         <>
+          <WebMcpPermissionsPanel />
+
           {/* Profile Section */}
           <div className="surface-panel p-6">
             <h2 className="text-xl font-semibold mb-4">Profile</h2>
