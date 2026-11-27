@@ -129,6 +129,25 @@ class ConfigRouteTests(LatencyArbRouteTestCase):
         self.assertEqual(body["daily_loss_limit"], 20.0)
         self.assertTrue(body["alert_on_opportunity"])
 
+    def test_get_config_warns_when_daily_limit_below_one_trade(self):
+        # 20 < 50: one losing trade halts the strategy for the UTC day.
+        config = _fake_config(daily_loss_limit=20.0, max_notional=50.0)
+        with patch("app.api.routes.trading.latency_arb.get_config", return_value=config):
+            body = self.client.get("/api/latency-arb/config").json()
+        self.assertIn("single losing trade", body["risk_warning"])
+
+    def test_get_config_has_no_warning_for_coherent_limit(self):
+        config = _fake_config(daily_loss_limit=150.0, max_notional=50.0)
+        with patch("app.api.routes.trading.latency_arb.get_config", return_value=config):
+            body = self.client.get("/api/latency-arb/config").json()
+        self.assertEqual(body["daily_loss_limit"], 150.0)
+        self.assertIsNone(body["risk_warning"])
+
+    def test_new_config_rows_default_to_150_daily_limit(self):
+        from app.models.trading.latency_arb_config import LatencyArbConfig
+
+        self.assertEqual(LatencyArbConfig.__table__.c.daily_loss_limit.default.arg, 150.0)
+
     def test_post_config_requires_authentication(self):
         app.dependency_overrides.clear()
         response = self.client.post("/api/latency-arb/config", json={})

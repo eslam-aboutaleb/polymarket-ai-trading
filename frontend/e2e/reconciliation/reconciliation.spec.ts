@@ -11,7 +11,8 @@ async function mountAccount(page: Page) {
       path.endsWith("/balance-snapshots") ||
       path.endsWith("/reconciliation") ||
       path.endsWith("/reconciliation-reports") ||
-      path.startsWith("/api/trades/analytics/attribution-studies")
+      path.startsWith("/api/trades/analytics/attribution-studies") ||
+      path.startsWith("/api/portfolio/redemption-intents")
     )
       return route.continue();
     if (path === "/api/auth/me")
@@ -174,3 +175,47 @@ for (const classified of [true, false]) {
     }
   });
 }
+
+test("redemption preview never broadcasts or reads a nonce", async ({ page, request }) => {
+  const scenario = await request.post("http://127.0.0.1:18139/__test/redemption");
+  const { condition_id } = await scenario.json();
+  await mountAccount(page);
+  await page.goto("/portfolio/redemptions");
+  const panel = page.getByRole("region", { name: "Redemption evidence" });
+  await panel.getByLabel("Resolved condition ID").fill(condition_id);
+  await panel.getByRole("button", { name: "Preview redemption", exact: true }).click();
+  await expect(panel.getByText("Preview — not broadcast", { exact: true })).toBeVisible();
+  await expect(panel.getByText(/Finalized payout evidence: Unknown/)).toBeVisible();
+  await expect(panel.getByRole("link", { name: /submitted transaction/ })).toHaveCount(0);
+  const counts = await (
+    await request.post("http://127.0.0.1:18139/__test/redemption/finality")
+  ).json();
+  expect(counts.broadcasts).toBe(0);
+  expect(counts.nonce_reads).toBe(0);
+});
+
+test("redemption requires finality and withdraws a reorged payout", async ({ page, request }) => {
+  await request.post("http://127.0.0.1:18139/__test/redemption?submitted=true");
+  await mountAccount(page);
+  await page.goto("/portfolio/redemptions");
+  const panel = page.getByRole("region", { name: "Redemption evidence" });
+  await expect(
+    panel.getByText("Submitted — awaiting finalized receipt", { exact: true }),
+  ).toBeVisible();
+  await panel.getByRole("button", { name: "Check finalized receipt" }).click();
+  await expect(panel.getByText(/Finalized payout evidence: Unknown/)).toBeVisible();
+  await request.post("http://127.0.0.1:18139/__test/redemption/finality");
+  await panel.getByRole("button", { name: "Check finalized receipt" }).click();
+  await expect(panel.getByText("Finalized receipt verified", { exact: true })).toBeVisible();
+  await expect(panel.getByText(/Finalized payout evidence: 10/)).toBeVisible();
+  await request.post("http://127.0.0.1:18139/__test/redemption/finality?reorg=true");
+  await panel.getByRole("button", { name: "Check finalized receipt" }).click();
+  await expect(
+    panel.getByText("Receipt invalidated — review required", { exact: true }),
+  ).toBeVisible();
+  await expect(panel.getByText(/Finalized payout evidence: Unknown/)).toBeVisible();
+  const counts = await (
+    await request.post("http://127.0.0.1:18139/__test/redemption/finality")
+  ).json();
+  expect(counts.broadcasts).toBe(1);
+});
