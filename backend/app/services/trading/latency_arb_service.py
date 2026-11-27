@@ -517,6 +517,20 @@ def get_engine_status() -> dict[str, Any]:
         "cycle_seconds": settings.latency_arb_cycle_seconds,
         "symbols": _engine_symbols(),
         "windows": _engine_windows(),
+        "book_feed": _book_feed_status(settings),
+    }
+
+
+def _book_feed_status(settings) -> dict[str, Any]:
+    """Health of the live order-book feed the edge is priced from."""
+    if not settings.latency_arb_book_feed_enabled:
+        return {"enabled": False}
+    from app.services.market_data.live_book_service import get_live_book_feed
+
+    return {
+        "enabled": True,
+        **get_live_book_feed().stats(),
+        "skipped_no_fresh_book": _book_feed_skips[0],
     }
 
 
@@ -1156,6 +1170,10 @@ def _dispatch_opportunity_alert(
 # ────────────── Engine cycle ──────────────
 
 
+# Count of evaluations skipped because the live book was missing or stale.
+_book_feed_skips: list[int] = [0]
+
+
 async def _fetch_opportunities(now: datetime) -> list[Opportunity]:
     """Evaluate every enabled symbol/window for the current cycle."""
     opportunities: list[Opportunity] = []
@@ -1170,6 +1188,13 @@ async def _fetch_opportunities(now: datetime) -> list[Opportunity]:
             # start is not the current UTC window.
             if not crypto_markets_service.window_start_matches(market, window_minutes, now):
                 continue
+            if get_settings().latency_arb_book_feed_enabled:
+                # Edge is measured against the live order book, never against
+                # the 30 s Gamma price. No fresh book means no signal.
+                market = crypto_markets_service.with_live_prices(market)
+                if market is None:
+                    _book_feed_skips[0] += 1
+                    continue
             feed_symbol = f"{symbol}USDT"
             current_price = binance_ws_service.get_last_price(feed_symbol)
             window_open = binance_ws_service.get_window_open_price(
@@ -1359,6 +1384,10 @@ async def start_latency_arb_engine() -> None:
     _stop_event = asyncio.Event()
     _running = True
     await binance_ws_service.start_binance_feed()
+    if get_settings().latency_arb_book_feed_enabled:
+        from app.services.market_data.live_book_service import get_live_book_feed
+
+        await get_live_book_feed().start()
     await crypto_markets_service.start_crypto_markets_refresh()
     _engine_task = asyncio.create_task(_engine_loop(_stop_event))
     logger.info(
@@ -1384,6 +1413,10 @@ async def stop_latency_arb_engine() -> None:
         except Exception as exc:
             logger.debug("Latency arb engine stop error: %s", exc)
     await crypto_markets_service.stop_crypto_markets_refresh()
+    if get_settings().latency_arb_book_feed_enabled:
+        from app.services.market_data.live_book_service import get_live_book_feed
+
+        await get_live_book_feed().stop()
     await binance_ws_service.stop_binance_feed()
     _engine_task = None
     _stop_event = None

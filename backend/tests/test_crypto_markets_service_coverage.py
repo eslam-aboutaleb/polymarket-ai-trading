@@ -603,13 +603,20 @@ class RefreshMarketsTests(_StateIsolatedTestCase):
 
     async def test_refresh_rebuilds_the_mapping(self):
         events = [self._live_event()]
-        with patch.object(
-            crypto_markets_service,
-            "_fetch_gamma_events",
-            new=AsyncMock(return_value=events),
-        ) as fetch:
+        with (
+            patch.object(
+                crypto_markets_service,
+                "_fetch_gamma_events",
+                new=AsyncMock(return_value=events),
+            ) as fetch,
+            # The by-slug lookups are a second HTTP source; keep this test offline.
+            patch.object(
+                crypto_markets_service, "_fetch_slug_events", new=AsyncMock(return_value=[])
+            ) as by_slug,
+        ):
             count = await crypto_markets_service.refresh_markets()
         fetch.assert_awaited_once_with()
+        by_slug.assert_awaited_once()
         self.assertEqual(count, 1)
         start = current_window_start(5)
         self.assertIn(("BTC", 5, start), crypto_markets_service._markets)
@@ -635,10 +642,15 @@ class RefreshMarketsTests(_StateIsolatedTestCase):
         crypto_markets_service._markets = {
             ("BTC", 5, int(NOW.timestamp())): CryptoMarket("BTC", 5, int(NOW.timestamp()), CID)
         }
-        with patch.object(
-            crypto_markets_service,
-            "_fetch_gamma_events",
-            new=AsyncMock(return_value=[]),
+        with (
+            patch.object(
+                crypto_markets_service,
+                "_fetch_gamma_events",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch.object(
+                crypto_markets_service, "_fetch_slug_events", new=AsyncMock(return_value=[])
+            ),
         ):
             count = await crypto_markets_service.refresh_markets()
         self.assertEqual(count, 0)

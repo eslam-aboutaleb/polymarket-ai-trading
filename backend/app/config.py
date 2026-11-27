@@ -267,7 +267,13 @@ class Settings(BaseSettings):
     # Feed→order latency budget (ms): abort when exceeded.
     latency_arb_max_latency_ms: int = 1500
     # Engine cycle interval (seconds).
-    latency_arb_cycle_seconds: int = 5
+    # 1 s so the edge is re-evaluated on every second of live book/price data;
+    # a 5 s cycle adds on average 2.5 s of decision delay.
+    latency_arb_cycle_seconds: int = 1
+    # Price the edge from the live CLOB order-book websocket (no Gamma fallback).
+    latency_arb_book_feed_enabled: bool = True
+    # Reject a live quote when no websocket frame arrived within this many ms.
+    latency_arb_book_max_age_ms: int = 3000
     # Taker fee rate parameter (fee per share = rate x p x (1 - p)); the
     # engine subtracts it from the model/market gap. Set 0 for fee-free markets.
     latency_arb_taker_fee_rate: float = 0.05
@@ -427,6 +433,8 @@ class Settings(BaseSettings):
             raise ValueError("LATENCY_ARB_MAX_LATENCY_MS must be >= 1.")
         if self.latency_arb_cycle_seconds < 1:
             raise ValueError("LATENCY_ARB_CYCLE_SECONDS must be >= 1.")
+        if self.latency_arb_book_max_age_ms < 1:
+            raise ValueError("LATENCY_ARB_BOOK_MAX_AGE_MS must be >= 1.")
         if self.latency_arb_daily_loss_limit < 0:
             raise ValueError("LATENCY_ARB_DAILY_LOSS_LIMIT must be >= 0.")
         if self.latency_arb_circuit_breaker_losses < 1:

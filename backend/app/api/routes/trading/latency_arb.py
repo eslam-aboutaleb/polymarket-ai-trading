@@ -90,6 +90,7 @@ class EngineStatusResponse(BaseModel):
     cycle_seconds: int
     symbols: list[str]
     windows: list[int]
+    book_feed: dict | None = None
 
 
 class OpportunitiesResponse(BaseModel):

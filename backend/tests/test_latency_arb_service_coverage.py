@@ -85,6 +85,10 @@ def _engine_settings(**overrides):
         "latency_arb_max_notional": 50.0,
         "latency_arb_max_latency_ms": 1500,
         "latency_arb_cycle_seconds": 5,
+        # These tests cover the Gamma-price path; the live-book path has its own
+        # tests in test_live_book_feed.py.
+        "latency_arb_book_feed_enabled": False,
+        "latency_arb_book_max_age_ms": 3000,
         "latency_arb_daily_loss_limit": 20.0,
         "latency_arb_circuit_breaker_losses": 3,
         "latency_arb_circuit_breaker_resume_seconds": 600,
@@ -453,6 +457,7 @@ class EngineStatusTests(unittest.TestCase):
         self.assertEqual(status["cycle_seconds"], 5)
         self.assertEqual(status["symbols"], ["BTC", "ETH", "SOL"])
         self.assertEqual(status["windows"], [5, 15, 60])
+        self.assertEqual(status["book_feed"], {"enabled": False})
 
     def test_status_with_last_cycle(self):
         latency_arb_service._running = False

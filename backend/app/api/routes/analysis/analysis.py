@@ -333,6 +333,27 @@ async def market_context(
         ) from exc
 
 
+@router.get(
+    "/markets/{condition_id}/live-quote",
+    dependencies=[Depends(_analysis_rate_limit)],
+)
+async def market_live_quote(
+    condition_id: str = Path(pattern=r"^0x[0-9a-fA-F]{64}$"),
+):
+    """Live best bid/ask for a tracked crypto up/down window (read-only).
+
+    Served from the engine's order-book websocket cache, with no LLM or
+    upstream HTTP call. 404 when the condition is not a tracked window or
+    its book is not fresh.
+    """
+    from app.services.market_data.crypto_markets_service import live_quote_for_condition
+
+    quote = live_quote_for_condition(condition_id)
+    if quote is None:
+        raise HTTPException(status_code=404, detail="No fresh live book for this market")
+    return quote
+
+
 class MarketContextHistory(BaseModel):
     observations: list[MarketContext]
 
