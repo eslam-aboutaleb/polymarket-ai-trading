@@ -1086,6 +1086,17 @@ class EvaluatePositionRowTests(_MonitorStateMixin, unittest.IsolatedAsyncioTestC
         self.assertEqual(self.row.status, "active")
         self.execute.assert_not_called()
 
+    async def test_no_x_data_cap_below_threshold_is_explained_not_silent(self):
+        # Regression: the no-X cap (70) is below the default threshold (75),
+        # so a reversal can never fire; the row must say why.
+        self.ai.return_value = {**_ai(confidence=70.0), "confidence_capped": True}
+
+        result = await self._evaluate()
+
+        self.assertEqual(result, {"status": "hold", "reason": "Confidence below threshold"})
+        self.assertIn("No X data", self.row.last_reasoning)
+        self.assertIn("threshold 75", self.row.last_reasoning)
+
     async def test_confidence_exactly_at_threshold_proceeds(self):
         self.ai.return_value = _ai(confidence=75.0)
 

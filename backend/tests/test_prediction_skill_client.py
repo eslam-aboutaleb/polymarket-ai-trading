@@ -16,6 +16,8 @@ from polymarket_mcp import ResearchMCPClient
         ("maker_economics", "maker-economics-v1"),
         ("event_correlation_risk", "event-correlation-risk-v1"),
         ("recorded_event_correlation_risk", "event-correlation-risk-v1"),
+        ("settlement_and_redemption", "settlement-lifecycle-v1"),
+        ("recorded_settlement_and_redemption", "settlement-lifecycle-v1"),
         ("forecast_calibration", "forecast-skill-report-v1"),
     ],
 )
