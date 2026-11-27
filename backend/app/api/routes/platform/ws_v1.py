@@ -1,11 +1,10 @@
 """External WebSocket API ``/ws/v1`` (plan 06 Phase B).
 
-A browser client already gets SSE (``/api/portfolio/prices/stream``);
-this is the machine channel, and it authenticates like the REST external
-API — an ``X-API-Key`` header on the handshake, or an ``api_key`` query
-parameter for clients that cannot set handshake headers. Both carry the
-same key, and neither is a cookie or a bearer token: the external
-namespace never accepts a browser session.
+Browser clients can use SSE (``/api/portfolio/prices/stream``). This external
+channel authenticates with an ``X-API-Key`` handshake header. Clients that
+cannot set handshake headers can use the ``api_key`` query parameter when
+the deployment explicitly enables ``WS_ALLOW_QUERY_KEY=true``. The external
+namespace requires an API key and does not accept a browser session.
 
 Protocol (one JSON frame per message, in both directions):
 
@@ -95,8 +94,8 @@ def _resolve_handshake_key(websocket: WebSocket, api_key: str | None) -> str | N
 
     Only the prefix is ever logged; the query-string path is the
     fallback for clients that cannot set handshake headers and is
-    documented as the less private of the two, because a URL can end up
-    in a proxy log.
+    disabled by default (WS_ALLOW_QUERY_KEY=false) because URLs can
+    leak in proxy/access logs, Referer headers, or browser history.
     """
     raw_header = (websocket.headers.get(API_KEY_HEADER) or "").strip()
     if raw_header:

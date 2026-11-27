@@ -1,8 +1,33 @@
 @import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap");
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../tailwind.config.js";
+
+/* Tailwind v4 does not honor the JS `safelist`. `resolveZ()` builds `z-<layer>`
+   at runtime, so every named stacking layer is emitted explicitly. The list is
+   guarded against src/lib/zIndex.ts by e2e/public/tailwind-zindex.spec.ts. */
+@source inline("z-{nav,navMenu,modal,modalNested,tutorial,login,drawer,toast}");
+
+/* v3 -> v4 compatibility: keep the v3 defaults the app was designed against. */
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentColor);
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+@theme {
+  --radius-xs: 0.125rem;
+  --radius-sm: 0.25rem;
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+}
 
 :root {
   --bg-base: #0f1116;
