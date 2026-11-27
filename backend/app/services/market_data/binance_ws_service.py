@@ -55,6 +55,11 @@ KLINE_HISTORY_SIZE = 120
 
 MAX_BACKOFF_SECONDS = 60.0
 
+# Per-second price samples retained per symbol (last price seen in each
+# wall-clock second). 25 minutes covers a 15m window plus the 60s TWAP
+# reference that precedes it.
+SECOND_HISTORY_SECONDS = 1500
+
 
 @dataclass
 class Kline:
@@ -80,6 +85,16 @@ class SymbolState:
     closed_klines: deque[Kline] = field(default_factory=deque)
     last_event_time_ms: int = 0
     last_message_at: float = 0.0
+    second_prices: dict[int, float] = field(default_factory=dict)
+
+    def _record_second(self, price: float, event_time_ms: int) -> None:
+        """Keep the last price seen in each wall-clock second."""
+        second = int(event_time_ms // 1000)
+        self.second_prices[second] = float(price)
+        if len(self.second_prices) > SECOND_HISTORY_SECONDS + 60:
+            cutoff = second - SECOND_HISTORY_SECONDS
+            for key in [k for k in self.second_prices if k < cutoff]:
+                del self.second_prices[key]
 
     def record_kline(self, kline: Kline) -> None:
         """Apply a kline update, rotating closed klines into history."""
@@ -88,6 +103,7 @@ class SymbolState:
         if kline.event_time_ms >= self.last_event_time_ms:
             self.last_price = kline.close
             self.last_event_time_ms = kline.event_time_ms
+            self._record_second(kline.close, kline.event_time_ms)
         self.last_message_at = datetime.now(UTC).timestamp()
         if kline.is_closed:
             self.closed_klines.append(kline)
@@ -103,6 +119,7 @@ class SymbolState:
             return
         self.last_price = price
         self.last_event_time_ms = event_time_ms
+        self._record_second(price, event_time_ms)
         self.last_message_at = datetime.now(UTC).timestamp()
 
 
@@ -281,6 +298,42 @@ def get_recent_closes(symbol: str, count: int = KLINE_HISTORY_SIZE) -> list[floa
         return []
     klines = list(state.closed_klines)[-max(count, 0) :]
     return [kline.close for kline in klines]
+
+
+def get_second_prices(
+    symbol: str, start_sec: int, end_sec: int, max_gap_s: int = 10
+) -> list[float] | None:
+    """One price per second for ``start_sec..end_sec`` inclusive, carried forward.
+
+    Returns ``None`` when the history cannot be trusted: no sample at or
+    before ``start_sec`` inside the buffer, or any gap between real
+    samples longer than ``max_gap_s`` seconds.
+    """
+    state = _state.get(symbol.upper())
+    if state is None or end_sec < start_sec:
+        return None
+    samples = state.second_prices
+    if not samples:
+        return None
+    earlier = [k for k in samples if k <= start_sec]
+    if not earlier:
+        return None
+    last_key = max(earlier)
+    if start_sec - last_key > max_gap_s:
+        return None
+    price = samples[last_key]
+    out: list[float] = []
+    since_real = start_sec - last_key
+    for sec in range(int(start_sec), int(end_sec) + 1):
+        if sec in samples:
+            price = samples[sec]
+            since_real = 0
+        else:
+            since_real += 1
+            if since_real > max_gap_s:
+                return None
+        out.append(price)
+    return out
 
 
 def get_kline_at(symbol: str, start_ms: int) -> Kline | None:
