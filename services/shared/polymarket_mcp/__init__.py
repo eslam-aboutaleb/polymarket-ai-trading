@@ -76,10 +76,7 @@ _SHUTDOWN_TOOL = "__shutdown__"
 # Candidate locations for the research MCP server, tried in order. The env var
 # wins so a deployment can point at an absolute path; the remaining entries
 # cover the container layout and a local checkout.
-_DEFAULT_SERVER_PATHS = (
-    "/app/services/mcps/research/server.py",
-    "services/mcps/research/server.py",
-)
+_CONTAINER_SERVER_PATH = "/app/services/mcps/research/server.py"
 
 # Token symbols that may appear in a prediction-market title, and the
 # long-form names that map onto them. Titles are written in prose
@@ -344,7 +341,7 @@ class ResearchMCPClient:
         env_path = os.getenv("RESEARCH_MCP_SERVER_PATH", "").strip()
         candidates = [
             env_path,
-            *_DEFAULT_SERVER_PATHS,
+            _CONTAINER_SERVER_PATH,
             # services/shared/polymarket_mcp -> services
             str(Path(__file__).resolve().parents[2] / "mcps" / "research" / "server.py"),
             str(Path.cwd() / "services" / "mcps" / "research" / "server.py"),
@@ -363,6 +360,8 @@ class ResearchMCPClient:
             "maker_economics",
             "event_correlation_risk",
             "recorded_event_correlation_risk",
+            "settlement_and_redemption",
+            "recorded_settlement_and_redemption",
             "event_logic",
             "forecast_calibration",
         )
@@ -386,6 +385,8 @@ class ResearchMCPClient:
             "maker_economics": "maker-economics-v1",
             "event_correlation_risk": "event-correlation-risk-v1",
             "recorded_event_correlation_risk": "event-correlation-risk-v1",
+            "settlement_and_redemption": "settlement-lifecycle-v1",
+            "recorded_settlement_and_redemption": "settlement-lifecycle-v1",
             "event_logic": "event-logic-v1",
             "forecast_calibration": "forecast-skill-report-v1",
         }

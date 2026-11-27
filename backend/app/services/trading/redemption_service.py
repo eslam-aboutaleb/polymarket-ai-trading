@@ -1,48 +1,10 @@
-"""
-On-Chain Auto-Redeem Service (plan 05).
+"""Legacy redemption scheduler and compatibility helpers.
 
-Automatically claims winning shares on resolved Polymarket markets
-instead of forfeiting them. Runs on a five-minute cycle (mirroring
-the position-lifecycle cadence), advisory-locked via the plan-02
-scheduler lock when that module is available.
-
-Flow per resolved position with a known winning outcome:
-
-  1. Compute the CTF ``collectionId``:
-     ``uint256(keccak256(abi.encode(parentCollectionId=0,
-     conditionId, indexSet)))`` with ``indexSet = 1 << winnerIndex``.
-  2. Resolve the holder wallet: EOA directly, or the Polymarket
-     proxy wallet (``Exchange.getPolyProxyWalletAddress``).
-  3. Verify a redeemable balance via
-     ``ConditionalTokens.balanceOf(holder, collectionId) > 0``.
-  4. Build, sign and send ``redeemPosition(collectionId)`` — one
-     market per transaction — and record the tx hash.
-  5. Wait for the receipt and mark the attempt confirmed/failed.
-
-Wallet types: EOA (signature_type=0) calls the Conditional Tokens
-contract directly. POLY_PROXY (signature_type=1) holds positions in
-the proxy contract, so the redeem is executed through the proxy; on
-failure the position is marked ``claim_via_ui`` and the user is
-notified with a Polymarket deep-link (backend mirror of
-``buildPolymarketEventUrl`` from ``frontend/src/utils/urlSafety.ts``).
-
-Safety controls (all module-level constants because ``app/config.py``
-is owned by plan 01 this wave):
-
-  - ``REDEEM_DRY_RUN`` — default ``True`` for the first 30 days; the
-    operator flips it after validating against live resolved markets.
-    Dry-run builds and logs the transaction but never broadcasts it.
-  - ``MAX_REDEEM_VALUE_PER_TX`` — per-transaction value cap (winning
-    shares pay $1 each, so position size == redeem value in USDC).
-  - ``DAILY_REDEEM_CAP_PER_USER`` — per-user daily attempt cap.
-  - ``MIN_GAS_BALANCE_MATIC`` — gas guard; insufficient MATIC
-    triggers a user notification instead of a silent failure.
-
-Every attempt (dry-run, submitted, confirmed, failed, claim_via_ui)
-is written to the ``RedemptionAttempt`` audit table.
-
-Security: signing uses ``app.security.credential_store.load_wallet_credentials``;
-the private key is never logged (ruff bandit S rules are enforced).
+Current previews delegate to durable, account-scoped CTF chain evidence and never
+read a nonce, build a transaction, load credentials or sign. Legacy live calls are
+blocked by the existing server-owned release barrier. Submission/reconciliation
+logic lives in redemption_workflow and redemption_chain; historical helper IDs
+are retained for audit compatibility only, never as CTF position derivations.
 """
 
 import asyncio
@@ -68,7 +30,6 @@ from app.models.trading.redemption_attempt import (
 )
 from app.repositories.trading.bots import TradingBotRepository
 from app.repositories.trading.redemptions import TradingRedemptionRepository
-from app.security.credential_store import CredentialStoreError, load_wallet_credentials
 from app.utils.database import SessionLocal
 from app.utils.time import utc_now
 
@@ -171,7 +132,7 @@ except ImportError:
 
 
 def compute_collection_id(condition_id: str, winner_outcome_index: int) -> str:
-    """Compute the CTF collectionId for a market's winning outcome.
+    """Legacy audit identifier only; never use this as a CTF token/collection ID.
 
     ``collectionId = uint256(keccak256(abi.encode(
     parentCollectionId=0, conditionId, indexSet)))`` where
@@ -435,37 +396,6 @@ def _redeemable_balance(w3: Any, holder: str, collection_id: str) -> int:
     return int(ctf.functions.balanceOf(Web3.to_checksum_address(holder), collection_id).call())
 
 
-def _build_redeem_tx(
-    w3: Any, sender: str, target_address: str, collection_id: str
-) -> dict[str, Any]:
-    """Build the redeemPosition(collectionId) transaction.
-
-    The nonce is fetched fresh for every transaction; a failed send
-    is never retried with the same nonce (plan risk: never resend a
-    tx with the same nonce blindly).
-    """
-    sender_cs = Web3.to_checksum_address(sender)
-    contract = w3.eth.contract(address=Web3.to_checksum_address(target_address), abi=_REDEEM_ABI)
-    return contract.functions.redeemPosition(collection_id).build_transaction(
-        {
-            "from": sender_cs,
-            "nonce": w3.eth.get_transaction_count(sender_cs),
-            "gasPrice": w3.eth.gas_price,
-            "chainId": POLYGON_CHAIN_ID,
-        }
-    )
-
-
-def _sign_and_send(w3: Any, private_key: str, tx: dict[str, Any]) -> str:
-    """Sign and broadcast a transaction; return the tx hash hex.
-
-    The private key is passed straight to web3 signing and is never
-    logged or persisted anywhere else.
-    """
-    signed = w3.eth.account.sign_transaction(tx, private_key)
-    return Web3.to_hex(w3.eth.send_raw_transaction(signed.raw_transaction))
-
-
 # ── Persistence ──────────────────────────────────────────────────
 
 
@@ -582,249 +512,37 @@ def _execute_redeem(
     position: dict[str, Any],
     w3: Any | None = None,
     dry_run: bool | None = None,
+    *,
+    account_id: int | None = None,
+    idempotency_key: str | None = None,
 ) -> RedemptionAttempt | None:
-    """Execute the on-chain redemption for one resolved position.
+    """Route previews through durable read-only evidence; legacy live calls abstain.
 
-    Synchronous core of the service: every web3 call happens here so
-    tests can inject a mocked provider. Flow: safety caps → RPC
-    connect → credentials → proxy resolution → balance verification →
-    tx build → (dry-run stop) → gas guard → sign + send → receipt.
-
-    Args:
-        db: Open database session for attempt records.
-        user_id: Owner of the position.
-        wallet_address: Signing wallet (EOA) address.
-        position: Record from ``_parse_redeemable_position``.
-        w3: Optional injected web3 provider (tests).
-        dry_run: Optional dry-run override (defaults to REDEEM_DRY_RUN).
-
-    Returns:
-        The recorded attempt, or None when nothing is redeemable
-        on-chain (zero balance).
+    `w3` is retained for source compatibility, but previews use the bounded
+    read-only chain adapter and never construct or sign a transaction.
     """
-    if dry_run is None:
-        dry_run = REDEEM_DRY_RUN
+    from sqlalchemy import select
 
-    market_id = position["market_id"]
-    condition_id = position["condition_id"]
-    winner_index = position["winner_index"]
-    amount = position["size"]
-    title = position.get("title", "Unknown")
+    from app.models import Account, User
+    from app.services.trading import redemption_workflow as workflow
+    from app.services.trading.live_trading_policy import block_legacy_live_execution
 
-    collection_id = compute_collection_id(condition_id, winner_index)
-
-    # Per-user daily redeem cap (live attempts only).
-    if _daily_attempt_count(db, user_id) >= DAILY_REDEEM_CAP_PER_USER:
-        logger.warning("Daily redeem cap reached for user %d", user_id)
-        return _record_attempt(
-            db,
-            user_id,
-            market_id,
-            collection_id,
-            REDEEM_STATUS_FAILED,
-            amount,
-            error="daily redeem cap reached",
+    del w3
+    preview = REDEEM_DRY_RUN if dry_run is None else dry_run
+    if not preview:
+        block_legacy_live_execution("redemption")
+    account = db.scalar(
+        select(Account).where(
+            Account.owner_user_id == user_id,
+            Account.id == account_id if account_id is not None else Account.kind == "personal",
         )
-
-    # Per-transaction value cap (winning shares pay $1 each).
-    if amount > MAX_REDEEM_VALUE_PER_TX:
-        logger.warning(
-            "Position value %.2f exceeds per-tx cap for user %d market %s",
-            amount,
-            user_id,
-            market_id,
-        )
-        return _record_attempt(
-            db,
-            user_id,
-            market_id,
-            collection_id,
-            REDEEM_STATUS_FAILED,
-            amount,
-            error=f"position value {amount} exceeds per-tx cap {MAX_REDEEM_VALUE_PER_TX}",
-        )
-
-    if w3 is None:
-        w3 = _connect_web3()
-    if w3 is None:
-        return _record_attempt(
-            db,
-            user_id,
-            market_id,
-            collection_id,
-            REDEEM_STATUS_FAILED,
-            amount,
-            error="no Polygon RPC reachable",
-        )
-
-    try:
-        credentials = load_wallet_credentials(wallet_address)
-    except CredentialStoreError as exc:
-        return _record_attempt(
-            db,
-            user_id,
-            market_id,
-            collection_id,
-            REDEEM_STATUS_FAILED,
-            amount,
-            error=f"credential store error: {exc}",
-        )
-    if not credentials:
-        return _record_attempt(
-            db,
-            user_id,
-            market_id,
-            collection_id,
-            REDEEM_STATUS_FAILED,
-            amount,
-            error="no wallet credentials stored",
-        )
-
-    # Resolve the holder: proxy wallet when one exists, else the EOA.
-    proxy_address = _resolve_proxy_address(w3, wallet_address)
-    holder = proxy_address or wallet_address
-    wallet_type = "POLY_PROXY" if proxy_address else "EOA"
-
-    # Verify a redeemable balance before building any transaction.
-    balance = _redeemable_balance(w3, holder, collection_id)
-    if balance <= 0:
-        logger.debug(
-            "No redeemable balance for user %d market %s (holder=%s)",
-            user_id,
-            market_id,
-            holder,
-        )
-        return None
-
-    logger.info(
-        "Redeemable position user=%d market=%s collectionId=%s balance=%s wallet=%s",
-        user_id,
-        market_id,
-        collection_id,
-        balance,
-        wallet_type,
     )
-
-    # EOA: call the Conditional Tokens contract directly.
-    # POLY_PROXY: execute the redeem through the proxy contract.
-    target_address = proxy_address or _CONDITIONAL_TOKENS
-
-    try:
-        tx = _build_redeem_tx(w3, wallet_address, target_address, collection_id)
-    except Exception as exc:
-        return _redeem_failure(
-            db,
-            user_id,
-            market_id,
-            collection_id,
-            amount,
-            position,
-            proxy_address,
-            exc,
-        )
-
-    if dry_run:
-        logger.info(
-            "DRY RUN: would send redeemPosition(collectionId=%s) from %s to %s "
-            "(nonce=%s, wallet=%s)",
-            collection_id,
-            wallet_address,
-            target_address,
-            tx.get("nonce"),
-            wallet_type,
-        )
-        return _record_attempt(
-            db,
-            user_id,
-            market_id,
-            collection_id,
-            REDEEM_STATUS_PREVIEW,
-            amount,
-        )
-
-    # Gas guard: the signing EOA pays the transaction fee.
-    gas_balance = w3.eth.get_balance(Web3.to_checksum_address(wallet_address))
-    if gas_balance < Web3.to_wei(MIN_GAS_BALANCE_MATIC, "ether"):
-        deep_link = build_polymarket_event_url(
-            position.get("event_slug"), position.get("market_slug")
-        )
-        _notify_user(
-            user_id,
-            "redeem_available",
-            f"Market '{title}' is resolved but the wallet lacks MATIC to pay "
-            "redemption gas. Add MATIC to claim the payout.",
-            deep_link=deep_link,
-        )
-        return _record_attempt(
-            db,
-            user_id,
-            market_id,
-            collection_id,
-            REDEEM_STATUS_FAILED,
-            amount,
-            error="insufficient MATIC for gas",
-        )
-
-    try:
-        tx_hash = _sign_and_send(w3, credentials["private_key"], tx)
-    except Exception as exc:
-        return _redeem_failure(
-            db,
-            user_id,
-            market_id,
-            collection_id,
-            amount,
-            position,
-            proxy_address,
-            exc,
-        )
-
-    attempt = _record_attempt(
-        db,
-        user_id,
-        market_id,
-        collection_id,
-        REDEEM_STATUS_SUBMITTED,
-        amount,
-        tx_hash=tx_hash,
-    )
-
-    try:
-        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=REDEEM_RECEIPT_TIMEOUT)
-        if receipt.get("status") == 1:
-            attempt.status = REDEEM_STATUS_CONFIRMED
-            attempt.error = None
-            logger.info(
-                "Redemption confirmed user=%d market=%s tx=%s",
-                user_id,
-                market_id,
-                tx_hash,
-            )
-        else:
-            attempt.status = REDEEM_STATUS_FAILED
-            attempt.error = (
-                f"transaction reverted on-chain (receipt status={receipt.get('status')})"
-            )
-            logger.error(
-                "Redemption reverted user=%d market=%s tx=%s",
-                user_id,
-                market_id,
-                tx_hash,
-            )
-    except Exception as exc:
-        # Submission succeeded but the receipt is not available yet;
-        # the attempt stays 'submitted' and the cycle retries nothing.
-        attempt.error = f"receipt not available: {exc}"
-        logger.warning(
-            "Redemption receipt pending user=%d market=%s tx=%s: %s",
-            user_id,
-            market_id,
-            tx_hash,
-            exc,
-        )
-
-    db.commit()
-    return attempt
+    user = db.get(User, user_id)
+    if account is None or user is None or user.wallet_address.lower() != wallet_address.lower():
+        raise ValueError("REDEMPTION_ACCOUNT_UNAVAILABLE")
+    key = idempotency_key or f"scheduler:{position['condition_id']}:{utc_now().date().isoformat()}"
+    intent = workflow.create_intent(db, account, position["condition_id"], key)
+    return workflow._attempt(db, intent)
 
 
 def _run_redeem_in_thread(
@@ -832,6 +550,9 @@ def _run_redeem_in_thread(
     wallet_address: str,
     position: dict[str, Any],
     dry_run: bool | None = None,
+    *,
+    account_id: int | None = None,
+    idempotency_key: str | None = None,
 ) -> RedemptionAttempt | None:
     """Thread entry point for ``_execute_redeem``.
 
@@ -840,7 +561,18 @@ def _run_redeem_in_thread(
     """
     db = SessionLocal()
     try:
-        return _execute_redeem(db, user_id, wallet_address, position, dry_run=dry_run)
+        return _execute_redeem(
+            db,
+            user_id,
+            wallet_address,
+            position,
+            dry_run=dry_run,
+            **(
+                {"account_id": account_id, "idempotency_key": idempotency_key}
+                if account_id is not None or idempotency_key is not None
+                else {}
+            ),
+        )
     finally:
         db.close()
 
@@ -848,10 +580,32 @@ def _run_redeem_in_thread(
 # ── Async orchestration ──────────────────────────────────────────
 
 
+def _recover_user_redemptions(user_id):
+    from sqlalchemy import select
+
+    from app.models import Account
+    from app.services.trading.redemption_workflow import reconcile_pending
+
+    db = SessionLocal()
+    try:
+        account = db.scalar(
+            select(Account).where(Account.owner_user_id == user_id, Account.kind == "personal")
+        )
+        if account is not None:
+            reconcile_pending(db, account)
+    finally:
+        db.close()
+
+
 async def _redeem_user_positions(user_id: int, wallet_address: str) -> list[RedemptionAttempt]:
     """Redeem every redeemable position for one user."""
     from app.services.market_data.polymarket_service import get_polymarket_service
 
+    # Recovery is independent of the positions/indexer response and never signs.
+    try:
+        await asyncio.to_thread(_recover_user_redemptions, user_id)
+    except Exception:
+        logger.warning("Redemption recovery unavailable for user %d", user_id)
     service = get_polymarket_service()
     try:
         positions = await service.get_positions(wallet_address)
@@ -934,6 +688,9 @@ async def redeem_market_for_user(
     wallet_address: str,
     market_id: str,
     winner_outcome_index: int | None = None,
+    *,
+    account_id: int | None = None,
+    idempotency_key: str | None = None,
 ) -> RedemptionAttempt | None:
     """Manually trigger on-chain redemption for one resolved market.
 
@@ -974,10 +731,20 @@ async def redeem_market_for_user(
         logger.info("No redeemable position for user %d on market %s", user_id, market_id)
         return None
 
-    if winner_outcome_index is not None:
-        target["winner_index"] = int(winner_outcome_index)
+    if winner_outcome_index is not None and int(winner_outcome_index) != target["winner_index"]:
+        return None
 
-    return await asyncio.to_thread(_run_redeem_in_thread, user_id, wallet_address, target)
+    return await asyncio.to_thread(
+        _run_redeem_in_thread,
+        user_id,
+        wallet_address,
+        target,
+        **(
+            {"account_id": account_id, "idempotency_key": idempotency_key}
+            if account_id is not None or idempotency_key is not None
+            else {}
+        ),
+    )
 
 
 async def _redeem_loop():
@@ -1046,3 +813,12 @@ def get_redemption_metrics() -> dict[str, Any]:
         "daily_redeem_cap_per_user": DAILY_REDEEM_CAP_PER_USER,
         "min_gas_balance_matic": MIN_GAS_BALANCE_MATIC,
     }
+
+
+async def read_redemption_cashflow(client, *, tx_hash, condition_id, wallet):
+    """Observe a canonical receipt without credentials, signing, retries or DB writes."""
+    from app.services.analytics.settlement_receipts import read_redemption_receipt
+
+    return await read_redemption_receipt(
+        client, tx_hash=tx_hash, condition_id=condition_id, wallet=wallet
+    )
