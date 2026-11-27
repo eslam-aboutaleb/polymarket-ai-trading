@@ -269,15 +269,13 @@ class EdgeTests(unittest.TestCase):
         )
         self.assertIsNone(opportunity)
 
-    def test_evaluate_opportunity_conservative_sigma_bounds_model(
-        self,
-    ):
-        # An extreme market price (0.9) implies a huge σ; the
-        # conservative guard inflates σ to 2× implied, pulling
-        # P_model back toward 0.5 and bounding the model's
-        # confidence — the model-risk note in the plan.
+    def test_evaluate_opportunity_sigma_is_realized_not_implied_zscore(self):
+        # Regression: implied_volatility() is a z-score (1-7), not a σ in
+        # return units. Feeding it into σ made σ ~3000x too large, so P(Up)
+        # stayed ~0.5 and the model was blind to the BTC move.
         market = _market(up_price=0.9)
         now = datetime.now(UTC)
+        closes = _calm_closes()
         opportunity = evaluate_opportunity(
             "BTC",
             5,
@@ -285,17 +283,56 @@ class EdgeTests(unittest.TestCase):
             current_price=67000.0,
             window_open=67000.0,
             now=now,
-            kline_closes=_calm_closes(),
+            kline_closes=closes,
             edge_threshold=0.03,
+            taker_fee_rate=0.0,
         )
         self.assertIsNotNone(opportunity)
         assert opportunity is not None
-        # σ must be at least 2× the market-implied level.
-        implied = implied_volatility(0.9, opportunity.t_remaining)
-        self.assertGreaterEqual(opportunity.sigma, 2.0 * implied)
-        # And the model probability is pulled toward 0.5
-        # relative to the market's 0.90.
-        self.assertLess(opportunity.p_model, 0.9)
+        self.assertAlmostEqual(opportunity.sigma, max(realized_volatility(closes, 5), 1e-6))
+        self.assertLess(opportunity.sigma, 0.05)
+
+    def test_model_follows_the_price_move(self):
+        # A clear move up from the window open must give P(Up) well above
+        # 0.5 (with the old σ it stayed within a point or two of 0.5).
+        market = _market(up_price=0.5)
+        opportunity = evaluate_opportunity(
+            "BTC",
+            5,
+            market,
+            current_price=67000.0 * 1.003,
+            window_open=67000.0,
+            now=datetime.now(UTC),
+            kline_closes=_calm_closes(),
+            edge_threshold=0.03,
+            taker_fee_rate=0.0,
+        )
+        self.assertIsNotNone(opportunity)
+        assert opportunity is not None
+        self.assertEqual(opportunity.side, "up")
+        self.assertGreater(opportunity.p_model, 0.8)
+
+    def test_edge_is_net_of_taker_fee(self):
+        market = _market(up_price=0.5)
+        kwargs = {
+            "symbol": "BTC",
+            "window_minutes": 5,
+            "market": market,
+            "current_price": 67000.0 * 1.003,
+            "window_open": 67000.0,
+            "now": datetime.now(UTC),
+            "kline_closes": _calm_closes(),
+            "edge_threshold": 0.03,
+        }
+        gross = evaluate_opportunity(**kwargs, taker_fee_rate=0.0)
+        net = evaluate_opportunity(**kwargs, taker_fee_rate=0.05)
+        assert gross is not None and net is not None
+        # 5% x 0.5 x 0.5 = 1.25 points at a 50c leg.
+        self.assertAlmostEqual(gross.edge - net.edge, 0.0125, places=6)
+        # A gap that clears the threshold gross but not net is rejected.
+        thin = dict(kwargs, edge_threshold=gross.edge - 0.001)
+        self.assertIsNotNone(evaluate_opportunity(**thin, taker_fee_rate=0.0))
+        self.assertIsNone(evaluate_opportunity(**thin, taker_fee_rate=0.05))
 
 
 if __name__ == "__main__":

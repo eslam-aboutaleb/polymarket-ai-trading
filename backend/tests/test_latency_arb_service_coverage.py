@@ -81,6 +81,7 @@ def _engine_settings(**overrides):
         "latency_arb_live": False,
         "live_latency_arb_enabled": True,
         "latency_arb_edge_threshold": 0.03,
+        "latency_arb_taker_fee_rate": 0.05,
         "latency_arb_max_notional": 50.0,
         "latency_arb_max_latency_ms": 1500,
         "latency_arb_cycle_seconds": 5,

@@ -23,6 +23,7 @@ export interface LatencyArbConfig {
   late_entry: boolean;
   daily_loss_limit: number;
   alert_on_opportunity: boolean;
+  risk_warning?: string | null;
 }
 
 export interface LatencyArbOpportunity {

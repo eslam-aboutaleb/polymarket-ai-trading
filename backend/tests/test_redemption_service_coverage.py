@@ -44,7 +44,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from web3 import Web3
 
 import app.services.trading.redemption_service as redemption_service
-from app.security.credential_store import CredentialStoreError
 from app.services.trading.redemption_service import (
     _CONDITIONAL_TOKENS,
     _CTF_EXCHANGE,
@@ -507,96 +506,8 @@ class DailyAttemptCountTests(unittest.TestCase):
 # ── core redemption flow ───────────────────────────────────
 
 
-class ExecuteRedeemEdgeCases(unittest.IsolatedAsyncioTestCase):
-    def _execute(self, w3, position=None, db=None, dry_run=False):
-        with patch(
-            "app.services.trading.redemption_service.load_wallet_credentials",
-            return_value=_credentials(),
-        ):
-            return redemption_service._execute_redeem(
-                db or _fake_db(),
-                1,
-                TEST_EOA,
-                position or _position(),
-                w3=w3,
-                dry_run=dry_run,
-            )
-
-    def test_credential_store_error_fails_the_attempt(self):
-        w3 = _fake_w3()
-
-        with patch(
-            "app.services.trading.redemption_service.load_wallet_credentials",
-            side_effect=CredentialStoreError("keystore unavailable"),
-        ):
-            attempt = redemption_service._execute_redeem(
-                _fake_db(), 1, TEST_EOA, _position(), w3=w3, dry_run=False
-            )
-
-        self.assertIsNotNone(attempt)
-        self.assertEqual(attempt.status, REDEEM_STATUS_FAILED)
-        self.assertEqual(attempt.error, "credential store error: keystore unavailable")
-        w3.eth.send_raw_transaction.assert_not_called()
-
-    def test_receipt_unavailable_keeps_attempt_submitted(self):
-        w3 = _fake_w3()
-        w3.eth.wait_for_transaction_receipt.side_effect = RuntimeError("receipt timeout")
-
-        attempt = self._execute(w3)
-
-        self.assertIsNotNone(attempt)
-        self.assertEqual(attempt.status, REDEEM_STATUS_SUBMITTED)
-        self.assertEqual(attempt.tx_hash, TEST_TX_HASH)
-        self.assertIn("receipt not available", attempt.error)
-        self.assertIn("receipt timeout", attempt.error)
-
-    def test_eoa_build_failure_records_failed(self):
-        w3 = _fake_w3()
-
-        with patch.object(
-            redemption_service,
-            "_build_redeem_tx",
-            side_effect=RuntimeError("nonce fetch failed"),
-        ):
-            attempt = self._execute(w3)
-
-        self.assertIsNotNone(attempt)
-        self.assertEqual(attempt.status, REDEEM_STATUS_FAILED)
-        self.assertIn("nonce fetch failed", attempt.error)
-        w3.eth.send_raw_transaction.assert_not_called()
-
-    def test_dry_run_defaults_to_the_module_constant(self):
-        w3 = _fake_w3()
-
-        with (
-            patch(
-                "app.services.trading.redemption_service.load_wallet_credentials",
-                return_value=_credentials(),
-            ),
-            patch.object(redemption_service, "REDEEM_DRY_RUN", True),
-        ):
-            attempt = redemption_service._execute_redeem(
-                _fake_db(), 1, TEST_EOA, _position(), w3=w3
-            )
-
-        self.assertEqual(attempt.status, REDEEM_STATUS_PREVIEW)
-        w3.eth.send_raw_transaction.assert_not_called()
-
-    def test_daily_count_query_failure_does_not_block_redemption(self):
-        # A broken daily-count query fails open (count 0).
-        db = MagicMock()
-        db.query.side_effect = RuntimeError("db down")
-        w3 = _fake_w3()
-
-        with patch(
-            "app.services.trading.redemption_service.load_wallet_credentials",
-            return_value=_credentials(),
-        ):
-            attempt = redemption_service._execute_redeem(
-                db, 1, TEST_EOA, _position(), w3=w3, dry_run=True
-            )
-
-        self.assertEqual(attempt.status, REDEEM_STATUS_PREVIEW)
+# Durable execution is covered with real database/RPC boundaries in
+# test_redemption_intents.py; obsolete unguarded signing assertions were retired.
 
 
 class RunRedeemInThreadTests(unittest.TestCase):
@@ -657,26 +568,19 @@ class RedeemUserPositionsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_non_dict_and_unparseable_positions_are_skipped(self):
         service = self._service(["not-a-dict", {"size": "1"}, _raw_position()])
-        db = _fake_db()
-        w3 = _fake_w3()
-
+        attempt = SimpleNamespace(status=REDEEM_STATUS_PREVIEW)
         with (
             patch(
                 "app.services.market_data.polymarket_service.get_polymarket_service",
                 return_value=service,
             ),
-            patch.object(redemption_service, "SessionLocal", return_value=db),
-            patch.object(redemption_service, "_connect_web3", return_value=w3),
-            patch(
-                "app.services.trading.redemption_service.load_wallet_credentials",
-                return_value=_credentials(),
-            ),
+            patch.object(
+                redemption_service, "_run_redeem_in_thread", return_value=attempt
+            ) as worker,
         ):
             result = await redemption_service._redeem_user_positions(1, TEST_EOA)
-
-        # Only the well-formed position produced an attempt (dry-run).
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0].status, REDEEM_STATUS_PREVIEW)
+        self.assertEqual(result, [attempt])
+        worker.assert_called_once()
 
     async def test_worker_thread_failure_is_logged_and_skipped(self):
         service = self._service([_raw_position()])
@@ -711,25 +615,16 @@ class RedeemUserPositionsTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, [])
 
-    async def test_zero_balance_attempts_are_not_appended(self):
+    async def test_no_attempts_are_not_appended(self):
         service = self._service([_raw_position()])
-        db = _fake_db()
-        w3 = _fake_w3(balance=0)
-
         with (
             patch(
                 "app.services.market_data.polymarket_service.get_polymarket_service",
                 return_value=service,
             ),
-            patch.object(redemption_service, "SessionLocal", return_value=db),
-            patch.object(redemption_service, "_connect_web3", return_value=w3),
-            patch(
-                "app.services.trading.redemption_service.load_wallet_credentials",
-                return_value=_credentials(),
-            ),
+            patch.object(redemption_service, "_run_redeem_in_thread", return_value=None),
         ):
             result = await redemption_service._redeem_user_positions(1, TEST_EOA)
-
         self.assertEqual(result, [])
 
 
@@ -807,31 +702,21 @@ class RedeemMarketForUserTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(attempt)
 
-    async def test_winner_index_override_is_applied(self):
-        db = _fake_db()
+    async def test_conflicting_winner_override_is_rejected(self):
         service = MagicMock()
         service.get_positions = AsyncMock(return_value=[_raw_position()])
-        w3 = _fake_w3()
-
         with (
-            patch.object(redemption_service, "SessionLocal", return_value=db),
-            patch.object(redemption_service, "REDEEM_DRY_RUN", False),
             patch(
                 "app.services.market_data.polymarket_service.get_polymarket_service",
                 return_value=service,
             ),
-            patch.object(redemption_service, "_connect_web3", return_value=w3),
-            patch(
-                "app.services.trading.redemption_service.load_wallet_credentials",
-                return_value=_credentials(),
-            ),
+            patch.object(redemption_service, "_run_redeem_in_thread") as worker,
         ):
             attempt = await redemption_service.redeem_market_for_user(
                 1, TEST_EOA, CID_AB, winner_outcome_index=0
             )
-
-        self.assertIsNotNone(attempt)
-        self.assertEqual(attempt.collection_id, CID_AB_INDEX_0)
+        self.assertIsNone(attempt)
+        worker.assert_not_called()
 
 
 class RedeemLoopTests(unittest.IsolatedAsyncioTestCase):
