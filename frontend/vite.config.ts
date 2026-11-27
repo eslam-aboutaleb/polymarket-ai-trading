@@ -97,7 +97,7 @@ export default defineConfig(({ command, mode }) => {
           runtimeCaching: [
             {
               // Account headers must never share a URL-only offline cache.
-              urlPattern: /\/api\/trades\/analytics(?:\/|$)/,
+              urlPattern: /\/api\/(?:trades\/analytics|portfolio\/redemption-intents)(?:\/|$)/,
               handler: "NetworkOnly",
             },
             {

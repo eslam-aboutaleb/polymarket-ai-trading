@@ -23,6 +23,7 @@ import {
 } from "../services/inverseBotService";
 import EmergencyHaltStatus from "./EmergencyHaltStatus";
 import { emergencyService, ArbitrageOpportunity } from "../services/emergencyService";
+import ArbitragePanel from "./ArbitragePanel";
 import { FollowingFeedEvent, tradesService } from "../services/tradesService";
 import { analysisService } from "../services/analysisService";
 import { getPaperSummary, PaperSummary } from "../services/settingsService";
@@ -39,6 +40,7 @@ import PositionAnalysisPopup, {
 } from "./PositionAnalysisPopup";
 import ErrorBoundary from "./ErrorBoundary";
 import EquityCurvePanel from "./EquityCurvePanel";
+import RedemptionPanel from "./RedemptionPanel";
 
 const STOP_LOSS_POLL_INTERVAL = 10_000; // 10 seconds – match backend check
 const FOLLOWING_FEED_POLL_INTERVAL = 15_000;
@@ -870,6 +872,7 @@ function DashboardContent() {
         )}
 
         <p className="text-xs text-soft">Arbitrage opportunities tracked: {arbitrageRows.length}</p>
+        <ArbitragePanel signals={arbitrageRows.slice(0, 8)} />
       </div>
 
       <div className="surface-panel p-6">
@@ -1445,6 +1448,7 @@ function DashboardContent() {
 
       {/* Equity curve — hourly bankroll snapshots (plan 05) */}
       <EquityCurvePanel />
+      <RedemptionPanel />
 
       {/* ── Modals ── */}
       {cashOutPosition && (

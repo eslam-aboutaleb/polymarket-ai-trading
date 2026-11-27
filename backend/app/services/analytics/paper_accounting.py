@@ -270,6 +270,7 @@ def submit_paper_order(
     source_identity=None,
     order_type="IOC",
     execution_window=None,
+    copy_slippage=None,
 ):
     amount = decimal(amount)
     if side.upper() not in {"BUY", "SELL"} or units not in {"USDC", "SHARES"}:
@@ -395,6 +396,25 @@ def submit_paper_order(
                 window.evidence_as_of if window else moment,
                 max_age=policy.max_book_age_seconds,
             )
+            if copy_slippage is not None:
+                from app.services.trading.copy_quote import MAX_QUOTE_AGE, copy_limit
+
+                if strategy != "copy" or not source_identity:
+                    raise ValueError("Copy guard requires source identity")
+                try:
+                    limit_price = copy_limit(
+                        side.upper(),
+                        source_identity["source_price"],
+                        copy_slippage,
+                        evidence.tick_size,
+                    )
+                except (KeyError, ArithmeticError, ValueError) as exc:
+                    raise EvidenceUnavailable("COPY_SLIPPAGE_BOUND_INVALID") from exc
+                if (
+                    moment
+                    >= min(evidence.book.source_at, evidence.book.observed_at) + MAX_QUOTE_AGE
+                ):
+                    raise EvidenceUnavailable("COPY_BOOK_STALE")
             if window:
                 window.validate_book(db, evidence)
                 ceiling = (window.model_probability - window.minimum_edge) / (

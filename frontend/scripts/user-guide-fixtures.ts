@@ -149,6 +149,7 @@ export async function installGuideFixtures(page: Page, anonymous = false) {
     else if (path === "/api/portfolio/positions") data = { positions, count: 1 };
     else if (path === "/api/portfolio/positions/prices")
       data = { prices: { "11": 0.7 }, ts: stamp };
+    else if (path === "/api/portfolio/redemption-intents") data = [];
     else if (path.startsWith("/api/portfolio/equity/snapshots")) data = [];
     else if (path.startsWith("/api/portfolio/equity/summary"))
       data = {
@@ -347,6 +348,15 @@ export async function installGuideFixtures(page: Page, anonymous = false) {
         fetched_at: stamp,
       };
     else if (path === "/api/trades/arbitrage/opportunities") data = [];
+    else if (path === "/api/v1/arbitrage/candidates")
+      data = {
+        schema_version: "arbitrage-candidates-v1",
+        engine_version: "fixture",
+        count: 0,
+        candidates: [],
+        paper_only: true,
+        live_execution_enabled: false,
+      };
     else if (path === "/api/trades/emergency-stop") data = null;
     else if (path === "/api/venues/adapters")
       data = {

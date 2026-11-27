@@ -25,6 +25,7 @@ import {
 } from "recharts";
 import { portfolioService, RiskReport, RiskReportPosition } from "../services/portfolioService";
 import { getApiErrorMessage } from "../utils/apiError";
+import AllocationComparison from "./AllocationComparison";
 
 /** The route also returns per-position rows, which the page's tables need. */
 type RiskMetrics = RiskReport["metrics"] & { positions?: RiskReportPosition[] };
@@ -452,6 +453,7 @@ export default function PortfolioRiskPanel() {
           </div>
         </>
       )}
+      <AllocationComparison />
     </div>
   );
 }

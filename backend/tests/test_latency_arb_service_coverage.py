@@ -101,6 +101,8 @@ def _engine_settings(**overrides):
         "latency_arb_late_entry_seconds": 10,
         "latency_arb_min_depth": 25.0,
         "latency_arb_max_spread": 0.02,
+        "taker_safety_margin": 0.02,
+        "taker_min_net_edge": 0.0,
         "latency_arb_symbols": "BTC,ETH,SOL",
         "latency_arb_windows": "5,15,60",
     }
@@ -1014,7 +1016,7 @@ class ExecuteOpportunityTests(unittest.IsolatedAsyncioTestCase):
         live.assert_not_awaited()
 
     async def test_down_side_accepts_its_validated_no_token(self):
-        opportunity = _opportunity(side="down")
+        opportunity = _opportunity(side="down", p_model=0.4, p_market=0.5)
         quote = ready("token-down-1", opportunity.market.condition_id)
         quote = quote.model_copy(update={"outcome": "NO"})
         live = AsyncMock(return_value={"status": "submitted"})
@@ -1101,7 +1103,7 @@ class ExecuteOpportunityTests(unittest.IsolatedAsyncioTestCase):
     async def test_down_side_uses_down_leg(self):
         paper = AsyncMock(return_value={"status": "simulated"})
         result = await self._execute(
-            opportunity=_opportunity(side="down"),
+            opportunity=_opportunity(side="down", p_model=0.4, p_market=0.5),
             user_settings=_user_settings(simulation_mode=True),
             extra_patches=[
                 patch.object(latency_arb_service, "_execute_paper", paper),

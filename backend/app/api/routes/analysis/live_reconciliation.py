@@ -86,6 +86,72 @@ def report(
         raise HTTPException(422, str(exc)) from exc
 
 
+def _scoped_report(db, account, opening_id, closing_id, strategy_id):
+    try:
+        report = build_reconciliation_report(db, account, opening_id, closing_id)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except (ValueError, ArithmeticError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if strategy_id is not None:
+        strategies = report.get("strategies") or {}
+        if strategy_id not in strategies:
+            raise HTTPException(404, "Strategy has no fills in this window")
+        report = {
+            **report,
+            "strategy_id": strategy_id,
+            "strategies": {strategy_id: strategies[strategy_id]},
+            "ledger_rows": [
+                row for row in report.get("ledger_rows", []) if row.get("strategy") == strategy_id
+            ],
+        }
+    return report
+
+
+@router.get("/attribution")
+def attribution(
+    opening_id: str = Query(pattern=r"^[a-f0-9]{64}$"),
+    closing_id: str = Query(pattern=r"^[a-f0-9]{64}$"),
+    strategy_id: str | None = Query(default=None, max_length=100),
+    download: bool = False,
+    account: Account = Depends(get_strict_account),
+    db: Session = Depends(get_db),
+):
+    """Account-scoped attribution, optionally narrowed to one strategy.
+
+    ``download=true`` returns the same evidence (fill/order IDs, input hash,
+    benchmark version) as an attachment. Unknown costs stay null, never 0.
+    """
+    from fastapi.encoders import jsonable_encoder
+    from fastapi.responses import JSONResponse
+
+    report = jsonable_encoder(_scoped_report(db, account, opening_id, closing_id, strategy_id))
+    headers = {"Cache-Control": "private, no-store"}
+    if download:
+        headers["Content-Disposition"] = 'attachment; filename="attribution-evidence.json"'
+    return JSONResponse(report, headers=headers)
+
+
+@router.get("/benchmarks")
+def benchmarks(
+    opening_id: str = Query(pattern=r"^[a-f0-9]{64}$"),
+    closing_id: str = Query(pattern=r"^[a-f0-9]{64}$"),
+    account: Account = Depends(get_strict_account),
+    db: Session = Depends(get_db),
+):
+    from fastapi.encoders import jsonable_encoder
+
+    report = _scoped_report(db, account, opening_id, closing_id, None)
+    return jsonable_encoder(
+        {
+            "account_id": account.id,
+            "benchmark_version": report["benchmark_version"],
+            "input_hash": report["input_hash"],
+            "benchmarks": report["benchmarks"],
+        }
+    )
+
+
 @router.post("/reconciliation-reports", response_model=AttributionReport)
 @limiter.limit("2/minute")
 def freeze(
