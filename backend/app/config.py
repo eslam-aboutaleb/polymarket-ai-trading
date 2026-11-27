@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     event_logic_enabled: bool = False
     forecast_calibration_enabled: bool = False
     forecast_generation_enabled: bool = False
+    settlement_redemption_enabled: bool = False
     live_account_reconciliation_enabled: bool = False
     observation_archive_enabled: bool = False
     historical_feed_canary_enabled: bool = False
@@ -206,10 +207,9 @@ class Settings(BaseSettings):
     # Debug / observability hardening
     debug_endpoints_enabled: bool = False
     debug_log_hash_salt: str = ""
-    # External WS /ws/v1 handshake: allow the ?api_key= query fallback for
-    # clients that cannot set handshake headers. On by default (documented,
-    # less private); set WS_ALLOW_QUERY_KEY=false to accept only X-API-Key.
-    ws_allow_query_key: bool = True
+    # Accept query-string API keys only when explicitly enabled. Proxy and
+    # access logs can record request URLs. Prefer the X-API-Key header.
+    ws_allow_query_key: bool = False
 
     # Process role (plan 10 Phase A): which half of the system this
     # process runs. Background schedulers coordinate through Postgres
@@ -268,8 +268,13 @@ class Settings(BaseSettings):
     latency_arb_max_latency_ms: int = 1500
     # Engine cycle interval (seconds).
     latency_arb_cycle_seconds: int = 5
-    # Per-strategy daily loss limit (USDC).
-    latency_arb_daily_loss_limit: float = 20.0
+    # Taker fee rate parameter (fee per share = rate x p x (1 - p)); the
+    # engine subtracts it from the model/market gap. Set 0 for fee-free markets.
+    latency_arb_taker_fee_rate: float = 0.05
+    # Per-strategy daily loss limit (USDC). Keep it several trades above
+    # latency_arb_max_notional: a limit below one trade size halts the bot
+    # after a single loss (a warning is logged at startup when it is).
+    latency_arb_daily_loss_limit: float = 150.0
     # Consecutive-loss circuit breaker: pause after N losses,
     # resume after the cooldown.
     latency_arb_circuit_breaker_losses: int = 3

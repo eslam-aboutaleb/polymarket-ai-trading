@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import unittest
 from contextlib import ExitStack, contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -415,3 +415,42 @@ class LatencyArbPaperModeTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RiskLimitCoherenceTests(unittest.TestCase):
+    """Regression tests for the daily-limit default and breaker timing."""
+
+    def test_default_daily_loss_limit_exceeds_max_notional(self):
+        defaults = Settings.model_fields
+        self.assertGreater(
+            defaults["latency_arb_daily_loss_limit"].default,
+            defaults["latency_arb_max_notional"].default,
+        )
+
+    def test_warns_when_daily_limit_below_one_trade(self):
+        cfg = _engine_settings(latency_arb_daily_loss_limit=20.0, latency_arb_max_notional=50.0)
+        with (
+            patch.object(latency_arb_service, "get_settings", return_value=cfg),
+            self.assertLogs(latency_arb_service.logger, level="WARNING") as logs,
+        ):
+            latency_arb_service._warn_incoherent_risk_limits()
+        self.assertIn("single losing trade", logs.output[0])
+
+    def test_breaker_resumes_from_resolution_not_entry(self):
+        now = datetime.now(UTC)
+        entered = now - timedelta(minutes=14)
+        resolved = now - timedelta(minutes=6)  # 5m trade resolved after entry
+        rows = [SimpleNamespace(pnl=-10.0, created_at=entered, updated_at=resolved)] * 3
+        db = _session()
+        limit_query = db.query.return_value.filter.return_value.order_by.return_value.limit
+        limit_query.return_value.all.return_value = rows
+        cfg = _engine_settings(
+            latency_arb_circuit_breaker_losses=3,
+            latency_arb_circuit_breaker_resume_seconds=600,
+        )
+        with patch.object(latency_arb_service, "get_settings", return_value=cfg):
+            state = latency_arb_service._circuit_breaker_state(db, 1, now)
+        # 10 min after resolution (6 min ago) -> still open for ~4 min. Counting
+        # from entry (14 min ago) would have resumed 4 minutes ago.
+        self.assertTrue(state["open"])
+        self.assertAlmostEqual(state["resume_in_seconds"], 240, delta=2)

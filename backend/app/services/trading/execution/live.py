@@ -280,7 +280,7 @@ def place_live_order(
     """size is shares for both sides; all persisted money amounts are notional."""
 
     def check_quote_deadline():
-        if strategy == "latency_arb" and (
+        if (strategy == "latency_arb" or execution_deadline is not None) and (
             execution_deadline is None
             or execution_deadline.tzinfo is None
             or utc_now() >= execution_deadline
@@ -350,6 +350,17 @@ def place_live_order(
                     raise LiveTradingBlocked("ACCOUNT_SETTINGS_REQUIRED")
         if strategy == "copy":
             _authorize_copy(db, user_id, settings, copied_from_wallet, ai_approved)
+            if (
+                execution_deadline is None
+                or not execution_evidence
+                or not market_id
+                or execution_evidence.get("condition") != market_id
+                or execution_evidence.get("token") != token_id
+                or type(execution_evidence.get("neg_risk")) is not bool
+                or not execution_evidence.get("tick_size")
+                or order_type != "FOK"
+            ):
+                raise LiveTradingBlocked("COPY_EXECUTABLE_QUOTE_REQUIRED")
         if db.scalar(
             select(LiveOrder.id)
             .where(
@@ -387,7 +398,7 @@ def place_live_order(
         check_quote_deadline()
         authorized_shares = shares
         quote_options = {}
-        if strategy == "latency_arb" and execution_evidence:
+        if strategy in {"latency_arb", "copy"} and execution_evidence:
             quote_options = {
                 "expected_tick": Decimal(execution_evidence["tick_size"]),
                 "expected_neg_risk": execution_evidence["neg_risk"],
