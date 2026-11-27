@@ -11,7 +11,7 @@ exercised end to end.
 import asyncio
 import unittest
 from datetime import timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -49,12 +49,21 @@ class PortfolioRouteTestBase(unittest.TestCase):
             connect_args={"check_same_thread": False},
             poolclass=StaticPool,
         )
-        User.__table__.create(self.engine)
-        RedemptionAttempt.__table__.create(self.engine)
+        from app.models import Base
+
+        Base.metadata.create_all(self.engine)
         self.session_factory = sessionmaker(
             bind=self.engine, class_=Session, expire_on_commit=False
         )
         self.db = self.session_factory()
+        from app.models import Account
+
+        self.db.add(User(id=1, wallet_address=WALLET))
+        self.db.flush()
+        self.db.add(
+            Account(id=1, owner_user_id=1, name="Personal", kind="personal", is_default=True)
+        )
+        self.db.commit()
 
         app.dependency_overrides[get_current_user_from_token] = lambda: {
             "user_id": 1,
@@ -479,6 +488,8 @@ class RedeemRouteTests(PortfolioRouteTestBase):
             wallet_address=WALLET,
             market_id="market-1",
             winner_outcome_index=None,
+            account_id=1,
+            idempotency_key=ANY,
         )
 
     def test_redeem_with_winner_outcome_index(self):
@@ -499,6 +510,8 @@ class RedeemRouteTests(PortfolioRouteTestBase):
             wallet_address=WALLET,
             market_id="market-1",
             winner_outcome_index=1,
+            account_id=1,
+            idempotency_key=ANY,
         )
 
     def test_redeem_no_redeemable_position_is_404(self):

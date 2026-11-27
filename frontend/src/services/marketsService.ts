@@ -107,6 +107,8 @@ export const marketsService = {
     limit?: number;
     offset?: number;
     sort?: string;
+    /** Cancels the request (used by read-only agent tools). */
+    signal?: AbortSignal;
   }): Promise<SearchMarketsResponse> {
     const qs = new URLSearchParams();
     if (params.q) qs.set("q", params.q);
@@ -114,7 +116,7 @@ export const marketsService = {
     if (params.limit) qs.set("limit", String(params.limit));
     if (params.offset) qs.set("offset", String(params.offset));
     if (params.sort) qs.set("sort", params.sort);
-    return apiClient.get(`/api/markets/search?${qs.toString()}`);
+    return apiClient.get(`/api/markets/search?${qs.toString()}`, { signal: params.signal });
   },
 
   /**

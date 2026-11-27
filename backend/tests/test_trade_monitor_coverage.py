@@ -1226,8 +1226,24 @@ class ProcessNewTradeTests(_MonitorTestCase):
 
         notifications.assert_not_awaited()
 
-    async def test_triggers_copy_trade_per_follower(self):
+    async def test_missing_source_time_records_trade_without_triggering_copy(self):
         trade = {"id": "t1", "market": "m", "side": "BUY", "size": 10, "price": 0.5}
+        session = _mock_session(followers=[SimpleNamespace(user_id=1)])
+        with self._pipeline(session=session) as (_session, _ensure, _pos, _notif, copy_trade):
+            await trade_monitor._process_new_trade(WALLET, trade)
+
+        session.add.assert_called_once()
+        copy_trade.assert_not_awaited()
+
+    async def test_triggers_copy_trade_per_follower(self):
+        trade = {
+            "id": "t1",
+            "market": "m",
+            "side": "BUY",
+            "size": 10,
+            "price": 0.5,
+            "timestamp": 1700000000,
+        }
         session = _mock_session(
             followers=[
                 SimpleNamespace(user_id=1),
@@ -1242,7 +1258,14 @@ class ProcessNewTradeTests(_MonitorTestCase):
         self.assertEqual(copy_trade.call_args_list[1].kwargs["user_id"], 2)
 
     async def test_copy_trade_failure_is_isolated_per_follower(self):
-        trade = {"id": "t1", "market": "m", "side": "BUY", "size": 10, "price": 0.5}
+        trade = {
+            "id": "t1",
+            "market": "m",
+            "side": "BUY",
+            "size": 10,
+            "price": 0.5,
+            "timestamp": 1700000000,
+        }
         session = _mock_session(
             followers=[
                 SimpleNamespace(user_id=1),

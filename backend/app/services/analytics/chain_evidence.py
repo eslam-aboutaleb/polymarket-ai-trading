@@ -69,6 +69,7 @@ class ChainReader:
             "eth_getBlockByNumber",
             "eth_call",
             "eth_getTransactionReceipt",
+            "eth_getTransactionCount",
             "eth_getLogs",
         }:
             raise ValueError("CHAIN_METHOD_FORBIDDEN")
