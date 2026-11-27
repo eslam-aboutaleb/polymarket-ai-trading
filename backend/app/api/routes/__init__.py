@@ -91,6 +91,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         paper,
         replay_evidence,
         risk,
+        strategy_lab,
         trader_evaluation,
         trades,
     )
@@ -140,6 +141,7 @@ def register_routers(app: FastAPI, *, debug_enabled: bool = True) -> None:
         paper,
         backtesting,
         executable_replay,
+        strategy_lab,
         execution_estimate,
         follower_replay,
         copy_intelligence,
