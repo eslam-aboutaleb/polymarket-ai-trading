@@ -69,7 +69,12 @@ class BacktestListResponse(BaseModel):
 # ── Helpers ──
 
 
+ACCOUNT_SCOPED_TYPES = {"event_replay", "shadow_run"}
+
+
 def _executable(run):
+    if run.strategy_type in ACCOUNT_SCOPED_TYPES:
+        return True
     return isinstance(run.parameters, dict) and bool(run.parameters.get("executable_replay_id"))
 
 

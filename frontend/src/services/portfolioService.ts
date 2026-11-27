@@ -191,12 +191,12 @@ export const portfolioService = {
     return apiClient.get<WalletBalance>("/api/portfolio/balance");
   },
 
-  async getPositions(): Promise<{
+  async getPositions(signal?: AbortSignal): Promise<{
     wallet_address: string;
     positions: PolymarketPosition[];
     count: number;
   }> {
-    return apiClient.get("/api/portfolio/positions");
+    return apiClient.get("/api/portfolio/positions", { signal });
   },
 
   async getSummary(): Promise<PortfolioSummary> {

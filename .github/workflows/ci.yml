@@ -94,6 +94,15 @@ jobs:
       test-script: test:safety
       browsers: chromium
 
+  webmcp-registry:
+    uses: eslam-aboutaleb/ci-workflows/.github/workflows/browser.yml@cb10612004f98e6ec10158af72c4d0e1a044e436
+    with:
+      project-dir: frontend
+      manager: npm
+      node-version: "24.22.1"
+      test-script: test:webmcp
+      browsers: chromium
+
   tailwind-css:
     uses: eslam-aboutaleb/ci-workflows/.github/workflows/browser.yml@cb10612004f98e6ec10158af72c4d0e1a044e436
     with:
